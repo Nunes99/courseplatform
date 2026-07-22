@@ -3,7 +3,7 @@ window.COURSE_PLATFORM_CONFIG = Object.freeze({
   courseId: 'COURSE-EAPI-001',
   appName: 'Economia e Avaliação de Projetos Industriais',
   organizationName: 'LMTWEBNAIRS',
-  publicAppUrl: 'COLE_AQUI_A_URL_DO_GITHUB_PAGES',
+  publicAppUrl: 'https://nunes99.github.io/courseplatform/',
   institutionalUrl: 'https://lmtwebnairs.com/summer_school_2026',
   supportEmail: '',
   pollIntervalMs: 60000,
