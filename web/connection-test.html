@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Teste da API</title>
+  <link rel="stylesheet" href="./assets/css/styles.css">
+  <script defer src="./assets/js/config.js"></script>
+</head>
+<body>
+  <main class="page-shell">
+    <section class="verification-shell">
+      <p class="eyebrow">Diagnóstico</p>
+      <h1>Teste de ligação</h1>
+      <p>Execute este teste antes de incorporar a plataforma no Tilda.</p>
+      <button class="button button-primary" id="testButton">Testar API</button>
+      <pre id="result" class="answer-value"></pre>
+    </section>
+  </main>
+
+  <script type="module">
+    import { CoursePlatformApi } from './assets/js/api.js';
+
+    const result = document.querySelector('#result');
+    const button = document.querySelector('#testButton');
+
+    button.addEventListener('click', async () => {
+      result.textContent = 'A testar…';
+
+      try {
+        const api = new CoursePlatformApi(window.COURSE_PLATFORM_CONFIG);
+        const health = await api.health();
+        const course = await api.publicCourseConfig();
+        result.textContent = JSON.stringify({ health, course }, null, 2);
+      } catch (error) {
+        result.textContent =
+          `${error.code || 'ERROR'}: ${error.message}\n\n` +
+          JSON.stringify(error.details, null, 2);
+      }
+    });
+  </script>
+</body>
+</html>

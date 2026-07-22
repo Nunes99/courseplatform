@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#12566b">
+  <meta name="description" content="Curso individual de Economia e Avaliação de Projetos Industriais.">
+  <title>Economia e Avaliação de Projetos Industriais</title>
+
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="./assets/css/styles.css">
+
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']]
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+      }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script defer src="./assets/js/config.js"></script>
+  <script type="module" src="./assets/js/app.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-brand">
+      <span class="site-brand-symbol">EAPI</span>
+      <span>Plataforma do curso</span>
+    </div>
+
+    <div class="site-header-actions">
+      <span class="header-user" id="headerUser"></span>
+      <button class="text-button" id="logoutButton" type="button" hidden>Sair</button>
+    </div>
+  </header>
+
+  <main id="app" class="page-shell"></main>
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+</body>
+</html>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#12566b">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Painel do Avaliador</title>
+
+  <link rel="stylesheet" href="./assets/css/styles.css">
+  <script defer src="./assets/js/config.js"></script>
+  <script type="module" src="./assets/js/admin.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-brand">
+      <span class="site-brand-symbol">ADM</span>
+      <span>Painel do avaliador</span>
+    </div>
+
+    <div class="site-header-actions">
+      <span class="header-user" id="adminIdentity"></span>
+      <button class="text-button" id="adminLogoutButton" type="button" hidden>Sair</button>
+    </div>
+  </header>
+
+  <main id="adminApp" class="page-shell"></main>
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+</body>
+</html>
