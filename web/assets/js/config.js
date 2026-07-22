@@ -1,5 +1,5 @@
 window.COURSE_PLATFORM_CONFIG = Object.freeze({
-  apiUrl: 'COLE_AQUI_A_URL_EXEC_DO_APPS_SCRIPT',
+  apiUrl: 'https://script.google.com/macros/s/AKfycbxXeeyV_uhPwwT-762VHJ5Ux_h_wihDegFUbPcQe06bZjYzxCT2tPffuQQtRtY-AP-Rjg/exec',
   courseId: 'COURSE-EAPI-001',
   appName: 'Economia e Avaliação de Projetos Industriais',
   organizationName: 'LMTWEBNAIRS',
