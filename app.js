@@ -40,6 +40,7 @@ initialize();
 
 function initialize() {
   initializeThemeToggle();
+  applyBrandLogo();
 
   try {
     api = new CoursePlatformApi(config);
@@ -106,7 +107,7 @@ function renderLogin() {
         </div>
 
         <div class="auth-brand-row">
-          <div class="brand-mark">LSS</div>
+          ${brandSymbolTemplate('brand-mark')}
           <div>
             <p class="eyebrow">LMTWEBNAIRS Summer School</p>
             <h1>Área do estudante</h1>
@@ -1055,8 +1056,8 @@ function videoCardTemplate(video) {
           ${video.description ? `<p>${escapeHtml(video.description)}</p>` : ''}
         </div>
         <button class="video-sound-button" type="button" data-toggle-video-sound
-          data-sound="off" aria-pressed="false">
-          Ativar som
+          data-sound="off" aria-pressed="false" aria-label="Ativar som">
+          ${soundIcon(false)}
         </button>
       </div>
     </article>
@@ -1072,7 +1073,8 @@ function bindVideoSoundEvents() {
 
       const soundOn = button.dataset.sound !== 'on';
       button.dataset.sound = soundOn ? 'on' : 'off';
-      button.textContent = soundOn ? 'Desativar som' : 'Ativar som';
+      button.innerHTML = soundIcon(soundOn);
+      button.setAttribute('aria-label', soundOn ? 'Desativar som' : 'Ativar som');
       button.setAttribute('aria-pressed', String(soundOn));
       iframe.src = videoEmbedUrl(card.dataset.videoUrl, {
         autoplay: true,
@@ -1080,6 +1082,20 @@ function bindVideoSoundEvents() {
       });
     });
   });
+}
+
+function soundIcon(soundOn) {
+  return soundOn
+    ? `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 9v6h4l5 4V5L8 9H4Z"></path>
+        <path d="M16 8.4a5 5 0 0 1 0 7.2"></path>
+        <path d="M18.5 5.8a9 9 0 0 1 0 12.4"></path>
+      </svg>`
+    : `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 9v6h4l5 4V5L8 9H4Z"></path>
+        <path d="m17 9 4 4"></path>
+        <path d="m21 9-4 4"></path>
+      </svg>`;
 }
 
 function videoEmbedUrl(rawUrl, options = {}) {
@@ -1242,6 +1258,47 @@ function studentGreeting(fullName) {
 function iconUrl(name, color) {
   const resolvedColor = document.documentElement.dataset.theme === 'dark' ? 'ffffff' : color;
   return `${icons8Base}/${resolvedColor}/${name}.png`;
+}
+
+function brandSymbolTemplate(className) {
+  const logo = brandLogoUrl();
+  return `
+    <div class="${className}">
+      ${logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS'}
+    </div>
+  `;
+}
+
+function applyBrandLogo() {
+  document.querySelectorAll('.site-brand-symbol').forEach((symbol) => {
+    const logo = brandLogoUrl();
+    symbol.innerHTML = logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS';
+  });
+}
+
+function brandLogoUrl() {
+  const rawUrl = localStorage.getItem('lssLogoUrl') || '';
+  return imageDisplayUrl(rawUrl);
+}
+
+function imageDisplayUrl(rawUrl) {
+  if (!rawUrl) return '';
+
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.replace(/^www\./, '');
+
+    if (host === 'drive.google.com') {
+      const queryId = url.searchParams.get('id');
+      const pathId = url.pathname.match(/\/file\/d\/([^/]+)/)?.[1];
+      const id = queryId || pathId;
+      return id ? `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w400` : rawUrl;
+    }
+
+    return rawUrl;
+  } catch {
+    return '';
+  }
 }
 
 function updateThemeIcons(theme) {

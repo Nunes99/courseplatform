@@ -30,6 +30,7 @@ initialize();
 
 function initialize() {
   initializeThemeToggle();
+  applyBrandLogo();
 
   try {
     api = new CoursePlatformApi(config);
@@ -67,7 +68,7 @@ function renderAdminLogin() {
         </div>
 
         <div class="auth-brand-row">
-          <div class="brand-mark">LSS</div>
+          ${brandSymbolTemplate('brand-mark')}
           <div>
             <p class="eyebrow">LMTWEBNAIRS Summer School</p>
             <h1 class="admin-login-title">Painel do administrador</h1>
@@ -142,7 +143,7 @@ function renderAdminShell() {
     <div class="admin-layout">
       <aside class="admin-sidebar">
         <div class="admin-sidebar-heading">
-          <span class="admin-sidebar-symbol" aria-hidden="true">LSS</span>
+          ${brandSymbolTemplate('admin-sidebar-symbol')}
           <h2>Gestão da Summer School</h2>
         </div>
         <button class="admin-nav is-active" data-admin-view="pending">
@@ -156,6 +157,10 @@ function renderAdminShell() {
         <button class="admin-nav" data-admin-view="videos">
           <img src="${iconUrl('video-playlist', blueIcon)}" alt="">
           <span>Vídeos</span>
+        </button>
+        <button class="admin-nav" data-admin-view="brand">
+          <img src="${iconUrl('picture', blueIcon)}" alt="">
+          <span>Marca</span>
         </button>
       </aside>
 
@@ -175,6 +180,8 @@ function renderAdminShell() {
         loadStudents();
       } else if (button.dataset.adminView === 'videos') {
         renderVideos();
+      } else if (button.dataset.adminView === 'brand') {
+        renderBrandSettings();
       } else {
         loadPending();
       }
@@ -572,6 +579,75 @@ function renderVideos() {
   });
 
   reportHeight();
+}
+
+function renderBrandSettings() {
+  const main = document.querySelector('#adminMain');
+  const rawLogoUrl = localStorage.getItem('lssLogoUrl') || '';
+  const displayLogo = brandLogoUrl();
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Identidade visual</p>
+        <h1>Marca</h1>
+      </div>
+    </div>
+
+    <section class="brand-settings-panel">
+      <div class="brand-preview-card">
+        <div class="brand-preview-symbol">
+          ${displayLogo ? `<img src="${escapeHtml(displayLogo)}" alt="Logotipo">` : 'LSS'}
+        </div>
+        <div>
+          <h2>Logotipo da plataforma</h2>
+          <p>Este logotipo substitui o texto LSS no cabeçalho, nos cartões de login e no painel administrativo.</p>
+        </div>
+      </div>
+
+      <form id="brandLogoForm" class="brand-logo-form">
+        <label>
+          <span>Link da imagem</span>
+          <input type="url" name="logoUrl" value="${escapeHtml(rawLogoUrl)}"
+            placeholder="https://drive.google.com/file/d/.../view ou https://.../logo.png">
+        </label>
+        <div class="brand-logo-actions">
+          <button class="button button-primary" type="submit">Guardar logotipo</button>
+          <button class="button button-secondary" type="button" id="removeBrandLogo"
+            ${rawLogoUrl ? '' : 'disabled'}>Remover</button>
+        </div>
+      </form>
+    </section>
+  `;
+
+  document.querySelector('#brandLogoForm').addEventListener('submit', saveBrandLogo);
+  document.querySelector('#removeBrandLogo').addEventListener('click', removeBrandLogo);
+  reportHeight();
+}
+
+function saveBrandLogo(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const rawUrl = String(new FormData(form).get('logoUrl') || '').trim();
+
+  if (!imageDisplayUrl(rawUrl)) {
+    showToast('Adicione um link válido para a imagem do logotipo.', 'warning');
+    form.elements.logoUrl.focus();
+    return;
+  }
+
+  localStorage.setItem('lssLogoUrl', rawUrl);
+  applyBrandLogo();
+  showToast('Logotipo atualizado.', 'success');
+  renderBrandSettings();
+}
+
+function removeBrandLogo() {
+  localStorage.removeItem('lssLogoUrl');
+  applyBrandLogo();
+  showToast('Logotipo removido.', 'success');
+  renderBrandSettings();
 }
 
 function saveVideo(event) {
