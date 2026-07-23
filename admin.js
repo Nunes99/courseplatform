@@ -16,6 +16,8 @@ const adminIdentity = document.querySelector('#adminIdentity');
 const logoutButton = document.querySelector('#adminLogoutButton');
 const themeToggle = document.querySelector('#themeToggle');
 const icons8Base = 'https://img.icons8.com/ios-filled/50';
+const blueIcon = '00365b';
+const goldIcon = 'c9a55b';
 
 let api;
 const state = {
@@ -60,7 +62,7 @@ function renderAdminLogin() {
     <section class="auth-shell">
       <div class="auth-card auth-card-modern">
         <div class="auth-card-accent">
-          <img src="${icons8Base}/c9a55b/admin-settings-male.png" alt="">
+          <img src="${iconUrl('admin-settings-male', goldIcon)}" alt="">
           <span>Área reservada</span>
         </div>
 
@@ -68,7 +70,7 @@ function renderAdminLogin() {
           <div class="brand-mark">LSS</div>
           <div>
             <p class="eyebrow">LMTWEBNAIRS Summer School</p>
-            <h1>Painel do administrador</h1>
+            <h1 class="admin-login-title">Painel do administrador</h1>
           </div>
         </div>
 
@@ -140,15 +142,15 @@ function renderAdminShell() {
     <div class="admin-layout">
       <aside class="admin-sidebar">
         <div class="admin-sidebar-heading">
-          <img src="${icons8Base}/c9a55b/dashboard-layout.png" alt="">
+          <img src="${iconUrl('dashboard-layout', goldIcon)}" alt="">
           <h2>Gestão da Summer School</h2>
         </div>
         <button class="admin-nav is-active" data-admin-view="pending">
-          <img src="${icons8Base}/00365b/inbox.png" alt="">
+          <img src="${iconUrl('inbox', blueIcon)}" alt="">
           <span>Submissões</span>
         </button>
         <button class="admin-nav" data-admin-view="students">
-          <img src="${icons8Base}/00365b/student-male.png" alt="">
+          <img src="${iconUrl('student-male', blueIcon)}" alt="">
           <span>Estudantes</span>
         </button>
       </aside>
@@ -203,21 +205,21 @@ function renderPending() {
 
     <section class="admin-summary-grid" aria-label="Resumo de avaliação">
       <article class="insight-card">
-        <img src="${icons8Base}/c9a55b/inbox.png" alt="">
+        <img src="${iconUrl('inbox', goldIcon)}" alt="">
         <div>
           <span>Submissões</span>
           <strong>${state.pending.length}</strong>
         </div>
       </article>
       <article class="insight-card">
-        <img src="${icons8Base}/c9a55b/student-male.png" alt="">
+        <img src="${iconUrl('student-male', goldIcon)}" alt="">
         <div>
           <span>Participantes</span>
           <strong>${uniqueStudents}</strong>
         </div>
       </article>
       <article class="insight-card">
-        <img src="${icons8Base}/c9a55b/documents.png" alt="">
+        <img src="${iconUrl('documents', goldIcon)}" alt="">
         <div>
           <span>Ficheiros</span>
           <strong>${fileTotal}</strong>
@@ -443,21 +445,21 @@ function renderStudents() {
 
     <section class="admin-summary-grid" aria-label="Resumo de participantes">
       <article class="insight-card">
-        <img src="${icons8Base}/c9a55b/conference-call.png" alt="">
+        <img src="${iconUrl('conference-call', goldIcon)}" alt="">
         <div>
           <span>Total</span>
           <strong>${state.students.length}</strong>
         </div>
       </article>
       <article class="insight-card">
-        <img src="${icons8Base}/c9a55b/ok.png" alt="">
+        <img src="${iconUrl('ok', goldIcon)}" alt="">
         <div>
           <span>Ativos</span>
           <strong>${activeStudents}</strong>
         </div>
       </article>
       <article class="insight-card">
-        <img src="${icons8Base}/c9a55b/combo-chart.png" alt="">
+        <img src="${iconUrl('combo-chart', goldIcon)}" alt="">
         <div>
           <span>Progresso médio</span>
           <strong>${avgProgress}%</strong>
@@ -617,6 +619,7 @@ function initializeThemeToggle() {
     localStorage.setItem('lssTheme', theme);
     const icon = themeToggle.querySelector('.theme-toggle-icon');
     if (icon) icon.textContent = theme === 'dark' ? '☾' : '☀';
+    updateThemeIcons(theme);
     themeToggle.title = theme === 'dark' ? 'Usar modo claro' : 'Usar modo noturno';
     themeToggle.setAttribute('aria-label', themeToggle.title);
   };
@@ -626,6 +629,25 @@ function initializeThemeToggle() {
   themeToggle.addEventListener('click', () => {
     const nextTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     applyTheme(nextTheme);
+  });
+}
+
+function iconUrl(name, color) {
+  const resolvedColor = document.documentElement.dataset.theme === 'dark' ? 'ffffff' : color;
+  return `${icons8Base}/${resolvedColor}/${name}.png`;
+}
+
+function updateThemeIcons(theme) {
+  document.querySelectorAll('img[src^="https://img.icons8.com/ios-filled/50/"]').forEach((image) => {
+    const url = new URL(image.src);
+    const parts = url.pathname.split('/');
+    if (parts.length < 4) return;
+    const currentColor = parts[3];
+    const originalColor = image.dataset.iconColor || (currentColor === 'ffffff' ? goldIcon : currentColor);
+    image.dataset.iconColor = originalColor;
+    parts[3] = theme === 'dark' ? 'ffffff' : originalColor;
+    url.pathname = parts.join('/');
+    image.src = url.toString();
   });
 }
 

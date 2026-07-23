@@ -23,6 +23,8 @@ const themeToggle = document.querySelector('#themeToggle');
 const platformName = config.appName || 'LMTWEBNAIRS Summer School 2026';
 const platformYear = 'Summer School 2026';
 const icons8Base = 'https://img.icons8.com/ios-filled/50';
+const blueIcon = '00365b';
+const goldIcon = 'c9a55b';
 
 let api;
 const state = {
@@ -99,7 +101,7 @@ function renderLogin() {
     <section class="auth-shell">
       <div class="auth-card auth-card-modern">
         <div class="auth-card-accent">
-          <img src="${icons8Base}/c9a55b/graduation-cap.png" alt="">
+          <img src="${iconUrl('graduation-cap', goldIcon)}" alt="">
           <span>Portal académico</span>
         </div>
 
@@ -116,9 +118,9 @@ function renderLogin() {
         </p>
 
         <div class="auth-feature-list" aria-label="Recursos da plataforma">
-          <span><img src="${icons8Base}/00365b/open-book.png" alt=""> Aulas</span>
-          <span><img src="${icons8Base}/00365b/task-completed.png" alt=""> Atividades</span>
-          <span><img src="${icons8Base}/00365b/certificate.png" alt=""> Certificado</span>
+          <span><img src="${iconUrl('open-book', blueIcon)}" alt=""> Aulas</span>
+          <span><img src="${iconUrl('task-completed', blueIcon)}" alt=""> Atividades</span>
+          <span><img src="${iconUrl('certificate', blueIcon)}" alt=""> Certificado</span>
         </div>
 
         <form id="loginForm" class="form-stack">
@@ -236,21 +238,21 @@ async function renderDashboard() {
 
     <section class="dashboard-insights" aria-label="Resumo do percurso">
       <article class="insight-card">
-        <img src="${icons8Base}/c9a55b/checked-checkbox.png" alt="">
+        <img src="${iconUrl('checked-checkbox', goldIcon)}" alt="">
         <div>
           <span>Aulas aprovadas</span>
           <strong>${approvedLessons}/${totalLessons}</strong>
         </div>
       </article>
       <article class="insight-card">
-        <img src="${icons8Base}/c9a55b/classroom.png" alt="">
+        <img src="${iconUrl('classroom', goldIcon)}" alt="">
         <div>
           <span>Aulas disponíveis</span>
           <strong>${activeLessons}</strong>
         </div>
       </article>
       <article class="insight-card">
-        <img src="${icons8Base}/c9a55b/time.png" alt="">
+        <img src="${iconUrl('time', goldIcon)}" alt="">
         <div>
           <span>Carga horária</span>
           <strong>${dashboard.course.totalHours}h</strong>
@@ -1087,6 +1089,7 @@ function initializeThemeToggle() {
     localStorage.setItem('lssTheme', theme);
     const icon = themeToggle.querySelector('.theme-toggle-icon');
     if (icon) icon.textContent = theme === 'dark' ? '☾' : '☀';
+    updateThemeIcons(theme);
     themeToggle.title = theme === 'dark' ? 'Usar modo claro' : 'Usar modo noturno';
     themeToggle.setAttribute('aria-label', themeToggle.title);
   };
@@ -1103,6 +1106,25 @@ function studentGreeting(fullName) {
   const hour = new Date().getHours();
   const period = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
   return `${period}, ${fullName}, seja bem-vindo ao LMTWEBNAIRS Summer School 2026`;
+}
+
+function iconUrl(name, color) {
+  const resolvedColor = document.documentElement.dataset.theme === 'dark' ? 'ffffff' : color;
+  return `${icons8Base}/${resolvedColor}/${name}.png`;
+}
+
+function updateThemeIcons(theme) {
+  document.querySelectorAll('img[src^="https://img.icons8.com/ios-filled/50/"]').forEach((image) => {
+    const url = new URL(image.src);
+    const parts = url.pathname.split('/');
+    if (parts.length < 4) return;
+    const currentColor = parts[3];
+    const originalColor = image.dataset.iconColor || (currentColor === 'ffffff' ? goldIcon : currentColor);
+    image.dataset.iconColor = originalColor;
+    parts[3] = theme === 'dark' ? 'ffffff' : originalColor;
+    url.pathname = parts.join('/');
+    image.src = url.toString();
+  });
 }
 
 function renderConfigurationError(error) {
