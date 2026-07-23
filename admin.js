@@ -142,7 +142,7 @@ function renderAdminShell() {
     <div class="admin-layout">
       <aside class="admin-sidebar">
         <div class="admin-sidebar-heading">
-          <img src="${iconUrl('dashboard-layout', goldIcon)}" alt="">
+          <span class="admin-sidebar-symbol" aria-hidden="true">LSS</span>
           <h2>Gestão da Summer School</h2>
         </div>
         <button class="admin-nav is-active" data-admin-view="pending">

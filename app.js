@@ -201,6 +201,8 @@ async function renderDashboard() {
   const totalLessons = dashboard.lessons.length;
   const approvedLessons = dashboard.lessons.filter((item) => item.progress.status === 'APPROVED').length;
   const activeLessons = dashboard.lessons.filter((item) => ['AVAILABLE', 'IN_PROGRESS', 'UNDER_REVIEW'].includes(item.progress.status)).length;
+  const savedVideoUrl = localStorage.getItem('lssDashboardVideoUrl') || '';
+  const savedVideoEmbed = videoEmbedUrl(savedVideoUrl);
 
   const certificateButton = dashboard.enrollment.status === 'COMPLETED'
     ? '<a class="button button-secondary" href="#/certificate">Ver certificado</a>'
@@ -260,6 +262,26 @@ async function renderDashboard() {
       </article>
     </section>
 
+    <section class="video-panel" aria-label="Vídeo de apoio">
+      <div class="video-panel-copy">
+        <p class="eyebrow">Vídeo de apoio</p>
+        <h2>Adicionar aula em vídeo</h2>
+        <p>Cole um link do YouTube ou Vimeo para visualizar o vídeo diretamente no painel.</p>
+      </div>
+
+      <form id="dashboardVideoForm" class="video-link-form">
+        <input type="url" name="videoUrl" value="${escapeHtml(savedVideoUrl)}"
+          placeholder="https://www.youtube.com/watch?v=...">
+        <button class="button button-secondary" type="submit">Adicionar vídeo</button>
+      </form>
+
+      <div id="dashboardVideoFrame" class="video-frame ${savedVideoEmbed ? '' : 'is-empty'}">
+        ${savedVideoEmbed
+          ? `<iframe src="${escapeHtml(savedVideoEmbed)}" title="Vídeo de apoio" allowfullscreen></iframe>`
+          : '<span>O vídeo aparecerá aqui depois de adicionar um link válido.</span>'}
+      </div>
+    </section>
+
     <section class="section-heading">
       <div>
         <p class="eyebrow">Percurso formativo</p>
@@ -302,6 +324,8 @@ async function renderDashboard() {
       }
     });
   });
+
+  bindDashboardVideoEvents();
 
   renderMath();
 }
@@ -1011,6 +1035,66 @@ function buildLessonNavigation() {
       ${escapeHtml(section.title)}
     </a>
   `).join('');
+}
+
+function bindDashboardVideoEvents() {
+  const form = document.querySelector('#dashboardVideoForm');
+  const frame = document.querySelector('#dashboardVideoFrame');
+  if (!form || !frame) return;
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+
+    const input = form.elements.videoUrl;
+    const rawUrl = input.value.trim();
+    const embedUrl = videoEmbedUrl(rawUrl);
+
+    if (!embedUrl) {
+      showToast('Adicione um link válido do YouTube ou Vimeo.', 'warning');
+      input.focus();
+      return;
+    }
+
+    localStorage.setItem('lssDashboardVideoUrl', rawUrl);
+    frame.classList.remove('is-empty');
+    frame.innerHTML = `
+      <iframe src="${escapeHtml(embedUrl)}" title="Vídeo de apoio" allowfullscreen></iframe>
+    `;
+    reportHeight();
+  });
+}
+
+function videoEmbedUrl(rawUrl) {
+  if (!rawUrl) return '';
+
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.replace(/^www\./, '');
+
+    if (host === 'youtu.be') {
+      const id = url.pathname.split('/').filter(Boolean)[0];
+      return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : '';
+    }
+
+    if (host.endsWith('youtube.com')) {
+      const watchId = url.searchParams.get('v');
+      if (watchId) return `https://www.youtube.com/embed/${encodeURIComponent(watchId)}`;
+
+      const parts = url.pathname.split('/').filter(Boolean);
+      const marker = parts.findIndex((part) => ['embed', 'shorts', 'live'].includes(part));
+      const id = marker >= 0 ? parts[marker + 1] : '';
+      return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : '';
+    }
+
+    if (host.endsWith('vimeo.com')) {
+      const id = url.pathname.split('/').filter(Boolean).find((part) => /^\d+$/.test(part));
+      return id ? `https://player.vimeo.com/video/${encodeURIComponent(id)}` : '';
+    }
+  } catch {
+    return '';
+  }
+
+  return '';
 }
 
 async function renderCertificate() {

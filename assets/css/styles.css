@@ -408,8 +408,8 @@ input:focus, textarea:focus, select:focus {
 
 .hero-greeting {
   max-width: 860px;
-  font-size: clamp(28px, 3.2vw, 44px);
-  line-height: 1.12;
+  font-size: clamp(22px, 2.35vw, 32px);
+  line-height: 1.22;
 }
 
 .dashboard-hero p:not(.eyebrow) {
@@ -489,6 +489,60 @@ input:focus, textarea:focus, select:focus {
 .admin-page-heading h1 { margin-bottom: 0; }
 
 .course-hours { color: var(--muted); font-weight: 700; }
+
+.video-panel {
+  display: grid;
+  gap: 16px;
+  margin: 18px 0 10px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.video-panel-copy {
+  max-width: 720px;
+}
+
+.video-panel-copy h2 {
+  margin-bottom: 8px;
+  font-size: clamp(22px, 2vw, 28px);
+}
+
+.video-panel-copy p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted);
+}
+
+.video-link-form {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 10px;
+}
+
+.video-frame {
+  display: grid;
+  min-height: 300px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.video-frame iframe {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+}
+
+.video-frame.is-empty {
+  min-height: 180px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
 
 .dashboard-insights,
 .admin-summary-grid {
@@ -1229,6 +1283,25 @@ input:focus, textarea:focus, select:focus {
   background: var(--surface-soft);
 }
 
+.admin-sidebar-symbol {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .04em;
+}
+
+:root[data-theme="dark"] .admin-sidebar-symbol {
+  color: #082033;
+}
+
 .admin-nav {
   display: flex;
   width: 100%;
@@ -1477,6 +1550,7 @@ input:focus, textarea:focus, select:focus {
   .lesson-navigation { display: none; }
   .submission-columns { grid-template-columns: 1fr; }
   .upload-methods { grid-template-columns: 1fr; }
+  .video-link-form { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
@@ -1521,6 +1595,9 @@ input:focus, textarea:focus, select:focus {
   }
   .auth-brand-row { grid-template-columns: 1fr; }
   .auth-feature-list { grid-template-columns: 1fr; }
+  .video-panel { padding: 20px; }
+  .video-frame { min-height: 220px; }
+  .video-frame.is-empty { min-height: 150px; }
 
   .admin-sidebar {
     grid-template-columns: 1fr;
