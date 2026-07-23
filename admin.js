@@ -68,7 +68,7 @@ function renderAdminLogin() {
           <div class="brand-mark">LSS</div>
           <div>
             <p class="eyebrow">LMTWEBNAIRS Summer School</p>
-            <h1>Painel do avaliador</h1>
+            <h1>Painel do administrador</h1>
           </div>
         </div>
 

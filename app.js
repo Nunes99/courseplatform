@@ -107,7 +107,7 @@ function renderLogin() {
           <div class="brand-mark">LSS</div>
           <div>
             <p class="eyebrow">LMTWEBNAIRS Summer School</p>
-            <h1>${escapeHtml(platformName)}</h1>
+            <h1>Área do estudante</h1>
           </div>
         </div>
 
@@ -192,8 +192,8 @@ async function renderDashboard() {
   state.dashboard = dashboard;
 
   const greeting = studentGreeting(dashboard.student.fullName);
-  headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(greeting)}</span>`;
-  headerUser.title = greeting;
+  headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(dashboard.student.fullName)}</span>`;
+  headerUser.title = dashboard.student.fullName;
   logoutButton.hidden = false;
 
   const totalLessons = dashboard.lessons.length;
@@ -208,7 +208,7 @@ async function renderDashboard() {
     <section class="dashboard-hero">
       <div class="hero-copy">
         <p class="eyebrow">${escapeHtml(platformYear)}</p>
-        <h1>${escapeHtml(platformName)}</h1>
+        <h1 class="hero-greeting">${escapeHtml(greeting)}</h1>
         <p>
           Ambiente digital para acompanhar conteúdos, exercícios e avaliações do programa.
         </p>
