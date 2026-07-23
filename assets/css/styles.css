@@ -120,6 +120,16 @@ a { color: var(--primary); }
   padding: 5px;
 }
 
+:root[data-theme="dark"] .site-brand-symbol.has-brand-logo,
+:root[data-theme="dark"] .brand-mark.has-brand-logo,
+:root[data-theme="dark"] .admin-sidebar-symbol.has-brand-logo,
+:root[data-theme="dark"] .brand-preview-symbol.has-brand-logo {
+  border-color: rgba(255, 248, 228, .42);
+  background: #00365b;
+  color: #fff8e4;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+}
+
 .site-brand-copy {
   display: grid;
   gap: 1px;

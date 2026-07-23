@@ -1263,7 +1263,7 @@ function iconUrl(name, color) {
 function brandSymbolTemplate(className) {
   const logo = brandLogoUrl();
   return `
-    <div class="${className}">
+    <div class="${className}${logo ? ' has-brand-logo' : ''}">
       ${logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS'}
     </div>
   `;
@@ -1272,6 +1272,7 @@ function brandSymbolTemplate(className) {
 function applyBrandLogo() {
   document.querySelectorAll('.site-brand-symbol, .brand-mark, .admin-sidebar-symbol').forEach((symbol) => {
     const logo = brandLogoUrl();
+    symbol.classList.toggle('has-brand-logo', Boolean(logo));
     symbol.innerHTML = logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS';
   });
 }

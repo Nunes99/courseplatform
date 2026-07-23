@@ -596,7 +596,7 @@ function renderBrandSettings() {
 
     <section class="brand-settings-panel">
       <div class="brand-preview-card">
-        <div class="brand-preview-symbol">
+        <div class="brand-preview-symbol${displayLogo ? ' has-brand-logo' : ''}">
           ${displayLogo ? `<img src="${escapeHtml(displayLogo)}" alt="Logotipo">` : 'LSS'}
         </div>
         <div>
@@ -871,7 +871,7 @@ function updateThemeIcons(theme) {
 function brandSymbolTemplate(className) {
   const logo = brandLogoUrl();
   return `
-    <div class="${className}">
+    <div class="${className}${logo ? ' has-brand-logo' : ''}">
       ${logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS'}
     </div>
   `;
@@ -880,6 +880,7 @@ function brandSymbolTemplate(className) {
 function applyBrandLogo() {
   document.querySelectorAll('.site-brand-symbol, .brand-mark, .admin-sidebar-symbol').forEach((symbol) => {
     const logo = brandLogoUrl();
+    symbol.classList.toggle('has-brand-logo', Boolean(logo));
     symbol.innerHTML = logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS';
   });
 }
