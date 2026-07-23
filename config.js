@@ -1,5 +1,5 @@
 window.COURSE_PLATFORM_CONFIG = Object.freeze({
-  apiUrl: 'https://script.google.com/macros/s/AKfycbxXeeyV_uhPwwT-762VHJ5Ux_h_wihDegFUbPcQe06bZjYzxCT2tPffuQQtRtY-AP-Rjg/exec',
+  apiUrl: 'https://script.google.com/macros/s/AKfycbxLAzx2IQ9n0uel0ehjagoG67ZwWv4EFFhBuuyCvd9eA22q6D8WaoRM399jhLeOsITA6w/exec',
   courseId: 'COURSE-EAPI-001',
   appName: 'LMTWEBNAIRS Summer School 2026',
   organizationName: 'LMTWEBNAIRS Summer School',
