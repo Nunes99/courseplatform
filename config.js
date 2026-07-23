@@ -1,8 +1,8 @@
 window.COURSE_PLATFORM_CONFIG = Object.freeze({
   apiUrl: 'https://script.google.com/macros/s/AKfycbxXeeyV_uhPwwT-762VHJ5Ux_h_wihDegFUbPcQe06bZjYzxCT2tPffuQQtRtY-AP-Rjg/exec',
   courseId: 'COURSE-EAPI-001',
-  appName: 'Economia e Avaliação de Projetos Industriais',
-  organizationName: 'LMTWEBNAIRS',
+  appName: 'LMTWEBNAIRS Summer School 2026',
+  organizationName: 'LMTWEBNAIRS Summer School',
   publicAppUrl: 'https://nunes99.github.io/courseplatform/',
   institutionalUrl: 'https://lmtwebnairs.com/summer_school_2026',
   supportEmail: '',

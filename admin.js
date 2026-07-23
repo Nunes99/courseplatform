@@ -55,8 +55,8 @@ function renderAdminLogin() {
   root.innerHTML = `
     <section class="auth-shell">
       <div class="auth-card">
-        <div class="brand-mark">ADM</div>
-        <p class="eyebrow">Área reservada</p>
+        <div class="brand-mark">LSS</div>
+        <p class="eyebrow">LMTWEBNAIRS Summer School</p>
         <h1>Painel do avaliador</h1>
 
         <form id="adminLoginForm" class="form-stack">
@@ -122,7 +122,7 @@ function renderAdminShell() {
   root.innerHTML = `
     <div class="admin-layout">
       <aside class="admin-sidebar">
-        <h2>Gestão do curso</h2>
+        <h2>Gestão da Summer School</h2>
         <button class="admin-nav is-active" data-admin-view="pending">
           Submissões
         </button>

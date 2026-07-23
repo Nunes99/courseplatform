@@ -19,6 +19,8 @@ const config = window.COURSE_PLATFORM_CONFIG;
 const root = document.querySelector('#app');
 const headerUser = document.querySelector('#headerUser');
 const logoutButton = document.querySelector('#logoutButton');
+const platformName = config.appName || 'LMTWEBNAIRS Summer School 2026';
+const platformYear = 'Summer School 2026';
 
 let api;
 const state = {
@@ -91,11 +93,11 @@ function renderLogin() {
   root.innerHTML = `
     <section class="auth-shell">
       <div class="auth-card">
-        <div class="brand-mark">EAPI</div>
-        <p class="eyebrow">Plataforma individual</p>
-        <h1>${escapeHtml(config.appName)}</h1>
+        <div class="brand-mark">LSS</div>
+        <p class="eyebrow">LMTWEBNAIRS Summer School</p>
+        <h1>${escapeHtml(platformName)}</h1>
         <p class="auth-description">
-          Leia as aulas, resolva os exercícios e acompanhe a avaliação das suas submissões.
+          Aceda ao percurso formativo, acompanhe as aulas e submeta as atividades da Summer School num ambiente organizado e seguro.
         </p>
 
         <form id="loginForm" class="form-stack">
@@ -177,10 +179,22 @@ async function renderDashboard() {
 
   root.innerHTML = `
     <section class="dashboard-hero">
-      <div>
-        <p class="eyebrow">${escapeHtml(dashboard.course.courseCode)}</p>
-        <h1>${escapeHtml(dashboard.course.title)}</h1>
-        <p>${escapeHtml(dashboard.course.description)}</p>
+      <div class="hero-copy">
+        <p class="eyebrow">${escapeHtml(platformYear)}</p>
+        <h1>${escapeHtml(platformName)}</h1>
+        <p>
+          Ambiente digital para acompanhar conteúdos, exercícios e avaliações do programa.
+        </p>
+        <div class="hero-meta">
+          <span>Programa: ${escapeHtml(dashboard.course.title)}</span>
+          <span>${escapeHtml(dashboard.course.courseCode)}</span>
+          <span>${dashboard.course.totalHours} horas</span>
+        </div>
+        <div class="hero-actions">
+          <a class="button button-light" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">
+            Página do evento
+          </a>
+        </div>
       </div>
 
       <div class="progress-summary">
@@ -196,7 +210,7 @@ async function renderDashboard() {
     <section class="section-heading">
       <div>
         <p class="eyebrow">Percurso formativo</p>
-        <h2>As suas aulas</h2>
+        <h2>Aulas da Summer School</h2>
       </div>
       <span class="course-hours">${dashboard.course.totalHours} horas</span>
     </section>
@@ -206,12 +220,12 @@ async function renderDashboard() {
     </div>
 
     <section class="information-panel">
-      <h3>Como funciona</h3>
+      <h3>Como funciona a plataforma</h3>
       <div class="information-grid">
-        <div><strong>1.</strong><span>Leia o conteúdo teórico.</span></div>
-        <div><strong>2.</strong><span>Inicie a tentativa prática.</span></div>
-        <div><strong>3.</strong><span>Responda e carregue os exercícios.</span></div>
-        <div><strong>4.</strong><span>Submeta e aguarde a avaliação.</span></div>
+        <div><strong>1.</strong><span>Consulte os materiais da aula.</span></div>
+        <div><strong>2.</strong><span>Inicie a atividade prática.</span></div>
+        <div><strong>3.</strong><span>Responda e carregue evidências.</span></div>
+        <div><strong>4.</strong><span>Acompanhe a avaliação.</span></div>
       </div>
     </section>
   `;
@@ -439,13 +453,27 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
         <p>As imagens serão otimizadas antes do envio. Confirme que todos os cálculos estão legíveis.</p>
       </div>
 
-      <label class="upload-dropzone" for="exerciseFiles">
-        <input id="exerciseFiles" type="file" multiple
-          accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,.xls,.xlsx">
-        <span class="upload-icon">↑</span>
-        <strong>Selecionar ficheiros</strong>
-        <small>JPG, PNG, WebP, PDF, Word ou Excel</small>
-      </label>
+      <div class="upload-methods">
+        <label class="upload-dropzone" for="exerciseFiles">
+          <input id="exerciseFiles" type="file" multiple
+            accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,.xls,.xlsx">
+          <span class="upload-icon">↑</span>
+          <strong>Selecionar ficheiros</strong>
+          <small>JPG, PNG, WebP, PDF, Word ou Excel</small>
+        </label>
+
+        <form id="driveUploadForm" class="drive-upload-form">
+          <label>
+            <span>Imagem por link do Google Drive</span>
+            <input id="driveImageUrl" type="url" name="driveImageUrl"
+              placeholder="https://drive.google.com/file/d/.../view">
+          </label>
+          <button class="button button-secondary" type="submit">Carregar imagem</button>
+          <p class="field-hint">
+            Use um link público para uma imagem. A plataforma lê a imagem e envia-a pela mesma submissão.
+          </p>
+        </form>
+      </div>
 
       <div id="uploadProgress" class="upload-progress" hidden></div>
       <div id="uploadedFiles" class="uploaded-files">
@@ -594,6 +622,7 @@ function bindAssessmentEvents() {
   });
 
   document.querySelector('#exerciseFiles')?.addEventListener('change', uploadFiles);
+  document.querySelector('#driveUploadForm')?.addEventListener('submit', uploadDriveImage);
   document.querySelector('#submitAttempt')?.addEventListener('click', submitAttempt);
   bindDeleteFileEvents();
 }
@@ -686,6 +715,97 @@ async function uploadFiles(event) {
   progress.hidden = true;
   event.target.value = '';
   await refreshAttemptData();
+}
+
+async function uploadDriveImage(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const input = form.querySelector('#driveImageUrl');
+  const button = form.querySelector('button');
+  const progress = document.querySelector('#uploadProgress');
+  const rawUrl = input.value.trim();
+
+  if (!rawUrl) {
+    input.focus();
+    return;
+  }
+
+  progress.hidden = false;
+  progress.textContent = 'A preparar imagem do Google Drive...';
+  setBusy(button, true, 'A carregar...');
+
+  try {
+    const file = await fileFromDriveImageUrl(rawUrl);
+    progress.textContent = `A enviar ${file.name}`;
+    await api.uploadFile(state.attempt.attemptId, file);
+    input.value = '';
+    showToast(`${file.name} carregado.`, 'success');
+    await refreshAttemptData();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+    progress.hidden = true;
+    reportHeight();
+  }
+}
+
+async function fileFromDriveImageUrl(rawUrl) {
+  const sourceUrl = googleDriveDownloadUrl(rawUrl);
+  let response;
+
+  try {
+    response = await fetch(sourceUrl, {
+      method: 'GET',
+      cache: 'no-store'
+    });
+  } catch {
+    throw new Error('Não foi possível ler o link. Confirme que a imagem do Google Drive está pública.');
+  }
+
+  if (!response.ok) {
+    throw new Error('Não foi possível descarregar a imagem do Google Drive.');
+  }
+
+  const blob = await response.blob();
+
+  if (!blob.type.startsWith('image/')) {
+    throw new Error('O link indicado precisa apontar para uma imagem pública do Google Drive.');
+  }
+
+  return new File([blob], driveImageFileName(rawUrl, blob.type), { type: blob.type });
+}
+
+function googleDriveDownloadUrl(rawUrl) {
+  const fileId = googleDriveFileId(rawUrl);
+  if (!fileId) return rawUrl;
+  return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
+}
+
+function googleDriveFileId(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const queryId = url.searchParams.get('id');
+    if (queryId) return queryId;
+
+    const match = url.pathname.match(/\/file\/d\/([^/]+)/);
+    return match?.[1] || '';
+  } catch {
+    return '';
+  }
+}
+
+function driveImageFileName(rawUrl, mimeType) {
+  const extensionByMime = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif'
+  };
+  const extension = extensionByMime[mimeType] || 'jpg';
+  const fileId = googleDriveFileId(rawUrl);
+  return `google-drive-${fileId || Date.now()}.${extension}`;
 }
 
 async function refreshAttemptData() {
