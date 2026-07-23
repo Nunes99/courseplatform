@@ -32,15 +32,18 @@ const state = {
   lesson: null,
   attempt: null,
   attemptData: null,
+  media: {
+    logoUrl: '',
+    videos: []
+  },
   timerId: null,
   pollId: null
 };
 
 initialize();
 
-function initialize() {
+async function initialize() {
   initializeThemeToggle();
-  applyBrandLogo();
 
   try {
     api = new CoursePlatformApi(config);
@@ -48,6 +51,9 @@ function initialize() {
     renderConfigurationError(error);
     return;
   }
+
+  await loadPublicMediaConfig();
+  applyBrandLogo();
 
   logoutButton.addEventListener('click', logout);
   window.addEventListener('hashchange', route);
@@ -193,6 +199,8 @@ async function renderDashboard() {
 
   const dashboard = await api.dashboard();
   state.dashboard = dashboard;
+  await loadStudentMediaConfig();
+  applyBrandLogo();
 
   const greeting = studentGreeting(dashboard.student.fullName);
   headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(dashboard.student.fullName)}</span>`;
@@ -1031,14 +1039,17 @@ function buildLessonNavigation() {
 }
 
 function videoGallery() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem('lssVideoGallery') || '[]');
-    return Array.isArray(parsed)
-      ? parsed.filter((video) => videoEmbedUrl(video.url))
-      : [];
-  } catch {
-    return [];
-  }
+  const videos = state.media.videos.length ? state.media.videos : localVideoGallery();
+  const studentEmail = String(state.dashboard?.student?.email || '').toLowerCase();
+
+  return videos.filter((video) => {
+    if (!videoEmbedUrl(video.url)) return false;
+    if (video.status && video.status !== 'ACTIVE') return false;
+    if (video.visibility !== 'SELECTED') return true;
+
+    const allowed = normalizeEmailList(video.allowedEmails);
+    return allowed.includes(studentEmail);
+  });
 }
 
 function videoCardTemplate(video) {
@@ -1278,8 +1289,58 @@ function applyBrandLogo() {
 }
 
 function brandLogoUrl() {
-  const rawUrl = localStorage.getItem('lssLogoUrl') || '';
+  const rawUrl = state.media.logoUrl || localStorage.getItem('lssLogoUrl') || '';
   return imageDisplayUrl(rawUrl);
+}
+
+async function loadPublicMediaConfig() {
+  try {
+    const result = await api.publicMediaConfig();
+    setMediaConfig(result.mediaConfig || result);
+  } catch {
+    setMediaConfig(localMediaConfig());
+  }
+}
+
+async function loadStudentMediaConfig() {
+  try {
+    const result = await api.mediaConfig();
+    setMediaConfig(result.mediaConfig || result);
+  } catch {
+    setMediaConfig(localMediaConfig());
+  }
+}
+
+function setMediaConfig(mediaConfig = {}) {
+  state.media.logoUrl = mediaConfig.logoUrl || '';
+  state.media.videos = Array.isArray(mediaConfig.videos) ? mediaConfig.videos : [];
+}
+
+function localMediaConfig() {
+  return {
+    logoUrl: localStorage.getItem('lssLogoUrl') || '',
+    videos: localVideoGallery()
+  };
+}
+
+function localVideoGallery() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('lssVideoGallery') || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeEmailList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim().toLowerCase()).filter(Boolean);
+  }
+
+  return String(value || '')
+    .split(/[\n,;]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function imageDisplayUrl(rawUrl) {

@@ -23,14 +23,17 @@ let api;
 const state = {
   pending: [],
   students: [],
-  selectedSubmission: null
+  selectedSubmission: null,
+  media: {
+    logoUrl: '',
+    videos: []
+  }
 };
 
 initialize();
 
-function initialize() {
+async function initialize() {
   initializeThemeToggle();
-  applyBrandLogo();
 
   try {
     api = new CoursePlatformApi(config);
@@ -43,6 +46,9 @@ function initialize() {
     `;
     return;
   }
+
+  await loadPublicMediaConfig();
+  applyBrandLogo();
 
   logoutButton.addEventListener('click', logout);
   new ResizeObserver(reportHeight).observe(document.body);
@@ -527,8 +533,10 @@ function renderStudents() {
   reportHeight();
 }
 
-function renderVideos() {
+async function renderVideos() {
   const main = document.querySelector('#adminMain');
+  main.innerHTML = loadingTemplate('A carregar vídeos…');
+  await loadAdminMediaConfig();
   const videos = videoGallery();
 
   main.innerHTML = `
@@ -553,6 +561,18 @@ function renderVideos() {
           <span>Descrição opcional</span>
           <textarea name="description" rows="3" placeholder="Breve contexto para os estudantes"></textarea>
         </label>
+        <label>
+          <span>Visibilidade</span>
+          <select name="visibility">
+            <option value="PUBLIC">Todos os estudantes</option>
+            <option value="SELECTED">Apenas emails selecionados</option>
+          </select>
+        </label>
+        <label class="admin-video-description">
+          <span>Emails autorizados</span>
+          <textarea name="allowedEmails" rows="3"
+            placeholder="um email por linha, vírgula ou ponto e vírgula"></textarea>
+        </label>
         <button class="button button-primary" type="submit">Publicar vídeo</button>
       </form>
     </section>
@@ -564,6 +584,7 @@ function renderVideos() {
             <div>
               <h3>${escapeHtml(video.title)}</h3>
               <p>${escapeHtml(video.description || 'Sem descrição.')}</p>
+              <small>${escapeHtml(videoAccessLabel(video))}</small>
               <a href="${escapeHtml(video.url)}" target="_blank" rel="noopener">Abrir link original</a>
             </div>
             <button type="button" data-delete-video="${escapeHtml(video.id)}">Remover</button>
@@ -581,9 +602,12 @@ function renderVideos() {
   reportHeight();
 }
 
-function renderBrandSettings() {
+async function renderBrandSettings() {
   const main = document.querySelector('#adminMain');
-  const rawLogoUrl = localStorage.getItem('lssLogoUrl') || '';
+  main.innerHTML = loadingTemplate('A carregar marca…');
+  await loadAdminMediaConfig();
+
+  const rawLogoUrl = state.media.logoUrl || '';
   const displayLogo = brandLogoUrl();
 
   main.innerHTML = `
@@ -625,10 +649,11 @@ function renderBrandSettings() {
   reportHeight();
 }
 
-function saveBrandLogo(event) {
+async function saveBrandLogo(event) {
   event.preventDefault();
 
   const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
   const rawUrl = String(new FormData(form).get('logoUrl') || '').trim();
 
   if (!imageDisplayUrl(rawUrl)) {
@@ -637,25 +662,41 @@ function saveBrandLogo(event) {
     return;
   }
 
-  localStorage.setItem('lssLogoUrl', rawUrl);
-  applyBrandLogo();
-  showToast('Logotipo atualizado.', 'success');
-  renderBrandSettings();
+  setBusy(button, true, 'A guardar…');
+  try {
+    state.media.logoUrl = rawUrl;
+    await saveMediaConfig();
+    applyBrandLogo();
+    showToast('Logotipo atualizado.', 'success');
+    await renderBrandSettings();
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
 }
 
-function removeBrandLogo() {
-  localStorage.removeItem('lssLogoUrl');
-  applyBrandLogo();
-  showToast('Logotipo removido.', 'success');
-  renderBrandSettings();
+async function removeBrandLogo() {
+  try {
+    state.media.logoUrl = '';
+    await saveMediaConfig();
+    applyBrandLogo();
+    showToast('Logotipo removido.', 'success');
+    await renderBrandSettings();
+  } catch (error) {
+    handleAdminError(error);
+  }
 }
 
-function saveVideo(event) {
+async function saveVideo(event) {
   event.preventDefault();
 
   const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
   const values = new FormData(form);
   const url = String(values.get('url') || '').trim();
+  const visibility = String(values.get('visibility') || 'PUBLIC');
+  const allowedEmails = normalizeEmailList(values.get('allowedEmails'));
 
   if (!videoEmbedUrl(url)) {
     showToast('Adicione um link válido do YouTube ou Vimeo.', 'warning');
@@ -663,39 +704,60 @@ function saveVideo(event) {
     return;
   }
 
+  if (visibility === 'SELECTED' && !allowedEmails.length) {
+    showToast('Informe pelo menos um email autorizado.', 'warning');
+    form.elements.allowedEmails.focus();
+    return;
+  }
+
+  setBusy(button, true, 'A publicar…');
   const videos = videoGallery();
   videos.unshift({
     id: String(Date.now()),
     title: String(values.get('title') || '').trim(),
     url,
-    description: String(values.get('description') || '').trim()
+    description: String(values.get('description') || '').trim(),
+    visibility,
+    allowedEmails,
+    status: 'ACTIVE'
   });
 
-  saveVideoGallery(videos);
-  showToast('Vídeo publicado na galeria.', 'success');
-  renderVideos();
-}
-
-function deleteVideo(videoId) {
-  if (!window.confirm('Remover este vídeo da galeria?')) return;
-  saveVideoGallery(videoGallery().filter((video) => video.id !== videoId));
-  showToast('Vídeo removido.', 'success');
-  renderVideos();
-}
-
-function videoGallery() {
   try {
-    const parsed = JSON.parse(localStorage.getItem('lssVideoGallery') || '[]');
-    return Array.isArray(parsed)
-      ? parsed.filter((video) => video?.id && videoEmbedUrl(video.url))
-      : [];
-  } catch {
-    return [];
+    state.media.videos = videos;
+    await saveMediaConfig();
+    showToast('Vídeo publicado na galeria.', 'success');
+    await renderVideos();
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
   }
 }
 
-function saveVideoGallery(videos) {
-  localStorage.setItem('lssVideoGallery', JSON.stringify(videos));
+async function deleteVideo(videoId) {
+  if (!window.confirm('Remover este vídeo da galeria?')) return;
+
+  try {
+    state.media.videos = videoGallery().filter((video) => video.id !== videoId);
+    await saveMediaConfig();
+    showToast('Vídeo removido.', 'success');
+    await renderVideos();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+function videoGallery() {
+  return state.media.videos.filter((video) => video?.id && videoEmbedUrl(video.url));
+}
+
+function videoAccessLabel(video) {
+  if (video.visibility === 'SELECTED') {
+    const count = normalizeEmailList(video.allowedEmails).length;
+    return `Visível para ${count} estudante${count === 1 ? '' : 's'}`;
+  }
+
+  return 'Visível para todos os estudantes';
 }
 
 function videoEmbedUrl(rawUrl) {
@@ -886,8 +948,71 @@ function applyBrandLogo() {
 }
 
 function brandLogoUrl() {
-  const rawUrl = localStorage.getItem('lssLogoUrl') || '';
+  const rawUrl = state.media.logoUrl || localStorage.getItem('lssLogoUrl') || '';
   return imageDisplayUrl(rawUrl);
+}
+
+async function loadPublicMediaConfig() {
+  try {
+    const result = await api.publicMediaConfig();
+    setMediaConfig(result.mediaConfig || result);
+  } catch {
+    setMediaConfig(localMediaConfig());
+  }
+}
+
+async function loadAdminMediaConfig() {
+  try {
+    const result = await api.adminMediaConfig();
+    setMediaConfig(result.mediaConfig || result);
+  } catch {
+    setMediaConfig(localMediaConfig());
+    showToast('Media carregada localmente. Publique as funções do Apps Script para sincronizar com Google Sheets.', 'warning');
+  }
+}
+
+async function saveMediaConfig() {
+  const mediaConfig = {
+    logoUrl: state.media.logoUrl,
+    videos: state.media.videos
+  };
+
+  const result = await api.adminSaveMediaConfig(mediaConfig);
+  setMediaConfig(result.mediaConfig || mediaConfig);
+  localStorage.setItem('lssLogoUrl', state.media.logoUrl || '');
+  localStorage.setItem('lssVideoGallery', JSON.stringify(state.media.videos));
+}
+
+function setMediaConfig(mediaConfig = {}) {
+  state.media.logoUrl = mediaConfig.logoUrl || '';
+  state.media.videos = Array.isArray(mediaConfig.videos) ? mediaConfig.videos : [];
+}
+
+function localMediaConfig() {
+  return {
+    logoUrl: localStorage.getItem('lssLogoUrl') || '',
+    videos: localVideoGallery()
+  };
+}
+
+function localVideoGallery() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('lssVideoGallery') || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeEmailList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim().toLowerCase()).filter(Boolean);
+  }
+
+  return String(value || '')
+    .split(/[\n,;]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function imageDisplayUrl(rawUrl) {

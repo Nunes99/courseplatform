@@ -1547,6 +1547,13 @@ input:focus, textarea:focus, select:focus {
   color: var(--muted);
 }
 
+.admin-video-card small {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .admin-video-card button {
   border: 0;
   background: none;

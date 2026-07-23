@@ -107,6 +107,10 @@ export class CoursePlatformApi {
     return this.publicGet('publicCourseConfig', { courseId: this.courseId });
   }
 
+  publicMediaConfig() {
+    return this.publicGet('publicMediaConfig', { courseId: this.courseId });
+  }
+
   verifyCertificate(code) {
     return this.publicGet('verifyCertificate', { code });
   }
@@ -176,6 +180,10 @@ export class CoursePlatformApi {
 
   certificate() {
     return this.studentRequest('getMyCertificate', { courseId: this.courseId });
+  }
+
+  mediaConfig() {
+    return this.studentRequest('getMediaConfig', { courseId: this.courseId });
   }
 
   studentRequest(action, payload = {}) {
@@ -251,6 +259,19 @@ export class CoursePlatformApi {
   adminCourseStructure() {
     return this.adminRequest('adminGetCourseStructure', {
       courseId: this.courseId
+    });
+  }
+
+  adminMediaConfig() {
+    return this.adminRequest('adminGetMediaConfig', {
+      courseId: this.courseId
+    });
+  }
+
+  adminSaveMediaConfig(mediaConfig) {
+    return this.adminRequest('adminSaveMediaConfig', {
+      courseId: this.courseId,
+      mediaConfig
     });
   }
 
