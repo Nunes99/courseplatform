@@ -14,6 +14,8 @@ const config = window.COURSE_PLATFORM_CONFIG;
 const root = document.querySelector('#adminApp');
 const adminIdentity = document.querySelector('#adminIdentity');
 const logoutButton = document.querySelector('#adminLogoutButton');
+const themeToggle = document.querySelector('#themeToggle');
+const icons8Base = 'https://img.icons8.com/ios-filled/50';
 
 let api;
 const state = {
@@ -25,6 +27,8 @@ const state = {
 initialize();
 
 function initialize() {
+  initializeThemeToggle();
+
   try {
     api = new CoursePlatformApi(config);
   } catch (error) {
@@ -54,10 +58,23 @@ function renderAdminLogin() {
 
   root.innerHTML = `
     <section class="auth-shell">
-      <div class="auth-card">
-        <div class="brand-mark">LSS</div>
-        <p class="eyebrow">LMTWEBNAIRS Summer School</p>
-        <h1>Painel do avaliador</h1>
+      <div class="auth-card auth-card-modern">
+        <div class="auth-card-accent">
+          <img src="${icons8Base}/c9a55b/admin-settings-male.png" alt="">
+          <span>Área reservada</span>
+        </div>
+
+        <div class="auth-brand-row">
+          <div class="brand-mark">LSS</div>
+          <div>
+            <p class="eyebrow">LMTWEBNAIRS Summer School</p>
+            <h1>Painel do avaliador</h1>
+          </div>
+        </div>
+
+        <p class="auth-description">
+          Organize submissões, acompanhe participantes e registe avaliações com clareza.
+        </p>
 
         <form id="adminLoginForm" class="form-stack">
           <label>
@@ -122,12 +139,17 @@ function renderAdminShell() {
   root.innerHTML = `
     <div class="admin-layout">
       <aside class="admin-sidebar">
-        <h2>Gestão da Summer School</h2>
+        <div class="admin-sidebar-heading">
+          <img src="${icons8Base}/c9a55b/dashboard-layout.png" alt="">
+          <h2>Gestão da Summer School</h2>
+        </div>
         <button class="admin-nav is-active" data-admin-view="pending">
-          Submissões
+          <img src="${icons8Base}/00365b/inbox.png" alt="">
+          <span>Submissões</span>
         </button>
         <button class="admin-nav" data-admin-view="students">
-          Estudantes
+          <img src="${icons8Base}/00365b/student-male.png" alt="">
+          <span>Estudantes</span>
         </button>
       </aside>
 
@@ -167,6 +189,8 @@ async function loadPending() {
 
 function renderPending() {
   const main = document.querySelector('#adminMain');
+  const uniqueStudents = new Set(state.pending.map((item) => item.student.email)).size;
+  const fileTotal = state.pending.reduce((sum, item) => sum + Number(item.fileCount || 0), 0);
 
   main.innerHTML = `
     <div class="admin-page-heading">
@@ -176,6 +200,30 @@ function renderPending() {
       </div>
       <button class="button button-secondary" id="refreshPending">Atualizar</button>
     </div>
+
+    <section class="admin-summary-grid" aria-label="Resumo de avaliação">
+      <article class="insight-card">
+        <img src="${icons8Base}/c9a55b/inbox.png" alt="">
+        <div>
+          <span>Submissões</span>
+          <strong>${state.pending.length}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${icons8Base}/c9a55b/student-male.png" alt="">
+        <div>
+          <span>Participantes</span>
+          <strong>${uniqueStudents}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${icons8Base}/c9a55b/documents.png" alt="">
+        <div>
+          <span>Ficheiros</span>
+          <strong>${fileTotal}</strong>
+        </div>
+      </article>
+    </section>
 
     <div class="admin-table-wrap">
       <table class="admin-table">
@@ -375,6 +423,12 @@ async function loadStudents() {
 
 function renderStudents() {
   const main = document.querySelector('#adminMain');
+  const activeStudents = state.students.filter(({ student }) => student.status === 'ACTIVE').length;
+  const avgProgress = state.students.length
+    ? Math.round(state.students.reduce((sum, { enrollments }) => {
+        return sum + Number(enrollments[0]?.progressPercent || 0);
+      }, 0) / state.students.length)
+    : 0;
 
   main.innerHTML = `
     <div class="admin-page-heading">
@@ -386,6 +440,30 @@ function renderStudents() {
         Adicionar estudante
       </button>
     </div>
+
+    <section class="admin-summary-grid" aria-label="Resumo de participantes">
+      <article class="insight-card">
+        <img src="${icons8Base}/c9a55b/conference-call.png" alt="">
+        <div>
+          <span>Total</span>
+          <strong>${state.students.length}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${icons8Base}/c9a55b/ok.png" alt="">
+        <div>
+          <span>Ativos</span>
+          <strong>${activeStudents}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${icons8Base}/c9a55b/combo-chart.png" alt="">
+        <div>
+          <span>Progresso médio</span>
+          <strong>${avgProgress}%</strong>
+        </div>
+      </article>
+    </section>
 
     <div class="student-admin-grid">
       ${state.students.map(({ student, enrollments }) => `
@@ -529,6 +607,26 @@ function loadingTemplate(message) {
       <p>${escapeHtml(message)}</p>
     </div>
   `;
+}
+
+function initializeThemeToggle() {
+  if (!themeToggle) return;
+
+  const applyTheme = (theme) => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('lssTheme', theme);
+    const icon = themeToggle.querySelector('.theme-toggle-icon');
+    if (icon) icon.textContent = theme === 'dark' ? '☾' : '☀';
+    themeToggle.title = theme === 'dark' ? 'Usar modo claro' : 'Usar modo noturno';
+    themeToggle.setAttribute('aria-label', themeToggle.title);
+  };
+
+  applyTheme(document.documentElement.dataset.theme || 'light');
+
+  themeToggle.addEventListener('click', () => {
+    const nextTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    applyTheme(nextTheme);
+  });
 }
 
 function handleAdminError(error) {

@@ -6,6 +6,16 @@
   <meta name="theme-color" content="#00365B">
   <title>LMTWEBNAIRS Summer School | Verificação</title>
 
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet">
+  <script>
+    (() => {
+      const saved = localStorage.getItem('lssTheme');
+      const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+      document.documentElement.dataset.theme = saved || (prefersDark ? 'dark' : 'light');
+    })();
+  </script>
   <link rel="stylesheet" href="./assets/css/styles.css">
   <script defer src="./config.js"></script>
   <script type="module" src="./verify.js"></script>

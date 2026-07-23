@@ -19,8 +19,10 @@ const config = window.COURSE_PLATFORM_CONFIG;
 const root = document.querySelector('#app');
 const headerUser = document.querySelector('#headerUser');
 const logoutButton = document.querySelector('#logoutButton');
+const themeToggle = document.querySelector('#themeToggle');
 const platformName = config.appName || 'LMTWEBNAIRS Summer School 2026';
 const platformYear = 'Summer School 2026';
+const icons8Base = 'https://img.icons8.com/ios-filled/50';
 
 let api;
 const state = {
@@ -35,6 +37,8 @@ const state = {
 initialize();
 
 function initialize() {
+  initializeThemeToggle();
+
   try {
     api = new CoursePlatformApi(config);
   } catch (error) {
@@ -87,18 +91,35 @@ async function route() {
 
 function renderLogin() {
   clearTimers();
-  headerUser.textContent = '';
+  headerUser.innerHTML = '';
+  headerUser.title = '';
   logoutButton.hidden = true;
 
   root.innerHTML = `
     <section class="auth-shell">
-      <div class="auth-card">
-        <div class="brand-mark">LSS</div>
-        <p class="eyebrow">LMTWEBNAIRS Summer School</p>
-        <h1>${escapeHtml(platformName)}</h1>
+      <div class="auth-card auth-card-modern">
+        <div class="auth-card-accent">
+          <img src="${icons8Base}/c9a55b/graduation-cap.png" alt="">
+          <span>Portal académico</span>
+        </div>
+
+        <div class="auth-brand-row">
+          <div class="brand-mark">LSS</div>
+          <div>
+            <p class="eyebrow">LMTWEBNAIRS Summer School</p>
+            <h1>${escapeHtml(platformName)}</h1>
+          </div>
+        </div>
+
         <p class="auth-description">
-          Aceda ao percurso formativo, acompanhe as aulas e submeta as atividades da Summer School num ambiente organizado e seguro.
+          Entre na área do participante para acompanhar aulas, exercícios e avaliações num ambiente simples e bem organizado.
         </p>
+
+        <div class="auth-feature-list" aria-label="Recursos da plataforma">
+          <span><img src="${icons8Base}/00365b/open-book.png" alt=""> Aulas</span>
+          <span><img src="${icons8Base}/00365b/task-completed.png" alt=""> Atividades</span>
+          <span><img src="${icons8Base}/00365b/certificate.png" alt=""> Certificado</span>
+        </div>
 
         <form id="loginForm" class="form-stack">
           <label>
@@ -170,8 +191,14 @@ async function renderDashboard() {
   const dashboard = await api.dashboard();
   state.dashboard = dashboard;
 
-  headerUser.textContent = dashboard.student.fullName;
+  const greeting = studentGreeting(dashboard.student.fullName);
+  headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(greeting)}</span>`;
+  headerUser.title = greeting;
   logoutButton.hidden = false;
+
+  const totalLessons = dashboard.lessons.length;
+  const approvedLessons = dashboard.lessons.filter((item) => item.progress.status === 'APPROVED').length;
+  const activeLessons = dashboard.lessons.filter((item) => ['AVAILABLE', 'IN_PROGRESS', 'UNDER_REVIEW'].includes(item.progress.status)).length;
 
   const certificateButton = dashboard.enrollment.status === 'COMPLETED'
     ? '<a class="button button-secondary" href="#/certificate">Ver certificado</a>'
@@ -205,6 +232,30 @@ async function renderDashboard() {
         </div>
         ${certificateButton}
       </div>
+    </section>
+
+    <section class="dashboard-insights" aria-label="Resumo do percurso">
+      <article class="insight-card">
+        <img src="${icons8Base}/c9a55b/checked-checkbox.png" alt="">
+        <div>
+          <span>Aulas aprovadas</span>
+          <strong>${approvedLessons}/${totalLessons}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${icons8Base}/c9a55b/classroom.png" alt="">
+        <div>
+          <span>Aulas disponíveis</span>
+          <strong>${activeLessons}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${icons8Base}/c9a55b/time.png" alt="">
+        <div>
+          <span>Carga horária</span>
+          <strong>${dashboard.course.totalHours}h</strong>
+        </div>
+      </article>
     </section>
 
     <section class="section-heading">
@@ -1026,6 +1077,32 @@ function loadingTemplate(message) {
       <p>${escapeHtml(message)}</p>
     </div>
   `;
+}
+
+function initializeThemeToggle() {
+  if (!themeToggle) return;
+
+  const applyTheme = (theme) => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('lssTheme', theme);
+    const icon = themeToggle.querySelector('.theme-toggle-icon');
+    if (icon) icon.textContent = theme === 'dark' ? '☾' : '☀';
+    themeToggle.title = theme === 'dark' ? 'Usar modo claro' : 'Usar modo noturno';
+    themeToggle.setAttribute('aria-label', themeToggle.title);
+  };
+
+  applyTheme(document.documentElement.dataset.theme || 'light');
+
+  themeToggle.addEventListener('click', () => {
+    const nextTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    applyTheme(nextTheme);
+  });
+}
+
+function studentGreeting(fullName) {
+  const hour = new Date().getHours();
+  const period = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+  return `${period}, ${fullName}, seja bem-vindo ao LMTWEBNAIRS Summer School 2026`;
 }
 
 function renderConfigurationError(error) {
