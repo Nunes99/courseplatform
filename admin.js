@@ -868,6 +868,47 @@ function updateThemeIcons(theme) {
   });
 }
 
+function brandSymbolTemplate(className) {
+  const logo = brandLogoUrl();
+  return `
+    <div class="${className}">
+      ${logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS'}
+    </div>
+  `;
+}
+
+function applyBrandLogo() {
+  document.querySelectorAll('.site-brand-symbol, .brand-mark, .admin-sidebar-symbol').forEach((symbol) => {
+    const logo = brandLogoUrl();
+    symbol.innerHTML = logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS';
+  });
+}
+
+function brandLogoUrl() {
+  const rawUrl = localStorage.getItem('lssLogoUrl') || '';
+  return imageDisplayUrl(rawUrl);
+}
+
+function imageDisplayUrl(rawUrl) {
+  if (!rawUrl) return '';
+
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.replace(/^www\./, '');
+
+    if (host === 'drive.google.com') {
+      const queryId = url.searchParams.get('id');
+      const pathId = url.pathname.match(/\/file\/d\/([^/]+)/)?.[1];
+      const id = queryId || pathId;
+      return id ? `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w400` : rawUrl;
+    }
+
+    return rawUrl;
+  } catch {
+    return '';
+  }
+}
+
 function handleAdminError(error) {
   console.error(error);
 

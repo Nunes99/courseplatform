@@ -1270,7 +1270,7 @@ function brandSymbolTemplate(className) {
 }
 
 function applyBrandLogo() {
-  document.querySelectorAll('.site-brand-symbol').forEach((symbol) => {
+  document.querySelectorAll('.site-brand-symbol, .brand-mark, .admin-sidebar-symbol').forEach((symbol) => {
     const logo = brandLogoUrl();
     symbol.innerHTML = logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS';
   });
