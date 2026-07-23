@@ -318,6 +318,7 @@ async function renderDashboard() {
     });
   });
 
+  bindVideoSoundEvents();
   renderMath();
 }
 
@@ -1041,21 +1042,50 @@ function videoGallery() {
 
 function videoCardTemplate(video) {
   return `
-    <article class="video-card">
+    <article class="video-card" data-video-url="${escapeHtml(video.url)}">
       <div class="video-frame">
-        <iframe src="${escapeHtml(videoEmbedUrl(video.url))}"
-          title="${escapeHtml(video.title || 'Vídeo da Summer School')}" allowfullscreen></iframe>
+        <iframe src="${escapeHtml(videoEmbedUrl(video.url, { autoplay: true, muted: true }))}"
+          title="${escapeHtml(video.title || 'Vídeo da Summer School')}"
+          allow="autoplay; encrypted-media; picture-in-picture"
+          allowfullscreen></iframe>
       </div>
       <div class="video-card-body">
-        <h3>${escapeHtml(video.title || 'Vídeo da Summer School')}</h3>
-        ${video.description ? `<p>${escapeHtml(video.description)}</p>` : ''}
+        <div>
+          <h3>${escapeHtml(video.title || 'Vídeo da Summer School')}</h3>
+          ${video.description ? `<p>${escapeHtml(video.description)}</p>` : ''}
+        </div>
+        <button class="video-sound-button" type="button" data-toggle-video-sound
+          data-sound="off" aria-pressed="false">
+          Ativar som
+        </button>
       </div>
     </article>
   `;
 }
 
-function videoEmbedUrl(rawUrl) {
+function bindVideoSoundEvents() {
+  root.querySelectorAll('[data-toggle-video-sound]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const card = button.closest('[data-video-url]');
+      const iframe = card?.querySelector('iframe');
+      if (!card || !iframe) return;
+
+      const soundOn = button.dataset.sound !== 'on';
+      button.dataset.sound = soundOn ? 'on' : 'off';
+      button.textContent = soundOn ? 'Desativar som' : 'Ativar som';
+      button.setAttribute('aria-pressed', String(soundOn));
+      iframe.src = videoEmbedUrl(card.dataset.videoUrl, {
+        autoplay: true,
+        muted: !soundOn
+      });
+    });
+  });
+}
+
+function videoEmbedUrl(rawUrl, options = {}) {
   if (!rawUrl) return '';
+  const autoplay = options.autoplay !== false;
+  const muted = options.muted !== false;
 
   try {
     const url = new URL(rawUrl);
@@ -1063,28 +1093,55 @@ function videoEmbedUrl(rawUrl) {
 
     if (host === 'youtu.be') {
       const id = url.pathname.split('/').filter(Boolean)[0];
-      return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : '';
+      return id ? youtubeEmbedUrl(id, autoplay, muted) : '';
     }
 
     if (host.endsWith('youtube.com')) {
       const watchId = url.searchParams.get('v');
-      if (watchId) return `https://www.youtube.com/embed/${encodeURIComponent(watchId)}`;
+      if (watchId) return youtubeEmbedUrl(watchId, autoplay, muted);
 
       const parts = url.pathname.split('/').filter(Boolean);
       const marker = parts.findIndex((part) => ['embed', 'shorts', 'live'].includes(part));
       const id = marker >= 0 ? parts[marker + 1] : '';
-      return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : '';
+      return id ? youtubeEmbedUrl(id, autoplay, muted) : '';
     }
 
     if (host.endsWith('vimeo.com')) {
       const id = url.pathname.split('/').filter(Boolean).find((part) => /^\d+$/.test(part));
-      return id ? `https://player.vimeo.com/video/${encodeURIComponent(id)}` : '';
+      return id ? vimeoEmbedUrl(id, autoplay, muted) : '';
     }
   } catch {
     return '';
   }
 
   return '';
+}
+
+function youtubeEmbedUrl(id, autoplay, muted) {
+  const url = new URL(`https://www.youtube.com/embed/${encodeURIComponent(id)}`);
+  url.searchParams.set('autoplay', autoplay ? '1' : '0');
+  url.searchParams.set('mute', muted ? '1' : '0');
+  url.searchParams.set('controls', '0');
+  url.searchParams.set('modestbranding', '1');
+  url.searchParams.set('rel', '0');
+  url.searchParams.set('playsinline', '1');
+  url.searchParams.set('iv_load_policy', '3');
+  url.searchParams.set('fs', '0');
+  url.searchParams.set('disablekb', '1');
+  return url.toString();
+}
+
+function vimeoEmbedUrl(id, autoplay, muted) {
+  const url = new URL(`https://player.vimeo.com/video/${encodeURIComponent(id)}`);
+  url.searchParams.set('autoplay', autoplay ? '1' : '0');
+  url.searchParams.set('muted', muted ? '1' : '0');
+  url.searchParams.set('controls', '0');
+  url.searchParams.set('title', '0');
+  url.searchParams.set('byline', '0');
+  url.searchParams.set('portrait', '0');
+  url.searchParams.set('autopause', '0');
+  url.searchParams.set('dnt', '1');
+  return url.toString();
 }
 
 async function renderCertificate() {

@@ -545,6 +545,10 @@ input:focus, textarea:focus, select:focus {
 }
 
 .video-card-body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
   padding: 14px 16px 16px;
 }
 
@@ -557,6 +561,28 @@ input:focus, textarea:focus, select:focus {
   margin: 0;
   color: var(--muted);
   font-size: 14px;
+}
+
+.video-sound-button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.video-sound-button[aria-pressed="true"] {
+  background: var(--primary);
+  color: var(--surface);
+}
+
+:root[data-theme="dark"] .video-sound-button[aria-pressed="true"] {
+  color: #082033;
 }
 
 .video-gallery.is-empty,
@@ -1691,6 +1717,11 @@ input:focus, textarea:focus, select:focus {
   .video-panel { padding: 20px; }
   .video-frame { min-height: 220px; }
   .video-frame.is-empty { min-height: 150px; }
+  .video-card-body {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .video-sound-button { width: 100%; }
 
   .admin-sidebar {
     grid-template-columns: 1fr;
