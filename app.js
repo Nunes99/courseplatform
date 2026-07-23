@@ -201,8 +201,7 @@ async function renderDashboard() {
   const totalLessons = dashboard.lessons.length;
   const approvedLessons = dashboard.lessons.filter((item) => item.progress.status === 'APPROVED').length;
   const activeLessons = dashboard.lessons.filter((item) => ['AVAILABLE', 'IN_PROGRESS', 'UNDER_REVIEW'].includes(item.progress.status)).length;
-  const savedVideoUrl = localStorage.getItem('lssDashboardVideoUrl') || '';
-  const savedVideoEmbed = videoEmbedUrl(savedVideoUrl);
+  const videos = videoGallery();
 
   const certificateButton = dashboard.enrollment.status === 'COMPLETED'
     ? '<a class="button button-secondary" href="#/certificate">Ver certificado</a>'
@@ -262,23 +261,17 @@ async function renderDashboard() {
       </article>
     </section>
 
-    <section class="video-panel" aria-label="Vídeo de apoio">
+    <section class="video-panel" aria-label="Galeria de vídeos">
       <div class="video-panel-copy">
-        <p class="eyebrow">Vídeo de apoio</p>
-        <h2>Adicionar aula em vídeo</h2>
-        <p>Cole um link do YouTube ou Vimeo para visualizar o vídeo diretamente no painel.</p>
+        <p class="eyebrow">Galeria</p>
+        <h2>Vídeos da Summer School</h2>
+        <p>Assista aos vídeos de apoio adicionados pela administração.</p>
       </div>
 
-      <form id="dashboardVideoForm" class="video-link-form">
-        <input type="url" name="videoUrl" value="${escapeHtml(savedVideoUrl)}"
-          placeholder="https://www.youtube.com/watch?v=...">
-        <button class="button button-secondary" type="submit">Adicionar vídeo</button>
-      </form>
-
-      <div id="dashboardVideoFrame" class="video-frame ${savedVideoEmbed ? '' : 'is-empty'}">
-        ${savedVideoEmbed
-          ? `<iframe src="${escapeHtml(savedVideoEmbed)}" title="Vídeo de apoio" allowfullscreen></iframe>`
-          : '<span>O vídeo aparecerá aqui depois de adicionar um link válido.</span>'}
+      <div class="video-gallery ${videos.length ? '' : 'is-empty'}">
+        ${videos.length
+          ? videos.map(videoCardTemplate).join('')
+          : '<div class="video-empty">Ainda não existem vídeos publicados.</div>'}
       </div>
     </section>
 
@@ -324,8 +317,6 @@ async function renderDashboard() {
       }
     });
   });
-
-  bindDashboardVideoEvents();
 
   renderMath();
 }
@@ -1037,31 +1028,30 @@ function buildLessonNavigation() {
   `).join('');
 }
 
-function bindDashboardVideoEvents() {
-  const form = document.querySelector('#dashboardVideoForm');
-  const frame = document.querySelector('#dashboardVideoFrame');
-  if (!form || !frame) return;
+function videoGallery() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('lssVideoGallery') || '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((video) => videoEmbedUrl(video.url))
+      : [];
+  } catch {
+    return [];
+  }
+}
 
-  form.addEventListener('submit', (event) => {
-    event.preventDefault();
-
-    const input = form.elements.videoUrl;
-    const rawUrl = input.value.trim();
-    const embedUrl = videoEmbedUrl(rawUrl);
-
-    if (!embedUrl) {
-      showToast('Adicione um link válido do YouTube ou Vimeo.', 'warning');
-      input.focus();
-      return;
-    }
-
-    localStorage.setItem('lssDashboardVideoUrl', rawUrl);
-    frame.classList.remove('is-empty');
-    frame.innerHTML = `
-      <iframe src="${escapeHtml(embedUrl)}" title="Vídeo de apoio" allowfullscreen></iframe>
-    `;
-    reportHeight();
-  });
+function videoCardTemplate(video) {
+  return `
+    <article class="video-card">
+      <div class="video-frame">
+        <iframe src="${escapeHtml(videoEmbedUrl(video.url))}"
+          title="${escapeHtml(video.title || 'Vídeo da Summer School')}" allowfullscreen></iframe>
+      </div>
+      <div class="video-card-body">
+        <h3>${escapeHtml(video.title || 'Vídeo da Summer School')}</h3>
+        ${video.description ? `<p>${escapeHtml(video.description)}</p>` : ''}
+      </div>
+    </article>
+  `;
 }
 
 function videoEmbedUrl(rawUrl) {

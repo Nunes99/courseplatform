@@ -153,6 +153,10 @@ function renderAdminShell() {
           <img src="${iconUrl('student-male', blueIcon)}" alt="">
           <span>Estudantes</span>
         </button>
+        <button class="admin-nav" data-admin-view="videos">
+          <img src="${iconUrl('video-playlist', blueIcon)}" alt="">
+          <span>Vídeos</span>
+        </button>
       </aside>
 
       <main class="admin-main" id="adminMain"></main>
@@ -169,6 +173,8 @@ function renderAdminShell() {
 
       if (button.dataset.adminView === 'students') {
         loadStudents();
+      } else if (button.dataset.adminView === 'videos') {
+        renderVideos();
       } else {
         loadPending();
       }
@@ -512,6 +518,141 @@ function renderStudents() {
   });
 
   reportHeight();
+}
+
+function renderVideos() {
+  const main = document.querySelector('#adminMain');
+  const videos = videoGallery();
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Galeria</p>
+        <h1>Vídeos</h1>
+      </div>
+    </div>
+
+    <section class="admin-video-panel">
+      <form id="adminVideoForm" class="admin-video-form">
+        <label>
+          <span>Título</span>
+          <input name="title" required placeholder="Ex.: Aula inaugural">
+        </label>
+        <label>
+          <span>Link YouTube ou Vimeo</span>
+          <input type="url" name="url" required placeholder="https://www.youtube.com/watch?v=...">
+        </label>
+        <label class="admin-video-description">
+          <span>Descrição opcional</span>
+          <textarea name="description" rows="3" placeholder="Breve contexto para os estudantes"></textarea>
+        </label>
+        <button class="button button-primary" type="submit">Publicar vídeo</button>
+      </form>
+    </section>
+
+    <section class="admin-video-list ${videos.length ? '' : 'is-empty'}">
+      ${videos.length
+        ? videos.map((video) => `
+          <article class="admin-video-card">
+            <div>
+              <h3>${escapeHtml(video.title)}</h3>
+              <p>${escapeHtml(video.description || 'Sem descrição.')}</p>
+              <a href="${escapeHtml(video.url)}" target="_blank" rel="noopener">Abrir link original</a>
+            </div>
+            <button type="button" data-delete-video="${escapeHtml(video.id)}">Remover</button>
+          </article>
+        `).join('')
+        : '<div class="video-empty">Nenhum vídeo publicado.</div>'}
+    </section>
+  `;
+
+  document.querySelector('#adminVideoForm').addEventListener('submit', saveVideo);
+  root.querySelectorAll('[data-delete-video]').forEach((button) => {
+    button.addEventListener('click', () => deleteVideo(button.dataset.deleteVideo));
+  });
+
+  reportHeight();
+}
+
+function saveVideo(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const values = new FormData(form);
+  const url = String(values.get('url') || '').trim();
+
+  if (!videoEmbedUrl(url)) {
+    showToast('Adicione um link válido do YouTube ou Vimeo.', 'warning');
+    form.elements.url.focus();
+    return;
+  }
+
+  const videos = videoGallery();
+  videos.unshift({
+    id: String(Date.now()),
+    title: String(values.get('title') || '').trim(),
+    url,
+    description: String(values.get('description') || '').trim()
+  });
+
+  saveVideoGallery(videos);
+  showToast('Vídeo publicado na galeria.', 'success');
+  renderVideos();
+}
+
+function deleteVideo(videoId) {
+  if (!window.confirm('Remover este vídeo da galeria?')) return;
+  saveVideoGallery(videoGallery().filter((video) => video.id !== videoId));
+  showToast('Vídeo removido.', 'success');
+  renderVideos();
+}
+
+function videoGallery() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('lssVideoGallery') || '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((video) => video?.id && videoEmbedUrl(video.url))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveVideoGallery(videos) {
+  localStorage.setItem('lssVideoGallery', JSON.stringify(videos));
+}
+
+function videoEmbedUrl(rawUrl) {
+  if (!rawUrl) return '';
+
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.replace(/^www\./, '');
+
+    if (host === 'youtu.be') {
+      const id = url.pathname.split('/').filter(Boolean)[0];
+      return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : '';
+    }
+
+    if (host.endsWith('youtube.com')) {
+      const watchId = url.searchParams.get('v');
+      if (watchId) return `https://www.youtube.com/embed/${encodeURIComponent(watchId)}`;
+
+      const parts = url.pathname.split('/').filter(Boolean);
+      const marker = parts.findIndex((part) => ['embed', 'shorts', 'live'].includes(part));
+      const id = marker >= 0 ? parts[marker + 1] : '';
+      return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : '';
+    }
+
+    if (host.endsWith('vimeo.com')) {
+      const id = url.pathname.split('/').filter(Boolean).find((part) => /^\d+$/.test(part));
+      return id ? `https://player.vimeo.com/video/${encodeURIComponent(id)}` : '';
+    }
+  } catch {
+    return '';
+  }
+
+  return '';
 }
 
 function showStudentDialog() {
