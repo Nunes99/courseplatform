@@ -32,6 +32,7 @@ const state = {
   courses: [],
   groups: [],
   selectedCourseId: config.courseId,
+  courseView: 'overview',
   selectedSubmission: null,
   studentFilters: {
     query: '',
@@ -272,7 +273,7 @@ async function loadStaff() {
   main.innerHTML = loadingTemplate('A carregar staff...');
 
   try {
-    const result = await api.adminStaff();
+    const result = await (typeof api.adminStaff === 'function' ? api.adminStaff() : api.adminstaff());
     state.staff = result.staff || [];
     state.admin = result.currentAdmin || state.admin;
     renderStaff();
@@ -1678,8 +1679,19 @@ async function loadCourses() {
   try {
     const coursesResult = await api.adminCourses();
     state.courses = coursesResult.courses || [];
-    if (!state.selectedCourseId && state.courses.length) {
-      state.selectedCourseId = state.courses[0].course.courseId;
+    const activeCourses = state.courses.filter((item) => item.course.status !== 'DELETED');
+    if (!activeCourses.length) {
+      state.selectedCourseId = '';
+      state.courseStructure = null;
+      state.groups = [];
+      renderCourses();
+      return;
+    }
+    if (
+      (!state.selectedCourseId || !activeCourses.some((item) => item.course.courseId === state.selectedCourseId)) &&
+      activeCourses.length
+    ) {
+      state.selectedCourseId = activeCourses[0].course.courseId;
     }
     state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId);
     const groupsResult = await api.adminGroups(state.courseStructure.course.courseId);
@@ -1694,8 +1706,30 @@ async function loadCourses() {
 function renderCourses() {
   const main = document.querySelector('#adminMain');
   const course = state.courseStructure?.course || {};
-  const lessons = state.courseStructure?.lessons || [];
-  const groups = state.groups || [];
+  if (!course.courseId) {
+    main.innerHTML = `
+      <div class="admin-page-heading">
+        <div>
+          <p class="eyebrow">Conteudo academico</p>
+          <h1>Cursos e modulos</h1>
+        </div>
+        <div class="admin-heading-actions">
+          <button class="button button-primary" id="newCourse" type="button">Novo curso</button>
+        </div>
+      </div>
+      <section class="student-empty-state">
+        Nenhum curso ativo encontrado. Crie um curso para iniciar a gestao de conteudos.
+      </section>
+    `;
+    document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
+    return;
+  }
+  const lessons = (state.courseStructure?.lessons || []).filter(({ lesson }) => lesson?.status !== 'DELETED');
+  const groups = (state.groups || []).filter(({ group }) => group?.status !== 'DELETED');
+  const deletedLessons = (state.courseStructure?.lessons || []).filter(({ lesson }) => lesson?.status === 'DELETED').length;
+  const deletedGroups = (state.groups || []).filter(({ group }) => group?.status === 'DELETED').length;
+  const totalContent = lessons.reduce((sum, item) => sum + (item.content?.length || 0), 0);
+  const totalQuestions = lessons.reduce((sum, item) => sum + (item.questions?.length || 0), 0);
 
   main.innerHTML = `
     <div class="admin-page-heading">
@@ -1705,13 +1739,11 @@ function renderCourses() {
       </div>
       <div class="admin-heading-actions">
         <button class="button button-secondary" id="newCourse" type="button">Novo curso</button>
-        <button class="button button-secondary" id="newGroup" type="button">Nova turma</button>
-        <button class="button button-primary" id="newLesson" type="button">Novo modulo</button>
       </div>
     </div>
 
     <section class="course-switcher">
-      ${state.courses.length ? state.courses.map((item) => `
+      ${state.courses.length ? state.courses.filter((item) => item.course.status !== 'DELETED').map((item) => `
         <button type="button" class="${item.course.courseId === course.courseId ? 'is-active' : ''}"
           data-select-course="${escapeHtml(item.course.courseId)}">
           <strong>${escapeHtml(item.course.title)}</strong>
@@ -1720,87 +1752,53 @@ function renderCourses() {
       `).join('') : '<div class="student-empty-state">Nenhum curso registado.</div>'}
     </section>
 
-    <section class="course-admin-layout">
-      <form id="courseForm" class="course-admin-card form-stack">
-        <div>
-          <p class="eyebrow">Curso principal</p>
-          <h2>${escapeHtml(course.title || 'Curso')}</h2>
-        </div>
-        <input type="hidden" name="courseId" value="${escapeHtml(course.courseId || config.courseId || '')}">
-        <label>
-          <span>Codigo</span>
-          <input name="courseCode" value="${escapeHtml(course.courseCode || '')}" required>
-        </label>
-        <label>
-          <span>Titulo</span>
-          <input name="title" value="${escapeHtml(course.title || '')}" required>
-        </label>
-        <label>
-          <span>Descricao</span>
-          <textarea name="description" rows="5">${escapeHtml(course.description || '')}</textarea>
-        </label>
-        <div class="course-form-grid">
-          <label>
-            <span>Total de horas</span>
-            <input type="number" name="totalHours" min="0" value="${escapeHtml(course.totalHours || 0)}">
-          </label>
-          <label>
-            <span>Nota minima</span>
-            <input type="number" name="passingScore" min="0" max="100" value="${escapeHtml(course.passingScore || 60)}">
-          </label>
-          <label>
-            <span>Estado</span>
-            <select name="status">
-              ${studentFilterOption('ACTIVE', 'Ativo', course.status || 'ACTIVE')}
-              ${studentFilterOption('INACTIVE', 'Inativo', course.status || 'ACTIVE')}
-            </select>
-          </label>
-        </div>
-        <div class="dialog-actions">
-          ${course.courseId ? '<button class="button button-danger" id="deleteCourse" type="button">Eliminar curso</button>' : ''}
-          <button class="button button-secondary" type="reset">Cancelar alteracoes</button>
-          <button class="button button-primary" type="submit">Guardar curso</button>
-        </div>
-      </form>
-
-      <section class="course-admin-card">
-        <div class="course-section-heading">
-          <div>
-            <p class="eyebrow">Modulos</p>
-            <h2>${lessons.length} modulos</h2>
-          </div>
-        </div>
-        <div class="course-module-list">
-          ${lessons.length ? lessons.map(moduleCardTemplate).join('') : `
-            <div class="student-empty-state">Nenhum modulo registado.</div>
-          `}
-        </div>
-      </section>
+    <section class="admin-content-overview">
+      <article class="content-metric-card">
+        <span>Modulos ativos</span>
+        <strong>${lessons.length}</strong>
+        <small>${deletedLessons} eliminados</small>
+      </article>
+      <article class="content-metric-card">
+        <span>Conteudos</span>
+        <strong>${totalContent}</strong>
+        <small>Seccoes cadastradas</small>
+      </article>
+      <article class="content-metric-card">
+        <span>Questoes</span>
+        <strong>${totalQuestions}</strong>
+        <small>Avaliacao</small>
+      </article>
+      <article class="content-metric-card">
+        <span>Grupos ativos</span>
+        <strong>${groups.length}</strong>
+        <small>${deletedGroups} eliminados</small>
+      </article>
     </section>
 
-    <section class="course-admin-card course-groups-panel">
-      <div class="course-section-heading">
-        <div>
-          <p class="eyebrow">Turmas e grupos</p>
-          <h2>${groups.length} grupos neste curso</h2>
-        </div>
-      </div>
-      <div class="course-module-list">
-        ${groups.length ? groups.map(groupCardTemplate).join('') : `
-          <div class="student-empty-state">Nenhuma turma registada para este curso.</div>
-        `}
-      </div>
+    <section class="admin-content-tabs" aria-label="Organizacao do conteudo">
+      <button type="button" class="${state.courseView === 'overview' ? 'is-active' : ''}" data-course-view="overview">Visao geral</button>
+      <button type="button" class="${state.courseView === 'modules' ? 'is-active' : ''}" data-course-view="modules">Modulos</button>
+      <button type="button" class="${state.courseView === 'groups' ? 'is-active' : ''}" data-course-view="groups">Grupos</button>
     </section>
+
+    ${courseManagementPanel(course, lessons, groups)}
   `;
 
-  document.querySelector('#courseForm').addEventListener('submit', saveCourse);
-  document.querySelector('#deleteCourse')?.addEventListener('click', deleteCurrentCourse);
   document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
-  document.querySelector('#newGroup').addEventListener('click', () => showGroupDialog());
-  document.querySelector('#newLesson').addEventListener('click', () => showLessonDialog());
+  document.querySelector('#courseForm')?.addEventListener('submit', saveCourse);
+  document.querySelector('#deleteCourse')?.addEventListener('click', deleteCurrentCourse);
+  document.querySelector('#newGroup')?.addEventListener('click', () => showGroupDialog());
+  document.querySelector('#newLesson')?.addEventListener('click', () => showLessonDialog());
+  root.querySelectorAll('[data-course-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.courseView = button.dataset.courseView;
+      renderCourses();
+    });
+  });
   root.querySelectorAll('[data-select-course]').forEach((button) => {
     button.addEventListener('click', async () => {
       state.selectedCourseId = button.dataset.selectCourse;
+      state.courseView = 'overview';
       await loadCourses();
     });
   });
@@ -1818,6 +1816,97 @@ function renderCourses() {
   });
 
   reportHeight();
+}
+
+function courseManagementPanel(course, lessons, groups) {
+  if (state.courseView === 'modules') {
+    return `
+      <section class="admin-content-panel">
+        <div class="course-section-heading">
+          <div>
+            <p class="eyebrow">Nivel 2</p>
+            <h2>Modulos do curso</h2>
+          </div>
+          <button class="button button-primary" id="newLesson" type="button">Novo modulo</button>
+        </div>
+        <div class="course-module-list course-module-list-clean">
+          ${lessons.length ? lessons.map(moduleCardTemplate).join('') : `
+            <div class="student-empty-state">Nenhum modulo registado.</div>
+          `}
+        </div>
+      </section>
+    `;
+  }
+
+  if (state.courseView === 'groups') {
+    return `
+      <section class="admin-content-panel">
+        <div class="course-section-heading">
+          <div>
+            <p class="eyebrow">Nivel 3</p>
+            <h2>Grupos e estudantes</h2>
+          </div>
+          <button class="button button-primary" id="newGroup" type="button">Nova turma</button>
+        </div>
+        <div class="course-module-list course-module-list-clean">
+          ${groups.length ? groups.map(groupCardTemplate).join('') : `
+            <div class="student-empty-state">Nenhuma turma registada para este curso.</div>
+          `}
+        </div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="admin-content-panel">
+      <div class="course-section-heading">
+        <div>
+          <p class="eyebrow">Nivel 1</p>
+          <h2>Configuracao do curso</h2>
+        </div>
+      </div>
+
+      <form id="courseForm" class="course-overview-form form-stack">
+        <input type="hidden" name="courseId" value="${escapeHtml(course.courseId || config.courseId || '')}">
+        <div class="course-form-grid">
+          <label>
+            <span>Codigo</span>
+            <input name="courseCode" value="${escapeHtml(course.courseCode || '')}" required>
+          </label>
+          <label>
+            <span>Titulo</span>
+            <input name="title" value="${escapeHtml(course.title || '')}" required>
+          </label>
+          <label>
+            <span>Estado</span>
+            <select name="status">
+              ${studentFilterOption('ACTIVE', 'Ativo', course.status || 'ACTIVE')}
+              ${studentFilterOption('INACTIVE', 'Inativo', course.status || 'ACTIVE')}
+            </select>
+          </label>
+        </div>
+        <label>
+          <span>Descricao</span>
+          <textarea name="description" rows="5">${escapeHtml(course.description || '')}</textarea>
+        </label>
+        <div class="course-form-grid">
+          <label>
+            <span>Total de horas</span>
+            <input type="number" name="totalHours" min="0" value="${escapeHtml(course.totalHours || 0)}">
+          </label>
+          <label>
+            <span>Nota minima</span>
+            <input type="number" name="passingScore" min="0" max="100" value="${escapeHtml(course.passingScore || 60)}">
+          </label>
+        </div>
+        <div class="dialog-actions">
+          ${course.courseId ? '<button class="button button-danger" id="deleteCourse" type="button">Eliminar curso</button>' : ''}
+          <button class="button button-secondary" type="reset">Cancelar alteracoes</button>
+          <button class="button button-primary" type="submit">Guardar curso</button>
+        </div>
+      </form>
+    </section>
+  `;
 }
 
 function moduleCardTemplate(item) {

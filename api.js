@@ -264,6 +264,10 @@ export class CoursePlatformApi {
     return this.adminRequest('adminListStaff');
   }
 
+  adminstaff() {
+    return this.adminStaff();
+  }
+
   adminSaveStaff(payload) {
     const { adminId, ...rest } = payload;
     return this.adminRequest('adminSaveStaff', {
