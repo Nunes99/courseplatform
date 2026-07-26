@@ -1641,6 +1641,7 @@ function getMyCourses_(payload) {
 
 function updateMyProfile_(payload) {
   ensureApiEnabled_();
+  ensureSchema_();
 
   var patch = {
     fullName: truncate_(payload.fullName || payload._student.fullName, 200),
@@ -2594,7 +2595,7 @@ function saveStudentProfilePhoto_(payload) {
     console.warn('NÃ£o foi possÃ­vel tornar a fotografia pÃºblica: ' + error.message);
   }
 
-  return 'https://drive.google.com/uc?export=view&id=' + driveFile.getId();
+  return 'https://drive.google.com/thumbnail?id=' + driveFile.getId() + '&sz=w512';
 }
 
 function getOrCreateChildFolder_(parent, name) {

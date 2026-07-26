@@ -688,7 +688,7 @@ function safeImageUrl(url) {
   try {
     const parsed = new URL(value, window.location.href);
     if (!['http:', 'https:', 'blob:', 'data:'].includes(parsed.protocol)) return '';
-    return parsed.href;
+    return imageDisplayUrl(parsed.href) || parsed.href;
   } catch {
     return '';
   }
