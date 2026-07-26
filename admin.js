@@ -24,6 +24,12 @@ const state = {
   pending: [],
   students: [],
   selectedSubmission: null,
+  studentFilters: {
+    query: '',
+    status: 'ALL',
+    progress: 'ALL',
+    sort: 'name'
+  },
   media: {
     logoUrl: '',
     videos: []
@@ -436,7 +442,7 @@ async function loadStudents() {
   try {
     const result = await api.adminStudents();
     state.students = result.students;
-    renderStudents();
+    renderStudentsV2();
   } catch (error) {
     handleAdminError(error);
   }
@@ -531,6 +537,434 @@ function renderStudents() {
   });
 
   reportHeight();
+}
+
+function renderStudentsV2() {
+  const main = document.querySelector('#adminMain');
+  const activeStudents = state.students.filter(({ student }) => student.status === 'ACTIVE').length;
+  const blockedStudents = state.students.filter(({ student }) => student.status === 'BLOCKED').length;
+  const completedStudents = state.students.filter(({ enrollments }) => {
+    return enrollments.some((enrollment) => (
+      enrollment.status === 'COMPLETED' ||
+      Number(enrollment.progressPercent || 0) >= 100
+    ));
+  }).length;
+  const avgProgress = state.students.length
+    ? Math.round(state.students.reduce((sum, { enrollments }) => sum + primaryProgress(enrollments), 0) / state.students.length)
+    : 0;
+  const visibleStudents = filteredStudents();
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Participantes</p>
+        <h1>Estudantes</h1>
+      </div>
+      <button class="button button-primary" id="newStudent">
+        Adicionar estudante
+      </button>
+    </div>
+
+    <section class="admin-summary-grid" aria-label="Resumo de participantes">
+      <article class="insight-card">
+        <img src="${iconUrl('conference-call', goldIcon)}" alt="">
+        <div>
+          <span>Total</span>
+          <strong>${state.students.length}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('ok', goldIcon)}" alt="">
+        <div>
+          <span>Ativos</span>
+          <strong>${activeStudents}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('combo-chart', goldIcon)}" alt="">
+        <div>
+          <span>Progresso medio</span>
+          <strong>${avgProgress}%</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('diploma', goldIcon)}" alt="">
+        <div>
+          <span>Concluidos</span>
+          <strong>${completedStudents}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('lock', goldIcon)}" alt="">
+        <div>
+          <span>Bloqueados</span>
+          <strong>${blockedStudents}</strong>
+        </div>
+      </article>
+    </section>
+
+    <section class="student-admin-toolbar" aria-label="Ferramentas de estudantes">
+      <label class="student-search-field">
+        <span>Pesquisar</span>
+        <input id="studentSearch" type="search" value="${escapeHtml(state.studentFilters.query)}"
+          placeholder="Nome, email, pais ou organizacao">
+      </label>
+      <label>
+        <span>Estado</span>
+        <select id="studentStatusFilter">
+          ${studentFilterOption('ALL', 'Todos os estados', state.studentFilters.status)}
+          ${studentFilterOption('ACTIVE', 'Ativos', state.studentFilters.status)}
+          ${studentFilterOption('BLOCKED', 'Bloqueados', state.studentFilters.status)}
+          ${studentFilterOption('INACTIVE', 'Inativos', state.studentFilters.status)}
+        </select>
+      </label>
+      <label>
+        <span>Progresso</span>
+        <select id="studentProgressFilter">
+          ${studentFilterOption('ALL', 'Todos', state.studentFilters.progress)}
+          ${studentFilterOption('NOT_STARTED', '0%', state.studentFilters.progress)}
+          ${studentFilterOption('IN_PROGRESS', '1% a 99%', state.studentFilters.progress)}
+          ${studentFilterOption('COMPLETED', '100%', state.studentFilters.progress)}
+        </select>
+      </label>
+      <label>
+        <span>Ordenar</span>
+        <select id="studentSort">
+          ${studentFilterOption('name', 'Nome', state.studentFilters.sort)}
+          ${studentFilterOption('progressDesc', 'Maior progresso', state.studentFilters.sort)}
+          ${studentFilterOption('progressAsc', 'Menor progresso', state.studentFilters.sort)}
+          ${studentFilterOption('recentLogin', 'Ultimo acesso', state.studentFilters.sort)}
+        </select>
+      </label>
+      <button class="button button-secondary" id="exportStudents" type="button">
+        Exportar CSV
+      </button>
+    </section>
+
+    <div class="student-list-meta">
+      <strong>${visibleStudents.length}</strong>
+      <span>de ${state.students.length} estudantes visiveis</span>
+    </div>
+
+    <div class="student-admin-grid">
+      ${visibleStudents.length ? visibleStudents.map(studentCardTemplate).join('') : `
+        <div class="student-empty-state">
+          Nenhum estudante corresponde aos filtros atuais.
+        </div>
+      `}
+    </div>
+  `;
+
+  document.querySelector('#newStudent').addEventListener('click', showStudentDialog);
+  document.querySelector('#studentSearch').addEventListener('input', (event) => {
+    state.studentFilters.query = event.currentTarget.value;
+    renderStudentsV2();
+  });
+  document.querySelector('#studentStatusFilter').addEventListener('change', (event) => {
+    state.studentFilters.status = event.currentTarget.value;
+    renderStudentsV2();
+  });
+  document.querySelector('#studentProgressFilter').addEventListener('change', (event) => {
+    state.studentFilters.progress = event.currentTarget.value;
+    renderStudentsV2();
+  });
+  document.querySelector('#studentSort').addEventListener('change', (event) => {
+    state.studentFilters.sort = event.currentTarget.value;
+    renderStudentsV2();
+  });
+  document.querySelector('#exportStudents').addEventListener('click', () => {
+    exportStudentsCsv(visibleStudents);
+  });
+
+  root.querySelectorAll('[data-view-student]').forEach((button) => {
+    button.addEventListener('click', () => showStudentDetails(button.dataset.viewStudent));
+  });
+
+  root.querySelectorAll('[data-copy-email]').forEach((button) => {
+    button.addEventListener('click', () => copyText(button.dataset.copyEmail, 'Email copiado.'));
+  });
+
+  root.querySelectorAll('[data-reset-access]').forEach((button) => {
+    button.addEventListener('click', () => resetAccess(button.dataset.resetAccess));
+  });
+
+  root.querySelectorAll('[data-toggle-student]').forEach((button) => {
+    button.addEventListener('click', () => toggleStudent(
+      button.dataset.toggleStudent,
+      button.dataset.currentStatus
+    ));
+  });
+
+  reportHeight();
+}
+
+function studentCardTemplate({ student, enrollments }) {
+  const primary = primaryEnrollment(enrollments);
+  const progress = primaryProgress(enrollments);
+  const lastLogin = student.lastLoginAt ? formatDate(student.lastLoginAt) : 'Sem acesso registado';
+  const organization = student.organization || 'Sem organizacao';
+  const country = student.country || 'Sem pais';
+
+  return `
+    <article class="student-admin-card">
+      <div class="student-card-header">
+        <span class="student-avatar">${escapeHtml(studentInitials(student.fullName))}</span>
+        <div>
+          <span class="status-pill ${statusClass(student.status)}">
+            ${statusLabel(student.status)}
+          </span>
+          <h3>${escapeHtml(student.fullName)}</h3>
+          <p>${escapeHtml(student.email)}</p>
+        </div>
+      </div>
+
+      <dl class="student-meta-grid">
+        <div>
+          <dt>Organizacao</dt>
+          <dd>${escapeHtml(organization)}</dd>
+        </div>
+        <div>
+          <dt>Pais</dt>
+          <dd>${escapeHtml(country)}</dd>
+        </div>
+        <div>
+          <dt>Ultimo acesso</dt>
+          <dd>${escapeHtml(lastLogin)}</dd>
+        </div>
+        <div>
+          <dt>Curso</dt>
+          <dd>${escapeHtml(primary?.courseId || 'Sem inscricao')}</dd>
+        </div>
+      </dl>
+
+      <div class="student-progress-line">
+        <span>Progresso</span>
+        <strong>${progress}%</strong>
+      </div>
+      <div class="student-progress-track">
+        <span style="width:${progress}%"></span>
+      </div>
+
+      <div class="student-admin-actions">
+        <button type="button" data-view-student="${escapeHtml(student.studentId)}">Detalhes</button>
+        <button type="button" data-copy-email="${escapeHtml(student.email)}">Copiar email</button>
+        <button type="button" data-reset-access="${escapeHtml(student.studentId)}">Novo codigo</button>
+        <button type="button"
+          data-toggle-student="${escapeHtml(student.studentId)}"
+          data-current-status="${escapeHtml(student.status)}">
+          ${student.status === 'ACTIVE' ? 'Bloquear' : 'Ativar'}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function filteredStudents() {
+  const query = state.studentFilters.query.trim().toLowerCase();
+  const status = state.studentFilters.status;
+  const progress = state.studentFilters.progress;
+  const sort = state.studentFilters.sort;
+
+  return state.students
+    .filter((record) => {
+      const { student, enrollments } = record;
+      if (status !== 'ALL' && student.status !== status) return false;
+      if (progress !== 'ALL' && progressBucket(primaryProgress(enrollments)) !== progress) return false;
+      if (!query) return true;
+      return studentSearchText(record).includes(query);
+    })
+    .sort((a, b) => {
+      if (sort === 'progressDesc') return primaryProgress(b.enrollments) - primaryProgress(a.enrollments);
+      if (sort === 'progressAsc') return primaryProgress(a.enrollments) - primaryProgress(b.enrollments);
+      if (sort === 'recentLogin') return dateValue(b.student.lastLoginAt) - dateValue(a.student.lastLoginAt);
+      return String(a.student.fullName || '').localeCompare(String(b.student.fullName || ''), 'pt');
+    });
+}
+
+function studentFilterOption(value, label, selected) {
+  return `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+}
+
+function studentSearchText({ student, enrollments }) {
+  return [
+    student.fullName,
+    student.email,
+    student.country,
+    student.organization,
+    student.status,
+    ...(enrollments || []).flatMap((enrollment) => [
+      enrollment.courseId,
+      enrollment.status,
+      enrollment.certificateId
+    ])
+  ].join(' ').toLowerCase();
+}
+
+function primaryEnrollment(enrollments = []) {
+  return [...enrollments].sort((a, b) => {
+    const progressDiff = Number(b.progressPercent || 0) - Number(a.progressPercent || 0);
+    if (progressDiff) return progressDiff;
+    return dateValue(b.updatedAt || b.enrolledAt) - dateValue(a.updatedAt || a.enrolledAt);
+  })[0] || null;
+}
+
+function primaryProgress(enrollments = []) {
+  return Math.max(0, Math.min(100, Number(primaryEnrollment(enrollments)?.progressPercent || 0)));
+}
+
+function progressBucket(progress) {
+  if (progress <= 0) return 'NOT_STARTED';
+  if (progress >= 100) return 'COMPLETED';
+  return 'IN_PROGRESS';
+}
+
+function dateValue(value) {
+  const date = new Date(value || 0);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function studentInitials(fullName) {
+  const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+  const first = parts[0]?.[0] || 'E';
+  const last = parts.length > 1 ? parts.at(-1)[0] : '';
+  return `${first}${last}`.toUpperCase();
+}
+
+function showStudentDetails(studentId) {
+  const record = state.students.find(({ student }) => student.studentId === studentId);
+  if (!record) return;
+
+  const { student, enrollments } = record;
+  const progress = primaryProgress(enrollments);
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card student-detail-dialog">
+      <button class="dialog-close" type="button">x</button>
+      <div class="student-detail-header">
+        <span class="student-avatar student-avatar-large">${escapeHtml(studentInitials(student.fullName))}</span>
+        <div>
+          <span class="status-pill ${statusClass(student.status)}">${statusLabel(student.status)}</span>
+          <h2>${escapeHtml(student.fullName)}</h2>
+          <p>${escapeHtml(student.email)}</p>
+        </div>
+      </div>
+
+      <dl class="student-detail-grid">
+        <div><dt>ID</dt><dd>${escapeHtml(student.studentId)}</dd></div>
+        <div><dt>Pais</dt><dd>${escapeHtml(student.country || 'Sem registo')}</dd></div>
+        <div><dt>Organizacao</dt><dd>${escapeHtml(student.organization || 'Sem registo')}</dd></div>
+        <div><dt>Criado em</dt><dd>${escapeHtml(formatDate(student.createdAt))}</dd></div>
+        <div><dt>Atualizado em</dt><dd>${escapeHtml(formatDate(student.updatedAt))}</dd></div>
+        <div><dt>Ultimo acesso</dt><dd>${escapeHtml(formatDate(student.lastLoginAt))}</dd></div>
+      </dl>
+
+      <section class="student-detail-section">
+        <div class="student-detail-section-heading">
+          <h3>Percurso academico</h3>
+          <strong>${progress}%</strong>
+        </div>
+        <div class="student-progress-track">
+          <span style="width:${progress}%"></span>
+        </div>
+        <div class="student-enrollment-list">
+          ${enrollments.length ? enrollments.map(enrollmentTemplate).join('') : `
+            <div class="student-empty-state">Sem inscricoes registadas.</div>
+          `}
+        </div>
+      </section>
+
+      <div class="student-detail-actions">
+        <button class="button button-secondary" type="button" data-copy-email="${escapeHtml(student.email)}">
+          Copiar email
+        </button>
+        <button class="button button-secondary" type="button" data-reset-access="${escapeHtml(student.studentId)}">
+          Novo codigo
+        </button>
+        <button class="button button-primary" type="button"
+          data-toggle-student="${escapeHtml(student.studentId)}"
+          data-current-status="${escapeHtml(student.status)}">
+          ${student.status === 'ACTIVE' ? 'Bloquear estudante' : 'Ativar estudante'}
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.querySelector('[data-copy-email]').addEventListener('click', (event) => {
+    copyText(event.currentTarget.dataset.copyEmail, 'Email copiado.');
+  });
+  overlay.querySelector('[data-reset-access]').addEventListener('click', () => resetAccess(student.studentId));
+  overlay.querySelector('[data-toggle-student]').addEventListener('click', async () => {
+    overlay.remove();
+    await toggleStudent(student.studentId, student.status);
+  });
+  reportHeight();
+}
+
+function enrollmentTemplate(enrollment) {
+  const progress = Math.max(0, Math.min(100, Number(enrollment.progressPercent || 0)));
+  return `
+    <article class="student-enrollment-card">
+      <div>
+        <span class="status-pill ${statusClass(enrollment.status)}">${statusLabel(enrollment.status)}</span>
+        <h4>${escapeHtml(enrollment.courseId || 'Curso')}</h4>
+        <p>Inscrito em ${escapeHtml(formatDate(enrollment.enrolledAt))}</p>
+      </div>
+      <dl>
+        <div><dt>Progresso</dt><dd>${progress}%</dd></div>
+        <div><dt>Nota final</dt><dd>${enrollment.finalScore === '' || enrollment.finalScore == null ? '-' : escapeHtml(enrollment.finalScore)}</dd></div>
+        <div><dt>Certificado</dt><dd>${escapeHtml(enrollment.certificateId || '-')}</dd></div>
+        <div><dt>Atualizado</dt><dd>${escapeHtml(formatDate(enrollment.updatedAt))}</dd></div>
+      </dl>
+    </article>
+  `;
+}
+
+async function copyText(text, successMessage) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(successMessage, 'success');
+  } catch {
+    window.prompt('Copie o texto:', text);
+  }
+}
+
+function exportStudentsCsv(records) {
+  const rows = [
+    ['Nome', 'Email', 'Estado', 'Pais', 'Organizacao', 'Progresso', 'Ultimo acesso']
+  ];
+
+  records.forEach(({ student, enrollments }) => {
+    rows.push([
+      student.fullName || '',
+      student.email || '',
+      statusLabel(student.status),
+      student.country || '',
+      student.organization || '',
+      `${primaryProgress(enrollments)}%`,
+      student.lastLoginAt || ''
+    ]);
+  });
+
+  const csv = rows.map((row) => row.map(csvCell).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `estudantes-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function csvCell(value) {
+  return `"${String(value ?? '').replaceAll('"', '""')}"`;
 }
 
 async function renderVideos() {
