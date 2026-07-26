@@ -960,6 +960,27 @@ input:focus, textarea:focus, select:focus {
 .file-control {
   display: grid;
   gap: 7px;
+  justify-items: start;
+}
+
+.file-control input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.profile-photo-button {
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.file-control:focus-within .profile-photo-button {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .file-control small,

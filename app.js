@@ -544,7 +544,9 @@ async function renderProfile() {
             </div>
             <label class="file-control">
               <span>Fotografia de perfil</span>
-              <input name="profilePhotoFile" type="file" accept="image/jpeg,image/png,image/webp">
+              <input name="profilePhotoFile" id="profilePhotoFile" type="file" accept="image/jpeg,image/png,image/webp">
+              <span class="button button-secondary profile-photo-button">Selecionar fotografia</span>
+              <small id="profilePhotoFileName">Nenhum ficheiro selecionado.</small>
               <small>Use uma imagem clara em JPG, PNG ou WebP.</small>
             </label>
             ${student.profilePhotoUrl ? `
@@ -700,11 +702,13 @@ async function changePassword(event) {
 function bindProfilePhotoPreview(student) {
   const input = document.querySelector('[name="profilePhotoFile"]');
   const preview = document.querySelector('#profilePhotoPreview');
+  const fileName = document.querySelector('#profilePhotoFileName');
   if (!input || !preview) return;
 
   input.addEventListener('change', () => {
     const file = input.files?.[0];
     if (!file) {
+      if (fileName) fileName.textContent = 'Nenhum ficheiro selecionado.';
       preview.innerHTML = profilePhotoTemplate(student);
       return;
     }
@@ -712,10 +716,12 @@ function bindProfilePhotoPreview(student) {
     if (!file.type.startsWith('image/')) {
       showToast('Selecione uma imagem valida.', 'error');
       input.value = '';
+      if (fileName) fileName.textContent = 'Nenhum ficheiro selecionado.';
       preview.innerHTML = profilePhotoTemplate(student);
       return;
     }
 
+    if (fileName) fileName.textContent = file.name;
     const objectUrl = URL.createObjectURL(file);
     preview.innerHTML = profileAvatarTemplate({
       ...student,
