@@ -148,6 +148,16 @@ a { color: var(--primary); }
   line-height: 1.25;
 }
 
+.header-user[role="button"] {
+  cursor: pointer;
+}
+
+.header-user[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
 .header-greeting {
   display: block;
   max-width: min(32vw, 360px);
@@ -644,23 +654,33 @@ input:focus, textarea:focus, select:focus {
 }
 
 .student-courses-panel {
-  margin: 24px 0 8px;
+  margin: 22px 0 6px;
+}
+
+.student-courses-panel .section-heading {
+  margin-bottom: 10px;
 }
 
 .student-course-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 14px;
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 2px 8px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
 }
 
 .student-course-card {
   display: grid;
-  gap: 14px;
-  padding: 20px;
+  min-width: min(330px, 84vw);
+  max-width: 360px;
+  gap: 12px;
+  padding: 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
+  scroll-snap-align: start;
 }
 
 .student-course-card.is-active {
@@ -669,24 +689,30 @@ input:focus, textarea:focus, select:focus {
 }
 
 .student-course-card h3 {
-  margin: 10px 0 4px;
+  margin: 8px 0 4px;
+  font-size: 18px;
+  line-height: 1.25;
 }
 
 .student-course-card p {
   margin: 0;
   color: var(--muted);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .student-course-card dl {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
   margin: 0;
 }
 
 .student-course-card dl div {
   min-width: 0;
-  padding: 10px;
+  padding: 8px;
   border-radius: var(--radius-small);
   background: var(--surface-soft);
 }
@@ -704,6 +730,10 @@ input:focus, textarea:focus, select:focus {
   font-weight: 850;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.student-course-card .button {
+  min-height: 38px;
 }
 
 .profile-shell {
@@ -790,14 +820,14 @@ input:focus, textarea:focus, select:focus {
 
 .lesson-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
 }
 
 .lesson-card {
   position: relative;
   display: flex;
-  min-height: 360px;
+  min-height: 0;
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -817,14 +847,14 @@ input:focus, textarea:focus, select:focus {
 
 .lesson-number {
   display: grid;
-  width: 52px;
-  height: 52px;
-  margin: 22px 0 0 22px;
+  width: 44px;
+  height: 44px;
+  margin: 16px 0 0 16px;
   place-items: center;
   border-radius: var(--radius);
   background: var(--primary);
   color: white;
-  font-size: 23px;
+  font-size: 20px;
   font-weight: 900;
   box-shadow: var(--shadow-soft);
 }
@@ -833,7 +863,7 @@ input:focus, textarea:focus, select:focus {
   display: flex;
   height: 100%;
   flex-direction: column;
-  padding: 18px 22px 22px;
+  padding: 14px 16px 16px;
 }
 
 .lesson-card-topline {
@@ -845,15 +875,19 @@ input:focus, textarea:focus, select:focus {
 }
 
 .lesson-card h3 {
-  margin: 14px 0 8px;
-  font-size: 21px;
+  margin: 10px 0 6px;
+  font-size: 18px;
   line-height: 1.22;
 }
 
 .lesson-card p {
   color: var(--muted);
-  font-size: 15px;
-  line-height: 1.55;
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.48;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .lesson-meta {
@@ -864,7 +898,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .lesson-meta span {
-  padding: 7px 10px;
+  padding: 6px 9px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface-soft) 70%, var(--surface));
@@ -874,7 +908,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .score-line { margin: 14px 0 0; }
-.lesson-card-actions { margin-top: 18px; }
+.lesson-card-actions { margin-top: 14px; }
 .lesson-card-actions .button { width: 100%; }
 
 .status-pill {

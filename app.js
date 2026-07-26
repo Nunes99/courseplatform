@@ -109,6 +109,10 @@ function renderLogin() {
   clearTimers();
   headerUser.innerHTML = '';
   headerUser.title = '';
+  headerUser.onclick = null;
+  headerUser.onkeydown = null;
+  headerUser.removeAttribute('role');
+  headerUser.removeAttribute('tabindex');
   logoutButton.hidden = true;
 
   root.innerHTML = `
@@ -218,7 +222,18 @@ async function renderDashboard() {
 
   const greeting = studentGreeting(dashboard.student.fullName);
   headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(dashboard.student.fullName)}</span>`;
-  headerUser.title = dashboard.student.fullName;
+  headerUser.title = 'Editar perfil pessoal';
+  headerUser.role = 'button';
+  headerUser.tabIndex = 0;
+  headerUser.onclick = () => {
+    location.hash = '#/profile';
+  };
+  headerUser.onkeydown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      location.hash = '#/profile';
+    }
+  };
   logoutButton.hidden = false;
 
   const totalLessons = dashboard.lessons.length;
@@ -244,9 +259,6 @@ async function renderDashboard() {
           <span>${dashboard.course.totalHours} horas</span>
         </div>
         <div class="hero-actions">
-          <a class="button button-light" href="#/profile">
-            Perfil pessoal
-          </a>
           <a class="button button-light" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">
             Página do evento
           </a>
@@ -375,6 +387,7 @@ function studentCourseCardTemplate(item) {
   const enrollment = item.enrollment || {};
   const group = item.group || null;
   const active = course.courseId === state.selectedCourseId;
+  const remainingDays = courseRemainingDaysLabel(group?.endDate);
 
   return `
     <article class="student-course-card ${active ? 'is-active' : ''}">
@@ -388,7 +401,7 @@ function studentCourseCardTemplate(item) {
       <dl>
         <div><dt>Progresso</dt><dd>${Number(enrollment.progressPercent || 0)}%</dd></div>
         <div><dt>Modulos</dt><dd>${item.lessonCount || 0}</dd></div>
-        <div><dt>Periodo</dt><dd>${group ? `${formatDate(group.startDate)} - ${formatDate(group.endDate)}` : 'Sem turma'}</dd></div>
+        <div><dt>Dias restantes</dt><dd>${escapeHtml(remainingDays)}</dd></div>
       </dl>
       <button class="button ${active ? 'button-disabled' : 'button-secondary'}" type="button"
         data-select-student-course="${escapeHtml(course.courseId)}"
@@ -399,6 +412,23 @@ function studentCourseCardTemplate(item) {
   `;
 }
 
+function courseRemainingDaysLabel(endDate) {
+  if (!endDate) return 'Sem prazo';
+
+  const end = new Date(endDate);
+  if (Number.isNaN(end.getTime())) return 'Sem prazo';
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const finalDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  const days = Math.ceil((finalDay - today) / 86400000);
+
+  if (days < 0) return 'Terminado';
+  if (days === 0) return 'Termina hoje';
+  if (days === 1) return '1 dia';
+  return `${days} dias`;
+}
+
 async function renderProfile() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar perfil...');
@@ -407,7 +437,18 @@ async function renderProfile() {
   state.myCourses = courseBundle.courses || [];
   const student = courseBundle.student || state.dashboard?.student || {};
   headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(student.fullName || student.email || '')}</span>`;
-  headerUser.title = student.fullName || student.email || '';
+  headerUser.title = 'Editar perfil pessoal';
+  headerUser.role = 'button';
+  headerUser.tabIndex = 0;
+  headerUser.onclick = () => {
+    location.hash = '#/profile';
+  };
+  headerUser.onkeydown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      location.hash = '#/profile';
+    }
+  };
   logoutButton.hidden = false;
 
   root.innerHTML = `
