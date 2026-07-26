@@ -29,6 +29,8 @@ const goldIcon = 'c9a55b';
 let api;
 const state = {
   dashboard: null,
+  myCourses: [],
+  selectedCourseId: localStorage.getItem('courseSelectedCourseId') || config.courseId || '',
   lesson: null,
   attempt: null,
   attemptData: null,
@@ -89,6 +91,11 @@ async function route() {
 
     if (routeName === 'certificate') {
       await renderCertificate();
+      return;
+    }
+
+    if (routeName === 'profile') {
+      await renderProfile();
       return;
     }
 
@@ -197,7 +204,14 @@ async function renderDashboard() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar o curso…');
 
-  const dashboard = await api.dashboard();
+  const courseBundle = await api.myCourses();
+  state.myCourses = courseBundle.courses || [];
+  if (!state.selectedCourseId || !state.myCourses.some((item) => item.course.courseId === state.selectedCourseId)) {
+    state.selectedCourseId = state.myCourses[0]?.course?.courseId || config.courseId || '';
+    localStorage.setItem('courseSelectedCourseId', state.selectedCourseId);
+  }
+
+  const dashboard = await api.dashboard(state.selectedCourseId);
   state.dashboard = dashboard;
   await loadStudentMediaConfig();
   applyBrandLogo();
@@ -230,6 +244,9 @@ async function renderDashboard() {
           <span>${dashboard.course.totalHours} horas</span>
         </div>
         <div class="hero-actions">
+          <a class="button button-light" href="#/profile">
+            Perfil pessoal
+          </a>
           <a class="button button-light" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">
             Página do evento
           </a>
@@ -243,6 +260,20 @@ async function renderDashboard() {
           <span style="width:${dashboard.enrollment.progressPercent}%"></span>
         </div>
         ${certificateButton}
+      </div>
+    </section>
+
+    <section class="student-courses-panel" aria-label="Cursos disponiveis">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Meus cursos</p>
+          <h2>Cursos disponiveis para si</h2>
+        </div>
+      </div>
+      <div class="student-course-list">
+        ${state.myCourses.length ? state.myCourses.map(studentCourseCardTemplate).join('') : `
+          <div class="video-empty">Ainda nao existem cursos associados ao seu perfil.</div>
+        `}
       </div>
     </section>
 
@@ -313,6 +344,14 @@ async function renderDashboard() {
     });
   });
 
+  root.querySelectorAll('[data-select-student-course]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      state.selectedCourseId = button.dataset.selectStudentCourse;
+      localStorage.setItem('courseSelectedCourseId', state.selectedCourseId);
+      await renderDashboard();
+    });
+  });
+
   root.querySelectorAll('[data-check-attempt]').forEach((button) => {
     button.addEventListener('click', async () => {
       setBusy(button, true);
@@ -329,6 +368,125 @@ async function renderDashboard() {
 
   bindVideoSoundEvents();
   renderMath();
+}
+
+function studentCourseCardTemplate(item) {
+  const course = item.course;
+  const enrollment = item.enrollment || {};
+  const group = item.group || null;
+  const active = course.courseId === state.selectedCourseId;
+
+  return `
+    <article class="student-course-card ${active ? 'is-active' : ''}">
+      <div>
+        <span class="status-pill ${statusClass(enrollment.status)}">
+          ${escapeHtml(statusLabel(enrollment.status))}
+        </span>
+        <h3>${escapeHtml(course.title)}</h3>
+        <p>${escapeHtml(course.description || 'Curso associado ao seu perfil.')}</p>
+      </div>
+      <dl>
+        <div><dt>Progresso</dt><dd>${Number(enrollment.progressPercent || 0)}%</dd></div>
+        <div><dt>Modulos</dt><dd>${item.lessonCount || 0}</dd></div>
+        <div><dt>Periodo</dt><dd>${group ? `${formatDate(group.startDate)} - ${formatDate(group.endDate)}` : 'Sem turma'}</dd></div>
+      </dl>
+      <button class="button ${active ? 'button-disabled' : 'button-secondary'}" type="button"
+        data-select-student-course="${escapeHtml(course.courseId)}"
+        ${active ? 'disabled' : ''}>
+        ${active ? 'Curso aberto' : 'Abrir curso'}
+      </button>
+    </article>
+  `;
+}
+
+async function renderProfile() {
+  clearTimers();
+  root.innerHTML = loadingTemplate('A carregar perfil...');
+
+  const courseBundle = await api.myCourses();
+  state.myCourses = courseBundle.courses || [];
+  const student = courseBundle.student || state.dashboard?.student || {};
+  headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(student.fullName || student.email || '')}</span>`;
+  headerUser.title = student.fullName || student.email || '';
+  logoutButton.hidden = false;
+
+  root.innerHTML = `
+    <section class="profile-shell">
+      <div class="profile-summary">
+        <span class="student-avatar student-avatar-large">${escapeHtml(profileInitials(student.fullName))}</span>
+        <div>
+          <p class="eyebrow">Perfil pessoal</p>
+          <h1>${escapeHtml(student.fullName || 'Estudante')}</h1>
+          <p>${escapeHtml(student.publicStudentId || '')} · ${escapeHtml(student.email || '')}</p>
+        </div>
+      </div>
+
+      <form id="profileForm" class="profile-form form-stack">
+        <label>
+          <span>Nome completo</span>
+          <input name="fullName" value="${escapeHtml(student.fullName || '')}" required>
+        </label>
+        <label>
+          <span>Email</span>
+          <input value="${escapeHtml(student.email || '')}" disabled>
+        </label>
+        <div class="profile-form-grid">
+          <label>
+            <span>Pais</span>
+            <input name="country" value="${escapeHtml(student.country || '')}">
+          </label>
+          <label>
+            <span>Telefone</span>
+            <input name="phone" value="${escapeHtml(student.phone || '')}">
+          </label>
+        </div>
+        <label>
+          <span>Organizacao</span>
+          <input name="organization" value="${escapeHtml(student.organization || '')}">
+        </label>
+        <label>
+          <span>Funcao profissional</span>
+          <input name="jobTitle" value="${escapeHtml(student.jobTitle || '')}">
+        </label>
+        <label>
+          <span>Interesses academicos ou profissionais</span>
+          <textarea name="interests" rows="5">${escapeHtml(student.interests || '')}</textarea>
+        </label>
+        <div class="profile-actions">
+          <a class="button button-secondary" href="#/">Voltar ao curso</a>
+          <button class="button button-primary" type="submit">Guardar perfil</button>
+        </div>
+      </form>
+    </section>
+  `;
+
+  document.querySelector('#profileForm').addEventListener('submit', saveProfile);
+  reportHeight();
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = Object.fromEntries(new FormData(form));
+  setBusy(button, true, 'A guardar...');
+
+  try {
+    const result = await api.updateMyProfile(values);
+    if (state.dashboard) state.dashboard.student = result.student;
+    showToast('Perfil atualizado.', 'success');
+    await renderProfile();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function profileInitials(fullName) {
+  const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+  return `${parts[0]?.[0] || 'E'}${parts.length > 1 ? parts.at(-1)[0] : ''}`.toUpperCase();
 }
 
 function lessonCardTemplate(item) {
@@ -1032,10 +1190,18 @@ function buildLessonNavigation() {
   if (!navigation) return;
 
   navigation.innerHTML = state.lesson.content.map((section) => `
-    <a href="#section-${escapeHtml(section.contentId)}">
+    <button type="button" data-scroll-section="${escapeHtml(section.contentId)}">
       ${escapeHtml(section.title)}
-    </a>
+    </button>
   `).join('');
+
+  navigation.querySelectorAll('[data-scroll-section]').forEach((button) => {
+    button.addEventListener('click', () => {
+      document
+        .querySelector(`#section-${CSS.escape(button.dataset.scrollSection)}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
 }
 
 function videoGallery() {
@@ -1175,7 +1341,7 @@ async function renderCertificate() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar o certificado…');
 
-  const result = await api.certificate();
+  const result = await api.certificate(state.selectedCourseId);
 
   if (!result.certificate) {
     root.innerHTML = `
@@ -1304,7 +1470,7 @@ async function loadPublicMediaConfig() {
 
 async function loadStudentMediaConfig() {
   try {
-    const result = await api.mediaConfig();
+    const result = await api.mediaConfig(state.selectedCourseId);
     setMediaConfig(result.mediaConfig || result);
   } catch {
     setMediaConfig(localMediaConfig());

@@ -37,7 +37,8 @@ var CP = {
   HEADERS: {
     Students: [
       'studentId', 'publicStudentId', 'fullName', 'email', 'accessCode', 'status',
-      'country', 'organization', 'createdAt', 'updatedAt', 'lastLoginAt'
+      'country', 'organization', 'phone', 'jobTitle', 'interests',
+      'createdAt', 'updatedAt', 'lastLoginAt'
     ],
     Admins: [
       'adminId', 'fullName', 'email', 'role', 'status',
@@ -263,6 +264,12 @@ function doPost(e) {
         break;
       case 'getDashboard':
         result = withStudentSession_(payload, getStudentDashboard_);
+        break;
+      case 'getMyCourses':
+        result = withStudentSession_(payload, getMyCourses_);
+        break;
+      case 'updateMyProfile':
+        result = withStudentSession_(payload, updateMyProfile_);
         break;
       case 'getLesson':
         result = withStudentSession_(payload, getLessonForStudent_);
@@ -1588,6 +1595,74 @@ function getStudentDashboard_(payload) {
   });
 }
 
+function getMyCourses_(payload) {
+  ensureApiEnabled_();
+
+  var enrollments = findMany_(CP.SHEETS.ENROLLMENTS, {
+    studentId: payload.studentId
+  });
+
+  if (!enrollments.length) {
+    enrollments = [ensureEnrollmentAndProgress_(payload.studentId, payload.courseId)];
+  }
+
+  var courses = enrollments.map(function(enrollment) {
+    var course = findOne_(CP.SHEETS.COURSES, {
+      courseId: enrollment.courseId
+    });
+    var group = enrollment.groupId
+      ? findOne_(CP.SHEETS.GROUPS, { groupId: enrollment.groupId })
+      : null;
+    var lessons = course
+      ? findMany_(CP.SHEETS.LESSONS, {
+        courseId: course.courseId,
+        status: CP.STATUS.ACTIVE
+      })
+      : [];
+
+    return {
+      course: publicCourse_(course),
+      enrollment: publicEnrollment_(enrollment),
+      group: publicGroup_(group),
+      lessonCount: lessons.length
+    };
+  }).filter(function(item) {
+    return item.course;
+  });
+
+  return successResponse_({
+    student: publicStudent_(ensureStudentPublicId_(payload._student)),
+    courses: courses
+  });
+}
+
+function updateMyProfile_(payload) {
+  ensureApiEnabled_();
+
+  var patch = {
+    fullName: truncate_(payload.fullName || payload._student.fullName, 200),
+    country: truncate_(payload.country || '', 100),
+    organization: truncate_(payload.organization || '', 250),
+    phone: truncate_(payload.phone || '', 80),
+    jobTitle: truncate_(payload.jobTitle || '', 180),
+    interests: truncate_(payload.interests || '', 1000),
+    updatedAt: new Date()
+  };
+
+  var student = updateRecordByKey_(
+    CP.SHEETS.STUDENTS,
+    'studentId',
+    payload.studentId,
+    patch
+  );
+
+  logAudit_('STUDENT', payload.studentId, 'PROFILE_UPDATED', 'STUDENT', payload.studentId, {});
+
+  return successResponse_({
+    student: publicStudent_(student)
+  });
+}
+
 function getLessonForStudent_(payload) {
   requireFields_(payload, ['lessonId']);
 
@@ -2795,6 +2870,9 @@ function createStudentRecord_(payload, actor) {
     status: CP.STATUS.ACTIVE,
     country: truncate_(payload.country || '', 100),
     organization: truncate_(payload.organization || '', 250),
+    phone: truncate_(payload.phone || '', 80),
+    jobTitle: truncate_(payload.jobTitle || '', 180),
+    interests: truncate_(payload.interests || '', 1000),
     createdAt: now,
     updatedAt: now,
     lastLoginAt: ''
@@ -3504,6 +3582,9 @@ function publicStudent_(student) {
     status: student.status,
     country: student.country,
     organization: student.organization,
+    phone: student.phone,
+    jobTitle: student.jobTitle,
+    interests: student.interests,
     createdAt: student.createdAt,
     lastLoginAt: student.lastLoginAt
   };

@@ -135,8 +135,16 @@ export class CoursePlatformApi {
     }
   }
 
-  dashboard() {
-    return this.studentRequest('getDashboard', { courseId: this.courseId });
+  dashboard(courseId = this.courseId) {
+    return this.studentRequest('getDashboard', { courseId });
+  }
+
+  myCourses() {
+    return this.studentRequest('getMyCourses', { courseId: this.courseId });
+  }
+
+  updateMyProfile(profile) {
+    return this.studentRequest('updateMyProfile', profile);
   }
 
   getLesson(lessonId) {
@@ -178,12 +186,12 @@ export class CoursePlatformApi {
     return this.studentRequest('getAttemptStatus', { attemptId });
   }
 
-  certificate() {
-    return this.studentRequest('getMyCertificate', { courseId: this.courseId });
+  certificate(courseId = this.courseId) {
+    return this.studentRequest('getMyCertificate', { courseId });
   }
 
-  mediaConfig() {
-    return this.studentRequest('getMediaConfig', { courseId: this.courseId });
+  mediaConfig(courseId = this.courseId) {
+    return this.studentRequest('getMediaConfig', { courseId });
   }
 
   studentRequest(action, payload = {}) {
