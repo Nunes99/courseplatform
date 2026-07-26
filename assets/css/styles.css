@@ -20,7 +20,7 @@
   --input-bg: #ffffff;
   --hero-text: rgba(255,255,255,.84);
   --radius: 8px;
-  --radius-small: 6px;
+  --radius-small: 8px;
   --max: 1240px;
 }
 
@@ -96,7 +96,7 @@ a { color: var(--primary); }
   height: 44px;
   place-items: center;
   border: 1px solid rgba(234, 199, 139, .48);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--primary);
   color: white;
   font-size: 12px;
@@ -144,9 +144,14 @@ a { color: var(--primary); }
 
 .header-user {
   appearance: none;
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
   padding: 0;
-  border: 0;
-  background: transparent;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
   color: var(--muted);
   cursor: pointer;
   font: inherit;
@@ -158,17 +163,24 @@ a { color: var(--primary); }
 .header-user:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
-.header-greeting {
-  display: block;
-  max-width: min(32vw, 360px);
+.header-avatar {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
   overflow: hidden;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface-soft));
   color: var(--text);
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+img.header-avatar {
+  object-fit: cover;
 }
 
 .theme-toggle {
@@ -178,7 +190,7 @@ a { color: var(--primary); }
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--primary);
   cursor: pointer;
@@ -233,7 +245,7 @@ a { color: var(--primary); }
   gap: 8px;
   padding: 7px 10px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--surface-soft);
   color: var(--muted);
   font-size: 13px;
@@ -386,7 +398,7 @@ input:focus, textarea:focus, select:focus {
   gap: 8px;
   padding: 0 18px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius);
   cursor: pointer;
   font-weight: 800;
   text-decoration: none;
@@ -467,7 +479,7 @@ input:focus, textarea:focus, select:focus {
 .hero-meta span {
   padding: 7px 10px;
   border: 1px solid rgba(255,255,255,.14);
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: rgba(255,255,255,.08);
   color: rgba(255,255,255,.84);
   font-size: 12px;
@@ -504,7 +516,7 @@ input:focus, textarea:focus, select:focus {
   height: 8px;
   margin-top: 17px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--surface-strong);
 }
 
@@ -610,7 +622,7 @@ input:focus, textarea:focus, select:focus {
   place-items: center;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--surface-soft);
   color: var(--primary);
   cursor: pointer;
@@ -788,7 +800,7 @@ input:focus, textarea:focus, select:focus {
   place-items: center;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--line));
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: color-mix(in srgb, var(--primary) 10%, var(--surface-soft));
   color: var(--primary);
   font-weight: 900;
@@ -813,9 +825,21 @@ input:focus, textarea:focus, select:focus {
 }
 
 .profile-photo-frame img,
-.profile-photo-preview img {
+.profile-photo-preview img,
+.profile-photo-frame span,
+.profile-photo-preview span {
   width: 100%;
   height: 100%;
+}
+
+.profile-photo-frame span,
+.profile-photo-preview span {
+  display: grid;
+  place-items: center;
+}
+
+.profile-photo-frame img,
+.profile-photo-preview img {
   object-fit: cover;
 }
 
@@ -1042,7 +1066,7 @@ input:focus, textarea:focus, select:focus {
 
 .lesson-meta span {
   padding: 6px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface-soft) 70%, var(--surface));
   color: var(--muted);
@@ -1059,7 +1083,7 @@ input:focus, textarea:focus, select:focus {
   min-height: 28px;
   align-items: center;
   padding: 0 9px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--surface-soft);
   color: var(--muted);
   font-size: 11px;
@@ -1148,7 +1172,7 @@ input:focus, textarea:focus, select:focus {
 .lesson-navigation button {
   padding: 7px 9px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -1186,7 +1210,7 @@ input:focus, textarea:focus, select:focus {
 .content-section-label {
   display: inline-flex;
   padding: 5px 8px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--surface-soft);
   color: var(--primary);
   font-size: 11px;
@@ -1249,7 +1273,7 @@ input:focus, textarea:focus, select:focus {
   height: 68px;
   margin: 0 auto 20px;
   place-items: center;
-  border-radius: 50%;
+  border-radius: var(--radius);
   background: #e3f4ea;
   color: var(--success);
   font-size: 32px;
@@ -1622,7 +1646,7 @@ input:focus, textarea:focus, select:focus {
 .configuration-error code {
   display: inline-block;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--surface-soft);
 }
 
@@ -1693,7 +1717,7 @@ input:focus, textarea:focus, select:focus {
   margin-top: 5px;
   padding: 10px 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -2309,7 +2333,7 @@ input:focus, textarea:focus, select:focus {
   width: 48px;
   height: 48px;
   place-items: center;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--primary);
   color: var(--surface);
   font-size: 15px;
@@ -2385,7 +2409,7 @@ input:focus, textarea:focus, select:focus {
 .student-progress-track {
   height: 8px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--surface-strong);
 }
 

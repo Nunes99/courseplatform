@@ -58,6 +58,7 @@ async function initialize() {
   applyBrandLogo();
 
   headerUser.addEventListener('click', openProfileFromHeader);
+  document.addEventListener('error', handleProfilePhotoError, true);
   logoutButton.addEventListener('click', logout);
   window.addEventListener('hashchange', route);
   window.addEventListener('message', (event) => {
@@ -110,6 +111,7 @@ function renderLogin() {
   clearTimers();
   headerUser.innerHTML = '';
   headerUser.title = '';
+  headerUser.removeAttribute('aria-label');
   headerUser.hidden = true;
   logoutButton.hidden = true;
 
@@ -234,8 +236,9 @@ async function renderDashboard() {
   applyBrandLogo();
 
   const greeting = studentGreeting(dashboard.student.fullName);
-  headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(dashboard.student.fullName)}</span>`;
+  headerUser.innerHTML = profileAvatarTemplate(dashboard.student, 'header-avatar');
   headerUser.title = 'Editar perfil pessoal';
+  headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
   headerUser.hidden = false;
   logoutButton.hidden = false;
 
@@ -439,8 +442,9 @@ async function renderProfile() {
   const courseBundle = await api.myCourses();
   state.myCourses = courseBundle.courses || [];
   const student = courseBundle.student || state.dashboard?.student || {};
-  headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(student.fullName || student.email || '')}</span>`;
+  headerUser.innerHTML = profileAvatarTemplate(student, 'header-avatar');
   headerUser.title = 'Editar perfil pessoal';
+  headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
   headerUser.hidden = false;
   logoutButton.hidden = false;
 
@@ -649,7 +653,10 @@ function bindProfilePhotoPreview(student) {
     }
 
     const objectUrl = URL.createObjectURL(file);
-    preview.innerHTML = `<img src="${escapeHtml(objectUrl)}" alt="Pre-visualizacao da fotografia">`;
+    preview.innerHTML = profileAvatarTemplate({
+      ...student,
+      profilePhotoUrl: objectUrl
+    }, 'profile-photo-image');
   });
 }
 
@@ -659,12 +666,42 @@ function profileInitials(fullName) {
 }
 
 function profilePhotoTemplate(student) {
-  const photoUrl = String(student?.profilePhotoUrl || '').trim();
+  return profileAvatarTemplate(student, 'profile-photo-image');
+}
+
+function profileAvatarTemplate(student, className = '') {
+  const initials = profileInitials(student?.fullName || student?.email);
+  const photoUrl = safeImageUrl(student?.profilePhotoUrl);
+  const classes = className ? ` class="${escapeHtml(className)}"` : '';
+
   if (photoUrl) {
-    return `<img src="${escapeHtml(photoUrl)}" alt="Fotografia de ${escapeHtml(student.fullName || 'estudante')}">`;
+    return `<img${classes} src="${escapeHtml(photoUrl)}" alt="Fotografia de ${escapeHtml(student?.fullName || 'estudante')}" data-profile-photo="true" data-profile-initials="${escapeHtml(initials)}" referrerpolicy="no-referrer">`;
   }
 
-  return `<span>${escapeHtml(profileInitials(student?.fullName))}</span>`;
+  return `<span${classes}>${escapeHtml(initials)}</span>`;
+}
+
+function safeImageUrl(url) {
+  const value = String(url || '').trim();
+  if (!value) return '';
+
+  try {
+    const parsed = new URL(value, window.location.href);
+    if (!['http:', 'https:', 'blob:', 'data:'].includes(parsed.protocol)) return '';
+    return parsed.href;
+  } catch {
+    return '';
+  }
+}
+
+function handleProfilePhotoError(event) {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement) || !image.dataset.profilePhoto) return;
+
+  const fallback = document.createElement('span');
+  fallback.className = image.className;
+  fallback.textContent = image.dataset.profileInitials || 'E';
+  image.replaceWith(fallback);
 }
 
 function lessonCardTemplate(item) {
