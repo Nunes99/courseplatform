@@ -306,6 +306,18 @@ function doPost(e) {
       case 'adminLogout':
         result = withAdminSession_(payload, adminLogout_, ['OWNER', 'ADMIN', 'REVIEWER']);
         break;
+      case 'adminMe':
+        result = withAdminSession_(payload, adminMe_, ['OWNER', 'ADMIN', 'REVIEWER']);
+        break;
+      case 'adminListStaff':
+        result = withAdminSession_(payload, adminListStaff_, ['OWNER', 'ADMIN']);
+        break;
+      case 'adminSaveStaff':
+        result = withAdminSession_(payload, adminSaveStaff_, ['OWNER']);
+        break;
+      case 'adminSetStaffStatus':
+        result = withAdminSession_(payload, adminSetStaffStatus_, ['OWNER']);
+        break;
       case 'adminListPendingSubmissions':
         result = withAdminSession_(payload, adminListPendingSubmissions_, ['OWNER', 'ADMIN', 'REVIEWER']);
         break;
@@ -1265,6 +1277,141 @@ function adminLogout_(payload) {
   logAudit_('ADMIN', payload.adminId, 'ADMIN_LOGOUT', 'SESSION', '', {});
 
   return successResponse_({ loggedOut: true });
+}
+
+function adminMe_(payload) {
+  return successResponse_({
+    admin: publicAdmin_(payload._admin)
+  });
+}
+
+function adminListStaff_(payload) {
+  var staff = readAll_(CP.SHEETS.ADMINS)
+    .sort(function(a, b) {
+      return stringValue_(a.fullName).localeCompare(stringValue_(b.fullName));
+    })
+    .map(publicAdmin_);
+
+  return successResponse_({
+    staff: staff,
+    currentAdmin: publicAdmin_(payload._admin)
+  });
+}
+
+function adminSaveStaff_(payload) {
+  requireFields_(payload, ['fullName', 'email', 'role', 'status']);
+
+  var email = normalizeEmail_(payload.email);
+  if (!isValidEmail_(email)) {
+    throw apiError_('INVALID_EMAIL', 'O email informado nao e valido.');
+  }
+
+  var role = stringValue_(payload.role).toUpperCase();
+  var allowedRoles = [CP.ADMIN_ROLES.OWNER, CP.ADMIN_ROLES.ADMIN, CP.ADMIN_ROLES.REVIEWER];
+  if (allowedRoles.indexOf(role) === -1) {
+    throw apiError_('INVALID_ADMIN_ROLE', 'Perfil administrativo invalido.');
+  }
+
+  var status = stringValue_(payload.status || CP.STATUS.ACTIVE).toUpperCase();
+  var allowedStatuses = [CP.STATUS.ACTIVE, CP.STATUS.INACTIVE, CP.STATUS.BLOCKED, CP.STATUS.DELETED];
+  if (allowedStatuses.indexOf(status) === -1) {
+    throw apiError_('INVALID_STATUS', 'Estado de staff invalido.');
+  }
+
+  var adminId = stringValue_(payload.targetAdminId);
+  var existing = adminId
+    ? findOne_(CP.SHEETS.ADMINS, { adminId: adminId })
+    : null;
+  var duplicated = findOne_(CP.SHEETS.ADMINS, { email: email });
+
+  if (duplicated && (!existing || duplicated.adminId !== existing.adminId)) {
+    throw apiError_('EMAIL_ALREADY_EXISTS', 'Ja existe um membro da administracao com este email.');
+  }
+
+  if (existing && stringValue_(existing.adminId) === stringValue_(payload._admin.adminId) && status !== CP.STATUS.ACTIVE) {
+    throw apiError_('CANNOT_DISABLE_SELF', 'Nao pode remover ou bloquear a sua propria permissao.');
+  }
+
+  if (existing && existing.role === CP.ADMIN_ROLES.OWNER && role !== CP.ADMIN_ROLES.OWNER) {
+    var ownerCount = readAll_(CP.SHEETS.ADMINS).filter(function(admin) {
+      return stringValue_(admin.role) === CP.ADMIN_ROLES.OWNER &&
+        stringValue_(admin.status) === CP.STATUS.ACTIVE;
+    }).length;
+    if (ownerCount <= 1) {
+      throw apiError_('LAST_OWNER_REQUIRED', 'Nao e possivel remover o ultimo OWNER ativo.');
+    }
+  }
+
+  var now = new Date();
+  var record = {
+    adminId: existing ? existing.adminId : newId_('ADM'),
+    fullName: truncate_(payload.fullName, 200),
+    email: email,
+    role: role,
+    status: status,
+    createdAt: existing ? existing.createdAt : now,
+    updatedAt: now
+  };
+
+  record = existing
+    ? updateRecordByKey_(CP.SHEETS.ADMINS, 'adminId', existing.adminId, record)
+    : appendRecord_(CP.SHEETS.ADMINS, record);
+
+  if (status !== CP.STATUS.ACTIVE) {
+    revokeSessionsForSubject_('ADMIN:' + record.adminId);
+  }
+
+  logAudit_('ADMIN', payload.adminId, 'STAFF_SAVED', 'ADMIN', record.adminId, {
+    role: role,
+    status: status
+  });
+
+  return successResponse_({ admin: publicAdmin_(record) });
+}
+
+function adminSetStaffStatus_(payload) {
+  requireFields_(payload, ['targetAdminId', 'status']);
+
+  var status = stringValue_(payload.status).toUpperCase();
+  var allowed = [CP.STATUS.ACTIVE, CP.STATUS.INACTIVE, CP.STATUS.BLOCKED, CP.STATUS.DELETED];
+  if (allowed.indexOf(status) === -1) {
+    throw apiError_('INVALID_STATUS', 'Estado de staff invalido.');
+  }
+
+  if (stringValue_(payload.targetAdminId) === stringValue_(payload._admin.adminId) && status !== CP.STATUS.ACTIVE) {
+    throw apiError_('CANNOT_DISABLE_SELF', 'Nao pode remover ou bloquear a sua propria permissao.');
+  }
+
+  var target = findOne_(CP.SHEETS.ADMINS, { adminId: payload.targetAdminId });
+  if (!target) {
+    throw apiError_('ADMIN_NOT_FOUND', 'Membro da administracao nao encontrado.');
+  }
+
+  if (stringValue_(target.role) === CP.ADMIN_ROLES.OWNER && status !== CP.STATUS.ACTIVE) {
+    var activeOwners = readAll_(CP.SHEETS.ADMINS).filter(function(admin) {
+      return stringValue_(admin.role) === CP.ADMIN_ROLES.OWNER &&
+        stringValue_(admin.status) === CP.STATUS.ACTIVE &&
+        stringValue_(admin.adminId) !== stringValue_(target.adminId);
+    }).length;
+    if (!activeOwners) {
+      throw apiError_('LAST_OWNER_REQUIRED', 'Nao e possivel remover o ultimo OWNER ativo.');
+    }
+  }
+
+  var admin = updateRecordByKey_(CP.SHEETS.ADMINS, 'adminId', payload.targetAdminId, {
+    status: status,
+    updatedAt: new Date()
+  });
+
+  if (status !== CP.STATUS.ACTIVE) {
+    revokeSessionsForSubject_('ADMIN:' + admin.adminId);
+  }
+
+  logAudit_('ADMIN', payload.adminId, 'STAFF_STATUS_CHANGED', 'ADMIN', admin.adminId, {
+    status: status
+  });
+
+  return successResponse_({ admin: publicAdmin_(admin) });
 }
 
 /** ===== 07_CourseService.gs ===== */
@@ -3720,7 +3867,9 @@ function publicAdmin_(admin) {
     fullName: admin.fullName,
     email: admin.email,
     role: admin.role,
-    status: admin.status
+    status: admin.status,
+    createdAt: admin.createdAt,
+    updatedAt: admin.updatedAt
   };
 }
 

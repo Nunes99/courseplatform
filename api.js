@@ -256,6 +256,29 @@ export class CoursePlatformApi {
     }
   }
 
+  adminMe() {
+    return this.adminRequest('adminMe');
+  }
+
+  adminStaff() {
+    return this.adminRequest('adminListStaff');
+  }
+
+  adminSaveStaff(payload) {
+    const { adminId, ...rest } = payload;
+    return this.adminRequest('adminSaveStaff', {
+      ...rest,
+      targetAdminId: adminId || ''
+    });
+  }
+
+  adminSetStaffStatus(adminId, status) {
+    return this.adminRequest('adminSetStaffStatus', {
+      targetAdminId: adminId,
+      status
+    });
+  }
+
   adminPending() {
     return this.adminRequest('adminListPendingSubmissions');
   }

@@ -183,6 +183,28 @@ img.header-avatar {
   object-fit: cover;
 }
 
+.admin-identity {
+  appearance: none;
+  max-width: min(34vw, 320px);
+  min-height: 40px;
+  padding: 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-identity:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 .theme-toggle {
   display: inline-grid;
   width: 40px;
@@ -468,6 +490,14 @@ input:focus, textarea:focus, select:focus {
 .button-light:hover:not(:disabled) { background: rgba(255,255,255,.2); }
 .button-disabled { background: #e7dfce; color: #7c7468; }
 :root[data-theme="dark"] .button-disabled { background: #203649; color: #8fa8b8; }
+.button-danger {
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  color: var(--danger);
+}
+.button-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 18%, var(--surface));
+}
 .button-block { width: 100%; }
 .button-small { min-height: 36px; padding: 0 13px; font-size: 13px; }
 
@@ -1186,6 +1216,7 @@ input:focus, textarea:focus, select:focus {
 .status-correction-required,
 .status-time-exceeded,
 .status-failed,
+.status-deleted,
 .status-blocked { background: #ffebeb; color: var(--danger); }
 
 .information-panel {
@@ -1951,7 +1982,8 @@ input:focus, textarea:focus, select:focus {
 }
 
 .admin-table-wrap {
-  overflow-x: auto;
+  max-height: 68vh;
+  overflow: auto;
   margin-top: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1971,6 +2003,9 @@ input:focus, textarea:focus, select:focus {
 }
 
 .admin-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
   background: var(--surface-soft);
   color: var(--muted);
   font-size: 12px;
@@ -1980,6 +2015,25 @@ input:focus, textarea:focus, select:focus {
 .admin-table small {
   display: block;
   color: var(--muted);
+}
+
+.admin-row-actions,
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.admin-row-actions {
+  justify-content: flex-start;
+}
+
+.admin-profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 16px;
+  align-items: start;
 }
 
 .empty-table {
@@ -2092,6 +2146,9 @@ input:focus, textarea:focus, select:focus {
 .course-module-list {
   display: grid;
   gap: 12px;
+  max-height: 620px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .course-module-card {
@@ -2913,7 +2970,13 @@ input:focus, textarea:focus, select:focus {
     grid-template-columns: 1fr;
   }
 
+  .admin-profile-grid {
+    grid-template-columns: 1fr;
+  }
+
   .student-admin-toolbar .button,
+  .admin-row-actions .button,
+  .dialog-actions .button,
   .student-detail-actions .button {
     width: 100%;
   }

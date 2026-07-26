@@ -11,7 +11,8 @@ export const STATUS_LABELS = Object.freeze({
   COMPLETED: 'Concluído',
   ACTIVE: 'Ativo',
   INACTIVE: 'Inativo',
-  BLOCKED: 'Bloqueado'
+  BLOCKED: 'Bloqueado',
+  DELETED: 'Eliminado'
 });
 
 export function statusLabel(status) {

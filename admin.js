@@ -21,6 +21,7 @@ const goldIcon = 'c9a55b';
 
 let api;
 const state = {
+  admin: null,
   pending: [],
   submissionFilters: {
     status: 'ALL',
@@ -41,7 +42,8 @@ const state = {
   media: {
     logoUrl: '',
     videos: []
-  }
+  },
+  staff: []
 };
 
 initialize();
@@ -65,11 +67,22 @@ async function initialize() {
   applyBrandLogo();
 
   logoutButton.addEventListener('click', logout);
+  adminIdentity.addEventListener('click', () => {
+    if (!api?.hasAdminSession()) return;
+    setActiveAdminView('profile');
+    renderAdminProfile();
+  });
   new ResizeObserver(reportHeight).observe(document.body);
 
   if (api.hasAdminSession()) {
-    renderAdminShell();
-    loadPending();
+    try {
+      const result = await api.adminMe();
+      state.admin = result.admin;
+      renderAdminShell();
+      loadPending();
+    } catch (error) {
+      handleAdminError(error);
+    }
   } else {
     renderAdminLogin();
   }
@@ -78,6 +91,7 @@ async function initialize() {
 function renderAdminLogin() {
   logoutButton.hidden = true;
   adminIdentity.textContent = '';
+  adminIdentity.hidden = true;
 
   root.innerHTML = `
     <section class="auth-shell">
@@ -135,6 +149,7 @@ async function login(event) {
 
   try {
     const result = await api.adminLogin(data.get('email'), data.get('adminKey'));
+    state.admin = result.admin;
     adminIdentity.textContent = `${result.admin.fullName} · ${result.admin.role}`;
     renderAdminShell();
     await loadPending();
@@ -153,11 +168,17 @@ async function logout() {
   } catch {
     sessionStorage.removeItem('courseAdminToken');
   }
+  state.admin = null;
+  state.staff = [];
   renderAdminLogin();
 }
 
 function renderAdminShell() {
   logoutButton.hidden = false;
+  adminIdentity.hidden = false;
+  if (state.admin) {
+    adminIdentity.textContent = `${state.admin.fullName} · ${state.admin.role}`;
+  }
 
   root.innerHTML = `
     <div class="admin-layout">
@@ -186,6 +207,16 @@ function renderAdminShell() {
           <img src="${iconUrl('picture', blueIcon)}" alt="">
           <span>Marca</span>
         </button>
+        ${canManageStaff() ? `
+          <button class="admin-nav" data-admin-view="staff">
+            <img src="${iconUrl('conference-call', blueIcon)}" alt="">
+            <span>Staff</span>
+          </button>
+        ` : ''}
+        <button class="admin-nav" data-admin-view="profile">
+          <img src="${iconUrl('user-male-circle', blueIcon)}" alt="">
+          <span>Perfil</span>
+        </button>
       </aside>
 
       <main class="admin-main" id="adminMain"></main>
@@ -194,11 +225,7 @@ function renderAdminShell() {
 
   root.querySelectorAll('[data-admin-view]').forEach((button) => {
     button.addEventListener('click', () => {
-      root.querySelectorAll('[data-admin-view]').forEach((item) => {
-        item.classList.remove('is-active');
-      });
-
-      button.classList.add('is-active');
+      setActiveAdminView(button.dataset.adminView);
 
       if (button.dataset.adminView === 'students') {
         loadStudents();
@@ -208,11 +235,288 @@ function renderAdminShell() {
         renderVideos();
       } else if (button.dataset.adminView === 'brand') {
         renderBrandSettings();
+      } else if (button.dataset.adminView === 'staff') {
+        loadStaff();
+      } else if (button.dataset.adminView === 'profile') {
+        renderAdminProfile();
       } else {
         loadPending();
       }
     });
   });
+}
+
+function setActiveAdminView(view) {
+  root.querySelectorAll('[data-admin-view]').forEach((item) => {
+    item.classList.toggle('is-active', item.dataset.adminView === view);
+  });
+}
+
+function confirmAdminAction(message) {
+  return window.confirm(message);
+}
+
+function bindDialogClose(overlay) {
+  overlay.querySelector('.dialog-close')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+}
+
+function canManageStaff() {
+  return ['OWNER', 'ADMIN'].includes(state.admin?.role);
+}
+
+async function loadStaff() {
+  const main = document.querySelector('#adminMain');
+  main.innerHTML = loadingTemplate('A carregar staff...');
+
+  try {
+    const result = await api.adminStaff();
+    state.staff = result.staff || [];
+    state.admin = result.currentAdmin || state.admin;
+    renderStaff();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+function renderStaff() {
+  const main = document.querySelector('#adminMain');
+  const activeCount = state.staff.filter((admin) => admin.status === 'ACTIVE').length;
+  const reviewerCount = state.staff.filter((admin) => admin.role === 'REVIEWER' && admin.status === 'ACTIVE').length;
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Gestao de Staff</p>
+        <h1>Administradores e revisores</h1>
+      </div>
+      <div class="admin-heading-actions">
+        ${state.admin?.role === 'OWNER' ? '<button class="button button-primary" id="newStaff" type="button">Adicionar staff</button>' : ''}
+      </div>
+    </div>
+
+    <section class="admin-summary-grid">
+      <article class="insight-card">
+        <img src="${iconUrl('conference-call', goldIcon)}" alt="">
+        <div><span>Total</span><strong>${state.staff.length}</strong></div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('ok', goldIcon)}" alt="">
+        <div><span>Ativos</span><strong>${activeCount}</strong></div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('inspection', goldIcon)}" alt="">
+        <div><span>Revisores</span><strong>${reviewerCount}</strong></div>
+      </article>
+    </section>
+
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Nome</th>
+            <th>Email</th>
+            <th>Permissao</th>
+            <th>Estado</th>
+            <th>Atualizado</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${state.staff.length ? state.staff.map(staffRowTemplate).join('') : `
+            <tr><td colspan="6" class="empty-table">Nenhum membro de staff registado.</td></tr>
+          `}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  document.querySelector('#newStaff')?.addEventListener('click', () => showStaffDialog());
+  root.querySelectorAll('[data-edit-staff]').forEach((button) => {
+    button.addEventListener('click', () => showStaffDialog(button.dataset.editStaff));
+  });
+  root.querySelectorAll('[data-staff-status]').forEach((button) => {
+    button.addEventListener('click', () => setStaffStatus(button.dataset.staffStatus, button.dataset.status));
+  });
+  reportHeight();
+}
+
+function staffRowTemplate(admin) {
+  const isCurrent = admin.adminId === state.admin?.adminId;
+  const canEdit = state.admin?.role === 'OWNER';
+  const canRemove = canEdit && !isCurrent && admin.status !== 'DELETED';
+  const canActivate = canEdit && admin.status !== 'ACTIVE';
+
+  return `
+    <tr>
+      <td>
+        <strong>${escapeHtml(admin.fullName)}</strong>
+        ${isCurrent ? '<small>Perfil atual</small>' : ''}
+      </td>
+      <td>${escapeHtml(admin.email)}</td>
+      <td>${escapeHtml(admin.role)}</td>
+      <td><span class="status-pill ${statusClass(admin.status)}">${statusLabel(admin.status)}</span></td>
+      <td>${escapeHtml(formatDate(admin.updatedAt || admin.createdAt))}</td>
+      <td>
+        <div class="admin-row-actions">
+          ${canEdit ? `
+            <button class="button button-small button-secondary" type="button"
+              data-edit-staff="${escapeHtml(admin.adminId)}">
+              Editar
+            </button>
+          ` : '<span class="empty-note">Sem permissao para editar</span>'}
+          ${canRemove ? `
+            <button class="button button-small button-danger" type="button"
+              data-staff-status="${escapeHtml(admin.adminId)}" data-status="DELETED">
+              Remover
+            </button>
+          ` : ''}
+          ${canActivate ? `
+            <button class="button button-small button-secondary" type="button"
+              data-staff-status="${escapeHtml(admin.adminId)}" data-status="ACTIVE">
+              Ativar
+            </button>
+          ` : ''}
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function showStaffDialog(adminId = '') {
+  const admin = state.staff.find((item) => item.adminId === adminId) || {
+    adminId: '',
+    fullName: '',
+    email: '',
+    role: 'REVIEWER',
+    status: 'ACTIVE'
+  };
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card course-lesson-dialog">
+      <button class="dialog-close" type="button">x</button>
+      <h2>${adminId ? 'Editar staff' : 'Adicionar staff'}</h2>
+      <form id="staffForm" class="form-stack">
+        <input type="hidden" name="adminId" value="${escapeHtml(admin.adminId || '')}">
+        <label>
+          <span>Nome completo</span>
+          <input name="fullName" value="${escapeHtml(admin.fullName || '')}" required>
+        </label>
+        <label>
+          <span>Email</span>
+          <input type="email" name="email" value="${escapeHtml(admin.email || '')}" required>
+        </label>
+        <div class="course-form-grid">
+          <label>
+            <span>Permissao</span>
+            <select name="role">
+              ${studentFilterOption('OWNER', 'Owner', admin.role || 'REVIEWER')}
+              ${studentFilterOption('ADMIN', 'Administrador', admin.role || 'REVIEWER')}
+              ${studentFilterOption('REVIEWER', 'Revisor', admin.role || 'REVIEWER')}
+            </select>
+          </label>
+          <label>
+            <span>Estado</span>
+            <select name="status">
+              ${studentFilterOption('ACTIVE', 'Ativo', admin.status || 'ACTIVE')}
+              ${studentFilterOption('INACTIVE', 'Inativo', admin.status || 'ACTIVE')}
+              ${studentFilterOption('BLOCKED', 'Bloqueado', admin.status || 'ACTIVE')}
+            </select>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Guardar staff</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  bindDialogClose(overlay);
+  overlay.querySelector('[data-cancel-dialog]').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#staffForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!confirmAdminAction('Deseja guardar estas permissoes de staff?')) return;
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const values = Object.fromEntries(new FormData(form));
+    setBusy(button, true, 'A guardar...');
+    try {
+      await api.adminSaveStaff(values);
+      showToast('Staff guardado.', 'success');
+      overlay.remove();
+      await loadStaff();
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  });
+}
+
+async function setStaffStatus(adminId, status) {
+  const verb = status === 'DELETED' ? 'remover permissoes deste membro' : 'alterar o estado deste membro';
+  if (!confirmAdminAction(`Tem certeza que deseja ${verb}?`)) return;
+
+  try {
+    await api.adminSetStaffStatus(adminId, status);
+    showToast('Permissoes atualizadas.', 'success');
+    await loadStaff();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+function renderAdminProfile() {
+  const main = document.querySelector('#adminMain');
+  const admin = state.admin || {};
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Perfil administrativo</p>
+        <h1>${escapeHtml(admin.fullName || 'Administrador')}</h1>
+      </div>
+    </div>
+
+    <section class="admin-profile-grid">
+      <article class="profile-card">
+        <div class="student-detail-header">
+          <span class="student-avatar student-avatar-large">${escapeHtml(studentInitials(admin.fullName || admin.email))}</span>
+          <div>
+            <span class="status-pill ${statusClass(admin.status)}">${statusLabel(admin.status)}</span>
+            <h2>${escapeHtml(admin.fullName || '')}</h2>
+            <p>${escapeHtml(admin.email || '')}</p>
+          </div>
+        </div>
+        <dl class="student-detail-grid">
+          <div><dt>ID</dt><dd>${escapeHtml(admin.adminId || '-')}</dd></div>
+          <div><dt>Permissao</dt><dd>${escapeHtml(admin.role || '-')}</dd></div>
+          <div><dt>Criado em</dt><dd>${escapeHtml(formatDate(admin.createdAt))}</dd></div>
+          <div><dt>Atualizado em</dt><dd>${escapeHtml(formatDate(admin.updatedAt))}</dd></div>
+        </dl>
+      </article>
+
+      <article class="profile-card">
+        <div class="profile-section-heading">
+          <div>
+            <p class="eyebrow">Sessao</p>
+            <h2>Acesso atual</h2>
+          </div>
+        </div>
+        <p class="profile-security-note">Use sair quando terminar a gestao administrativa neste dispositivo.</p>
+        <button class="button button-secondary" id="adminProfileLogout" type="button">Sair da conta</button>
+      </article>
+    </section>
+  `;
+
+  document.querySelector('#adminProfileLogout').addEventListener('click', logout);
+  reportHeight();
 }
 
 async function loadPending() {
@@ -616,6 +920,8 @@ async function applyLessonAccess(event) {
     return;
   }
 
+  if (!confirmAdminAction('Deseja aplicar esta alteracao de acesso aos estudantes selecionados?')) return;
+
   setBusy(button, true, 'A aplicar...');
   try {
     const result = await api.adminSetLessonAccess(payload);
@@ -805,6 +1111,8 @@ async function applySingleStudentAccess(status) {
 
 async function submitReview(event) {
   event.preventDefault();
+
+  if (!confirmAdminAction('Deseja guardar esta avaliacao? Esta decisao pode alterar o progresso do estudante.')) return;
 
   const form = event.currentTarget;
   const button = form.querySelector('button');
@@ -1448,7 +1756,11 @@ function renderCourses() {
             </select>
           </label>
         </div>
-        <button class="button button-primary" type="submit">Guardar curso</button>
+        <div class="dialog-actions">
+          ${course.courseId ? '<button class="button button-danger" id="deleteCourse" type="button">Eliminar curso</button>' : ''}
+          <button class="button button-secondary" type="reset">Cancelar alteracoes</button>
+          <button class="button button-primary" type="submit">Guardar curso</button>
+        </div>
       </form>
 
       <section class="course-admin-card">
@@ -1482,6 +1794,7 @@ function renderCourses() {
   `;
 
   document.querySelector('#courseForm').addEventListener('submit', saveCourse);
+  document.querySelector('#deleteCourse')?.addEventListener('click', deleteCurrentCourse);
   document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
   document.querySelector('#newGroup').addEventListener('click', () => showGroupDialog());
   document.querySelector('#newLesson').addEventListener('click', () => showLessonDialog());
@@ -1494,8 +1807,14 @@ function renderCourses() {
   root.querySelectorAll('[data-edit-lesson]').forEach((button) => {
     button.addEventListener('click', () => showLessonDialog(button.dataset.editLesson));
   });
+  root.querySelectorAll('[data-delete-lesson]').forEach((button) => {
+    button.addEventListener('click', () => deleteLesson(button.dataset.deleteLesson));
+  });
   root.querySelectorAll('[data-edit-group]').forEach((button) => {
     button.addEventListener('click', () => showGroupDialog(button.dataset.editGroup));
+  });
+  root.querySelectorAll('[data-delete-group]').forEach((button) => {
+    button.addEventListener('click', () => deleteGroup(button.dataset.deleteGroup));
   });
 
   reportHeight();
@@ -1520,10 +1839,16 @@ function moduleCardTemplate(item) {
         <div><dt>Conteudos</dt><dd>${contentCount}</dd></div>
         <div><dt>Questoes</dt><dd>${questionCount}</dd></div>
       </dl>
-      <button class="button button-secondary button-small" type="button"
-        data-edit-lesson="${escapeHtml(lesson.lessonId)}">
-        Editar modulo
-      </button>
+      <div class="admin-row-actions">
+        <button class="button button-secondary button-small" type="button"
+          data-edit-lesson="${escapeHtml(lesson.lessonId)}">
+          Editar modulo
+        </button>
+        <button class="button button-danger button-small" type="button"
+          data-delete-lesson="${escapeHtml(lesson.lessonId)}">
+          Eliminar
+        </button>
+      </div>
     </article>
   `;
 }
@@ -1544,16 +1869,24 @@ function groupCardTemplate(item) {
         <div><dt>Fim</dt><dd>${escapeHtml(formatDate(group.endDate))}</dd></div>
         <div><dt>Estado</dt><dd>${escapeHtml(statusLabel(group.status))}</dd></div>
       </dl>
-      <button class="button button-secondary button-small" type="button"
-        data-edit-group="${escapeHtml(group.groupId)}">
-        Gerir turma
-      </button>
+      <div class="admin-row-actions">
+        <button class="button button-secondary button-small" type="button"
+          data-edit-group="${escapeHtml(group.groupId)}">
+          Gerir turma
+        </button>
+        <button class="button button-danger button-small" type="button"
+          data-delete-group="${escapeHtml(group.groupId)}">
+          Eliminar
+        </button>
+      </div>
     </article>
   `;
 }
 
 async function saveCourse(event) {
   event.preventDefault();
+
+  if (!confirmAdminAction('Deseja guardar as alteracoes deste curso?')) return;
 
   const form = event.currentTarget;
   const button = form.querySelector('button[type="submit"]');
@@ -1571,6 +1904,61 @@ async function saveCourse(event) {
     handleAdminError(error);
   } finally {
     setBusy(button, false);
+  }
+}
+
+async function deleteCurrentCourse() {
+  const course = state.courseStructure?.course;
+  if (!course?.courseId) return;
+  if (!confirmAdminAction('Tem certeza que deseja eliminar este curso? O historico fica preservado, mas o curso deixa de ficar ativo.')) return;
+
+  try {
+    await api.adminSaveCourse({
+      ...course,
+      status: 'DELETED'
+    });
+    showToast('Curso eliminado.', 'success');
+    state.selectedCourseId = '';
+    await loadCourses();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+async function deleteLesson(lessonId) {
+  const found = (state.courseStructure?.lessons || []).find((item) => item.lesson?.lessonId === lessonId);
+  const lesson = found?.lesson;
+  if (!lesson) return;
+  if (!confirmAdminAction(`Eliminar o modulo "${lesson.title}"?`)) return;
+
+  try {
+    await api.adminSaveLesson({
+      ...lesson,
+      status: 'DELETED'
+    });
+    showToast('Modulo eliminado.', 'success');
+    await loadCourses();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+async function deleteGroup(groupId) {
+  const found = (state.groups || []).find((item) => item.group?.groupId === groupId);
+  const group = found?.group;
+  if (!group) return;
+  if (!confirmAdminAction(`Eliminar a turma "${group.name}"?`)) return;
+
+  try {
+    await api.adminSaveGroup({
+      ...group,
+      status: 'DELETED',
+      studentIds: []
+    });
+    showToast('Turma eliminada.', 'success');
+    await loadCourses();
+  } catch (error) {
+    handleAdminError(error);
   }
 }
 
@@ -1611,7 +1999,10 @@ function showCourseDialog() {
             </select>
           </label>
         </div>
-        <button class="button button-primary button-block" type="submit">Criar curso</button>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Criar curso</button>
+        </div>
       </form>
     </div>
   `;
@@ -1621,8 +2012,10 @@ function showCourseDialog() {
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) overlay.remove();
   });
+  overlay.querySelector('[data-cancel-dialog]').addEventListener('click', () => overlay.remove());
   overlay.querySelector('#newCourseForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!confirmAdminAction('Deseja criar este curso?')) return;
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const values = Object.fromEntries(new FormData(form));
@@ -1704,7 +2097,11 @@ function showGroupDialog(groupId = '') {
             `).join('') : '<p class="empty-note">Carregue a seccao Estudantes antes de gerir membros.</p>'}
           </div>
         </fieldset>
-        <button class="button button-primary button-block" type="submit">Guardar turma</button>
+        <div class="dialog-actions">
+          ${groupId ? '<button class="button button-danger" type="button" data-delete-dialog-group>Eliminar turma</button>' : ''}
+          <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Guardar turma</button>
+        </div>
       </form>
     </div>
   `;
@@ -1714,8 +2111,14 @@ function showGroupDialog(groupId = '') {
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) overlay.remove();
   });
+  overlay.querySelector('[data-cancel-dialog]').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-delete-dialog-group]')?.addEventListener('click', async () => {
+    overlay.remove();
+    await deleteGroup(group.groupId);
+  });
   overlay.querySelector('#groupForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!confirmAdminAction('Deseja guardar esta turma e os seus estudantes?')) return;
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const values = Object.fromEntries(new FormData(form));
@@ -1824,7 +2227,11 @@ function showLessonDialog(lessonId = '') {
               .join('')}
           </select>
         </label>
-        <button class="button button-primary button-block" type="submit">Guardar modulo</button>
+        <div class="dialog-actions">
+          ${lessonId ? '<button class="button button-danger" type="button" data-delete-dialog-lesson>Eliminar modulo</button>' : ''}
+          <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Guardar modulo</button>
+        </div>
       </form>
     </div>
   `;
@@ -1834,8 +2241,14 @@ function showLessonDialog(lessonId = '') {
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) overlay.remove();
   });
+  overlay.querySelector('[data-cancel-dialog]').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-delete-dialog-lesson]')?.addEventListener('click', async () => {
+    overlay.remove();
+    await deleteLesson(lesson.lessonId);
+  });
   overlay.querySelector('#lessonForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!confirmAdminAction('Deseja guardar este modulo?')) return;
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const values = Object.fromEntries(new FormData(form));
