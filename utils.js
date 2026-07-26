@@ -5,6 +5,7 @@ export const STATUS_LABELS = Object.freeze({
   UNDER_REVIEW: 'Em avaliação',
   CORRECTION_REQUIRED: 'Correção solicitada',
   APPROVED: 'Aprovada',
+  APPROVED_WITH_NOTES: 'Aprovada com observacoes',
   FAILED: 'Não aprovada',
   TIME_EXCEEDED: 'Tempo excedido',
   COMPLETED: 'Concluído',

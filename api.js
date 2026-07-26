@@ -228,6 +228,10 @@ export class CoursePlatformApi {
     return this.adminRequest('adminListPendingSubmissions');
   }
 
+  adminSubmissions(filters = {}) {
+    return this.adminRequest('adminListSubmissions', filters);
+  }
+
   adminSubmission(attemptId) {
     return this.adminRequest('adminGetSubmission', { attemptId });
   }
@@ -260,6 +264,18 @@ export class CoursePlatformApi {
     return this.adminRequest('adminGetCourseStructure', {
       courseId: this.courseId
     });
+  }
+
+  adminSaveCourse(payload) {
+    return this.adminRequest('adminSaveCourse', payload);
+  }
+
+  adminSaveLesson(payload) {
+    return this.adminRequest('adminSaveLesson', payload);
+  }
+
+  adminSaveLessonContent(payload) {
+    return this.adminRequest('adminSaveLessonContent', payload);
   }
 
   adminMediaConfig() {

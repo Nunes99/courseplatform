@@ -22,7 +22,12 @@ const goldIcon = 'c9a55b';
 let api;
 const state = {
   pending: [],
+  submissionFilters: {
+    status: 'ALL',
+    query: ''
+  },
   students: [],
+  courseStructure: null,
   selectedSubmission: null,
   studentFilters: {
     query: '',
@@ -166,6 +171,10 @@ function renderAdminShell() {
           <img src="${iconUrl('student-male', blueIcon)}" alt="">
           <span>Estudantes</span>
         </button>
+        <button class="admin-nav" data-admin-view="courses">
+          <img src="${iconUrl('book-shelf', blueIcon)}" alt="">
+          <span>Cursos</span>
+        </button>
         <button class="admin-nav" data-admin-view="videos">
           <img src="${iconUrl('video-playlist', blueIcon)}" alt="">
           <span>Vídeos</span>
@@ -190,6 +199,8 @@ function renderAdminShell() {
 
       if (button.dataset.adminView === 'students') {
         loadStudents();
+      } else if (button.dataset.adminView === 'courses') {
+        loadCourses();
       } else if (button.dataset.adminView === 'videos') {
         renderVideos();
       } else if (button.dataset.adminView === 'brand') {
@@ -206,9 +217,12 @@ async function loadPending() {
   main.innerHTML = loadingTemplate('A carregar submissões…');
 
   try {
-    const result = await api.adminPending();
+    const result = await api.adminSubmissions({
+      status: state.submissionFilters.status,
+      limit: 300
+    });
     state.pending = result.submissions;
-    renderPending();
+    renderSubmissionsV2();
   } catch (error) {
     handleAdminError(error);
   }
@@ -302,6 +316,180 @@ function renderPending() {
   reportHeight();
 }
 
+function renderSubmissionsV2() {
+  const main = document.querySelector('#adminMain');
+  const visibleSubmissions = filteredSubmissions();
+  const pendingCount = state.pending.filter(({ attempt }) => attempt.status === 'UNDER_REVIEW').length;
+  const reviewedCount = state.pending.filter(({ attempt }) => ['APPROVED', 'CORRECTION_REQUIRED', 'FAILED'].includes(attempt.status)).length;
+  const approvedCount = state.pending.filter(({ attempt }) => attempt.status === 'APPROVED').length;
+  const fileTotal = visibleSubmissions.reduce((sum, item) => sum + Number(item.fileCount || 0), 0);
+  const uniqueStudents = new Set(visibleSubmissions.map((item) => item.student?.email).filter(Boolean)).size;
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Avaliacao</p>
+        <h1>Submissoes</h1>
+      </div>
+      <button class="button button-secondary" id="refreshPending">Atualizar</button>
+    </div>
+
+    <section class="admin-summary-grid" aria-label="Resumo de avaliacao">
+      <article class="insight-card">
+        <img src="${iconUrl('inbox', goldIcon)}" alt="">
+        <div>
+          <span>Visiveis</span>
+          <strong>${visibleSubmissions.length}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('time-machine', goldIcon)}" alt="">
+        <div>
+          <span>Pendentes</span>
+          <strong>${pendingCount}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('ok', goldIcon)}" alt="">
+        <div>
+          <span>Aprovadas</span>
+          <strong>${approvedCount}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('student-male', goldIcon)}" alt="">
+        <div>
+          <span>Participantes</span>
+          <strong>${uniqueStudents}</strong>
+        </div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('documents', goldIcon)}" alt="">
+        <div>
+          <span>Ficheiros</span>
+          <strong>${fileTotal}</strong>
+        </div>
+      </article>
+    </section>
+
+    <section class="admin-filter-bar" aria-label="Filtros de submissoes">
+      <label>
+        <span>Estado</span>
+        <select id="submissionStatusFilter">
+          ${submissionStatusOption('ALL', 'Todas', state.submissionFilters.status)}
+          ${submissionStatusOption('UNDER_REVIEW', 'Pendentes', state.submissionFilters.status)}
+          ${submissionStatusOption('REVIEWED', 'Ja avaliadas', state.submissionFilters.status)}
+          ${submissionStatusOption('APPROVED', 'Aprovadas', state.submissionFilters.status)}
+          ${submissionStatusOption('CORRECTION_REQUIRED', 'Correcao solicitada', state.submissionFilters.status)}
+          ${submissionStatusOption('FAILED', 'Nao aprovadas', state.submissionFilters.status)}
+          ${submissionStatusOption('TIME_EXCEEDED', 'Tempo excedido', state.submissionFilters.status)}
+        </select>
+      </label>
+      <label class="admin-filter-search">
+        <span>Pesquisar</span>
+        <input id="submissionSearch" type="search" value="${escapeHtml(state.submissionFilters.query)}"
+          placeholder="Estudante, email, aula ou comentario">
+      </label>
+    </section>
+
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Estudante</th>
+            <th>Aula</th>
+            <th>Estado</th>
+            <th>Nota</th>
+            <th>Ultima decisao</th>
+            <th>Ficheiros</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${visibleSubmissions.length
+            ? visibleSubmissions.map(submissionRowTemplate).join('')
+            : '<tr><td colspan="7" class="empty-table">Nao existem submissoes para os filtros atuais.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  document.querySelector('#refreshPending').addEventListener('click', loadPending);
+  document.querySelector('#submissionStatusFilter').addEventListener('change', (event) => {
+    state.submissionFilters.status = event.currentTarget.value;
+    loadPending();
+  });
+  document.querySelector('#submissionSearch').addEventListener('input', (event) => {
+    state.submissionFilters.query = event.currentTarget.value;
+    renderSubmissionsV2();
+  });
+
+  root.querySelectorAll('[data-open-submission]').forEach((button) => {
+    button.addEventListener('click', () => openSubmission(button.dataset.openSubmission));
+  });
+
+  reportHeight();
+}
+
+function filteredSubmissions() {
+  const query = state.submissionFilters.query.trim().toLowerCase();
+  if (!query) return state.pending;
+  return state.pending.filter((item) => submissionSearchText(item).includes(query));
+}
+
+function submissionSearchText(item) {
+  return [
+    item.student?.fullName,
+    item.student?.email,
+    item.lesson?.title,
+    item.lesson?.lessonNumber,
+    item.attempt?.status,
+    item.latestReview?.decision,
+    item.latestReview?.comments,
+    item.attempt?.reviewComments
+  ].join(' ').toLowerCase();
+}
+
+function submissionStatusOption(value, label, selected) {
+  return `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+}
+
+function submissionRowTemplate(item) {
+  const review = item.latestReview;
+  const score = item.attempt?.score ?? review?.score ?? '';
+  const actionLabel = item.attempt.status === 'UNDER_REVIEW' ? 'Avaliar' : 'Ver / alterar';
+
+  return `
+    <tr>
+      <td>
+        <strong>${escapeHtml(item.student?.fullName || 'Estudante')}</strong>
+        <small>${escapeHtml(item.student?.email || '')}</small>
+      </td>
+      <td>
+        Aula ${escapeHtml(item.lesson?.lessonNumber || '')}
+        <small>${escapeHtml(item.lesson?.title || item.attempt.lessonId)}</small>
+      </td>
+      <td>
+        <span class="status-pill ${statusClass(item.attempt.status)}">
+          ${statusLabel(item.attempt.status)}
+        </span>
+      </td>
+      <td>${score === '' || score == null ? '-' : `${escapeHtml(score)}%`}</td>
+      <td>
+        ${review ? escapeHtml(statusLabel(review.decision)) : '-'}
+        <small>${escapeHtml(formatDate(item.attempt.reviewedAt || review?.reviewedAt))}</small>
+      </td>
+      <td>${item.fileCount || 0}</td>
+      <td>
+        <button class="button button-small button-primary"
+          data-open-submission="${escapeHtml(item.attempt.attemptId)}">
+          ${actionLabel}
+        </button>
+      </td>
+    </tr>
+  `;
+}
+
 async function openSubmission(attemptId) {
   const main = document.querySelector('#adminMain');
   main.innerHTML = loadingTemplate('A abrir a submissão…');
@@ -317,6 +505,13 @@ async function openSubmission(attemptId) {
 function renderSubmission() {
   const data = state.selectedSubmission;
   const main = document.querySelector('#adminMain');
+  const latestReview = [...(data.reviews || [])].sort((a, b) => dateValue(b.reviewedAt) - dateValue(a.reviewedAt))[0] || null;
+  const currentDecision = latestReview?.decision || decisionFromAttemptStatus(data.attempt.status);
+  const currentScore = data.attempt.score ?? latestReview?.score ?? '';
+  const currentComments = data.attempt.reviewComments || latestReview?.comments || '';
+  const currentDeadline = latestReview?.correctionDeadline
+    ? toDatetimeLocalValue(latestReview.correctionDeadline)
+    : '';
 
   const answers = data.answers.map(({ question, answer }) => `
     <article class="admin-answer">
@@ -339,7 +534,7 @@ function renderSubmission() {
   `).join('');
 
   main.innerHTML = `
-    <button class="text-button" id="backPending">← Submissões pendentes</button>
+    <button class="text-button" id="backPending">Voltar para submissoes</button>
 
     <div class="admin-page-heading">
       <div>
@@ -362,6 +557,12 @@ function renderSubmission() {
       <aside>
         <div class="review-form-card">
           <h2>Avaliação</h2>
+          ${latestReview ? `
+            <p class="review-history-note">
+              Ultima decisao: ${escapeHtml(statusLabel(latestReview.decision))}
+              em ${escapeHtml(formatDate(latestReview.reviewedAt))}
+            </p>
+          ` : ''}
 
           <form id="reviewForm" class="form-stack">
             <label>
@@ -404,8 +605,27 @@ function renderSubmission() {
   `;
 
   document.querySelector('#backPending').addEventListener('click', loadPending);
-  document.querySelector('#reviewForm').addEventListener('submit', submitReview);
+  const reviewForm = document.querySelector('#reviewForm');
+  reviewForm.elements.decision.value = currentDecision || 'APPROVED';
+  reviewForm.elements.score.value = currentScore === null ? '' : currentScore;
+  reviewForm.elements.comments.value = currentComments;
+  reviewForm.elements.correctionDeadline.value = currentDeadline;
+  reviewForm.addEventListener('submit', submitReview);
   reportHeight();
+}
+
+function decisionFromAttemptStatus(status) {
+  if (status === 'APPROVED') return 'APPROVED';
+  if (status === 'CORRECTION_REQUIRED') return 'CORRECTION_REQUIRED';
+  if (status === 'FAILED' || status === 'TIME_EXCEEDED') return 'FAILED';
+  return 'APPROVED';
+}
+
+function toDatetimeLocalValue(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
 async function submitReview(event) {
@@ -967,10 +1187,264 @@ function csvCell(value) {
   return `"${String(value ?? '').replaceAll('"', '""')}"`;
 }
 
+async function loadCourses() {
+  const main = document.querySelector('#adminMain');
+  main.innerHTML = loadingTemplate('A carregar cursos...');
+
+  try {
+    state.courseStructure = await api.adminCourseStructure();
+    renderCourses();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+function renderCourses() {
+  const main = document.querySelector('#adminMain');
+  const course = state.courseStructure?.course || {};
+  const lessons = state.courseStructure?.lessons || [];
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Conteudo academico</p>
+        <h1>Cursos e modulos</h1>
+      </div>
+      <button class="button button-primary" id="newLesson" type="button">
+        Novo modulo
+      </button>
+    </div>
+
+    <section class="course-admin-layout">
+      <form id="courseForm" class="course-admin-card form-stack">
+        <div>
+          <p class="eyebrow">Curso principal</p>
+          <h2>${escapeHtml(course.title || 'Curso')}</h2>
+        </div>
+        <input type="hidden" name="courseId" value="${escapeHtml(course.courseId || config.courseId || '')}">
+        <label>
+          <span>Codigo</span>
+          <input name="courseCode" value="${escapeHtml(course.courseCode || '')}" required>
+        </label>
+        <label>
+          <span>Titulo</span>
+          <input name="title" value="${escapeHtml(course.title || '')}" required>
+        </label>
+        <label>
+          <span>Descricao</span>
+          <textarea name="description" rows="5">${escapeHtml(course.description || '')}</textarea>
+        </label>
+        <div class="course-form-grid">
+          <label>
+            <span>Total de horas</span>
+            <input type="number" name="totalHours" min="0" value="${escapeHtml(course.totalHours || 0)}">
+          </label>
+          <label>
+            <span>Nota minima</span>
+            <input type="number" name="passingScore" min="0" max="100" value="${escapeHtml(course.passingScore || 60)}">
+          </label>
+          <label>
+            <span>Estado</span>
+            <select name="status">
+              ${studentFilterOption('ACTIVE', 'Ativo', course.status || 'ACTIVE')}
+              ${studentFilterOption('INACTIVE', 'Inativo', course.status || 'ACTIVE')}
+            </select>
+          </label>
+        </div>
+        <button class="button button-primary" type="submit">Guardar curso</button>
+      </form>
+
+      <section class="course-admin-card">
+        <div class="course-section-heading">
+          <div>
+            <p class="eyebrow">Modulos</p>
+            <h2>${lessons.length} modulos</h2>
+          </div>
+        </div>
+        <div class="course-module-list">
+          ${lessons.length ? lessons.map(moduleCardTemplate).join('') : `
+            <div class="student-empty-state">Nenhum modulo registado.</div>
+          `}
+        </div>
+      </section>
+    </section>
+  `;
+
+  document.querySelector('#courseForm').addEventListener('submit', saveCourse);
+  document.querySelector('#newLesson').addEventListener('click', () => showLessonDialog());
+  root.querySelectorAll('[data-edit-lesson]').forEach((button) => {
+    button.addEventListener('click', () => showLessonDialog(button.dataset.editLesson));
+  });
+
+  reportHeight();
+}
+
+function moduleCardTemplate(item) {
+  const lesson = item.lesson || item;
+  const contentCount = item.content?.length || 0;
+  const questionCount = item.questions?.length || 0;
+
+  return `
+    <article class="course-module-card">
+      <div>
+        <span class="status-pill ${statusClass(lesson.status)}">${statusLabel(lesson.status)}</span>
+        <h3>Aula ${escapeHtml(lesson.lessonNumber)} - ${escapeHtml(lesson.title)}</h3>
+        <p>${escapeHtml(lesson.summary || 'Sem resumo registado.')}</p>
+      </div>
+      <dl>
+        <div><dt>Teoria</dt><dd>${escapeHtml(lesson.theoryMinutes || 0)} min</dd></div>
+        <div><dt>Exercicios</dt><dd>${escapeHtml(lesson.exerciseMinutes || 0)} min</dd></div>
+        <div><dt>Individual</dt><dd>${escapeHtml(lesson.individualMinutes || 0)} min</dd></div>
+        <div><dt>Conteudos</dt><dd>${contentCount}</dd></div>
+        <div><dt>Questoes</dt><dd>${questionCount}</dd></div>
+      </dl>
+      <button class="button button-secondary button-small" type="button"
+        data-edit-lesson="${escapeHtml(lesson.lessonId)}">
+        Editar modulo
+      </button>
+    </article>
+  `;
+}
+
+async function saveCourse(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = Object.fromEntries(new FormData(form));
+  values.totalHours = Number(values.totalHours || 0);
+  values.passingScore = Number(values.passingScore || 0);
+
+  setBusy(button, true, 'A guardar...');
+
+  try {
+    await api.adminSaveCourse(values);
+    showToast('Curso guardado.', 'success');
+    await loadCourses();
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function showLessonDialog(lessonId = '') {
+  const lessons = state.courseStructure?.lessons || [];
+  const found = lessons.find((item) => item.lesson?.lessonId === lessonId);
+  const lesson = found?.lesson || {
+    courseId: state.courseStructure?.course?.courseId || config.courseId,
+    lessonNumber: lessons.length + 1,
+    title: '',
+    slug: '',
+    summary: '',
+    theoryMinutes: 0,
+    exerciseMinutes: 0,
+    individualMinutes: 0,
+    passingScore: state.courseStructure?.course?.passingScore || 60,
+    prerequisiteLessonId: '',
+    status: 'ACTIVE'
+  };
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card course-lesson-dialog">
+      <button class="dialog-close" type="button">x</button>
+      <h2>${lessonId ? 'Editar modulo' : 'Novo modulo'}</h2>
+      <form id="lessonForm" class="form-stack">
+        <input type="hidden" name="lessonId" value="${escapeHtml(lesson.lessonId || '')}">
+        <input type="hidden" name="courseId" value="${escapeHtml(lesson.courseId || state.courseStructure?.course?.courseId || config.courseId)}">
+        <div class="course-form-grid">
+          <label>
+            <span>Numero</span>
+            <input type="number" name="lessonNumber" min="1" value="${escapeHtml(lesson.lessonNumber || 1)}" required>
+          </label>
+          <label>
+            <span>Nota minima</span>
+            <input type="number" name="passingScore" min="0" max="100" value="${escapeHtml(lesson.passingScore || 60)}">
+          </label>
+          <label>
+            <span>Estado</span>
+            <select name="status">
+              ${studentFilterOption('ACTIVE', 'Ativo', lesson.status || 'ACTIVE')}
+              ${studentFilterOption('INACTIVE', 'Inativo', lesson.status || 'ACTIVE')}
+            </select>
+          </label>
+        </div>
+        <label>
+          <span>Titulo</span>
+          <input name="title" value="${escapeHtml(lesson.title || '')}" required>
+        </label>
+        <label>
+          <span>Slug</span>
+          <input name="slug" value="${escapeHtml(lesson.slug || '')}" placeholder="gerado automaticamente se vazio">
+        </label>
+        <label>
+          <span>Resumo</span>
+          <textarea name="summary" rows="4">${escapeHtml(lesson.summary || '')}</textarea>
+        </label>
+        <div class="course-form-grid">
+          <label>
+            <span>Teoria (min)</span>
+            <input type="number" name="theoryMinutes" min="0" value="${escapeHtml(lesson.theoryMinutes || 0)}">
+          </label>
+          <label>
+            <span>Exercicios (min)</span>
+            <input type="number" name="exerciseMinutes" min="0" value="${escapeHtml(lesson.exerciseMinutes || 0)}">
+          </label>
+          <label>
+            <span>Individual (min)</span>
+            <input type="number" name="individualMinutes" min="0" value="${escapeHtml(lesson.individualMinutes || 0)}">
+          </label>
+        </div>
+        <label>
+          <span>Modulo pre-requisito</span>
+          <select name="prerequisiteLessonId">
+            ${studentFilterOption('', 'Sem pre-requisito', lesson.prerequisiteLessonId || '')}
+            ${lessons
+              .filter((item) => item.lesson?.lessonId !== lesson.lessonId)
+              .map((item) => studentFilterOption(item.lesson.lessonId, `Aula ${item.lesson.lessonNumber} - ${item.lesson.title}`, lesson.prerequisiteLessonId || ''))
+              .join('')}
+          </select>
+        </label>
+        <button class="button button-primary button-block" type="submit">Guardar modulo</button>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.querySelector('#lessonForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const values = Object.fromEntries(new FormData(form));
+    ['lessonNumber', 'passingScore', 'theoryMinutes', 'exerciseMinutes', 'individualMinutes'].forEach((field) => {
+      values[field] = Number(values[field] || 0);
+    });
+
+    setBusy(button, true, 'A guardar...');
+    try {
+      await api.adminSaveLesson(values);
+      showToast('Modulo guardado.', 'success');
+      overlay.remove();
+      await loadCourses();
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  });
+}
+
 async function renderVideos() {
   const main = document.querySelector('#adminMain');
   main.innerHTML = loadingTemplate('A carregar vídeos…');
   await loadAdminMediaConfig();
+  await ensureStudentsForMedia();
   const videos = videoGallery();
 
   main.innerHTML = `
@@ -997,16 +1471,17 @@ async function renderVideos() {
         </label>
         <label>
           <span>Visibilidade</span>
-          <select name="visibility">
+          <select name="visibility" id="videoVisibility">
             <option value="PUBLIC">Todos os estudantes</option>
             <option value="SELECTED">Apenas emails selecionados</option>
           </select>
         </label>
-        <label class="admin-video-description">
-          <span>Emails autorizados</span>
-          <textarea name="allowedEmails" rows="3"
-            placeholder="um email por linha, vírgula ou ponto e vírgula"></textarea>
-        </label>
+        <fieldset class="video-student-access" id="videoStudentAccess" disabled>
+          <legend>Estudantes autorizados</legend>
+          <div class="video-student-list">
+            ${studentVideoCheckboxes()}
+          </div>
+        </fieldset>
         <button class="button button-primary" type="submit">Publicar vídeo</button>
       </form>
     </section>
@@ -1029,6 +1504,8 @@ async function renderVideos() {
   `;
 
   document.querySelector('#adminVideoForm').addEventListener('submit', saveVideo);
+  document.querySelector('#videoVisibility').addEventListener('change', updateVideoAccessState);
+  updateVideoAccessState();
   root.querySelectorAll('[data-delete-video]').forEach((button) => {
     button.addEventListener('click', () => deleteVideo(button.dataset.deleteVideo));
   });
@@ -1122,6 +1599,41 @@ async function removeBrandLogo() {
   }
 }
 
+async function ensureStudentsForMedia() {
+  if (state.students.length) return;
+
+  try {
+    const result = await api.adminStudents();
+    state.students = result.students || [];
+  } catch {
+    state.students = [];
+  }
+}
+
+function studentVideoCheckboxes() {
+  if (!state.students.length) {
+    return '<p class="empty-note">Nenhum estudante disponivel para selecao.</p>';
+  }
+
+  return state.students.map(({ student }) => `
+    <label class="video-student-option">
+      <input type="checkbox" name="allowedStudents" value="${escapeHtml(student.email)}">
+      <span>
+        <strong>${escapeHtml(student.fullName)}</strong>
+        <small>${escapeHtml(student.email)}</small>
+      </span>
+    </label>
+  `).join('');
+}
+
+function updateVideoAccessState() {
+  const visibility = document.querySelector('#videoVisibility');
+  const access = document.querySelector('#videoStudentAccess');
+  if (!visibility || !access) return;
+  access.disabled = visibility.value !== 'SELECTED';
+  access.classList.toggle('is-disabled', access.disabled);
+}
+
 async function saveVideo(event) {
   event.preventDefault();
 
@@ -1130,7 +1642,9 @@ async function saveVideo(event) {
   const values = new FormData(form);
   const url = String(values.get('url') || '').trim();
   const visibility = String(values.get('visibility') || 'PUBLIC');
-  const allowedEmails = normalizeEmailList(values.get('allowedEmails'));
+  const allowedEmails = visibility === 'SELECTED'
+    ? normalizeEmailList(values.getAll('allowedStudents'))
+    : [];
 
   if (!videoEmbedUrl(url)) {
     showToast('Adicione um link válido do YouTube ou Vimeo.', 'warning');
@@ -1140,7 +1654,7 @@ async function saveVideo(event) {
 
   if (visibility === 'SELECTED' && !allowedEmails.length) {
     showToast('Informe pelo menos um email autorizado.', 'warning');
-    form.elements.allowedEmails.focus();
+    form.querySelector('[name="allowedStudents"]')?.focus();
     return;
   }
 

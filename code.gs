@@ -290,6 +290,9 @@ function doPost(e) {
       case 'adminListPendingSubmissions':
         result = withAdminSession_(payload, adminListPendingSubmissions_, ['OWNER', 'ADMIN', 'REVIEWER']);
         break;
+      case 'adminListSubmissions':
+        result = withAdminSession_(payload, adminListSubmissions_, ['OWNER', 'ADMIN', 'REVIEWER']);
+        break;
       case 'adminGetSubmission':
         result = withAdminSession_(payload, adminGetSubmission_, ['OWNER', 'ADMIN', 'REVIEWER']);
         break;
@@ -1708,6 +1711,10 @@ function recalculateEnrollment_(studentId, courseId) {
 
     var certificate = ensureCertificate_(studentId, courseId, finalScore);
     patch.certificateId = certificate.certificateId;
+  } else {
+    patch.status = CP.STATUS.ACTIVE;
+    patch.completedAt = '';
+    patch.certificateId = '';
   }
 
   return updateRecordByKey_(
@@ -2393,6 +2400,61 @@ function adminListPendingSubmissions_(payload) {
   return successResponse_({ submissions: result });
 }
 
+function adminListSubmissions_(payload) {
+  var statusFilter = stringValue_(payload.status || 'ALL').toUpperCase();
+  var reviewableStatuses = [
+    CP.STATUS.UNDER_REVIEW,
+    CP.STATUS.APPROVED,
+    CP.STATUS.CORRECTION_REQUIRED,
+    CP.STATUS.FAILED,
+    CP.STATUS.TIME_EXCEEDED
+  ];
+
+  var attempts = readAll_(CP.SHEETS.ATTEMPTS)
+    .filter(function(attempt) {
+      var status = stringValue_(attempt.status);
+      if (reviewableStatuses.indexOf(status) === -1) return false;
+      if (statusFilter === 'ALL') return true;
+      if (statusFilter === 'REVIEWED') {
+        return [CP.STATUS.APPROVED, CP.STATUS.CORRECTION_REQUIRED, CP.STATUS.FAILED].indexOf(status) !== -1;
+      }
+      return status === statusFilter;
+    })
+    .sort(function(a, b) {
+      var aDate = new Date(a.reviewedAt || a.submittedAt || a.updatedAt || a.createdAt).getTime();
+      var bDate = new Date(b.reviewedAt || b.submittedAt || b.updatedAt || b.createdAt).getTime();
+      return bDate - aDate;
+    })
+    .slice(0, Number(payload.limit || 250));
+
+  return successResponse_({
+    submissions: attempts.map(adminSubmissionListItem_)
+  });
+}
+
+function adminSubmissionListItem_(attempt) {
+  var student = findOne_(CP.SHEETS.STUDENTS, {
+    studentId: attempt.studentId
+  });
+  var lesson = findOne_(CP.SHEETS.LESSONS, {
+    lessonId: attempt.lessonId
+  });
+  var reviews = findMany_(CP.SHEETS.REVIEWS, {
+    attemptId: attempt.attemptId
+  }).sort(function(a, b) {
+    return new Date(b.reviewedAt).getTime() - new Date(a.reviewedAt).getTime();
+  });
+
+  return {
+    attempt: publicAttempt_(attempt),
+    student: publicStudent_(student),
+    lesson: publicLesson_(lesson),
+    latestReview: reviews.length ? publicReview_(reviews[0]) : null,
+    reviewCount: reviews.length,
+    fileCount: listAttemptFiles_(attempt.attemptId).length
+  };
+}
+
 function adminGetSubmission_(payload) {
   requireFields_(payload, ['attemptId']);
 
@@ -2466,7 +2528,13 @@ function adminReviewSubmission_(payload) {
   }
 
   if (
-    [CP.STATUS.UNDER_REVIEW, CP.STATUS.CORRECTION_REQUIRED]
+    [
+      CP.STATUS.UNDER_REVIEW,
+      CP.STATUS.CORRECTION_REQUIRED,
+      CP.STATUS.APPROVED,
+      CP.STATUS.FAILED,
+      CP.STATUS.TIME_EXCEEDED
+    ]
       .indexOf(stringValue_(attempt.status)) === -1
   ) {
     throw apiError_('ATTEMPT_NOT_REVIEWABLE', 'A tentativa não está disponível para avaliação.');
@@ -2537,6 +2605,8 @@ function adminReviewSubmission_(payload) {
 
   if (approvedDecision) {
     progressPatch.approvedAt = now;
+  } else {
+    progressPatch.approvedAt = '';
   }
 
   updateRecordByKey_(
