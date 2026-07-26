@@ -1421,6 +1421,13 @@ input:focus, textarea:focus, select:focus {
 
 .admin-page-heading { margin-top: 0; }
 
+.admin-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .admin-filter-bar {
   display: grid;
   grid-template-columns: minmax(180px, .45fr) minmax(260px, 1fr);
@@ -1444,6 +1451,69 @@ input:focus, textarea:focus, select:focus {
   font-size: 12px;
   font-weight: 850;
   text-transform: uppercase;
+}
+
+.access-control-panel {
+  margin: 16px 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.access-control-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, .5fr));
+  gap: 12px;
+}
+
+.access-control-form > fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.access-control-form > fieldset,
+.access-control-form > button {
+  grid-column: 1 / -1;
+}
+
+.access-control-form legend {
+  padding: 0 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.access-checkbox-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.access-checkbox-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.access-checkbox-option input {
+  width: 18px;
+  min-height: 18px;
+  margin-top: 3px;
 }
 
 .admin-table-wrap {
@@ -1528,6 +1598,37 @@ input:focus, textarea:focus, select:focus {
   align-items: start;
 }
 
+.course-switcher {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 14px 0 18px;
+}
+
+.course-switcher button {
+  display: grid;
+  gap: 3px;
+  min-height: 72px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.course-switcher button.is-active {
+  border-color: var(--primary);
+  background: var(--surface-soft);
+  color: var(--primary);
+}
+
+.course-switcher span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .course-admin-card {
   padding: 22px;
   border: 1px solid var(--line);
@@ -1608,6 +1709,27 @@ input:focus, textarea:focus, select:focus {
 
 .course-lesson-dialog {
   width: min(100%, 860px);
+}
+
+.course-groups-panel {
+  margin-top: 18px;
+}
+
+.group-student-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.group-student-picker legend {
+  padding: 0 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
 }
 
 .admin-video-panel {
@@ -2195,7 +2317,8 @@ input:focus, textarea:focus, select:focus {
     grid-template-columns: 1fr;
   }
   .course-module-card dl,
-  .course-form-grid {
+  .course-form-grid,
+  .access-control-form {
     grid-template-columns: 1fr;
   }
   .upload-methods { grid-template-columns: 1fr; }
@@ -2260,6 +2383,11 @@ input:focus, textarea:focus, select:focus {
     flex-direction: column;
   }
   .brand-logo-actions .button {
+    width: 100%;
+  }
+
+  .admin-heading-actions,
+  .admin-heading-actions .button {
     width: 100%;
   }
 

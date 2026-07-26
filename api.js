@@ -266,6 +266,16 @@ export class CoursePlatformApi {
     });
   }
 
+  adminCourses() {
+    return this.adminRequest('adminListCourses');
+  }
+
+  adminCourseStructureFor(courseId) {
+    return this.adminRequest('adminGetCourseStructure', {
+      courseId: courseId || this.courseId
+    });
+  }
+
   adminSaveCourse(payload) {
     return this.adminRequest('adminSaveCourse', payload);
   }
@@ -276,6 +286,22 @@ export class CoursePlatformApi {
 
   adminSaveLessonContent(payload) {
     return this.adminRequest('adminSaveLessonContent', payload);
+  }
+
+  adminGroups(courseId = '') {
+    return this.adminRequest('adminListGroups', { courseId });
+  }
+
+  adminSaveGroup(payload) {
+    return this.adminRequest('adminSaveGroup', payload);
+  }
+
+  adminAssignStudentsToGroup(groupId, studentIds) {
+    return this.adminRequest('adminAssignStudentsToGroup', { groupId, studentIds });
+  }
+
+  adminSetLessonAccess(payload) {
+    return this.adminRequest('adminSetLessonAccess', payload);
   }
 
   adminMediaConfig() {

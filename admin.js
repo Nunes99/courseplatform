@@ -28,6 +28,9 @@ const state = {
   },
   students: [],
   courseStructure: null,
+  courses: [],
+  groups: [],
+  selectedCourseId: config.courseId,
   selectedSubmission: null,
   studentFilters: {
     query: '',
@@ -222,6 +225,7 @@ async function loadPending() {
       limit: 300
     });
     state.pending = result.submissions;
+    await loadAccessContext();
     renderSubmissionsV2();
   } catch (error) {
     handleAdminError(error);
@@ -392,6 +396,49 @@ function renderSubmissionsV2() {
       </label>
     </section>
 
+    <section class="access-control-panel">
+      <div class="course-section-heading">
+        <div>
+          <p class="eyebrow">Acesso aos modulos</p>
+          <h2>Liberar ou restringir conteudos</h2>
+        </div>
+      </div>
+      <form id="lessonAccessForm" class="access-control-form">
+        <label>
+          <span>Curso</span>
+          <select name="courseId" id="accessCourse">
+            ${accessCourseOptions()}
+          </select>
+        </label>
+        <label>
+          <span>Acao</span>
+          <select name="status">
+            <option value="AVAILABLE">Disponibilizar novamente</option>
+            <option value="LOCKED">Restringir acesso</option>
+          </select>
+        </label>
+        <fieldset>
+          <legend>Modulos</legend>
+          <div class="access-checkbox-list">
+            ${accessLessonCheckboxes()}
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Turmas</legend>
+          <div class="access-checkbox-list">
+            ${accessGroupCheckboxes()}
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Estudantes especificos</legend>
+          <div class="access-checkbox-list">
+            ${accessStudentCheckboxes()}
+          </div>
+        </fieldset>
+        <button class="button button-primary" type="submit">Aplicar acesso</button>
+      </form>
+    </section>
+
     <div class="admin-table-wrap">
       <table class="admin-table">
         <thead>
@@ -423,6 +470,12 @@ function renderSubmissionsV2() {
     state.submissionFilters.query = event.currentTarget.value;
     renderSubmissionsV2();
   });
+  document.querySelector('#accessCourse').addEventListener('change', async (event) => {
+    state.selectedCourseId = event.currentTarget.value;
+    await loadAccessContext();
+    renderSubmissionsV2();
+  });
+  document.querySelector('#lessonAccessForm').addEventListener('submit', applyLessonAccess);
 
   root.querySelectorAll('[data-open-submission]').forEach((button) => {
     button.addEventListener('click', () => openSubmission(button.dataset.openSubmission));
@@ -488,6 +541,91 @@ function submissionRowTemplate(item) {
       </td>
     </tr>
   `;
+}
+
+async function loadAccessContext() {
+  const coursesResult = await api.adminCourses();
+  state.courses = coursesResult.courses || [];
+  if (!state.selectedCourseId) {
+    state.selectedCourseId = state.courses[0]?.course?.courseId || config.courseId;
+  }
+  state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId);
+  const groupsResult = await api.adminGroups(state.courseStructure.course.courseId);
+  state.groups = groupsResult.groups || [];
+  await ensureStudentsForMedia();
+}
+
+function accessCourseOptions() {
+  return (state.courses || []).map((item) => {
+    const course = item.course;
+    return studentFilterOption(course.courseId, course.title, state.courseStructure?.course?.courseId || state.selectedCourseId);
+  }).join('');
+}
+
+function accessLessonCheckboxes() {
+  const lessons = state.courseStructure?.lessons || [];
+  if (!lessons.length) return '<p class="empty-note">Sem modulos neste curso.</p>';
+  return lessons.map(({ lesson }) => `
+    <label class="access-checkbox-option">
+      <input type="checkbox" name="lessonIds" value="${escapeHtml(lesson.lessonId)}">
+      <span>Aula ${escapeHtml(lesson.lessonNumber)} - ${escapeHtml(lesson.title)}</span>
+    </label>
+  `).join('');
+}
+
+function accessGroupCheckboxes() {
+  if (!state.groups.length) return '<p class="empty-note">Sem turmas neste curso.</p>';
+  return state.groups.map(({ group, memberCount }) => `
+    <label class="access-checkbox-option">
+      <input type="checkbox" name="groupIds" value="${escapeHtml(group.groupId)}">
+      <span>${escapeHtml(group.name)} (${memberCount || 0})</span>
+    </label>
+  `).join('');
+}
+
+function accessStudentCheckboxes() {
+  const courseId = state.courseStructure?.course?.courseId || state.selectedCourseId;
+  const students = state.students.filter(({ enrollments }) => {
+    return (enrollments || []).some((enrollment) => enrollment.courseId === courseId);
+  });
+  if (!students.length) return '<p class="empty-note">Sem estudantes inscritos neste curso.</p>';
+  return students.map(({ student }) => `
+    <label class="access-checkbox-option">
+      <input type="checkbox" name="studentIds" value="${escapeHtml(student.studentId)}">
+      <span>${escapeHtml(student.publicStudentId || student.studentId)} - ${escapeHtml(student.fullName)}</span>
+    </label>
+  `).join('');
+}
+
+async function applyLessonAccess(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = new FormData(form);
+  const payload = {
+    courseId: values.get('courseId'),
+    status: values.get('status'),
+    lessonIds: values.getAll('lessonIds'),
+    groupIds: values.getAll('groupIds'),
+    studentIds: values.getAll('studentIds')
+  };
+
+  if (!payload.groupIds.length && !payload.studentIds.length) {
+    showToast('Selecione pelo menos uma turma ou estudante.', 'warning');
+    return;
+  }
+
+  setBusy(button, true, 'A aplicar...');
+  try {
+    const result = await api.adminSetLessonAccess(payload);
+    showToast(`Acesso atualizado para ${result.studentCount} estudante(s).`, 'success');
+    await loadPending();
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
 }
 
 async function openSubmission(attemptId) {
@@ -600,6 +738,18 @@ function renderSubmission() {
           <h2>Ficheiros</h2>
           ${files || '<p class="empty-note">Nenhum ficheiro.</p>'}
         </div>
+
+        <div class="review-files">
+          <h2>Acesso deste estudante</h2>
+          <div class="student-detail-actions">
+            <button class="button button-secondary" type="button" data-student-access="AVAILABLE">
+              Disponibilizar modulo
+            </button>
+            <button class="button button-secondary" type="button" data-student-access="LOCKED">
+              Restringir modulo
+            </button>
+          </div>
+        </div>
       </aside>
     </div>
   `;
@@ -611,6 +761,9 @@ function renderSubmission() {
   reviewForm.elements.comments.value = currentComments;
   reviewForm.elements.correctionDeadline.value = currentDeadline;
   reviewForm.addEventListener('submit', submitReview);
+  root.querySelectorAll('[data-student-access]').forEach((button) => {
+    button.addEventListener('click', () => applySingleStudentAccess(button.dataset.studentAccess));
+  });
   reportHeight();
 }
 
@@ -626,6 +779,28 @@ function toDatetimeLocalValue(value) {
   if (Number.isNaN(date.getTime())) return '';
   const offset = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+async function applySingleStudentAccess(status) {
+  const data = state.selectedSubmission;
+  if (!data) return;
+
+  const label = status === 'AVAILABLE' ? 'disponibilizar' : 'restringir';
+  if (!window.confirm(`Deseja ${label} este modulo para ${data.student.fullName}?`)) return;
+
+  try {
+    await api.adminSetLessonAccess({
+      courseId: data.lesson.courseId,
+      status,
+      lessonIds: [data.lesson.lessonId],
+      studentIds: [data.student.studentId],
+      groupIds: []
+    });
+    showToast('Acesso atualizado.', 'success');
+    await openSubmission(data.attempt.attemptId);
+  } catch (error) {
+    handleAdminError(error);
+  }
 }
 
 async function submitReview(event) {
@@ -934,7 +1109,7 @@ function studentCardTemplate({ student, enrollments }) {
             ${statusLabel(student.status)}
           </span>
           <h3>${escapeHtml(student.fullName)}</h3>
-          <p>${escapeHtml(student.email)}</p>
+          <p>${escapeHtml(student.publicStudentId || student.studentId)} · ${escapeHtml(student.email)}</p>
         </div>
       </div>
 
@@ -1071,7 +1246,7 @@ function showStudentDetails(studentId) {
       </div>
 
       <dl class="student-detail-grid">
-        <div><dt>ID</dt><dd>${escapeHtml(student.studentId)}</dd></div>
+        <div><dt>ID publico</dt><dd>${escapeHtml(student.publicStudentId || student.studentId)}</dd></div>
         <div><dt>Pais</dt><dd>${escapeHtml(student.country || 'Sem registo')}</dd></div>
         <div><dt>Organizacao</dt><dd>${escapeHtml(student.organization || 'Sem registo')}</dd></div>
         <div><dt>Criado em</dt><dd>${escapeHtml(formatDate(student.createdAt))}</dd></div>
@@ -1156,11 +1331,12 @@ async function copyText(text, successMessage) {
 
 function exportStudentsCsv(records) {
   const rows = [
-    ['Nome', 'Email', 'Estado', 'Pais', 'Organizacao', 'Progresso', 'Ultimo acesso']
+    ['ID publico', 'Nome', 'Email', 'Estado', 'Pais', 'Organizacao', 'Progresso', 'Ultimo acesso']
   ];
 
   records.forEach(({ student, enrollments }) => {
     rows.push([
+      student.publicStudentId || student.studentId || '',
       student.fullName || '',
       student.email || '',
       statusLabel(student.status),
@@ -1192,7 +1368,15 @@ async function loadCourses() {
   main.innerHTML = loadingTemplate('A carregar cursos...');
 
   try {
-    state.courseStructure = await api.adminCourseStructure();
+    const coursesResult = await api.adminCourses();
+    state.courses = coursesResult.courses || [];
+    if (!state.selectedCourseId && state.courses.length) {
+      state.selectedCourseId = state.courses[0].course.courseId;
+    }
+    state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId);
+    const groupsResult = await api.adminGroups(state.courseStructure.course.courseId);
+    state.groups = groupsResult.groups || [];
+    await ensureStudentsForMedia();
     renderCourses();
   } catch (error) {
     handleAdminError(error);
@@ -1203,6 +1387,7 @@ function renderCourses() {
   const main = document.querySelector('#adminMain');
   const course = state.courseStructure?.course || {};
   const lessons = state.courseStructure?.lessons || [];
+  const groups = state.groups || [];
 
   main.innerHTML = `
     <div class="admin-page-heading">
@@ -1210,10 +1395,22 @@ function renderCourses() {
         <p class="eyebrow">Conteudo academico</p>
         <h1>Cursos e modulos</h1>
       </div>
-      <button class="button button-primary" id="newLesson" type="button">
-        Novo modulo
-      </button>
+      <div class="admin-heading-actions">
+        <button class="button button-secondary" id="newCourse" type="button">Novo curso</button>
+        <button class="button button-secondary" id="newGroup" type="button">Nova turma</button>
+        <button class="button button-primary" id="newLesson" type="button">Novo modulo</button>
+      </div>
     </div>
+
+    <section class="course-switcher">
+      ${state.courses.length ? state.courses.map((item) => `
+        <button type="button" class="${item.course.courseId === course.courseId ? 'is-active' : ''}"
+          data-select-course="${escapeHtml(item.course.courseId)}">
+          <strong>${escapeHtml(item.course.title)}</strong>
+          <span>${item.lessonCount} modulos · ${item.groupCount} turmas</span>
+        </button>
+      `).join('') : '<div class="student-empty-state">Nenhum curso registado.</div>'}
+    </section>
 
     <section class="course-admin-layout">
       <form id="courseForm" class="course-admin-card form-stack">
@@ -1268,12 +1465,37 @@ function renderCourses() {
         </div>
       </section>
     </section>
+
+    <section class="course-admin-card course-groups-panel">
+      <div class="course-section-heading">
+        <div>
+          <p class="eyebrow">Turmas e grupos</p>
+          <h2>${groups.length} grupos neste curso</h2>
+        </div>
+      </div>
+      <div class="course-module-list">
+        ${groups.length ? groups.map(groupCardTemplate).join('') : `
+          <div class="student-empty-state">Nenhuma turma registada para este curso.</div>
+        `}
+      </div>
+    </section>
   `;
 
   document.querySelector('#courseForm').addEventListener('submit', saveCourse);
+  document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
+  document.querySelector('#newGroup').addEventListener('click', () => showGroupDialog());
   document.querySelector('#newLesson').addEventListener('click', () => showLessonDialog());
+  root.querySelectorAll('[data-select-course]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      state.selectedCourseId = button.dataset.selectCourse;
+      await loadCourses();
+    });
+  });
   root.querySelectorAll('[data-edit-lesson]').forEach((button) => {
     button.addEventListener('click', () => showLessonDialog(button.dataset.editLesson));
+  });
+  root.querySelectorAll('[data-edit-group]').forEach((button) => {
+    button.addEventListener('click', () => showGroupDialog(button.dataset.editGroup));
   });
 
   reportHeight();
@@ -1306,6 +1528,30 @@ function moduleCardTemplate(item) {
   `;
 }
 
+function groupCardTemplate(item) {
+  const group = item.group || item;
+  return `
+    <article class="course-module-card">
+      <div>
+        <span class="status-pill ${statusClass(group.status)}">${statusLabel(group.status)}</span>
+        <h3>${escapeHtml(group.name)}</h3>
+        <p>${escapeHtml(group.groupCode || group.groupId)} · ${escapeHtml(formatDate(group.startDate))} ate ${escapeHtml(formatDate(group.endDate))}</p>
+      </div>
+      <dl>
+        <div><dt>Membros</dt><dd>${item.memberCount || 0}</dd></div>
+        <div><dt>Curso</dt><dd>${escapeHtml(group.courseId)}</dd></div>
+        <div><dt>Inicio</dt><dd>${escapeHtml(formatDate(group.startDate))}</dd></div>
+        <div><dt>Fim</dt><dd>${escapeHtml(formatDate(group.endDate))}</dd></div>
+        <div><dt>Estado</dt><dd>${escapeHtml(statusLabel(group.status))}</dd></div>
+      </dl>
+      <button class="button button-secondary button-small" type="button"
+        data-edit-group="${escapeHtml(group.groupId)}">
+        Gerir turma
+      </button>
+    </article>
+  `;
+}
+
 async function saveCourse(event) {
   event.preventDefault();
 
@@ -1326,6 +1572,177 @@ async function saveCourse(event) {
   } finally {
     setBusy(button, false);
   }
+}
+
+function showCourseDialog() {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card course-lesson-dialog">
+      <button class="dialog-close" type="button">x</button>
+      <h2>Novo curso</h2>
+      <form id="newCourseForm" class="form-stack">
+        <label>
+          <span>Codigo</span>
+          <input name="courseCode" required>
+        </label>
+        <label>
+          <span>Titulo</span>
+          <input name="title" required>
+        </label>
+        <label>
+          <span>Descricao</span>
+          <textarea name="description" rows="4"></textarea>
+        </label>
+        <div class="course-form-grid">
+          <label>
+            <span>Total de horas</span>
+            <input type="number" name="totalHours" min="0" value="0">
+          </label>
+          <label>
+            <span>Nota minima</span>
+            <input type="number" name="passingScore" min="0" max="100" value="60">
+          </label>
+          <label>
+            <span>Estado</span>
+            <select name="status">
+              ${studentFilterOption('ACTIVE', 'Ativo', 'ACTIVE')}
+              ${studentFilterOption('INACTIVE', 'Inativo', 'ACTIVE')}
+            </select>
+          </label>
+        </div>
+        <button class="button button-primary button-block" type="submit">Criar curso</button>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.querySelector('#newCourseForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const values = Object.fromEntries(new FormData(form));
+    values.totalHours = Number(values.totalHours || 0);
+    values.passingScore = Number(values.passingScore || 0);
+    setBusy(button, true, 'A criar...');
+    try {
+      const result = await api.adminSaveCourse(values);
+      state.selectedCourseId = result.course.courseId;
+      showToast('Curso criado.', 'success');
+      overlay.remove();
+      await loadCourses();
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  });
+}
+
+function showGroupDialog(groupId = '') {
+  const found = (state.groups || []).find((item) => item.group.groupId === groupId);
+  const group = found?.group || {
+    courseId: state.courseStructure?.course?.courseId || state.selectedCourseId || config.courseId,
+    groupCode: '',
+    name: '',
+    startDate: '',
+    endDate: '',
+    status: 'ACTIVE'
+  };
+  const activeStudentIds = groupId ? activeStudentIdsForGroup(groupId) : [];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card course-lesson-dialog">
+      <button class="dialog-close" type="button">x</button>
+      <h2>${groupId ? 'Gerir turma' : 'Nova turma'}</h2>
+      <form id="groupForm" class="form-stack">
+        <input type="hidden" name="groupId" value="${escapeHtml(group.groupId || '')}">
+        <input type="hidden" name="courseId" value="${escapeHtml(group.courseId)}">
+        <label>
+          <span>Nome da turma</span>
+          <input name="name" value="${escapeHtml(group.name || '')}" required>
+        </label>
+        <label>
+          <span>Codigo</span>
+          <input name="groupCode" value="${escapeHtml(group.groupCode || '')}" placeholder="opcional">
+        </label>
+        <div class="course-form-grid">
+          <label>
+            <span>Inicio</span>
+            <input type="date" name="startDate" value="${escapeHtml(dateInputValue(group.startDate))}">
+          </label>
+          <label>
+            <span>Fim</span>
+            <input type="date" name="endDate" value="${escapeHtml(dateInputValue(group.endDate))}">
+          </label>
+          <label>
+            <span>Estado</span>
+            <select name="status">
+              ${studentFilterOption('ACTIVE', 'Ativa', group.status || 'ACTIVE')}
+              ${studentFilterOption('INACTIVE', 'Inativa', group.status || 'ACTIVE')}
+            </select>
+          </label>
+        </div>
+        <fieldset class="group-student-picker">
+          <legend>Estudantes da turma</legend>
+          <div class="video-student-list">
+            ${state.students.length ? state.students.map(({ student }) => `
+              <label class="video-student-option">
+                <input type="checkbox" name="studentIds" value="${escapeHtml(student.studentId)}"
+                  ${activeStudentIds.includes(student.studentId) ? 'checked' : ''}>
+                <span>
+                  <strong>${escapeHtml(student.publicStudentId || student.studentId)} · ${escapeHtml(student.fullName)}</strong>
+                  <small>${escapeHtml(student.email)}</small>
+                </span>
+              </label>
+            `).join('') : '<p class="empty-note">Carregue a seccao Estudantes antes de gerir membros.</p>'}
+          </div>
+        </fieldset>
+        <button class="button button-primary button-block" type="submit">Guardar turma</button>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.querySelector('#groupForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const values = Object.fromEntries(new FormData(form));
+    values.studentIds = new FormData(form).getAll('studentIds');
+    setBusy(button, true, 'A guardar...');
+    try {
+      await api.adminSaveGroup(values);
+      showToast('Turma guardada.', 'success');
+      overlay.remove();
+      await loadCourses();
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  });
+}
+
+function activeStudentIdsForGroup(groupId) {
+  return state.students
+    .filter(({ memberships }) => (memberships || []).some((member) => member.groupId === groupId && member.status === 'ACTIVE'))
+    .map(({ student }) => student.studentId);
+}
+
+function dateInputValue(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 }
 
 function showLessonDialog(lessonId = '') {

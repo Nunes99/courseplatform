@@ -20,6 +20,8 @@ var CP = {
     QUESTIONS: 'Questions',
     QUESTION_OPTIONS: 'QuestionOptions',
     ENROLLMENTS: 'Enrollments',
+    GROUPS: 'Groups',
+    GROUP_MEMBERS: 'GroupMembers',
     LESSON_PROGRESS: 'LessonProgress',
     ATTEMPTS: 'Attempts',
     ANSWERS: 'Answers',
@@ -34,7 +36,7 @@ var CP = {
 
   HEADERS: {
     Students: [
-      'studentId', 'fullName', 'email', 'accessCode', 'status',
+      'studentId', 'publicStudentId', 'fullName', 'email', 'accessCode', 'status',
       'country', 'organization', 'createdAt', 'updatedAt', 'lastLoginAt'
     ],
     Admins: [
@@ -69,8 +71,15 @@ var CP = {
       'optionText', 'isCorrect', 'createdAt'
     ],
     Enrollments: [
-      'enrollmentId', 'studentId', 'courseId', 'status', 'enrolledAt',
+      'enrollmentId', 'studentId', 'courseId', 'groupId', 'status', 'enrolledAt',
       'completedAt', 'progressPercent', 'finalScore', 'certificateId', 'updatedAt'
+    ],
+    Groups: [
+      'groupId', 'groupCode', 'name', 'courseId', 'startDate', 'endDate',
+      'status', 'createdAt', 'updatedAt'
+    ],
+    GroupMembers: [
+      'groupMemberId', 'groupId', 'studentId', 'status', 'joinedAt', 'updatedAt'
     ],
     LessonProgress: [
       'progressId', 'enrollmentId', 'studentId', 'lessonId', 'status',
@@ -317,6 +326,9 @@ function doPost(e) {
       case 'adminSaveCourse':
         result = withAdminSession_(payload, adminSaveCourse_, ['OWNER', 'ADMIN']);
         break;
+      case 'adminListCourses':
+        result = withAdminSession_(payload, adminListCourses_, ['OWNER', 'ADMIN', 'REVIEWER']);
+        break;
       case 'adminSaveLesson':
         result = withAdminSession_(payload, adminSaveLesson_, ['OWNER', 'ADMIN']);
         break;
@@ -331,6 +343,18 @@ function doPost(e) {
         break;
       case 'adminGetCourseStructure':
         result = withAdminSession_(payload, adminGetCourseStructure_, ['OWNER', 'ADMIN', 'REVIEWER']);
+        break;
+      case 'adminListGroups':
+        result = withAdminSession_(payload, adminListGroups_, ['OWNER', 'ADMIN', 'REVIEWER']);
+        break;
+      case 'adminSaveGroup':
+        result = withAdminSession_(payload, adminSaveGroup_, ['OWNER', 'ADMIN']);
+        break;
+      case 'adminAssignStudentsToGroup':
+        result = withAdminSession_(payload, adminAssignStudentsToGroup_, ['OWNER', 'ADMIN']);
+        break;
+      case 'adminSetLessonAccess':
+        result = withAdminSession_(payload, adminSetLessonAccess_, ['OWNER', 'ADMIN']);
         break;
       case 'adminGetMediaConfig':
         result = withAdminSession_(payload, adminGetMediaConfig_, ['OWNER', 'ADMIN', 'REVIEWER']);
@@ -1132,6 +1156,8 @@ function loginStudent_(payload) {
     throw apiError_('STUDENT_NOT_ACTIVE', 'A conta do estudante não está ativa.');
   }
 
+  student = ensureStudentPublicId_(student);
+
   var submittedHash = hashSecret_(payload.accessCode);
   if (!constantTimeEquals_(submittedHash, student.accessCode)) {
     logAudit_('STUDENT', student.studentId, 'LOGIN_FAILED', 'STUDENT', student.studentId, {
@@ -1436,7 +1462,7 @@ function isHttpUrl_(url) {
   return /^https?:\/\/[^\s]+$/i.test(stringValue_(url).trim());
 }
 
-function ensureEnrollmentAndProgress_(studentId, courseId) {
+function ensureEnrollmentAndProgress_(studentId, courseId, groupId) {
   courseId = stringValue_(courseId) ||
     stringValue_(getSetting_('DEFAULT_COURSE_ID', CP.DEFAULTS.DEFAULT_COURSE_ID));
 
@@ -1459,12 +1485,18 @@ function ensureEnrollmentAndProgress_(studentId, courseId) {
       enrollmentId: newId_('ENR'),
       studentId: studentId,
       courseId: courseId,
+      groupId: stringValue_(groupId),
       status: CP.STATUS.ACTIVE,
       enrolledAt: new Date(),
       completedAt: '',
       progressPercent: 0,
       finalScore: '',
       certificateId: '',
+      updatedAt: new Date()
+    });
+  } else if (groupId && stringValue_(enrollment.groupId) !== stringValue_(groupId)) {
+    enrollment = updateRecordByKey_(CP.SHEETS.ENROLLMENTS, 'enrollmentId', enrollment.enrollmentId, {
+      groupId: stringValue_(groupId),
       updatedAt: new Date()
     });
   }
@@ -1508,6 +1540,7 @@ function getStudentDashboard_(payload) {
     payload.studentId,
     payload.courseId
   );
+  validateEnrollmentWindow_(enrollment);
 
   var course = findOne_(CP.SHEETS.COURSES, {
     courseId: enrollment.courseId
@@ -1575,6 +1608,10 @@ function getLessonForStudent_(payload) {
   if (!progress || stringValue_(progress.status) === CP.STATUS.LOCKED) {
     throw apiError_('LESSON_LOCKED', 'Esta aula ainda está bloqueada.');
   }
+
+  validateEnrollmentWindow_(findOne_(CP.SHEETS.ENROLLMENTS, {
+    enrollmentId: progress.enrollmentId
+  }));
 
   var content = findMany_(CP.SHEETS.LESSON_CONTENT, {
     lessonId: lesson.lessonId,
@@ -1725,6 +1762,31 @@ function recalculateEnrollment_(studentId, courseId) {
   );
 }
 
+function validateEnrollmentWindow_(enrollment) {
+  if (!enrollment || !enrollment.groupId) return;
+
+  var group = findOne_(CP.SHEETS.GROUPS, {
+    groupId: enrollment.groupId
+  });
+  if (!group) return;
+
+  if (stringValue_(group.status) !== CP.STATUS.ACTIVE) {
+    throw apiError_('GROUP_NOT_ACTIVE', 'A turma associada a este curso nao esta ativa.');
+  }
+
+  var now = Date.now();
+  var start = group.startDate ? new Date(group.startDate).getTime() : 0;
+  var end = group.endDate ? new Date(group.endDate).getTime() : 0;
+
+  if (start && now < start) {
+    throw apiError_('GROUP_NOT_STARTED', 'O periodo desta turma ainda nao iniciou.');
+  }
+
+  if (end && now > end) {
+    throw apiError_('GROUP_ENDED', 'O periodo desta turma ja terminou.');
+  }
+}
+
 /** ===== 08_AttemptService.gs ===== */
 
 function startAttempt_(payload) {
@@ -1747,6 +1809,10 @@ function startAttempt_(payload) {
   if (!progress) {
     throw apiError_('PROGRESS_NOT_FOUND', 'O progresso desta aula não foi criado.');
   }
+
+  validateEnrollmentWindow_(findOne_(CP.SHEETS.ENROLLMENTS, {
+    enrollmentId: progress.enrollmentId
+  }));
 
   if (stringValue_(progress.status) === CP.STATUS.LOCKED) {
     throw apiError_('LESSON_LOCKED', 'A aula ainda está bloqueada.');
@@ -2722,6 +2788,7 @@ function createStudentRecord_(payload, actor) {
 
   var student = appendRecord_(CP.SHEETS.STUDENTS, {
     studentId: newId_('STU'),
+    publicStudentId: generatePublicStudentId_(),
     fullName: truncate_(payload.fullName, 200),
     email: email,
     accessCode: hashSecret_(plainAccessCode),
@@ -2735,7 +2802,8 @@ function createStudentRecord_(payload, actor) {
 
   var enrollment = ensureEnrollmentAndProgress_(
     student.studentId,
-    payload.courseId
+    payload.courseId,
+    payload.groupId
   );
 
   logAudit_(
@@ -2761,13 +2829,20 @@ function adminListStudents_(payload) {
       return stringValue_(a.fullName).localeCompare(stringValue_(b.fullName));
     })
     .map(function(student) {
+      student = ensureStudentPublicId_(student);
       var enrollments = findMany_(CP.SHEETS.ENROLLMENTS, {
         studentId: student.studentId
       }).map(publicEnrollment_);
 
+      var memberships = findMany_(CP.SHEETS.GROUP_MEMBERS, {
+        studentId: student.studentId,
+        status: CP.STATUS.ACTIVE
+      }).map(publicGroupMember_);
+
       return {
         student: publicStudent_(student),
-        enrollments: enrollments
+        enrollments: enrollments,
+        memberships: memberships
       };
     });
 
@@ -2856,6 +2931,27 @@ function adminSaveCourse_(payload) {
 
   logAudit_('ADMIN', payload.adminId, 'COURSE_SAVED', 'COURSE', courseId, {});
   return successResponse_({ course: publicCourse_(record) });
+}
+
+function adminListCourses_(payload) {
+  var courses = readAll_(CP.SHEETS.COURSES)
+    .sort(function(a, b) {
+      return stringValue_(a.title).localeCompare(stringValue_(b.title));
+    })
+    .map(function(course) {
+      var lessons = findMany_(CP.SHEETS.LESSONS, { courseId: course.courseId });
+      var groups = findMany_(CP.SHEETS.GROUPS, { courseId: course.courseId });
+      var enrollments = findMany_(CP.SHEETS.ENROLLMENTS, { courseId: course.courseId });
+
+      return {
+        course: publicCourse_(course),
+        lessonCount: lessons.length,
+        groupCount: groups.length,
+        enrollmentCount: enrollments.length
+      };
+    });
+
+  return successResponse_({ courses: courses });
 }
 
 function adminSaveLesson_(payload) {
@@ -3024,6 +3120,246 @@ function adminGetCourseStructure_(payload) {
   });
 }
 
+function adminListGroups_(payload) {
+  var courseId = stringValue_(payload.courseId);
+  var groups = readAll_(CP.SHEETS.GROUPS)
+    .filter(function(group) {
+      return !courseId || stringValue_(group.courseId) === courseId;
+    })
+    .sort(function(a, b) {
+      return stringValue_(a.name).localeCompare(stringValue_(b.name));
+    })
+    .map(function(group) {
+      var members = findMany_(CP.SHEETS.GROUP_MEMBERS, {
+        groupId: group.groupId,
+        status: CP.STATUS.ACTIVE
+      });
+
+      return {
+        group: publicGroup_(group),
+        memberCount: members.length
+      };
+    });
+
+  return successResponse_({ groups: groups });
+}
+
+function adminSaveGroup_(payload) {
+  requireFields_(payload, ['name', 'courseId']);
+
+  var now = new Date();
+  var groupId = stringValue_(payload.groupId) || newId_('GRP');
+  var existing = findOne_(CP.SHEETS.GROUPS, { groupId: groupId });
+  var record = {
+    groupId: groupId,
+    groupCode: truncate_(payload.groupCode || generateGroupCode_(payload.name), 60),
+    name: truncate_(payload.name, 200),
+    courseId: payload.courseId,
+    startDate: payload.startDate ? new Date(payload.startDate) : '',
+    endDate: payload.endDate ? new Date(payload.endDate) : '',
+    status: stringValue_(payload.status || CP.STATUS.ACTIVE).toUpperCase(),
+    createdAt: existing ? existing.createdAt : now,
+    updatedAt: now
+  };
+
+  record = existing
+    ? updateRecordByKey_(CP.SHEETS.GROUPS, 'groupId', groupId, record)
+    : appendRecord_(CP.SHEETS.GROUPS, record);
+
+  if (payload.studentIds instanceof Array) {
+    syncGroupStudents_(record, payload.studentIds);
+  }
+
+  logAudit_('ADMIN', payload.adminId, 'GROUP_SAVED', 'GROUP', groupId, {
+    courseId: record.courseId
+  });
+
+  return successResponse_({ group: publicGroup_(record) });
+}
+
+function adminAssignStudentsToGroup_(payload) {
+  requireFields_(payload, ['groupId']);
+  var group = findOne_(CP.SHEETS.GROUPS, { groupId: payload.groupId });
+  if (!group) throw apiError_('GROUP_NOT_FOUND', 'Grupo nao encontrado.');
+
+  var result = syncGroupStudents_(group, payload.studentIds || []);
+  logAudit_('ADMIN', payload.adminId, 'GROUP_STUDENTS_ASSIGNED', 'GROUP', group.groupId, result);
+  return successResponse_(result);
+}
+
+function syncGroupStudents_(group, studentIds) {
+  var normalized = [];
+  (studentIds || []).forEach(function(studentId) {
+    studentId = stringValue_(studentId);
+    if (studentId && normalized.indexOf(studentId) === -1) normalized.push(studentId);
+  });
+
+  var existing = findMany_(CP.SHEETS.GROUP_MEMBERS, { groupId: group.groupId });
+  var now = new Date();
+  var active = 0;
+  var removed = 0;
+
+  existing.forEach(function(member) {
+    var shouldBeActive = normalized.indexOf(stringValue_(member.studentId)) !== -1;
+    if (!shouldBeActive && stringValue_(member.status) === CP.STATUS.ACTIVE) {
+      updateRecordByKey_(CP.SHEETS.GROUP_MEMBERS, 'groupMemberId', member.groupMemberId, {
+        status: CP.STATUS.INACTIVE,
+        updatedAt: now
+      });
+      removed++;
+    }
+  });
+
+  normalized.forEach(function(studentId) {
+    var student = findOne_(CP.SHEETS.STUDENTS, { studentId: studentId });
+    if (!student) return;
+
+    var member = findOne_(CP.SHEETS.GROUP_MEMBERS, {
+      groupId: group.groupId,
+      studentId: studentId
+    });
+
+    if (member) {
+      updateRecordByKey_(CP.SHEETS.GROUP_MEMBERS, 'groupMemberId', member.groupMemberId, {
+        status: CP.STATUS.ACTIVE,
+        updatedAt: now
+      });
+    } else {
+      appendRecord_(CP.SHEETS.GROUP_MEMBERS, {
+        groupMemberId: newId_('GM'),
+        groupId: group.groupId,
+        studentId: studentId,
+        status: CP.STATUS.ACTIVE,
+        joinedAt: now,
+        updatedAt: now
+      });
+    }
+
+    ensureEnrollmentAndProgress_(studentId, group.courseId, group.groupId);
+    active++;
+  });
+
+  return {
+    success: true,
+    activeMembers: active,
+    removedMembers: removed
+  };
+}
+
+function adminSetLessonAccess_(payload) {
+  requireFields_(payload, ['courseId', 'status']);
+
+  var status = stringValue_(payload.status).toUpperCase();
+  if ([CP.STATUS.AVAILABLE, CP.STATUS.LOCKED].indexOf(status) === -1) {
+    throw apiError_('INVALID_ACCESS_STATUS', 'Use AVAILABLE para disponibilizar ou LOCKED para restringir.');
+  }
+
+  var lessonIds = payload.lessonIds instanceof Array
+    ? payload.lessonIds.map(stringValue_).filter(Boolean)
+    : [];
+  if (!lessonIds.length) {
+    lessonIds = findMany_(CP.SHEETS.LESSONS, { courseId: payload.courseId })
+      .map(function(lesson) { return lesson.lessonId; });
+  }
+
+  var studentIds = resolveTargetStudentIds_(payload);
+  var changed = 0;
+  var now = new Date();
+
+  studentIds.forEach(function(studentId) {
+    var enrollment = ensureEnrollmentAndProgress_(studentId, payload.courseId);
+    lessonIds.forEach(function(lessonId) {
+      var progress = findOne_(CP.SHEETS.LESSON_PROGRESS, {
+        enrollmentId: enrollment.enrollmentId,
+        studentId: studentId,
+        lessonId: lessonId
+      });
+      if (!progress) return;
+      updateRecordByKey_(CP.SHEETS.LESSON_PROGRESS, 'progressId', progress.progressId, {
+        status: status,
+        unlockedAt: status === CP.STATUS.AVAILABLE && !progress.unlockedAt ? now : progress.unlockedAt,
+        updatedAt: now
+      });
+      if (status === CP.STATUS.AVAILABLE) {
+        authorizeLatestRetryForStudentLesson_(studentId, lessonId, now);
+      }
+      changed++;
+    });
+  });
+
+  logAudit_('ADMIN', payload.adminId, 'LESSON_ACCESS_CHANGED', 'LESSON_PROGRESS', '', {
+    courseId: payload.courseId,
+    status: status,
+    lessonIds: lessonIds,
+    studentCount: studentIds.length,
+    changed: changed
+  });
+
+  return successResponse_({
+    changed: changed,
+    studentCount: studentIds.length,
+    lessonCount: lessonIds.length
+  });
+}
+
+function authorizeLatestRetryForStudentLesson_(studentId, lessonId, now) {
+  var attempts = findMany_(CP.SHEETS.ATTEMPTS, {
+    studentId: studentId,
+    lessonId: lessonId
+  }).sort(function(a, b) {
+    return Number(b.attemptNumber) - Number(a.attemptNumber);
+  });
+
+  if (!attempts.length) return null;
+
+  var latest = attempts[0];
+  if (
+    [CP.STATUS.FAILED, CP.STATUS.TIME_EXCEEDED, CP.STATUS.CORRECTION_REQUIRED]
+      .indexOf(stringValue_(latest.status)) === -1
+  ) {
+    return null;
+  }
+
+  return updateRecordByKey_(CP.SHEETS.ATTEMPTS, 'attemptId', latest.attemptId, {
+    retryAuthorized: true,
+    updatedAt: now || new Date()
+  });
+}
+
+function resolveTargetStudentIds_(payload) {
+  var ids = [];
+
+  if (payload.studentIds instanceof Array) {
+    payload.studentIds.forEach(function(studentId) {
+      studentId = stringValue_(studentId);
+      if (studentId && ids.indexOf(studentId) === -1) ids.push(studentId);
+    });
+  }
+
+  if (payload.groupIds instanceof Array) {
+    payload.groupIds.forEach(function(groupId) {
+      findMany_(CP.SHEETS.GROUP_MEMBERS, {
+        groupId: groupId,
+        status: CP.STATUS.ACTIVE
+      }).forEach(function(member) {
+        var studentId = stringValue_(member.studentId);
+        if (studentId && ids.indexOf(studentId) === -1) ids.push(studentId);
+      });
+    });
+  }
+
+  if (!ids.length) {
+    throw apiError_('TARGET_STUDENTS_REQUIRED', 'Selecione pelo menos um estudante ou grupo.');
+  }
+
+  return ids;
+}
+
+function generateGroupCode_(name) {
+  var base = slugify_(name).replace(/-/g, '').toUpperCase().slice(0, 8) || 'GRUPO';
+  return base + '-' + ('000' + Math.floor(Math.random() * 1000)).slice(-3);
+}
+
 /** ===== 11_CertificateService.gs ===== */
 
 function ensureCertificate_(studentId, courseId, finalScore) {
@@ -3162,6 +3498,7 @@ function publicStudent_(student) {
   if (!student) return null;
   return {
     studentId: student.studentId,
+    publicStudentId: student.publicStudentId || student.studentId,
     fullName: student.fullName,
     email: student.email,
     status: student.status,
@@ -3169,6 +3506,33 @@ function publicStudent_(student) {
     organization: student.organization,
     createdAt: student.createdAt,
     lastLoginAt: student.lastLoginAt
+  };
+}
+
+function publicGroup_(group) {
+  if (!group) return null;
+  return {
+    groupId: group.groupId,
+    groupCode: group.groupCode,
+    name: group.name,
+    courseId: group.courseId,
+    startDate: group.startDate,
+    endDate: group.endDate,
+    status: group.status,
+    createdAt: group.createdAt,
+    updatedAt: group.updatedAt
+  };
+}
+
+function publicGroupMember_(member) {
+  if (!member) return null;
+  return {
+    groupMemberId: member.groupMemberId,
+    groupId: member.groupId,
+    studentId: member.studentId,
+    status: member.status,
+    joinedAt: member.joinedAt,
+    updatedAt: member.updatedAt
   };
 }
 
@@ -3234,6 +3598,7 @@ function publicEnrollment_(enrollment) {
     enrollmentId: enrollment.enrollmentId,
     studentId: enrollment.studentId,
     courseId: enrollment.courseId,
+    groupId: enrollment.groupId,
     status: enrollment.status,
     enrolledAt: enrollment.enrolledAt,
     completedAt: enrollment.completedAt,
@@ -3370,6 +3735,27 @@ function normalizeCellValue_(value) {
 
 function newId_(prefix) {
   return prefix + '-' + Utilities.getUuid().replace(/-/g, '').toUpperCase();
+}
+
+function generatePublicStudentId_() {
+  for (var attempt = 0; attempt < 200; attempt++) {
+    var number = Math.floor(Math.random() * 100000);
+    var candidate = 'STU-' + ('00000' + number).slice(-5);
+    if (!findOne_(CP.SHEETS.STUDENTS, { publicStudentId: candidate })) {
+      return candidate;
+    }
+  }
+  throw apiError_('PUBLIC_STUDENT_ID_EXHAUSTED', 'Nao foi possivel gerar um ID publico unico para o estudante.');
+}
+
+function ensureStudentPublicId_(student) {
+  if (!student) return student;
+  if (stringValue_(student.publicStudentId)) return student;
+
+  return updateRecordByKey_(CP.SHEETS.STUDENTS, 'studentId', student.studentId, {
+    publicStudentId: generatePublicStudentId_(),
+    updatedAt: new Date()
+  });
 }
 
 function truncate_(value, maxLength) {
