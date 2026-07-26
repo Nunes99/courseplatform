@@ -143,8 +143,32 @@ export class CoursePlatformApi {
     return this.studentRequest('getMyCourses', { courseId: this.courseId });
   }
 
-  updateMyProfile(profile) {
-    return this.studentRequest('updateMyProfile', profile);
+  async updateMyProfile(profile) {
+    const payload = { ...profile };
+    const profilePhotoFile = payload.profilePhotoFile;
+    delete payload.profilePhotoFile;
+
+    if (profilePhotoFile && profilePhotoFile.size) {
+      const prepared = await prepareProfilePhoto(profilePhotoFile, this.config);
+      payload.profilePhotoFileName = prepared.fileName;
+      payload.profilePhotoMimeType = prepared.mimeType;
+      payload.profilePhotoBase64 = prepared.base64Data;
+    }
+
+    return this.studentRequest('updateMyProfile', payload);
+  }
+
+  async changeMyAccessCode(currentAccessCode, newAccessCode) {
+    const result = await this.studentRequest('changeMyAccessCode', {
+      currentAccessCode,
+      newAccessCode
+    });
+
+    if (result.requiresLogin) {
+      localStorage.removeItem('courseSessionToken');
+    }
+
+    return result;
   }
 
   getLesson(lessonId) {
@@ -364,6 +388,24 @@ async function prepareFileForUpload(file, config) {
     fileName: file.name,
     mimeType: file.type || 'application/octet-stream',
     base64Data: await blobToBase64(file)
+  };
+}
+
+async function prepareProfilePhoto(file, config) {
+  if (!file.type.startsWith('image/')) {
+    throw new ApiError('Selecione uma imagem JPG, PNG ou WebP.', 'INVALID_PROFILE_PHOTO');
+  }
+
+  const optimized = await optimizeImage(
+    file,
+    config.profilePhotoMaxDimension || 720,
+    config.profilePhotoQuality || 0.82
+  );
+
+  return {
+    fileName: normalizedImageName(file.name || 'profile-photo', optimized.type),
+    mimeType: optimized.type,
+    base64Data: await blobToBase64(optimized)
   };
 }
 

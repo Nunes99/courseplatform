@@ -445,56 +445,131 @@ async function renderProfile() {
   logoutButton.hidden = false;
 
   root.innerHTML = `
-    <section class="profile-shell">
-      <div class="profile-summary">
-        <span class="student-avatar student-avatar-large">${escapeHtml(profileInitials(student.fullName))}</span>
-        <div>
-          <p class="eyebrow">Perfil pessoal</p>
-          <h1>${escapeHtml(student.fullName || 'Estudante')}</h1>
-          <p>${escapeHtml(student.publicStudentId || '')} · ${escapeHtml(student.email || '')}</p>
+    <section class="profile-shell profile-shell-modern">
+      <div class="profile-header-card">
+        <div class="profile-identity">
+          <div class="profile-photo-frame profile-photo-frame-large">
+            ${profilePhotoTemplate(student)}
+          </div>
+          <div>
+            <p class="eyebrow">Perfil pessoal</p>
+            <h1>${escapeHtml(student.fullName || 'Estudante')}</h1>
+            <p>${escapeHtml(student.publicStudentId || '')} · ${escapeHtml(student.email || '')}</p>
+          </div>
+        </div>
+        <div class="profile-status-grid" aria-label="Resumo do perfil">
+          <div>
+            <span>ID publico</span>
+            <strong>${escapeHtml(student.publicStudentId || '-')}</strong>
+          </div>
+          <div>
+            <span>Cursos</span>
+            <strong>${state.myCourses.length}</strong>
+          </div>
+          <div>
+            <span>Estado</span>
+            <strong>${escapeHtml(statusLabel(student.status || 'ACTIVE'))}</strong>
+          </div>
         </div>
       </div>
 
-      <form id="profileForm" class="profile-form form-stack">
-        <label>
-          <span>Nome completo</span>
-          <input name="fullName" value="${escapeHtml(student.fullName || '')}" required>
-        </label>
-        <label>
-          <span>Email</span>
-          <input value="${escapeHtml(student.email || '')}" disabled>
-        </label>
-        <div class="profile-form-grid">
+      <div class="profile-workspace">
+        <form id="profileForm" class="profile-card profile-form form-stack">
+          <div class="profile-section-heading">
+            <div>
+              <p class="eyebrow">Dados gerais</p>
+              <h2>Informacoes pessoais</h2>
+            </div>
+          </div>
+
+          <div class="profile-photo-editor">
+            <div class="profile-photo-preview" id="profilePhotoPreview">
+              ${profilePhotoTemplate(student)}
+            </div>
+            <label class="file-control">
+              <span>Fotografia de perfil</span>
+              <input name="profilePhotoFile" type="file" accept="image/jpeg,image/png,image/webp">
+              <small>Use uma imagem clara em JPG, PNG ou WebP.</small>
+            </label>
+            ${student.profilePhotoUrl ? `
+              <label class="checkbox-line">
+                <input type="checkbox" name="removeProfilePhoto" value="true">
+                Remover fotografia atual
+              </label>
+            ` : ''}
+          </div>
+
+          <div class="profile-form-grid">
+            <label>
+              <span>Nome completo</span>
+              <input name="fullName" value="${escapeHtml(student.fullName || '')}" required>
+            </label>
+            <label>
+              <span>Email</span>
+              <input value="${escapeHtml(student.email || '')}" disabled>
+            </label>
+            <label>
+              <span>Pais</span>
+              <input name="country" value="${escapeHtml(student.country || '')}">
+            </label>
+            <label>
+              <span>Telefone</span>
+              <input name="phone" value="${escapeHtml(student.phone || '')}">
+            </label>
+            <label>
+              <span>Organizacao</span>
+              <input name="organization" value="${escapeHtml(student.organization || '')}">
+            </label>
+            <label>
+              <span>Funcao profissional</span>
+              <input name="jobTitle" value="${escapeHtml(student.jobTitle || '')}">
+            </label>
+          </div>
+
           <label>
-            <span>Pais</span>
-            <input name="country" value="${escapeHtml(student.country || '')}">
+            <span>Interesses academicos ou profissionais</span>
+            <textarea name="interests" rows="5">${escapeHtml(student.interests || '')}</textarea>
+          </label>
+
+          <div class="profile-actions">
+            <a class="button button-secondary" href="#/">Voltar ao curso</a>
+            <button class="button button-primary" type="submit">Guardar perfil</button>
+          </div>
+        </form>
+
+        <form id="passwordForm" class="profile-card profile-security form-stack">
+          <div class="profile-section-heading">
+            <div>
+              <p class="eyebrow">Seguranca</p>
+              <h2>Alterar senha de acesso</h2>
+            </div>
+          </div>
+          <label>
+            <span>Senha atual</span>
+            <input type="password" name="currentAccessCode" autocomplete="current-password" required>
           </label>
           <label>
-            <span>Telefone</span>
-            <input name="phone" value="${escapeHtml(student.phone || '')}">
+            <span>Nova senha</span>
+            <input type="password" name="newAccessCode" autocomplete="new-password" minlength="8" required>
           </label>
-        </div>
-        <label>
-          <span>Organizacao</span>
-          <input name="organization" value="${escapeHtml(student.organization || '')}">
-        </label>
-        <label>
-          <span>Funcao profissional</span>
-          <input name="jobTitle" value="${escapeHtml(student.jobTitle || '')}">
-        </label>
-        <label>
-          <span>Interesses academicos ou profissionais</span>
-          <textarea name="interests" rows="5">${escapeHtml(student.interests || '')}</textarea>
-        </label>
-        <div class="profile-actions">
-          <a class="button button-secondary" href="#/">Voltar ao curso</a>
-          <button class="button button-primary" type="submit">Guardar perfil</button>
-        </div>
-      </form>
+          <label>
+            <span>Confirmar nova senha</span>
+            <input type="password" name="confirmAccessCode" autocomplete="new-password" minlength="8" required>
+          </label>
+          <div class="profile-security-note">
+            Ao alterar a senha, sera necessario iniciar sessao novamente.
+          </div>
+          <div class="profile-actions">
+            <button class="button button-primary" type="submit">Alterar senha</button>
+          </div>
+        </form>
+      </div>
     </section>
   `;
 
   document.querySelector('#profileForm').addEventListener('submit', saveProfile);
+  document.querySelector('#passwordForm').addEventListener('submit', changePassword);
+  bindProfilePhotoPreview(student);
   reportHeight();
 }
 
@@ -503,7 +578,12 @@ async function saveProfile(event) {
 
   const form = event.currentTarget;
   const button = form.querySelector('button[type="submit"]');
-  const values = Object.fromEntries(new FormData(form));
+  const formData = new FormData(form);
+  const values = Object.fromEntries(formData.entries());
+  const profilePhotoFile = form.querySelector('[name="profilePhotoFile"]')?.files?.[0] || null;
+
+  values.profilePhotoFile = profilePhotoFile && profilePhotoFile.size ? profilePhotoFile : null;
+  values.removeProfilePhoto = formData.get('removeProfilePhoto') === 'true' ? 'true' : '';
   setBusy(button, true, 'A guardar...');
 
   try {
@@ -518,9 +598,73 @@ async function saveProfile(event) {
   }
 }
 
+async function changePassword(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const formData = new FormData(form);
+  const currentAccessCode = String(formData.get('currentAccessCode') || '');
+  const newAccessCode = String(formData.get('newAccessCode') || '');
+  const confirmAccessCode = String(formData.get('confirmAccessCode') || '');
+
+  if (newAccessCode !== confirmAccessCode) {
+    showToast('A confirmacao da nova senha nao corresponde.', 'error');
+    return;
+  }
+
+  setBusy(button, true, 'A alterar...');
+
+  try {
+    await api.changeMyAccessCode(currentAccessCode, newAccessCode);
+    state.dashboard = null;
+    state.myCourses = [];
+    location.hash = '';
+    showToast('Senha alterada. Inicie sessao novamente.', 'success');
+    renderLogin();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function bindProfilePhotoPreview(student) {
+  const input = document.querySelector('[name="profilePhotoFile"]');
+  const preview = document.querySelector('#profilePhotoPreview');
+  if (!input || !preview) return;
+
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (!file) {
+      preview.innerHTML = profilePhotoTemplate(student);
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      showToast('Selecione uma imagem valida.', 'error');
+      input.value = '';
+      preview.innerHTML = profilePhotoTemplate(student);
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    preview.innerHTML = `<img src="${escapeHtml(objectUrl)}" alt="Pre-visualizacao da fotografia">`;
+  });
+}
+
 function profileInitials(fullName) {
   const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
   return `${parts[0]?.[0] || 'E'}${parts.length > 1 ? parts.at(-1)[0] : ''}`.toUpperCase();
+}
+
+function profilePhotoTemplate(student) {
+  const photoUrl = String(student?.profilePhotoUrl || '').trim();
+  if (photoUrl) {
+    return `<img src="${escapeHtml(photoUrl)}" alt="Fotografia de ${escapeHtml(student.fullName || 'estudante')}">`;
+  }
+
+  return `<span>${escapeHtml(profileInitials(student?.fullName))}</span>`;
 }
 
 function lessonCardTemplate(item) {

@@ -37,7 +37,7 @@ var CP = {
   HEADERS: {
     Students: [
       'studentId', 'publicStudentId', 'fullName', 'email', 'accessCode', 'status',
-      'country', 'organization', 'phone', 'jobTitle', 'interests',
+      'country', 'organization', 'phone', 'jobTitle', 'interests', 'profilePhotoUrl',
       'createdAt', 'updatedAt', 'lastLoginAt'
     ],
     Admins: [
@@ -270,6 +270,9 @@ function doPost(e) {
         break;
       case 'updateMyProfile':
         result = withStudentSession_(payload, updateMyProfile_);
+        break;
+      case 'changeMyAccessCode':
+        result = withStudentSession_(payload, changeMyAccessCode_);
         break;
       case 'getLesson':
         result = withStudentSession_(payload, getLessonForStudent_);
@@ -1649,6 +1652,12 @@ function updateMyProfile_(payload) {
     updatedAt: new Date()
   };
 
+  if (stringValue_(payload.removeProfilePhoto) === 'true') {
+    patch.profilePhotoUrl = '';
+  } else if (stringValue_(payload.profilePhotoBase64)) {
+    patch.profilePhotoUrl = saveStudentProfilePhoto_(payload);
+  }
+
   var student = updateRecordByKey_(
     CP.SHEETS.STUDENTS,
     'studentId',
@@ -1660,6 +1669,38 @@ function updateMyProfile_(payload) {
 
   return successResponse_({
     student: publicStudent_(student)
+  });
+}
+
+function changeMyAccessCode_(payload) {
+  ensureApiEnabled_();
+  requireFields_(payload, ['currentAccessCode', 'newAccessCode']);
+
+  var currentHash = hashSecret_(payload.currentAccessCode);
+  if (!constantTimeEquals_(currentHash, payload._student.accessCode)) {
+    throw apiError_('INVALID_CURRENT_ACCESS_CODE', 'A senha atual nÃ£o estÃ¡ correta.');
+  }
+
+  var newAccessCode = stringValue_(payload.newAccessCode).trim();
+  if (newAccessCode.length < 8) {
+    throw apiError_('WEAK_ACCESS_CODE', 'A nova senha deve ter pelo menos 8 caracteres.');
+  }
+
+  if (constantTimeEquals_(hashSecret_(newAccessCode), payload._student.accessCode)) {
+    throw apiError_('ACCESS_CODE_UNCHANGED', 'A nova senha deve ser diferente da senha atual.');
+  }
+
+  updateRecordByKey_(CP.SHEETS.STUDENTS, 'studentId', payload.studentId, {
+    accessCode: hashSecret_(newAccessCode),
+    updatedAt: new Date()
+  });
+
+  revokeSessionsForSubject_(payload.studentId);
+  logAudit_('STUDENT', payload.studentId, 'ACCESS_CODE_CHANGED', 'STUDENT', payload.studentId, {});
+
+  return successResponse_({
+    changed: true,
+    requiresLogin: true
   });
 }
 
@@ -2501,6 +2542,59 @@ function getAttemptFolder_(attempt) {
       'Tentativa ' + attempt.attemptNumber + ' — ' + attempt.attemptId
     )
   );
+}
+
+function saveStudentProfilePhoto_(payload) {
+  requireFields_(payload, [
+    'profilePhotoFileName',
+    'profilePhotoMimeType',
+    'profilePhotoBase64'
+  ]);
+
+  var mimeType = stringValue_(payload.profilePhotoMimeType).toLowerCase();
+  var allowedImageTypes = ['image/jpeg', 'image/png', 'image/webp'];
+  if (allowedImageTypes.indexOf(mimeType) === -1) {
+    throw apiError_('PROFILE_PHOTO_TYPE_NOT_ALLOWED', 'A fotografia deve ser JPG, PNG ou WebP.');
+  }
+
+  var cleanBase64 = stripDataUrl_(payload.profilePhotoBase64);
+  var estimatedBytes = Math.floor(cleanBase64.length * 3 / 4);
+  var maxBytes = 2 * 1024 * 1024;
+  if (estimatedBytes > maxBytes) {
+    throw apiError_('PROFILE_PHOTO_TOO_LARGE', 'A fotografia deve ter no mÃ¡ximo 2 MB.');
+  }
+
+  var bytes;
+  try {
+    bytes = Utilities.base64Decode(cleanBase64);
+  } catch (error) {
+    throw apiError_('INVALID_PROFILE_PHOTO', 'A fotografia nÃ£o estÃ¡ em Base64 vÃ¡lido.');
+  }
+
+  if (bytes.length > maxBytes) {
+    throw apiError_('PROFILE_PHOTO_TOO_LARGE', 'A fotografia deve ter no mÃ¡ximo 2 MB.');
+  }
+
+  var root = ensureRootFolder_();
+  var profileFolder = getOrCreateChildFolder_(root, 'Profile Photos');
+  var studentFolder = getOrCreateChildFolder_(
+    profileFolder,
+    sanitizeFolderName_(payload.studentId + ' â€” ' + payload._student.fullName)
+  );
+  var extension = mimeType === 'image/png' ? 'png' : (mimeType === 'image/webp' ? 'webp' : 'jpg');
+  var fileName = sanitizeFileName_(
+    payload.studentId + '-profile-' + Utilities.formatDate(new Date(), 'UTC', 'yyyyMMdd-HHmmss') + '.' + extension
+  );
+  var blob = Utilities.newBlob(bytes, mimeType, fileName);
+  var driveFile = studentFolder.createFile(blob);
+
+  try {
+    driveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (error) {
+    console.warn('NÃ£o foi possÃ­vel tornar a fotografia pÃºblica: ' + error.message);
+  }
+
+  return 'https://drive.google.com/uc?export=view&id=' + driveFile.getId();
 }
 
 function getOrCreateChildFolder_(parent, name) {
@@ -3585,6 +3679,7 @@ function publicStudent_(student) {
     phone: student.phone,
     jobTitle: student.jobTitle,
     interests: student.interests,
+    profilePhotoUrl: student.profilePhotoUrl,
     createdAt: student.createdAt,
     lastLoginAt: student.lastLoginAt
   };
