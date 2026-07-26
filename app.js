@@ -57,6 +57,7 @@ async function initialize() {
   await loadPublicMediaConfig();
   applyBrandLogo();
 
+  headerUser.addEventListener('click', openProfileFromHeader);
   logoutButton.addEventListener('click', logout);
   window.addEventListener('hashchange', route);
   window.addEventListener('message', (event) => {
@@ -109,10 +110,7 @@ function renderLogin() {
   clearTimers();
   headerUser.innerHTML = '';
   headerUser.title = '';
-  headerUser.onclick = null;
-  headerUser.onkeydown = null;
-  headerUser.removeAttribute('role');
-  headerUser.removeAttribute('tabindex');
+  headerUser.hidden = true;
   logoutButton.hidden = true;
 
   root.innerHTML = `
@@ -164,6 +162,21 @@ function renderLogin() {
 
   document.querySelector('#loginForm').addEventListener('submit', login);
   reportHeight();
+}
+
+async function openProfileFromHeader() {
+  if (!api?.hasStudentSession()) return;
+
+  try {
+    if (location.hash === '#/profile') {
+      await renderProfile();
+      return;
+    }
+
+    location.hash = '#/profile';
+  } catch (error) {
+    handleError(error);
+  }
 }
 
 async function login(event) {
@@ -223,17 +236,7 @@ async function renderDashboard() {
   const greeting = studentGreeting(dashboard.student.fullName);
   headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(dashboard.student.fullName)}</span>`;
   headerUser.title = 'Editar perfil pessoal';
-  headerUser.role = 'button';
-  headerUser.tabIndex = 0;
-  headerUser.onclick = () => {
-    location.hash = '#/profile';
-  };
-  headerUser.onkeydown = (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      location.hash = '#/profile';
-    }
-  };
+  headerUser.hidden = false;
   logoutButton.hidden = false;
 
   const totalLessons = dashboard.lessons.length;
@@ -438,17 +441,7 @@ async function renderProfile() {
   const student = courseBundle.student || state.dashboard?.student || {};
   headerUser.innerHTML = `<span class="header-greeting">${escapeHtml(student.fullName || student.email || '')}</span>`;
   headerUser.title = 'Editar perfil pessoal';
-  headerUser.role = 'button';
-  headerUser.tabIndex = 0;
-  headerUser.onclick = () => {
-    location.hash = '#/profile';
-  };
-  headerUser.onkeydown = (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      location.hash = '#/profile';
-    }
-  };
+  headerUser.hidden = false;
   logoutButton.hidden = false;
 
   root.innerHTML = `

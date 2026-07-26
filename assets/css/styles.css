@@ -143,16 +143,19 @@ a { color: var(--primary); }
 }
 
 .header-user {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--muted);
+  cursor: pointer;
+  font: inherit;
   font-size: 13px;
   line-height: 1.25;
+  text-align: left;
 }
 
-.header-user[role="button"] {
-  cursor: pointer;
-}
-
-.header-user[role="button"]:focus-visible {
+.header-user:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
   border-radius: 6px;
