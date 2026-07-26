@@ -150,7 +150,7 @@ a { color: var(--primary); }
   padding: 0;
   place-items: center;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 50%;
   background: var(--surface);
   color: var(--muted);
   cursor: pointer;
@@ -163,7 +163,7 @@ a { color: var(--primary); }
 .header-user:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
-  border-radius: var(--radius);
+  border-radius: 50%;
 }
 
 .header-avatar {
@@ -206,6 +206,59 @@ img.header-avatar {
 .theme-toggle-icon {
   font-size: 18px;
   line-height: 1;
+}
+
+.mobile-menu-button {
+  display: none;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--primary);
+  cursor: pointer;
+}
+
+.mobile-menu-button span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: var(--radius);
+  background: currentColor;
+}
+
+.mobile-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 16px;
+  display: grid;
+  min-width: 190px;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.mobile-menu button {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-weight: 800;
+}
+
+.mobile-menu button:hover {
+  background: var(--surface-soft);
+  color: var(--primary);
 }
 
 .page-shell {
@@ -800,7 +853,7 @@ input:focus, textarea:focus, select:focus {
   place-items: center;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--line));
-  border-radius: var(--radius);
+  border-radius: 50%;
   background: color-mix(in srgb, var(--primary) 10%, var(--surface-soft));
   color: var(--primary);
   font-weight: 900;
@@ -940,6 +993,19 @@ input:focus, textarea:focus, select:focus {
 .profile-security {
   position: sticky;
   top: 86px;
+}
+
+.profile-exit {
+  grid-column: 2;
+}
+
+.profile-exit p {
+  margin: 0 0 16px;
+  color: var(--muted);
+}
+
+.profile-exit .button {
+  width: 100%;
 }
 
 .profile-actions {
@@ -1130,6 +1196,10 @@ input:focus, textarea:focus, select:focus {
   align-items: start;
 }
 
+.lesson-main {
+  min-width: 0;
+}
+
 .lesson-sidebar {
   position: sticky;
   top: 95px;
@@ -1221,6 +1291,33 @@ input:focus, textarea:focus, select:focus {
 .rich-content { color: var(--text); }
 .rich-content h4 { margin-top: 24px; }
 .rich-content li + li { margin-top: 6px; }
+
+.rich-content img,
+.rich-content iframe,
+.rich-content video {
+  max-width: 100%;
+}
+
+.rich-content img,
+.rich-content video {
+  height: auto;
+  border-radius: var(--radius);
+}
+
+.rich-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.rich-content pre,
+.rich-content code {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 .formula {
   margin: 20px 0;
@@ -2621,9 +2718,36 @@ input:focus, textarea:focus, select:focus {
 @media (max-width: 1000px) {
   .lesson-card { min-height: auto; }
   .information-grid { grid-template-columns: repeat(2,1fr); }
-  .lesson-layout { grid-template-columns: 1fr; }
-  .lesson-sidebar { position: static; }
-  .lesson-navigation { display: none; }
+  .lesson-layout {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .lesson-sidebar {
+    position: static;
+    display: grid;
+    gap: 14px;
+    padding: 18px;
+  }
+  .lesson-sidebar h2 {
+    margin-bottom: 0;
+  }
+  .lesson-time-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin: 0;
+  }
+  .lesson-navigation {
+    display: flex;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 12px 0 2px;
+  }
+  .lesson-navigation button,
+  .lesson-navigation a {
+    flex: 0 0 auto;
+    max-width: min(260px, 75vw);
+    white-space: nowrap;
+  }
   .submission-columns { grid-template-columns: 1fr; }
   .course-admin-layout,
   .admin-filter-bar {
@@ -2645,9 +2769,15 @@ input:focus, textarea:focus, select:focus {
   .site-header { padding: 0 16px; }
   .site-brand span:last-child { display: none; }
   .site-header-actions { gap: 8px; }
-  .header-greeting {
-    max-width: 34vw;
-    font-size: 12px;
+  .theme-toggle {
+    display: none;
+  }
+  .mobile-menu-button:not([hidden]) {
+    display: inline-grid;
+  }
+  .mobile-menu {
+    right: 11px;
+    left: 11px;
   }
   .theme-toggle {
     width: 36px;
@@ -2696,11 +2826,41 @@ input:focus, textarea:focus, select:focus {
   .profile-security {
     position: static;
   }
+  .profile-exit {
+    grid-column: 1;
+  }
   .checkbox-line {
     grid-column: 1;
   }
   .profile-actions .button {
     width: 100%;
+  }
+  .lesson-sidebar,
+  .lesson-header,
+  .content-section,
+  .question-card,
+  .start-assessment-card,
+  .completion-card,
+  .review-card,
+  .submission-box,
+  .upload-panel {
+    padding: 18px;
+  }
+  .lesson-time-summary {
+    grid-template-columns: 1fr;
+  }
+  .lesson-navigation button,
+  .lesson-navigation a {
+    max-width: 82vw;
+    font-size: 12px;
+  }
+  .content-section {
+    margin-top: 16px;
+    scroll-margin-top: 78px;
+  }
+  .content-section h2,
+  .lesson-header h1 {
+    overflow-wrap: anywhere;
   }
   .auth-brand-row { grid-template-columns: 1fr; }
   .auth-feature-list { grid-template-columns: 1fr; }

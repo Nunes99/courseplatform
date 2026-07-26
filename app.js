@@ -20,6 +20,9 @@ const root = document.querySelector('#app');
 const headerUser = document.querySelector('#headerUser');
 const logoutButton = document.querySelector('#logoutButton');
 const themeToggle = document.querySelector('#themeToggle');
+const mobileMenuButton = document.querySelector('#mobileMenuButton');
+const mobileMenu = document.querySelector('#mobileMenu');
+const mobileThemeButton = document.querySelector('#mobileThemeButton');
 const platformName = config.appName || 'LMTWEBNAIRS Summer School 2026';
 const platformYear = 'Summer School 2026';
 const icons8Base = 'https://img.icons8.com/ios-filled/50';
@@ -59,6 +62,7 @@ async function initialize() {
 
   headerUser.addEventListener('click', openProfileFromHeader);
   document.addEventListener('error', handleProfilePhotoError, true);
+  initializeMobileMenu();
   logoutButton.addEventListener('click', logout);
   window.addEventListener('hashchange', route);
   window.addEventListener('message', (event) => {
@@ -77,6 +81,7 @@ async function initialize() {
 }
 
 async function route() {
+  closeMobileMenu();
   const hash = location.hash.replace(/^#\/?/, '');
   const [routeName, routeValue] = hash.split('/');
 
@@ -113,6 +118,8 @@ function renderLogin() {
   headerUser.title = '';
   headerUser.removeAttribute('aria-label');
   headerUser.hidden = true;
+  if (mobileMenuButton) mobileMenuButton.hidden = true;
+  closeMobileMenu();
   logoutButton.hidden = true;
 
   root.innerHTML = `
@@ -181,6 +188,49 @@ async function openProfileFromHeader() {
   }
 }
 
+function initializeMobileMenu() {
+  if (!mobileMenuButton || !mobileMenu) return;
+
+  mobileMenuButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const willOpen = mobileMenu.hidden;
+    mobileMenu.hidden = !willOpen;
+    mobileMenuButton.setAttribute('aria-expanded', String(willOpen));
+  });
+
+  mobileMenu.addEventListener('click', (event) => {
+    const routeButton = event.target.closest('[data-mobile-route]');
+    if (routeButton) {
+      location.hash = routeButton.dataset.mobileRoute;
+      closeMobileMenu();
+      return;
+    }
+
+    if (event.target.closest('#mobileThemeButton')) {
+      themeToggle?.click();
+      closeMobileMenu();
+    }
+  });
+
+  document.addEventListener('click', (event) => {
+    if (
+      mobileMenu.hidden ||
+      mobileMenu.contains(event.target) ||
+      mobileMenuButton.contains(event.target)
+    ) {
+      return;
+    }
+
+    closeMobileMenu();
+  });
+}
+
+function closeMobileMenu() {
+  if (!mobileMenu || !mobileMenuButton) return;
+  mobileMenu.hidden = true;
+  mobileMenuButton.setAttribute('aria-expanded', 'false');
+}
+
 async function login(event) {
   event.preventDefault();
 
@@ -240,7 +290,8 @@ async function renderDashboard() {
   headerUser.title = 'Editar perfil pessoal';
   headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
   headerUser.hidden = false;
-  logoutButton.hidden = false;
+  if (mobileMenuButton) mobileMenuButton.hidden = false;
+  logoutButton.hidden = true;
 
   const totalLessons = dashboard.lessons.length;
   const approvedLessons = dashboard.lessons.filter((item) => item.progress.status === 'APPROVED').length;
@@ -446,7 +497,8 @@ async function renderProfile() {
   headerUser.title = 'Editar perfil pessoal';
   headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
   headerUser.hidden = false;
-  logoutButton.hidden = false;
+  if (mobileMenuButton) mobileMenuButton.hidden = false;
+  logoutButton.hidden = true;
 
   root.innerHTML = `
     <section class="profile-shell profile-shell-modern">
@@ -567,12 +619,24 @@ async function renderProfile() {
             <button class="button button-primary" type="submit">Alterar senha</button>
           </div>
         </form>
+
+        <section class="profile-card profile-exit">
+          <div class="profile-section-heading">
+            <div>
+              <p class="eyebrow">Sessao</p>
+              <h2>Terminar acesso</h2>
+            </div>
+          </div>
+          <p>Saia da plataforma quando terminar de usar este dispositivo.</p>
+          <button class="button button-secondary" id="profileLogoutButton" type="button">Sair da conta</button>
+        </section>
       </div>
     </section>
   `;
 
   document.querySelector('#profileForm').addEventListener('submit', saveProfile);
   document.querySelector('#passwordForm').addEventListener('submit', changePassword);
+  document.querySelector('#profileLogoutButton').addEventListener('click', logout);
   bindProfilePhotoPreview(student);
   reportHeight();
 }
@@ -1631,6 +1695,9 @@ function initializeThemeToggle() {
     updateThemeIcons(theme);
     themeToggle.title = theme === 'dark' ? 'Usar modo claro' : 'Usar modo noturno';
     themeToggle.setAttribute('aria-label', themeToggle.title);
+    if (mobileThemeButton) {
+      mobileThemeButton.textContent = theme === 'dark' ? 'Modo claro' : 'Modo noturno';
+    }
   };
 
   applyTheme(document.documentElement.dataset.theme || 'light');

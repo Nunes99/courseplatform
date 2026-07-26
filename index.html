@@ -52,7 +52,18 @@
         <span class="theme-toggle-icon" aria-hidden="true">☀</span>
       </button>
       <button class="text-button" id="logoutButton" type="button" hidden>Sair</button>
+      <button class="mobile-menu-button" id="mobileMenuButton" type="button" aria-label="Abrir menu" aria-expanded="false" hidden>
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
     </div>
+
+    <nav class="mobile-menu" id="mobileMenu" hidden>
+      <button type="button" data-mobile-route="#/">Curso</button>
+      <button type="button" data-mobile-route="#/profile">Perfil</button>
+      <button type="button" id="mobileThemeButton">Tema</button>
+    </nav>
   </header>
 
   <main id="app" class="page-shell"></main>
