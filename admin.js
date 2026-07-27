@@ -22,6 +22,7 @@ const goldIcon = 'c9a55b';
 let api;
 let submissionSearchTimer;
 let studentSearchTimer;
+let courseSearchTimer;
 const state = {
   admin: null,
   pending: [],
@@ -286,6 +287,27 @@ function bindDialogClose(overlay) {
   });
 }
 
+function renderPreservingFocus(renderFn) {
+  const active = document.activeElement;
+  const activeId = active?.id;
+  const selectionStart = typeof active?.selectionStart === 'number' ? active.selectionStart : null;
+  const selectionEnd = typeof active?.selectionEnd === 'number' ? active.selectionEnd : null;
+
+  renderFn();
+
+  if (!activeId) return;
+  const nextActive = document.getElementById(activeId);
+  if (!nextActive) return;
+  nextActive.focus();
+  if (
+    selectionStart !== null &&
+    selectionEnd !== null &&
+    typeof nextActive.setSelectionRange === 'function'
+  ) {
+    nextActive.setSelectionRange(selectionStart, selectionEnd);
+  }
+}
+
 function canManageStaff() {
   return ['OWNER', 'ADMIN'].includes(state.admin?.role);
 }
@@ -300,6 +322,10 @@ async function loadStaff(options = {}) {
     state.admin = result.currentAdmin || state.admin;
     renderStaff();
   } catch (error) {
+    if (options.silent) {
+      console.warn('Falha ao atualizar staff em segundo plano:', error);
+      return;
+    }
     handleAdminError(error);
   }
 }
@@ -491,6 +517,7 @@ async function setStaffStatus(adminId, status) {
     showToast('Permissoes atualizadas.', 'success');
     await loadStaff();
   } catch (error) {
+}
     handleAdminError(error);
   }
 }
@@ -544,7 +571,9 @@ function renderAdminProfile() {
 
 async function loadPending(options = {}) {
   const main = document.querySelector('#adminMain');
-  main.innerHTML = loadingTemplate('A carregar submissões…');
+  if (!options.silent) {
+    main.innerHTML = loadingTemplate('A carregar submissoes...');
+  }
 
   try {
     const result = await api.adminSubmissions({
@@ -554,8 +583,14 @@ async function loadPending(options = {}) {
     }, options);
     state.pending = result.submissions;
     await loadAccessContext(options);
-    renderSubmissionsV2();
+    if (!options.silent) {
+      renderSubmissionsV2();
+    }
   } catch (error) {
+    if (options.silent) {
+      console.warn('Falha ao atualizar submissoes em segundo plano:', error);
+      return;
+    }
     handleAdminError(error);
   }
 }
@@ -799,8 +834,8 @@ function renderSubmissionsV2() {
   });
   document.querySelector('#submissionSearch').addEventListener('input', (event) => {
     state.submissionFilters.query = event.currentTarget.value;
-    clearTimeout(submissionSearchTimer);
-    submissionSearchTimer = setTimeout(() => loadPending(), 350);
+    renderPreservingFocus(renderSubmissionsV2);
+    scheduleSubmissionRefresh();
   });
   document.querySelector('#accessCourse').addEventListener('change', async (event) => {
     state.selectedCourseId = event.currentTarget.value;
@@ -815,6 +850,18 @@ function renderSubmissionsV2() {
   });
 
   reportHeight();
+}
+
+function scheduleSubmissionRefresh(delay = 450) {
+  clearTimeout(submissionSearchTimer);
+  const expectedFilters = JSON.stringify(state.submissionFilters);
+  submissionSearchTimer = setTimeout(() => {
+    loadPending({ silent: true }).then(() => {
+      if (expectedFilters === JSON.stringify(state.submissionFilters) && document.querySelector('#submissionSearch')) {
+        renderPreservingFocus(renderSubmissionsV2);
+      }
+    });
+  }, delay);
 }
 
 function filteredSubmissions() {
@@ -1191,6 +1238,7 @@ async function applySingleStudentAccess(status) {
     showToast('Acesso atualizado.', 'success');
     await openSubmission(data.attempt.attemptId);
   } catch (error) {
+}
     handleAdminError(error);
   }
 }
@@ -1226,7 +1274,9 @@ async function submitReview(event) {
 
 async function loadStudents(options = {}) {
   const main = document.querySelector('#adminMain');
-  main.innerHTML = loadingTemplate('A carregar estudantes…');
+  if (!options.silent) {
+    main.innerHTML = loadingTemplate('A carregar estudantes...');
+  }
 
   try {
     const result = await api.adminStudents({
@@ -1237,8 +1287,14 @@ async function loadStudents(options = {}) {
       limit: 500
     }, options);
     state.students = result.students;
-    renderStudentsV2();
+    if (!options.silent) {
+      renderStudentsV2();
+    }
   } catch (error) {
+    if (options.silent) {
+      console.warn('Falha ao atualizar estudantes em segundo plano:', error);
+      return;
+    }
     handleAdminError(error);
   }
 }
@@ -1453,8 +1509,8 @@ function renderStudentsV2() {
   document.querySelector('#newStudent').addEventListener('click', showStudentDialog);
   document.querySelector('#studentSearch').addEventListener('input', (event) => {
     state.studentFilters.query = event.currentTarget.value;
-    clearTimeout(studentSearchTimer);
-    studentSearchTimer = setTimeout(() => loadStudents(), 350);
+    renderPreservingFocus(renderStudentsV2);
+    scheduleStudentRefresh();
   });
   document.querySelector('#studentStatusFilter').addEventListener('change', (event) => {
     state.studentFilters.status = event.currentTarget.value;
@@ -1553,6 +1609,18 @@ function studentCardTemplate({ student, enrollments }) {
       </div>
     </article>
   `;
+}
+
+function scheduleStudentRefresh(delay = 450) {
+  clearTimeout(studentSearchTimer);
+  const expectedFilters = JSON.stringify(state.studentFilters);
+  studentSearchTimer = setTimeout(() => {
+    loadStudents({ silent: true }).then(() => {
+      if (expectedFilters === JSON.stringify(state.studentFilters) && document.querySelector('#studentSearch')) {
+        renderPreservingFocus(renderStudentsV2);
+      }
+    });
+  }, delay);
 }
 
 function filteredStudents() {
@@ -1766,7 +1834,9 @@ function csvCell(value) {
 
 async function loadCourses(options = {}) {
   const main = document.querySelector('#adminMain');
-  main.innerHTML = loadingTemplate('A carregar cursos...');
+  if (!options.silent) {
+    main.innerHTML = loadingTemplate('A carregar cursos...');
+  }
 
   try {
     const coursePayload = state.courseMode === 'detail'
@@ -1783,7 +1853,9 @@ async function loadCourses(options = {}) {
     if (state.courseMode !== 'detail') {
       state.courseStructure = null;
       state.groups = [];
-      renderCourseList();
+      if (!options.silent) {
+        renderCourseList();
+      }
       return;
     }
 
@@ -1793,7 +1865,9 @@ async function loadCourses(options = {}) {
       state.courseStructure = null;
       state.groups = [];
       state.courseMode = 'list';
-      renderCourseList();
+      if (!options.silent) {
+        renderCourseList();
+      }
       return;
     }
     if (
@@ -1806,8 +1880,14 @@ async function loadCourses(options = {}) {
     const groupsResult = await api.adminGroups(state.courseStructure.course.courseId, { limit: 500 }, options);
     state.groups = groupsResult.groups || [];
     await ensureStudentsForMedia(options);
-    renderCourses();
+    if (!options.silent) {
+      renderCourses();
+    }
   } catch (error) {
+    if (options.silent) {
+      console.warn('Falha ao atualizar cursos em segundo plano:', error);
+      return;
+    }
     handleAdminError(error);
   }
 }
@@ -1897,23 +1977,42 @@ function renderCourseList() {
     state.courseFilters.content = document.querySelector('#courseContentFilter').value;
     loadCourses();
   });
+  document.querySelector('#courseSearch').addEventListener('input', (event) => {
+    state.courseFilters.query = event.currentTarget.value;
+    renderPreservingFocus(renderCourseList);
+    scheduleCourseRefresh();
+  });
   document.querySelector('#courseStatusFilter').addEventListener('change', (event) => {
     state.courseFilters.query = document.querySelector('#courseSearch').value;
     state.courseFilters.status = event.currentTarget.value;
     state.courseFilters.content = document.querySelector('#courseContentFilter').value;
-    loadCourses();
+    renderPreservingFocus(renderCourseList);
+    scheduleCourseRefresh(0);
   });
   document.querySelector('#courseContentFilter').addEventListener('change', (event) => {
     state.courseFilters.query = document.querySelector('#courseSearch').value;
     state.courseFilters.status = document.querySelector('#courseStatusFilter').value;
     state.courseFilters.content = event.currentTarget.value;
-    loadCourses();
+    renderPreservingFocus(renderCourseList);
+    scheduleCourseRefresh(0);
   });
   root.querySelectorAll('[data-open-course-detail]').forEach((button) => {
     button.addEventListener('click', () => openCourseDetail(button.dataset.openCourseDetail));
   });
 
   reportHeight();
+}
+
+function scheduleCourseRefresh(delay = 450) {
+  clearTimeout(courseSearchTimer);
+  const expectedFilters = JSON.stringify(state.courseFilters);
+  courseSearchTimer = setTimeout(() => {
+    loadCourses({ silent: true }).then(() => {
+      if (expectedFilters === JSON.stringify(state.courseFilters) && document.querySelector('#courseSearch')) {
+        renderPreservingFocus(renderCourseList);
+      }
+    });
+  }, delay);
 }
 
 function filteredAdminCourses() {
