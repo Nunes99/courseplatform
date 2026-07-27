@@ -517,7 +517,6 @@ async function setStaffStatus(adminId, status) {
     showToast('Permissoes atualizadas.', 'success');
     await loadStaff();
   } catch (error) {
-}
     handleAdminError(error);
   }
 }
@@ -1238,7 +1237,6 @@ async function applySingleStudentAccess(status) {
     showToast('Acesso atualizado.', 'success');
     await openSubmission(data.attempt.attemptId);
   } catch (error) {
-}
     handleAdminError(error);
   }
 }
