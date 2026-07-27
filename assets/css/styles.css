@@ -2401,6 +2401,12 @@ input:focus, textarea:focus, select:focus {
   width: min(100%, 860px);
 }
 
+.dialog-helper-text {
+  margin: -4px 0 18px;
+  color: var(--muted);
+  font-weight: 750;
+}
+
 .course-groups-panel {
   margin-top: 18px;
 }

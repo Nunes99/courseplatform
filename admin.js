@@ -2171,6 +2171,9 @@ function renderCourses() {
   root.querySelectorAll('[data-edit-lesson]').forEach((button) => {
     button.addEventListener('click', () => showLessonDialog(button.dataset.editLesson));
   });
+  root.querySelectorAll('[data-manage-lesson-access]').forEach((button) => {
+    button.addEventListener('click', () => showLessonAccessDialog(button.dataset.manageLessonAccess));
+  });
   root.querySelectorAll('[data-delete-lesson]').forEach((button) => {
     button.addEventListener('click', () => deleteLesson(button.dataset.deleteLesson));
   });
@@ -2296,6 +2299,10 @@ function moduleCardTemplate(item) {
       </dl>
       <div class="admin-row-actions">
         <button class="button button-secondary button-small" type="button"
+          data-manage-lesson-access="${escapeHtml(lesson.lessonId)}">
+          Gerir acesso
+        </button>
+        <button class="button button-secondary button-small" type="button"
           data-edit-lesson="${escapeHtml(lesson.lessonId)}">
           Editar modulo
         </button>
@@ -2336,6 +2343,113 @@ function groupCardTemplate(item) {
       </div>
     </article>
   `;
+}
+
+async function showLessonAccessDialog(lessonId) {
+  const lessonItem = (state.courseStructure?.lessons || []).find((item) => item.lesson?.lessonId === lessonId);
+  const lesson = lessonItem?.lesson;
+  const courseId = lesson?.courseId || state.courseStructure?.course?.courseId || state.selectedCourseId;
+  if (!lesson || !courseId) return;
+
+  let students = state.students || [];
+  try {
+    const result = await api.adminStudents({ limit: 500 }, { force: true });
+    students = result.students || [];
+  } catch {
+    students = state.students || [];
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card course-lesson-dialog">
+      <button class="dialog-close" type="button">x</button>
+      <h2>Acesso do modulo</h2>
+      <p class="dialog-helper-text">
+        Aula ${escapeHtml(lesson.lessonNumber)} - ${escapeHtml(lesson.title)}
+      </p>
+      <form id="lessonAccessDialogForm" class="form-stack">
+        <input type="hidden" name="courseId" value="${escapeHtml(courseId)}">
+        <input type="hidden" name="lessonId" value="${escapeHtml(lesson.lessonId)}">
+        <label>
+          <span>Acao</span>
+          <select name="status">
+            <option value="AVAILABLE">Disponibilizar este modulo</option>
+            <option value="LOCKED">Restringir este modulo</option>
+          </select>
+        </label>
+        <fieldset class="group-student-picker">
+          <legend>Estudantes</legend>
+          ${selectAllToolbar('studentIds')}
+          <div class="video-student-list">
+            ${moduleAccessStudentCheckboxes(courseId, students)}
+          </div>
+        </fieldset>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Aplicar acesso</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  bindDialogClose(overlay);
+  overlay.querySelector('[data-cancel-dialog]').addEventListener('click', () => overlay.remove());
+  bindSelectAllControls(overlay);
+  overlay.querySelector('#lessonAccessDialogForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const studentIds = values.getAll('studentIds');
+
+    if (!studentIds.length) {
+      showToast('Selecione pelo menos um estudante.', 'warning');
+      return;
+    }
+
+    if (!confirmAdminAction('Deseja aplicar esta alteracao de acesso ao modulo para os estudantes selecionados?')) {
+      return;
+    }
+
+    const button = form.querySelector('button[type="submit"]');
+    setBusy(button, true, 'A aplicar...');
+    try {
+      const result = await api.adminSetLessonAccess({
+        courseId: values.get('courseId'),
+        status: values.get('status'),
+        lessonIds: [values.get('lessonId')],
+        studentIds,
+        groupIds: []
+      });
+      showToast(`Acesso atualizado para ${result.studentCount || studentIds.length} estudante(s).`, 'success');
+      overlay.remove();
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  });
+}
+
+function moduleAccessStudentCheckboxes(courseId, students) {
+  const courseStudents = (students || []).filter(({ enrollments }) => {
+    return (enrollments || []).some((enrollment) => enrollment.courseId === courseId);
+  });
+
+  if (!courseStudents.length) {
+    return '<p class="empty-note">Sem estudantes inscritos neste curso.</p>';
+  }
+
+  return courseStudents.map(({ student }) => `
+    <label class="video-student-option">
+      <input type="checkbox" name="studentIds" value="${escapeHtml(student.studentId)}">
+      <span>
+        <strong>${escapeHtml(student.publicStudentId || student.studentId)} - ${escapeHtml(student.fullName)}</strong>
+        <small>${escapeHtml(student.email)}</small>
+      </span>
+    </label>
+  `).join('');
 }
 
 async function saveCourse(event) {
