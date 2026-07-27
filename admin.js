@@ -32,7 +32,13 @@ const state = {
   courses: [],
   groups: [],
   selectedCourseId: config.courseId,
+  courseMode: 'list',
   courseView: 'overview',
+  courseFilters: {
+    query: '',
+    status: 'ALL',
+    content: 'ALL'
+  },
   selectedSubmission: null,
   studentFilters: {
     query: '',
@@ -231,6 +237,7 @@ function renderAdminShell() {
       if (button.dataset.adminView === 'students') {
         loadStudents();
       } else if (button.dataset.adminView === 'courses') {
+        state.courseMode = 'list';
         loadCourses();
       } else if (button.dataset.adminView === 'videos') {
         renderVideos();
@@ -724,18 +731,21 @@ function renderSubmissionsV2() {
         </label>
         <fieldset>
           <legend>Modulos</legend>
+          ${selectAllToolbar('lessonIds')}
           <div class="access-checkbox-list">
             ${accessLessonCheckboxes()}
           </div>
         </fieldset>
         <fieldset>
           <legend>Turmas</legend>
+          ${selectAllToolbar('groupIds')}
           <div class="access-checkbox-list">
             ${accessGroupCheckboxes()}
           </div>
         </fieldset>
         <fieldset>
           <legend>Estudantes especificos</legend>
+          ${selectAllToolbar('studentIds')}
           <div class="access-checkbox-list">
             ${accessStudentCheckboxes()}
           </div>
@@ -781,6 +791,7 @@ function renderSubmissionsV2() {
     renderSubmissionsV2();
   });
   document.querySelector('#lessonAccessForm').addEventListener('submit', applyLessonAccess);
+  bindSelectAllControls(root);
 
   root.querySelectorAll('[data-open-submission]').forEach((button) => {
     button.addEventListener('click', () => openSubmission(button.dataset.openSubmission));
@@ -900,6 +911,63 @@ function accessStudentCheckboxes() {
       <span>${escapeHtml(student.publicStudentId || student.studentId)} - ${escapeHtml(student.fullName)}</span>
     </label>
   `).join('');
+}
+
+function selectAllToolbar(inputName) {
+  return `
+    <div class="select-all-toolbar">
+      <button class="button button-secondary button-small" type="button"
+        data-select-all="${escapeHtml(inputName)}">Selecionar todos</button>
+      <button class="button button-secondary button-small" type="button"
+        data-clear-all="${escapeHtml(inputName)}">Limpar selecao</button>
+      <span data-selected-count="${escapeHtml(inputName)}">0 selecionados</span>
+    </div>
+  `;
+}
+
+function bindSelectAllControls(scope = root) {
+  const names = new Set();
+  scope.querySelectorAll('[data-select-all], [data-clear-all], [data-selected-count]').forEach((item) => {
+    const name = item.dataset.selectAll || item.dataset.clearAll || item.dataset.selectedCount;
+    if (name) names.add(name);
+  });
+
+  scope.querySelectorAll('[data-select-all]').forEach((button) => {
+    button.addEventListener('click', () => {
+      setCheckboxesForName(scope, button.dataset.selectAll, true);
+    });
+  });
+  scope.querySelectorAll('[data-clear-all]').forEach((button) => {
+    button.addEventListener('click', () => {
+      setCheckboxesForName(scope, button.dataset.clearAll, false);
+    });
+  });
+  names.forEach((name) => {
+    checkboxesForName(scope, name).forEach((checkbox) => {
+      checkbox.addEventListener('change', () => updateSelectedCount(scope, name));
+    });
+    updateSelectedCount(scope, name);
+  });
+}
+
+function checkboxesForName(scope, inputName) {
+  const escapedName = window.CSS?.escape ? CSS.escape(inputName) : inputName.replace(/"/g, '\\"');
+  return Array.from(scope.querySelectorAll(`input[type="checkbox"][name="${escapedName}"]`));
+}
+
+function setCheckboxesForName(scope, inputName, checked) {
+  checkboxesForName(scope, inputName).forEach((checkbox) => {
+    checkbox.checked = checked;
+  });
+  updateSelectedCount(scope, inputName);
+}
+
+function updateSelectedCount(scope, inputName) {
+  const boxes = checkboxesForName(scope, inputName);
+  const selected = boxes.filter((checkbox) => checkbox.checked).length;
+  scope.querySelectorAll(`[data-selected-count="${inputName}"]`).forEach((item) => {
+    item.textContent = `${selected} de ${boxes.length} selecionados`;
+  });
 }
 
 async function applyLessonAccess(event) {
@@ -1679,12 +1747,21 @@ async function loadCourses() {
   try {
     const coursesResult = await api.adminCourses();
     state.courses = coursesResult.courses || [];
+
+    if (state.courseMode !== 'detail') {
+      state.courseStructure = null;
+      state.groups = [];
+      renderCourseList();
+      return;
+    }
+
     const activeCourses = state.courses.filter((item) => item.course.status !== 'DELETED');
     if (!activeCourses.length) {
       state.selectedCourseId = '';
       state.courseStructure = null;
       state.groups = [];
-      renderCourses();
+      state.courseMode = 'list';
+      renderCourseList();
       return;
     }
     if (
@@ -1701,6 +1778,178 @@ async function loadCourses() {
   } catch (error) {
     handleAdminError(error);
   }
+}
+
+function renderCourseList() {
+  const main = document.querySelector('#adminMain');
+  const visibleCourses = filteredAdminCourses();
+  const activeCount = state.courses.filter((item) => item.course?.status === 'ACTIVE').length;
+  const inactiveCount = state.courses.filter((item) => item.course?.status === 'INACTIVE').length;
+  const moduleCount = state.courses.reduce((sum, item) => sum + Number(item.lessonCount || 0), 0);
+  const groupCount = state.courses.reduce((sum, item) => sum + Number(item.groupCount || 0), 0);
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Catalogo academico</p>
+        <h1>Cursos</h1>
+      </div>
+      <div class="admin-heading-actions">
+        <button class="button button-primary" id="newCourse" type="button">Novo curso</button>
+      </div>
+    </div>
+
+    <section class="admin-content-overview">
+      <article class="content-metric-card">
+        <span>Total</span>
+        <strong>${state.courses.length}</strong>
+        <small>Cursos registados</small>
+      </article>
+      <article class="content-metric-card">
+        <span>Ativos</span>
+        <strong>${activeCount}</strong>
+        <small>${inactiveCount} inativos</small>
+      </article>
+      <article class="content-metric-card">
+        <span>Modulos</span>
+        <strong>${moduleCount}</strong>
+        <small>Em todos os cursos</small>
+      </article>
+      <article class="content-metric-card">
+        <span>Grupos</span>
+        <strong>${groupCount}</strong>
+        <small>Turmas criadas</small>
+      </article>
+    </section>
+
+    <form id="courseFilterForm" class="admin-filter-bar course-list-filters" aria-label="Filtros de cursos">
+      <label>
+        <span>Pesquisar</span>
+        <input id="courseSearch" type="search" value="${escapeHtml(state.courseFilters.query)}"
+          placeholder="ID, codigo, nome ou descricao">
+      </label>
+      <label>
+        <span>Estado</span>
+        <select id="courseStatusFilter">
+          ${studentFilterOption('ALL', 'Todos', state.courseFilters.status)}
+          ${studentFilterOption('ACTIVE', 'Ativos', state.courseFilters.status)}
+          ${studentFilterOption('INACTIVE', 'Inativos', state.courseFilters.status)}
+          ${studentFilterOption('DELETED', 'Eliminados', state.courseFilters.status)}
+        </select>
+      </label>
+      <label>
+        <span>Conteudo</span>
+        <select id="courseContentFilter">
+          ${studentFilterOption('ALL', 'Todos', state.courseFilters.content)}
+          ${studentFilterOption('WITH_MODULES', 'Com modulos', state.courseFilters.content)}
+          ${studentFilterOption('WITHOUT_MODULES', 'Sem modulos', state.courseFilters.content)}
+          ${studentFilterOption('WITH_GROUPS', 'Com grupos', state.courseFilters.content)}
+          ${studentFilterOption('WITHOUT_GROUPS', 'Sem grupos', state.courseFilters.content)}
+        </select>
+      </label>
+      <button class="button button-secondary" type="submit">Aplicar filtros</button>
+    </form>
+
+    <section class="admin-course-list" aria-label="Lista de cursos">
+      ${visibleCourses.length
+        ? visibleCourses.map(courseListCardTemplate).join('')
+        : '<div class="student-empty-state">Nenhum curso encontrado para os filtros atuais.</div>'}
+    </section>
+  `;
+
+  document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
+  document.querySelector('#courseFilterForm').addEventListener('submit', (event) => {
+    event.preventDefault();
+    state.courseFilters.query = document.querySelector('#courseSearch').value;
+    state.courseFilters.status = document.querySelector('#courseStatusFilter').value;
+    state.courseFilters.content = document.querySelector('#courseContentFilter').value;
+    renderCourseList();
+  });
+  document.querySelector('#courseStatusFilter').addEventListener('change', (event) => {
+    state.courseFilters.query = document.querySelector('#courseSearch').value;
+    state.courseFilters.status = event.currentTarget.value;
+    state.courseFilters.content = document.querySelector('#courseContentFilter').value;
+    renderCourseList();
+  });
+  document.querySelector('#courseContentFilter').addEventListener('change', (event) => {
+    state.courseFilters.query = document.querySelector('#courseSearch').value;
+    state.courseFilters.status = document.querySelector('#courseStatusFilter').value;
+    state.courseFilters.content = event.currentTarget.value;
+    renderCourseList();
+  });
+  root.querySelectorAll('[data-open-course-detail]').forEach((button) => {
+    button.addEventListener('click', () => openCourseDetail(button.dataset.openCourseDetail));
+  });
+
+  reportHeight();
+}
+
+function filteredAdminCourses() {
+  const query = state.courseFilters.query.trim().toLowerCase();
+  const status = state.courseFilters.status;
+  const content = state.courseFilters.content;
+
+  return state.courses.filter((item) => {
+    const course = item.course || {};
+    if (status !== 'ALL' && course.status !== status) return false;
+    if (content === 'WITH_MODULES' && !Number(item.lessonCount || 0)) return false;
+    if (content === 'WITHOUT_MODULES' && Number(item.lessonCount || 0)) return false;
+    if (content === 'WITH_GROUPS' && !Number(item.groupCount || 0)) return false;
+    if (content === 'WITHOUT_GROUPS' && Number(item.groupCount || 0)) return false;
+    if (!query) return true;
+    return [
+      course.courseId,
+      course.courseCode,
+      course.title,
+      course.description,
+      course.status
+    ].join(' ').toLowerCase().includes(query);
+  });
+}
+
+function courseListCardTemplate(item) {
+  const course = item.course || {};
+  const status = course.status || 'ACTIVE';
+
+  return `
+    <article class="admin-course-card">
+      <div>
+        <div class="admin-course-card-topline">
+          <span class="status-pill ${statusClass(status)}">${statusLabel(status)}</span>
+          <small>${escapeHtml(course.courseCode || course.courseId || '')}</small>
+        </div>
+        <h2>${escapeHtml(course.title || 'Curso sem nome')}</h2>
+        <p>${escapeHtml(course.description || 'Sem descricao registada.')}</p>
+      </div>
+      <dl>
+        <div>
+          <dt>ID</dt>
+          <dd>${escapeHtml(course.courseId || '-')}</dd>
+        </div>
+        <div>
+          <dt>Modulos</dt>
+          <dd>${item.lessonCount || 0}</dd>
+        </div>
+        <div>
+          <dt>Grupos</dt>
+          <dd>${item.groupCount || 0}</dd>
+        </div>
+      </dl>
+      <div class="admin-course-card-actions">
+        <button class="button button-primary" type="button"
+          data-open-course-detail="${escapeHtml(course.courseId || '')}">
+          Abrir detalhes
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+async function openCourseDetail(courseId) {
+  state.selectedCourseId = courseId;
+  state.courseMode = 'detail';
+  state.courseView = 'overview';
+  await loadCourses();
 }
 
 function renderCourses() {
@@ -1735,9 +1984,10 @@ function renderCourses() {
     <div class="admin-page-heading">
       <div>
         <p class="eyebrow">Conteudo academico</p>
-        <h1>Cursos e modulos</h1>
+        <h1>${escapeHtml(course.title || 'Cursos e modulos')}</h1>
       </div>
       <div class="admin-heading-actions">
+        <button class="button button-secondary" id="backToCourseList" type="button">Todos os cursos</button>
         <button class="button button-secondary" id="newCourse" type="button">Novo curso</button>
       </div>
     </div>
@@ -1784,6 +2034,10 @@ function renderCourses() {
     ${courseManagementPanel(course, lessons, groups)}
   `;
 
+  document.querySelector('#backToCourseList').addEventListener('click', () => {
+    state.courseMode = 'list';
+    renderCourseList();
+  });
   document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
   document.querySelector('#courseForm')?.addEventListener('submit', saveCourse);
   document.querySelector('#deleteCourse')?.addEventListener('click', deleteCurrentCourse);
@@ -1798,6 +2052,7 @@ function renderCourses() {
   root.querySelectorAll('[data-select-course]').forEach((button) => {
     button.addEventListener('click', async () => {
       state.selectedCourseId = button.dataset.selectCourse;
+      state.courseMode = 'detail';
       state.courseView = 'overview';
       await loadCourses();
     });
@@ -1986,7 +2241,9 @@ async function saveCourse(event) {
   setBusy(button, true, 'A guardar...');
 
   try {
-    await api.adminSaveCourse(values);
+    const result = await api.adminSaveCourse(values);
+    state.selectedCourseId = result.course?.courseId || values.courseId || state.selectedCourseId;
+    state.courseMode = 'detail';
     showToast('Curso guardado.', 'success');
     await loadCourses();
   } catch (error) {
@@ -2008,6 +2265,7 @@ async function deleteCurrentCourse() {
     });
     showToast('Curso eliminado.', 'success');
     state.selectedCourseId = '';
+    state.courseMode = 'list';
     await loadCourses();
   } catch (error) {
     handleAdminError(error);
@@ -2114,6 +2372,8 @@ function showCourseDialog() {
     try {
       const result = await api.adminSaveCourse(values);
       state.selectedCourseId = result.course.courseId;
+      state.courseMode = 'detail';
+      state.courseView = 'overview';
       showToast('Curso criado.', 'success');
       overlay.remove();
       await loadCourses();
@@ -2173,6 +2433,7 @@ function showGroupDialog(groupId = '') {
         </div>
         <fieldset class="group-student-picker">
           <legend>Estudantes da turma</legend>
+          ${selectAllToolbar('studentIds')}
           <div class="video-student-list">
             ${state.students.length ? state.students.map(({ student }) => `
               <label class="video-student-option">
@@ -2205,6 +2466,7 @@ function showGroupDialog(groupId = '') {
     overlay.remove();
     await deleteGroup(group.groupId);
   });
+  bindSelectAllControls(overlay);
   overlay.querySelector('#groupForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!confirmAdminAction('Deseja guardar esta turma e os seus estudantes?')) return;
@@ -2397,6 +2659,7 @@ async function renderVideos() {
         </label>
         <fieldset class="video-student-access" id="videoStudentAccess" disabled>
           <legend>Estudantes autorizados</legend>
+          ${selectAllToolbar('allowedStudents')}
           <div class="video-student-list">
             ${studentVideoCheckboxes()}
           </div>
@@ -2424,6 +2687,7 @@ async function renderVideos() {
 
   document.querySelector('#adminVideoForm').addEventListener('submit', saveVideo);
   document.querySelector('#videoVisibility').addEventListener('change', updateVideoAccessState);
+  bindSelectAllControls(root);
   updateVideoAccessState();
   root.querySelectorAll('[data-delete-video]').forEach((button) => {
     button.addEventListener('click', () => deleteVideo(button.dataset.deleteVideo));
