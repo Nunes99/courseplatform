@@ -1992,16 +1992,6 @@ function renderCourses() {
       </div>
     </div>
 
-    <section class="course-switcher">
-      ${state.courses.length ? state.courses.filter((item) => item.course.status !== 'DELETED').map((item) => `
-        <button type="button" class="${item.course.courseId === course.courseId ? 'is-active' : ''}"
-          data-select-course="${escapeHtml(item.course.courseId)}">
-          <strong>${escapeHtml(item.course.title)}</strong>
-          <span>${item.lessonCount} modulos · ${item.groupCount} turmas</span>
-        </button>
-      `).join('') : '<div class="student-empty-state">Nenhum curso registado.</div>'}
-    </section>
-
     <section class="admin-content-overview">
       <article class="content-metric-card">
         <span>Modulos ativos</span>
@@ -2047,14 +2037,6 @@ function renderCourses() {
     button.addEventListener('click', () => {
       state.courseView = button.dataset.courseView;
       renderCourses();
-    });
-  });
-  root.querySelectorAll('[data-select-course]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      state.selectedCourseId = button.dataset.selectCourse;
-      state.courseMode = 'detail';
-      state.courseView = 'overview';
-      await loadCourses();
     });
   });
   root.querySelectorAll('[data-edit-lesson]').forEach((button) => {
