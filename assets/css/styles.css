@@ -2124,6 +2124,21 @@ input:focus, textarea:focus, select:focus {
   color: var(--muted);
 }
 
+.submission-status-pill {
+  width: 168px;
+  min-height: 38px;
+  justify-content: center;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-small);
+  text-align: center;
+  white-space: normal;
+}
+
+.submission-action-button {
+  width: 112px;
+  justify-content: center;
+}
+
 .admin-row-actions,
 .dialog-actions {
   display: flex;

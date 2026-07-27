@@ -826,7 +826,7 @@ function submissionStatusOption(value, label, selected) {
 function submissionRowTemplate(item) {
   const review = item.latestReview;
   const score = item.attempt?.score ?? review?.score ?? '';
-  const actionLabel = item.attempt.status === 'UNDER_REVIEW' ? 'Avaliar' : 'Ver / alterar';
+  const actionLabel = item.attempt.status === 'UNDER_REVIEW' ? 'Avaliar' : 'Abrir';
 
   return `
     <tr>
@@ -839,7 +839,7 @@ function submissionRowTemplate(item) {
         <small>${escapeHtml(item.lesson?.title || item.attempt.lessonId)}</small>
       </td>
       <td>
-        <span class="status-pill ${statusClass(item.attempt.status)}">
+        <span class="status-pill submission-status-pill ${statusClass(item.attempt.status)}">
           ${statusLabel(item.attempt.status)}
         </span>
       </td>
@@ -850,7 +850,7 @@ function submissionRowTemplate(item) {
       </td>
       <td>${item.fileCount || 0}</td>
       <td>
-        <button class="button button-small button-primary"
+        <button class="button button-small button-primary submission-action-button"
           data-open-submission="${escapeHtml(item.attempt.attemptId)}">
           ${actionLabel}
         </button>
