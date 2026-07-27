@@ -20,6 +20,19 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
+function isCacheOptions(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return Boolean(keys.length) && keys.every((key) => ['force', 'ttlMs'].includes(key));
+}
+
+function splitPayloadOptions(payload = {}, options = {}) {
+  if (isCacheOptions(payload) && !Object.keys(options || {}).length) {
+    return [{}, payload];
+  }
+  return [payload || {}, options || {}];
+}
+
 export class CoursePlatformApi {
   constructor(config) {
     this.config = config;
@@ -300,8 +313,9 @@ export class CoursePlatformApi {
     });
   }
 
-  adminPending(options = {}) {
-    return this.cachedAdminRequest('adminListPendingSubmissions', {}, options);
+  adminPending(filters = {}, options = {}) {
+    const [payload, cacheOptions] = splitPayloadOptions(filters, options);
+    return this.cachedAdminRequest('adminListPendingSubmissions', payload, cacheOptions);
   }
 
   adminSubmissions(filters = {}, options = {}) {
@@ -320,8 +334,9 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminAuthorizeRetry', { attemptId });
   }
 
-  adminStudents(options = {}) {
-    return this.cachedAdminRequest('adminListStudents', {}, options);
+  adminStudents(filters = {}, options = {}) {
+    const [payload, cacheOptions] = splitPayloadOptions(filters, options);
+    return this.cachedAdminRequest('adminListStudents', payload, cacheOptions);
   }
 
   adminCreateStudent(payload) {
@@ -342,8 +357,9 @@ export class CoursePlatformApi {
     }, options);
   }
 
-  adminCourses(options = {}) {
-    return this.cachedAdminRequest('adminListCourses', {}, options);
+  adminCourses(filters = {}, options = {}) {
+    const [payload, cacheOptions] = splitPayloadOptions(filters, options);
+    return this.cachedAdminRequest('adminListCourses', payload, cacheOptions);
   }
 
   adminCourseStructureFor(courseId, options = {}) {
@@ -364,8 +380,12 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminSaveLessonContent', payload);
   }
 
-  adminGroups(courseId = '', options = {}) {
-    return this.cachedAdminRequest('adminListGroups', { courseId }, options);
+  adminGroups(courseId = '', filters = {}, options = {}) {
+    const [payload, cacheOptions] = splitPayloadOptions(filters, options);
+    return this.cachedAdminRequest('adminListGroups', {
+      courseId,
+      ...payload
+    }, cacheOptions);
   }
 
   adminSaveGroup(payload) {

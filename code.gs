@@ -2755,36 +2755,147 @@ function getOrCreateChildFolder_(parent, name) {
 
 /** ===== 10_AdminService.gs ===== */
 
+function adminPagination_(payload, defaultLimit, maxLimit) {
+  var limit = Number(payload.limit || defaultLimit || 100);
+  var page = Number(payload.page || 1);
+
+  if (!isFinite(limit) || limit < 1) limit = defaultLimit || 100;
+  if (!isFinite(page) || page < 1) page = 1;
+  limit = Math.min(limit, maxLimit || 500);
+
+  var offset = payload.offset === undefined || payload.offset === ''
+    ? (page - 1) * limit
+    : Number(payload.offset || 0);
+
+  if (!isFinite(offset) || offset < 0) offset = 0;
+
+  return {
+    page: page,
+    limit: limit,
+    offset: offset
+  };
+}
+
+function paginatedPayload_(items, pagination) {
+  var total = items.length;
+  var offset = pagination.offset;
+  var limit = pagination.limit;
+  var pageItems = items.slice(offset, offset + limit);
+
+  return {
+    items: pageItems,
+    pagination: {
+      total: total,
+      page: pagination.page,
+      limit: limit,
+      offset: offset,
+      returned: pageItems.length,
+      hasMore: offset + pageItems.length < total
+    }
+  };
+}
+
+function normalizedSearch_(value) {
+  return stringValue_(value).trim().toLowerCase();
+}
+
+function textMatches_(parts, query) {
+  if (!query) return true;
+  return parts.join(' ').toLowerCase().indexOf(query) !== -1;
+}
+
+function indexBy_(records, keyField) {
+  var index = {};
+  records.forEach(function(record) {
+    var key = stringValue_(record[keyField]);
+    if (key) index[key] = record;
+  });
+  return index;
+}
+
+function groupBy_(records, keyField, predicate) {
+  var groups = {};
+  records.forEach(function(record) {
+    if (predicate && !predicate(record)) return;
+    var key = stringValue_(record[keyField]);
+    if (!key) return;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(record);
+  });
+  return groups;
+}
+
+function countBy_(records, keyField, predicate) {
+  var counts = {};
+  records.forEach(function(record) {
+    if (predicate && !predicate(record)) return;
+    var key = stringValue_(record[keyField]);
+    if (!key) return;
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  return counts;
+}
+
 function adminListPendingSubmissions_(payload) {
+  var pagination = adminPagination_(payload, Number(payload.limit || 100), 500);
+  var courseFilter = stringValue_(payload.courseId || '');
+  var lessonFilter = stringValue_(payload.lessonId || '');
+  var studentFilter = stringValue_(payload.studentId || '');
+  var query = normalizedSearch_(payload.query);
+  var studentsById = indexBy_(readAll_(CP.SHEETS.STUDENTS), 'studentId');
+  var lessonsById = indexBy_(readAll_(CP.SHEETS.LESSONS), 'lessonId');
+  var fileCountByAttempt = countBy_(readAll_(CP.SHEETS.FILES), 'attemptId', function(file) {
+    return stringValue_(file.status) === CP.STATUS.ACTIVE;
+  });
+
   var attempts = readAll_(CP.SHEETS.ATTEMPTS)
     .filter(function(attempt) {
-      return stringValue_(attempt.status) === CP.STATUS.UNDER_REVIEW;
+      var student = studentsById[stringValue_(attempt.studentId)];
+      var lesson = lessonsById[stringValue_(attempt.lessonId)];
+      if (stringValue_(attempt.status) !== CP.STATUS.UNDER_REVIEW) return false;
+      if (courseFilter && (!lesson || stringValue_(lesson.courseId) !== courseFilter)) return false;
+      if (lessonFilter && stringValue_(attempt.lessonId) !== lessonFilter) return false;
+      if (studentFilter && stringValue_(attempt.studentId) !== studentFilter) return false;
+      return textMatches_([
+        attempt.attemptId,
+        attempt.status,
+        student ? student.publicStudentId : '',
+        student ? student.fullName : '',
+        student ? student.email : '',
+        lesson ? lesson.lessonNumber : '',
+        lesson ? lesson.title : ''
+      ], query);
     })
     .sort(function(a, b) {
       return new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime();
     });
 
-  var result = attempts.map(function(attempt) {
-    var student = findOne_(CP.SHEETS.STUDENTS, {
-      studentId: attempt.studentId
-    });
-    var lesson = findOne_(CP.SHEETS.LESSONS, {
-      lessonId: attempt.lessonId
-    });
+  var page = paginatedPayload_(attempts, pagination);
+  var result = page.items.map(function(attempt) {
+    var student = studentsById[stringValue_(attempt.studentId)];
+    var lesson = lessonsById[stringValue_(attempt.lessonId)];
 
     return {
       attempt: publicAttempt_(attempt),
       student: publicStudent_(student),
       lesson: publicLesson_(lesson),
-      fileCount: listAttemptFiles_(attempt.attemptId).length
+      fileCount: fileCountByAttempt[stringValue_(attempt.attemptId)] || 0
     };
   });
 
-  return successResponse_({ submissions: result });
+  return successResponse_({
+    submissions: result,
+    pagination: page.pagination
+  });
 }
 
 function adminListSubmissions_(payload) {
+  var pagination = adminPagination_(payload, 100, 500);
   var statusFilter = stringValue_(payload.status || 'ALL').toUpperCase();
+  var courseFilter = stringValue_(payload.courseId || '');
+  var lessonFilter = stringValue_(payload.lessonId || '');
+  var studentFilter = stringValue_(payload.studentId || '');
+  var query = normalizedSearch_(payload.query);
   var reviewableStatuses = [
     CP.STATUS.UNDER_REVIEW,
     CP.STATUS.APPROVED,
@@ -2792,39 +2903,71 @@ function adminListSubmissions_(payload) {
     CP.STATUS.FAILED,
     CP.STATUS.TIME_EXCEEDED
   ];
+  var studentsById = indexBy_(readAll_(CP.SHEETS.STUDENTS), 'studentId');
+  var lessonsById = indexBy_(readAll_(CP.SHEETS.LESSONS), 'lessonId');
+  var reviewsByAttempt = groupBy_(readAll_(CP.SHEETS.REVIEWS), 'attemptId');
+  var fileCountByAttempt = countBy_(readAll_(CP.SHEETS.FILES), 'attemptId', function(file) {
+    return stringValue_(file.status) === CP.STATUS.ACTIVE;
+  });
 
   var attempts = readAll_(CP.SHEETS.ATTEMPTS)
     .filter(function(attempt) {
       var status = stringValue_(attempt.status);
+      var student = studentsById[stringValue_(attempt.studentId)];
+      var lesson = lessonsById[stringValue_(attempt.lessonId)];
       if (reviewableStatuses.indexOf(status) === -1) return false;
-      if (statusFilter === 'ALL') return true;
+      if (courseFilter && (!lesson || stringValue_(lesson.courseId) !== courseFilter)) return false;
+      if (lessonFilter && stringValue_(attempt.lessonId) !== lessonFilter) return false;
+      if (studentFilter && stringValue_(attempt.studentId) !== studentFilter) return false;
       if (statusFilter === 'REVIEWED') {
-        return [CP.STATUS.APPROVED, CP.STATUS.CORRECTION_REQUIRED, CP.STATUS.FAILED].indexOf(status) !== -1;
+        if ([CP.STATUS.APPROVED, CP.STATUS.CORRECTION_REQUIRED, CP.STATUS.FAILED].indexOf(status) === -1) return false;
+      } else if (statusFilter !== 'ALL' && status !== statusFilter) {
+        return false;
       }
-      return status === statusFilter;
+      return textMatches_([
+        attempt.attemptId,
+        attempt.status,
+        student ? student.publicStudentId : '',
+        student ? student.fullName : '',
+        student ? student.email : '',
+        lesson ? lesson.lessonNumber : '',
+        lesson ? lesson.title : ''
+      ], query);
     })
     .sort(function(a, b) {
       var aDate = new Date(a.reviewedAt || a.submittedAt || a.updatedAt || a.createdAt).getTime();
       var bDate = new Date(b.reviewedAt || b.submittedAt || b.updatedAt || b.createdAt).getTime();
       return bDate - aDate;
-    })
-    .slice(0, Number(payload.limit || 250));
+    });
+
+  var page = paginatedPayload_(attempts, pagination);
 
   return successResponse_({
-    submissions: attempts.map(adminSubmissionListItem_)
+    submissions: page.items.map(function(attempt) {
+      return adminSubmissionListItem_(attempt, {
+        studentsById: studentsById,
+        lessonsById: lessonsById,
+        reviewsByAttempt: reviewsByAttempt,
+        fileCountByAttempt: fileCountByAttempt
+      });
+    }),
+    pagination: page.pagination
   });
 }
 
-function adminSubmissionListItem_(attempt) {
-  var student = findOne_(CP.SHEETS.STUDENTS, {
-    studentId: attempt.studentId
-  });
-  var lesson = findOne_(CP.SHEETS.LESSONS, {
-    lessonId: attempt.lessonId
-  });
-  var reviews = findMany_(CP.SHEETS.REVIEWS, {
-    attemptId: attempt.attemptId
-  }).sort(function(a, b) {
+function adminSubmissionListItem_(attempt, context) {
+  context = context || {};
+  var student = context.studentsById
+    ? context.studentsById[stringValue_(attempt.studentId)]
+    : findOne_(CP.SHEETS.STUDENTS, { studentId: attempt.studentId });
+  var lesson = context.lessonsById
+    ? context.lessonsById[stringValue_(attempt.lessonId)]
+    : findOne_(CP.SHEETS.LESSONS, { lessonId: attempt.lessonId });
+  var reviews = context.reviewsByAttempt
+    ? (context.reviewsByAttempt[stringValue_(attempt.attemptId)] || [])
+    : findMany_(CP.SHEETS.REVIEWS, { attemptId: attempt.attemptId });
+
+  reviews = reviews.sort(function(a, b) {
     return new Date(b.reviewedAt).getTime() - new Date(a.reviewedAt).getTime();
   });
 
@@ -2834,7 +2977,9 @@ function adminSubmissionListItem_(attempt) {
     lesson: publicLesson_(lesson),
     latestReview: reviews.length ? publicReview_(reviews[0]) : null,
     reviewCount: reviews.length,
-    fileCount: listAttemptFiles_(attempt.attemptId).length
+    fileCount: context.fileCountByAttempt
+      ? (context.fileCountByAttempt[stringValue_(attempt.attemptId)] || 0)
+      : listAttemptFiles_(attempt.attemptId).length
   };
 }
 
@@ -3144,20 +3289,73 @@ function createStudentRecord_(payload, actor) {
 }
 
 function adminListStudents_(payload) {
-  var students = readAll_(CP.SHEETS.STUDENTS)
-    .sort(function(a, b) {
-      return stringValue_(a.fullName).localeCompare(stringValue_(b.fullName));
-    })
-    .map(function(student) {
-      student = ensureStudentPublicId_(student);
-      var enrollments = findMany_(CP.SHEETS.ENROLLMENTS, {
-        studentId: student.studentId
-      }).map(publicEnrollment_);
+  var pagination = adminPagination_(payload, 100, 500);
+  var query = normalizedSearch_(payload.query);
+  var statusFilter = stringValue_(payload.status || 'ALL').toUpperCase();
+  var courseFilter = stringValue_(payload.courseId || '');
+  var groupFilter = stringValue_(payload.groupId || '');
+  var progressFilter = stringValue_(payload.progress || 'ALL').toUpperCase();
+  var sort = stringValue_(payload.sort || 'name');
+  var enrollmentsByStudent = groupBy_(readAll_(CP.SHEETS.ENROLLMENTS), 'studentId');
+  var membershipsByStudent = groupBy_(readAll_(CP.SHEETS.GROUP_MEMBERS), 'studentId', function(member) {
+    return stringValue_(member.status) === CP.STATUS.ACTIVE;
+  });
 
-      var memberships = findMany_(CP.SHEETS.GROUP_MEMBERS, {
-        studentId: student.studentId,
-        status: CP.STATUS.ACTIVE
-      }).map(publicGroupMember_);
+  var students = readAll_(CP.SHEETS.STUDENTS)
+    .filter(function(student) {
+      var enrollments = enrollmentsByStudent[stringValue_(student.studentId)] || [];
+      var memberships = membershipsByStudent[stringValue_(student.studentId)] || [];
+      var maxProgress = enrollments.reduce(function(max, enrollment) {
+        return Math.max(max, Number(enrollment.progressPercent || 0));
+      }, 0);
+
+      if (statusFilter !== 'ALL' && stringValue_(student.status) !== statusFilter) return false;
+      if (courseFilter && !enrollments.some(function(enrollment) {
+        return stringValue_(enrollment.courseId) === courseFilter;
+      })) return false;
+      if (groupFilter && !memberships.some(function(member) {
+        return stringValue_(member.groupId) === groupFilter;
+      })) return false;
+      if (progressFilter === 'NOT_STARTED' && maxProgress !== 0) return false;
+      if (progressFilter === 'IN_PROGRESS' && (maxProgress <= 0 || maxProgress >= 100)) return false;
+      if (progressFilter === 'COMPLETED' && maxProgress < 100) return false;
+
+      return textMatches_([
+        student.studentId,
+        student.publicStudentId,
+        student.fullName,
+        student.email,
+        student.country,
+        student.organization,
+        student.phone,
+        student.jobTitle,
+        student.status
+      ], query);
+    })
+    .sort(function(a, b) {
+      var aEnrollments = enrollmentsByStudent[stringValue_(a.studentId)] || [];
+      var bEnrollments = enrollmentsByStudent[stringValue_(b.studentId)] || [];
+      var aProgress = aEnrollments.reduce(function(max, enrollment) {
+        return Math.max(max, Number(enrollment.progressPercent || 0));
+      }, 0);
+      var bProgress = bEnrollments.reduce(function(max, enrollment) {
+        return Math.max(max, Number(enrollment.progressPercent || 0));
+      }, 0);
+
+      if (sort === 'progressDesc') return bProgress - aProgress;
+      if (sort === 'progressAsc') return aProgress - bProgress;
+      if (sort === 'recentLogin') {
+        return new Date(b.lastLoginAt || 0).getTime() - new Date(a.lastLoginAt || 0).getTime();
+      }
+      return stringValue_(a.fullName).localeCompare(stringValue_(b.fullName));
+    });
+
+  var page = paginatedPayload_(students, pagination);
+  var result = page.items.map(function(student) {
+      student = ensureStudentPublicId_(student);
+      var enrollments = (enrollmentsByStudent[stringValue_(student.studentId)] || []).map(publicEnrollment_);
+
+      var memberships = (membershipsByStudent[stringValue_(student.studentId)] || []).map(publicGroupMember_);
 
       return {
         student: publicStudent_(student),
@@ -3166,7 +3364,10 @@ function adminListStudents_(payload) {
       };
     });
 
-  return successResponse_({ students: students });
+  return successResponse_({
+    students: result,
+    pagination: page.pagination
+  });
 }
 
 function adminSetStudentStatus_(payload) {
@@ -3254,24 +3455,52 @@ function adminSaveCourse_(payload) {
 }
 
 function adminListCourses_(payload) {
+  var pagination = adminPagination_(payload, 100, 500);
+  var query = normalizedSearch_(payload.query);
+  var statusFilter = stringValue_(payload.status || 'ALL').toUpperCase();
+  var contentFilter = stringValue_(payload.content || 'ALL').toUpperCase();
+  var lessonCountByCourse = countBy_(readAll_(CP.SHEETS.LESSONS), 'courseId');
+  var groupCountByCourse = countBy_(readAll_(CP.SHEETS.GROUPS), 'courseId');
+  var enrollmentCountByCourse = countBy_(readAll_(CP.SHEETS.ENROLLMENTS), 'courseId');
   var courses = readAll_(CP.SHEETS.COURSES)
+    .filter(function(course) {
+      var lessonCount = lessonCountByCourse[stringValue_(course.courseId)] || 0;
+      var groupCount = groupCountByCourse[stringValue_(course.courseId)] || 0;
+
+      if (statusFilter !== 'ALL' && stringValue_(course.status) !== statusFilter) return false;
+      if (contentFilter === 'WITH_MODULES' && !lessonCount) return false;
+      if (contentFilter === 'WITHOUT_MODULES' && lessonCount) return false;
+      if (contentFilter === 'WITH_GROUPS' && !groupCount) return false;
+      if (contentFilter === 'WITHOUT_GROUPS' && groupCount) return false;
+
+      return textMatches_([
+        course.courseId,
+        course.courseCode,
+        course.title,
+        course.description,
+        course.status
+      ], query);
+    })
     .sort(function(a, b) {
       return stringValue_(a.title).localeCompare(stringValue_(b.title));
-    })
-    .map(function(course) {
-      var lessons = findMany_(CP.SHEETS.LESSONS, { courseId: course.courseId });
-      var groups = findMany_(CP.SHEETS.GROUPS, { courseId: course.courseId });
-      var enrollments = findMany_(CP.SHEETS.ENROLLMENTS, { courseId: course.courseId });
+    });
+
+  var page = paginatedPayload_(courses, pagination);
+  var result = page.items.map(function(course) {
+      var courseId = stringValue_(course.courseId);
 
       return {
         course: publicCourse_(course),
-        lessonCount: lessons.length,
-        groupCount: groups.length,
-        enrollmentCount: enrollments.length
+        lessonCount: lessonCountByCourse[courseId] || 0,
+        groupCount: groupCountByCourse[courseId] || 0,
+        enrollmentCount: enrollmentCountByCourse[courseId] || 0
       };
     });
 
-  return successResponse_({ courses: courses });
+  return successResponse_({
+    courses: result,
+    pagination: page.pagination
+  });
 }
 
 function adminSaveLesson_(payload) {
@@ -3441,27 +3670,43 @@ function adminGetCourseStructure_(payload) {
 }
 
 function adminListGroups_(payload) {
+  var pagination = adminPagination_(payload, 100, 500);
   var courseId = stringValue_(payload.courseId);
+  var query = normalizedSearch_(payload.query);
+  var statusFilter = stringValue_(payload.status || 'ALL').toUpperCase();
+  var memberCountByGroup = countBy_(readAll_(CP.SHEETS.GROUP_MEMBERS), 'groupId', function(member) {
+    return stringValue_(member.status) === CP.STATUS.ACTIVE;
+  });
   var groups = readAll_(CP.SHEETS.GROUPS)
     .filter(function(group) {
-      return !courseId || stringValue_(group.courseId) === courseId;
+      if (courseId && stringValue_(group.courseId) !== courseId) return false;
+      if (statusFilter !== 'ALL' && stringValue_(group.status) !== statusFilter) return false;
+      return textMatches_([
+        group.groupId,
+        group.groupCode,
+        group.name,
+        group.courseId,
+        group.status
+      ], query);
     })
     .sort(function(a, b) {
       return stringValue_(a.name).localeCompare(stringValue_(b.name));
-    })
-    .map(function(group) {
-      var members = findMany_(CP.SHEETS.GROUP_MEMBERS, {
-        groupId: group.groupId,
-        status: CP.STATUS.ACTIVE
-      });
+    });
+
+  var page = paginatedPayload_(groups, pagination);
+  var result = page.items.map(function(group) {
+      var groupId = stringValue_(group.groupId);
 
       return {
         group: publicGroup_(group),
-        memberCount: members.length
+        memberCount: memberCountByGroup[groupId] || 0
       };
     });
 
-  return successResponse_({ groups: groups });
+  return successResponse_({
+    groups: result,
+    pagination: page.pagination
+  });
 }
 
 function adminSaveGroup_(payload) {

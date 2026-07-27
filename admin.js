@@ -20,6 +20,8 @@ const blueIcon = '00365b';
 const goldIcon = 'c9a55b';
 
 let api;
+let submissionSearchTimer;
+let studentSearchTimer;
 const state = {
   admin: null,
   pending: [],
@@ -186,8 +188,8 @@ function warmAdminCache() {
   if (!api?.hasAdminSession()) return;
 
   Promise.allSettled([
-    api.adminCourses(),
-    api.adminStudents(),
+    api.adminCourses({ limit: 500 }),
+    api.adminStudents({ limit: 500 }),
     api.adminMediaConfig(),
     typeof api.adminStaff === 'function' ? api.adminStaff() : api.adminstaff()
   ]);
@@ -547,6 +549,7 @@ async function loadPending(options = {}) {
   try {
     const result = await api.adminSubmissions({
       status: state.submissionFilters.status,
+      query: state.submissionFilters.query,
       limit: 300
     }, options);
     state.pending = result.submissions;
@@ -796,7 +799,8 @@ function renderSubmissionsV2() {
   });
   document.querySelector('#submissionSearch').addEventListener('input', (event) => {
     state.submissionFilters.query = event.currentTarget.value;
-    renderSubmissionsV2();
+    clearTimeout(submissionSearchTimer);
+    submissionSearchTimer = setTimeout(() => loadPending(), 350);
   });
   document.querySelector('#accessCourse').addEventListener('change', async (event) => {
     state.selectedCourseId = event.currentTarget.value;
@@ -873,13 +877,13 @@ function submissionRowTemplate(item) {
 }
 
 async function loadAccessContext(options = {}) {
-  const coursesResult = await api.adminCourses(options);
+  const coursesResult = await api.adminCourses({ limit: 500 }, options);
   state.courses = coursesResult.courses || [];
   if (!state.selectedCourseId) {
     state.selectedCourseId = state.courses[0]?.course?.courseId || config.courseId;
   }
   state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId, options);
-  const groupsResult = await api.adminGroups(state.courseStructure.course.courseId, options);
+  const groupsResult = await api.adminGroups(state.courseStructure.course.courseId, { limit: 500 }, options);
   state.groups = groupsResult.groups || [];
   await ensureStudentsForMedia(options);
 }
@@ -1225,7 +1229,13 @@ async function loadStudents(options = {}) {
   main.innerHTML = loadingTemplate('A carregar estudantes…');
 
   try {
-    const result = await api.adminStudents(options);
+    const result = await api.adminStudents({
+      query: state.studentFilters.query,
+      status: state.studentFilters.status,
+      progress: state.studentFilters.progress,
+      sort: state.studentFilters.sort,
+      limit: 500
+    }, options);
     state.students = result.students;
     renderStudentsV2();
   } catch (error) {
@@ -1443,19 +1453,20 @@ function renderStudentsV2() {
   document.querySelector('#newStudent').addEventListener('click', showStudentDialog);
   document.querySelector('#studentSearch').addEventListener('input', (event) => {
     state.studentFilters.query = event.currentTarget.value;
-    renderStudentsV2();
+    clearTimeout(studentSearchTimer);
+    studentSearchTimer = setTimeout(() => loadStudents(), 350);
   });
   document.querySelector('#studentStatusFilter').addEventListener('change', (event) => {
     state.studentFilters.status = event.currentTarget.value;
-    renderStudentsV2();
+    loadStudents();
   });
   document.querySelector('#studentProgressFilter').addEventListener('change', (event) => {
     state.studentFilters.progress = event.currentTarget.value;
-    renderStudentsV2();
+    loadStudents();
   });
   document.querySelector('#studentSort').addEventListener('change', (event) => {
     state.studentFilters.sort = event.currentTarget.value;
-    renderStudentsV2();
+    loadStudents();
   });
   document.querySelector('#exportStudents').addEventListener('click', () => {
     exportStudentsCsv(visibleStudents);
@@ -1758,7 +1769,15 @@ async function loadCourses(options = {}) {
   main.innerHTML = loadingTemplate('A carregar cursos...');
 
   try {
-    const coursesResult = await api.adminCourses(options);
+    const coursePayload = state.courseMode === 'detail'
+      ? { limit: 500 }
+      : {
+          query: state.courseFilters.query,
+          status: state.courseFilters.status,
+          content: state.courseFilters.content,
+          limit: 500
+        };
+    const coursesResult = await api.adminCourses(coursePayload, options);
     state.courses = coursesResult.courses || [];
 
     if (state.courseMode !== 'detail') {
@@ -1784,7 +1803,7 @@ async function loadCourses(options = {}) {
       state.selectedCourseId = activeCourses[0].course.courseId;
     }
     state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId, options);
-    const groupsResult = await api.adminGroups(state.courseStructure.course.courseId, options);
+    const groupsResult = await api.adminGroups(state.courseStructure.course.courseId, { limit: 500 }, options);
     state.groups = groupsResult.groups || [];
     await ensureStudentsForMedia(options);
     renderCourses();
@@ -1876,19 +1895,19 @@ function renderCourseList() {
     state.courseFilters.query = document.querySelector('#courseSearch').value;
     state.courseFilters.status = document.querySelector('#courseStatusFilter').value;
     state.courseFilters.content = document.querySelector('#courseContentFilter').value;
-    renderCourseList();
+    loadCourses();
   });
   document.querySelector('#courseStatusFilter').addEventListener('change', (event) => {
     state.courseFilters.query = document.querySelector('#courseSearch').value;
     state.courseFilters.status = event.currentTarget.value;
     state.courseFilters.content = document.querySelector('#courseContentFilter').value;
-    renderCourseList();
+    loadCourses();
   });
   document.querySelector('#courseContentFilter').addEventListener('change', (event) => {
     state.courseFilters.query = document.querySelector('#courseSearch').value;
     state.courseFilters.status = document.querySelector('#courseStatusFilter').value;
     state.courseFilters.content = event.currentTarget.value;
-    renderCourseList();
+    loadCourses();
   });
   root.querySelectorAll('[data-open-course-detail]').forEach((button) => {
     button.addEventListener('click', () => openCourseDetail(button.dataset.openCourseDetail));
@@ -2781,7 +2800,7 @@ async function ensureStudentsForMedia(options = {}) {
   if (state.students.length && !options.force) return;
 
   try {
-    const result = await api.adminStudents(options);
+    const result = await api.adminStudents({ limit: 500 }, options);
     state.students = result.students || [];
   } catch {
     state.students = [];
