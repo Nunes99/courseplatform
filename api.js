@@ -7,11 +7,27 @@ export class ApiError extends Error {
   }
 }
 
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
 export class CoursePlatformApi {
   constructor(config) {
     this.config = config;
     this.apiUrl = String(config.apiUrl || '').trim();
     this.courseId = config.courseId || '';
+    this.cache = new Map();
+    this.cacheVersion = 0;
+    this.cacheTtlMs = Number(config.apiCacheTtlMs || 45000);
 
     if (!this.apiUrl || this.apiUrl.includes('COLE_AQUI')) {
       throw new ApiError(
@@ -252,6 +268,7 @@ export class CoursePlatformApi {
     try {
       return await this.request('adminLogout', { adminToken });
     } finally {
+      this.clearCache();
       sessionStorage.removeItem('courseAdminToken');
     }
   }
@@ -260,119 +277,164 @@ export class CoursePlatformApi {
     return this.adminRequest('adminMe');
   }
 
-  adminStaff() {
-    return this.adminRequest('adminListStaff');
+  adminStaff(options = {}) {
+    return this.cachedAdminRequest('adminListStaff', {}, options);
   }
 
-  adminstaff() {
-    return this.adminStaff();
+  adminstaff(options = {}) {
+    return this.adminStaff(options);
   }
 
   adminSaveStaff(payload) {
     const { adminId, ...rest } = payload;
-    return this.adminRequest('adminSaveStaff', {
+    return this.mutateAdmin('adminSaveStaff', {
       ...rest,
       targetAdminId: adminId || ''
     });
   }
 
   adminSetStaffStatus(adminId, status) {
-    return this.adminRequest('adminSetStaffStatus', {
+    return this.mutateAdmin('adminSetStaffStatus', {
       targetAdminId: adminId,
       status
     });
   }
 
-  adminPending() {
-    return this.adminRequest('adminListPendingSubmissions');
+  adminPending(options = {}) {
+    return this.cachedAdminRequest('adminListPendingSubmissions', {}, options);
   }
 
-  adminSubmissions(filters = {}) {
-    return this.adminRequest('adminListSubmissions', filters);
+  adminSubmissions(filters = {}, options = {}) {
+    return this.cachedAdminRequest('adminListSubmissions', filters, options);
   }
 
-  adminSubmission(attemptId) {
-    return this.adminRequest('adminGetSubmission', { attemptId });
+  adminSubmission(attemptId, options = {}) {
+    return this.cachedAdminRequest('adminGetSubmission', { attemptId }, options);
   }
 
   adminReview(payload) {
-    return this.adminRequest('adminReviewSubmission', payload);
+    return this.mutateAdmin('adminReviewSubmission', payload);
   }
 
   adminAuthorizeRetry(attemptId) {
-    return this.adminRequest('adminAuthorizeRetry', { attemptId });
+    return this.mutateAdmin('adminAuthorizeRetry', { attemptId });
   }
 
-  adminStudents() {
-    return this.adminRequest('adminListStudents');
+  adminStudents(options = {}) {
+    return this.cachedAdminRequest('adminListStudents', {}, options);
   }
 
   adminCreateStudent(payload) {
-    return this.adminRequest('adminCreateStudent', payload);
+    return this.mutateAdmin('adminCreateStudent', payload);
   }
 
   adminSetStudentStatus(studentId, status) {
-    return this.adminRequest('adminSetStudentStatus', { studentId, status });
+    return this.mutateAdmin('adminSetStudentStatus', { studentId, status });
   }
 
   adminResetAccess(studentId) {
-    return this.adminRequest('adminResetStudentAccessCode', { studentId });
+    return this.mutateAdmin('adminResetStudentAccessCode', { studentId });
   }
 
-  adminCourseStructure() {
-    return this.adminRequest('adminGetCourseStructure', {
+  adminCourseStructure(options = {}) {
+    return this.cachedAdminRequest('adminGetCourseStructure', {
       courseId: this.courseId
-    });
+    }, options);
   }
 
-  adminCourses() {
-    return this.adminRequest('adminListCourses');
+  adminCourses(options = {}) {
+    return this.cachedAdminRequest('adminListCourses', {}, options);
   }
 
-  adminCourseStructureFor(courseId) {
-    return this.adminRequest('adminGetCourseStructure', {
+  adminCourseStructureFor(courseId, options = {}) {
+    return this.cachedAdminRequest('adminGetCourseStructure', {
       courseId: courseId || this.courseId
-    });
+    }, options);
   }
 
   adminSaveCourse(payload) {
-    return this.adminRequest('adminSaveCourse', payload);
+    return this.mutateAdmin('adminSaveCourse', payload);
   }
 
   adminSaveLesson(payload) {
-    return this.adminRequest('adminSaveLesson', payload);
+    return this.mutateAdmin('adminSaveLesson', payload);
   }
 
   adminSaveLessonContent(payload) {
-    return this.adminRequest('adminSaveLessonContent', payload);
+    return this.mutateAdmin('adminSaveLessonContent', payload);
   }
 
-  adminGroups(courseId = '') {
-    return this.adminRequest('adminListGroups', { courseId });
+  adminGroups(courseId = '', options = {}) {
+    return this.cachedAdminRequest('adminListGroups', { courseId }, options);
   }
 
   adminSaveGroup(payload) {
-    return this.adminRequest('adminSaveGroup', payload);
+    return this.mutateAdmin('adminSaveGroup', payload);
   }
 
   adminAssignStudentsToGroup(groupId, studentIds) {
-    return this.adminRequest('adminAssignStudentsToGroup', { groupId, studentIds });
+    return this.mutateAdmin('adminAssignStudentsToGroup', { groupId, studentIds });
   }
 
   adminSetLessonAccess(payload) {
-    return this.adminRequest('adminSetLessonAccess', payload);
+    return this.mutateAdmin('adminSetLessonAccess', payload);
   }
 
-  adminMediaConfig() {
-    return this.adminRequest('adminGetMediaConfig', {
+  adminMediaConfig(options = {}) {
+    return this.cachedAdminRequest('adminGetMediaConfig', {
       courseId: this.courseId
-    });
+    }, options);
   }
 
   adminSaveMediaConfig(mediaConfig) {
-    return this.adminRequest('adminSaveMediaConfig', {
+    return this.mutateAdmin('adminSaveMediaConfig', {
       courseId: this.courseId,
       mediaConfig
+    });
+  }
+
+  cachedAdminRequest(action, payload = {}, options = {}) {
+    const ttlMs = Number(options.ttlMs || this.cacheTtlMs);
+    const key = this.cacheKey('admin', action, {
+      adminToken: this.adminToken(),
+      ...payload
+    });
+    const cached = this.cache.get(key);
+    const now = Date.now();
+    const cacheVersion = this.cacheVersion;
+
+    if (!options.force && cached) {
+      if (cached.promise) return cached.promise;
+      if (cached.expiresAt > now) return Promise.resolve(cached.data);
+    }
+
+    const promise = this.adminRequest(action, payload)
+      .then((data) => {
+        if (this.cacheVersion === cacheVersion) {
+          this.cache.set(key, {
+            data,
+            expiresAt: Date.now() + ttlMs
+          });
+        }
+        return data;
+      })
+      .catch((error) => {
+        this.cache.delete(key);
+        throw error;
+      });
+
+    this.cache.set(key, {
+      promise,
+      expiresAt: now + ttlMs
+    });
+
+    return promise;
+  }
+
+  mutateAdmin(action, payload = {}) {
+    return this.adminRequest(action, payload).then((data) => {
+      this.clearCache();
+      return data;
     });
   }
 
@@ -381,6 +443,15 @@ export class CoursePlatformApi {
       adminToken: this.adminToken(),
       ...payload
     });
+  }
+
+  cacheKey(scope, action, payload = {}) {
+    return `${scope}:${action}:${stableStringify(payload)}`;
+  }
+
+  clearCache() {
+    this.cacheVersion += 1;
+    this.cache.clear();
   }
 
   adminToken() {

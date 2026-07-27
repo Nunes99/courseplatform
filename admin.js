@@ -86,6 +86,7 @@ async function initialize() {
       const result = await api.adminMe();
       state.admin = result.admin;
       renderAdminShell();
+      warmAdminCache();
       loadPending();
     } catch (error) {
       handleAdminError(error);
@@ -159,6 +160,7 @@ async function login(event) {
     state.admin = result.admin;
     adminIdentity.textContent = `${result.admin.fullName} · ${result.admin.role}`;
     renderAdminShell();
+    warmAdminCache();
     await loadPending();
   } catch (error) {
     errorBox.textContent = error.message;
@@ -178,6 +180,17 @@ async function logout() {
   state.admin = null;
   state.staff = [];
   renderAdminLogin();
+}
+
+function warmAdminCache() {
+  if (!api?.hasAdminSession()) return;
+
+  Promise.allSettled([
+    api.adminCourses(),
+    api.adminStudents(),
+    api.adminMediaConfig(),
+    typeof api.adminStaff === 'function' ? api.adminStaff() : api.adminstaff()
+  ]);
 }
 
 function renderAdminShell() {
@@ -275,12 +288,12 @@ function canManageStaff() {
   return ['OWNER', 'ADMIN'].includes(state.admin?.role);
 }
 
-async function loadStaff() {
+async function loadStaff(options = {}) {
   const main = document.querySelector('#adminMain');
   main.innerHTML = loadingTemplate('A carregar staff...');
 
   try {
-    const result = await (typeof api.adminStaff === 'function' ? api.adminStaff() : api.adminstaff());
+    const result = await (typeof api.adminStaff === 'function' ? api.adminStaff(options) : api.adminstaff(options));
     state.staff = result.staff || [];
     state.admin = result.currentAdmin || state.admin;
     renderStaff();
@@ -527,7 +540,7 @@ function renderAdminProfile() {
   reportHeight();
 }
 
-async function loadPending() {
+async function loadPending(options = {}) {
   const main = document.querySelector('#adminMain');
   main.innerHTML = loadingTemplate('A carregar submissões…');
 
@@ -535,9 +548,9 @@ async function loadPending() {
     const result = await api.adminSubmissions({
       status: state.submissionFilters.status,
       limit: 300
-    });
+    }, options);
     state.pending = result.submissions;
-    await loadAccessContext();
+    await loadAccessContext(options);
     renderSubmissionsV2();
   } catch (error) {
     handleAdminError(error);
@@ -621,7 +634,7 @@ function renderPending() {
     </div>
   `;
 
-  document.querySelector('#refreshPending').addEventListener('click', loadPending);
+  document.querySelector('#refreshPending').addEventListener('click', () => loadPending({ force: true }));
 
   root.querySelectorAll('[data-open-submission]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -776,7 +789,7 @@ function renderSubmissionsV2() {
     </div>
   `;
 
-  document.querySelector('#refreshPending').addEventListener('click', loadPending);
+  document.querySelector('#refreshPending').addEventListener('click', () => loadPending({ force: true }));
   document.querySelector('#submissionStatusFilter').addEventListener('change', (event) => {
     state.submissionFilters.status = event.currentTarget.value;
     loadPending();
@@ -859,16 +872,16 @@ function submissionRowTemplate(item) {
   `;
 }
 
-async function loadAccessContext() {
-  const coursesResult = await api.adminCourses();
+async function loadAccessContext(options = {}) {
+  const coursesResult = await api.adminCourses(options);
   state.courses = coursesResult.courses || [];
   if (!state.selectedCourseId) {
     state.selectedCourseId = state.courses[0]?.course?.courseId || config.courseId;
   }
-  state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId);
-  const groupsResult = await api.adminGroups(state.courseStructure.course.courseId);
+  state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId, options);
+  const groupsResult = await api.adminGroups(state.courseStructure.course.courseId, options);
   state.groups = groupsResult.groups || [];
-  await ensureStudentsForMedia();
+  await ensureStudentsForMedia(options);
 }
 
 function accessCourseOptions() {
@@ -1207,12 +1220,12 @@ async function submitReview(event) {
   }
 }
 
-async function loadStudents() {
+async function loadStudents(options = {}) {
   const main = document.querySelector('#adminMain');
   main.innerHTML = loadingTemplate('A carregar estudantes…');
 
   try {
-    const result = await api.adminStudents();
+    const result = await api.adminStudents(options);
     state.students = result.students;
     renderStudentsV2();
   } catch (error) {
@@ -1740,12 +1753,12 @@ function csvCell(value) {
   return `"${String(value ?? '').replaceAll('"', '""')}"`;
 }
 
-async function loadCourses() {
+async function loadCourses(options = {}) {
   const main = document.querySelector('#adminMain');
   main.innerHTML = loadingTemplate('A carregar cursos...');
 
   try {
-    const coursesResult = await api.adminCourses();
+    const coursesResult = await api.adminCourses(options);
     state.courses = coursesResult.courses || [];
 
     if (state.courseMode !== 'detail') {
@@ -1770,10 +1783,10 @@ async function loadCourses() {
     ) {
       state.selectedCourseId = activeCourses[0].course.courseId;
     }
-    state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId);
-    const groupsResult = await api.adminGroups(state.courseStructure.course.courseId);
+    state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId, options);
+    const groupsResult = await api.adminGroups(state.courseStructure.course.courseId, options);
     state.groups = groupsResult.groups || [];
-    await ensureStudentsForMedia();
+    await ensureStudentsForMedia(options);
     renderCourses();
   } catch (error) {
     handleAdminError(error);
@@ -2603,11 +2616,11 @@ function showLessonDialog(lessonId = '') {
   });
 }
 
-async function renderVideos() {
+async function renderVideos(options = {}) {
   const main = document.querySelector('#adminMain');
   main.innerHTML = loadingTemplate('A carregar vídeos…');
-  await loadAdminMediaConfig();
-  await ensureStudentsForMedia();
+  await loadAdminMediaConfig(options);
+  await ensureStudentsForMedia(options);
   const videos = videoGallery();
 
   main.innerHTML = `
@@ -2764,11 +2777,11 @@ async function removeBrandLogo() {
   }
 }
 
-async function ensureStudentsForMedia() {
-  if (state.students.length) return;
+async function ensureStudentsForMedia(options = {}) {
+  if (state.students.length && !options.force) return;
 
   try {
-    const result = await api.adminStudents();
+    const result = await api.adminStudents(options);
     state.students = result.students || [];
   } catch {
     state.students = [];
@@ -3074,9 +3087,9 @@ async function loadPublicMediaConfig() {
   }
 }
 
-async function loadAdminMediaConfig() {
+async function loadAdminMediaConfig(options = {}) {
   try {
-    const result = await api.adminMediaConfig();
+    const result = await api.adminMediaConfig(options);
     setMediaConfig(result.mediaConfig || result);
   } catch {
     setMediaConfig(localMediaConfig());
