@@ -1,0 +1,1 @@
+"""CoursePlatform Python backend package."""
