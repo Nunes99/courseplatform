@@ -16,6 +16,13 @@ Este plano prepara a migracao sem destruir o Apps Script atual. O frontend pode 
 - `backend/courseplatform/*`: API FastAPI/Postgres.
 - `scripts/migrate_sheets_to_supabase.py`: migracao Google Sheets -> Supabase.
 - `.env.example`: variáveis necessárias para dev/deploy.
+- `docs/database-alignment.md`: mapa das abas do Google Sheets para tabelas Supabase.
+
+## Alinhamento da base atual
+
+A estrutura foi alinhada com o ficheiro `CoursePlatformDB.xlsx` exportado em 2026-07-28. Todas as abas encontradas estao cobertas no schema/migrador: dados principais, progresso, autenticacao, grupos, importacao de estudantes, resultados de importacao, novas credenciais e guia do schema.
+
+Nota: a aba `MediaContent` existe no workbook, mas esta sem dados/cabecalho. A midia atual continua preservada pela chave `MEDIA_CONFIG` em `Settings`; a tabela `courseplatform.media_content` ficou preparada para uso futuro.
 
 ## Variáveis críticas
 
