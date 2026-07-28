@@ -45,7 +45,10 @@ const state = {
   pollId: null
 };
 
-initialize();
+initialize().catch((error) => {
+  console.error(error);
+  renderConfigurationError(error);
+});
 
 async function initialize() {
   initializeThemeToggle();
@@ -70,7 +73,9 @@ async function initialize() {
       reportHeight();
     }
   });
-  new ResizeObserver(reportHeight).observe(document.body);
+  if (window.ResizeObserver) {
+    new ResizeObserver(reportHeight).observe(document.body);
+  }
 
   if (!api.hasStudentSession()) {
     renderLogin();
