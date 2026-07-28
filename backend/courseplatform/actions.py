@@ -58,9 +58,10 @@ def configured_secret(value: str) -> bool:
     if not text:
         return False
     return not (
-        text.startswith("COLE_AQUI")
-        or text.startswith("copy-from")
-        or text.startswith("igual ao")
+        text.startswith("CHANGE_ME")
+        or text.startswith("YOUR_")
+        or text.startswith("generate-with-python-api-auth-rotation")
+        or text in {"PASSWORD", "SENHA"}
     )
 
 

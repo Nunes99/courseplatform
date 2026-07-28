@@ -21,18 +21,10 @@ except ImportError:
             self.value = value
 
 try:
-    from google.oauth2.service_account import Credentials
-    from googleapiclient.discovery import build
-except ImportError:
-    Credentials = None
-    build = None
-
-try:
     from dotenv import load_dotenv
 except ImportError:
     load_dotenv = None
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 EXCEL_MAIN_NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 EXCEL_REL_NS = {"r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
 EXCEL_PACKAGE_REL_NS = {"pr": "http://schemas.openxmlformats.org/package/2006/relationships"}
@@ -528,29 +520,6 @@ def read_xlsx_values(path: str | Path) -> dict[str, list[list[Any]]]:
     return sheets
 
 
-def read_sheet(service, spreadsheet_id: str, sheet_name: str) -> list[dict[str, Any]]:
-    result = service.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=f"{sheet_name}!A:ZZ",
-    ).execute()
-    values = result.get("values", [])
-    if len(values) < 2:
-        return []
-    headers = [str(header).strip() for header in values[0]]
-    rows = []
-    for row_number, raw in enumerate(values[1:], start=2):
-        row = {}
-        for index, header in enumerate(headers):
-            if not header:
-                continue
-            row[header] = raw[index] if index < len(raw) else ""
-        if any(value not in ("", None) for value in row.values()):
-            row["__rowNumber"] = row_number
-            row["__rowId"] = hashlib.sha256(f"{sheet_name}:{row_number}".encode("utf-8")).hexdigest()
-            rows.append(row)
-    return rows
-
-
 def rows_from_values(sheet_name: str, values: list[list[Any]]) -> list[dict[str, Any]]:
     if len(values) < 2:
         return []
@@ -656,19 +625,6 @@ def migrate_from_reader(read_rows, database_url: str, dry_run: bool, validate_on
     return report
 
 
-def migrate_from_google_sheets(spreadsheet_id: str, credentials_path: str, database_url: str, dry_run: bool):
-    if Credentials is None or build is None:
-        raise SystemExit("Missing Google API dependencies. Install dependencies with: pip install -r requirements.txt")
-    credentials = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
-    service = build("sheets", "v4", credentials=credentials)
-    return migrate_from_reader(
-        lambda sheet_name: read_sheet(service, spreadsheet_id, sheet_name),
-        database_url,
-        dry_run,
-        validate_only=False,
-    )
-
-
 def migrate_from_xlsx(xlsx_path: str, database_url: str | None, dry_run: bool, validate_only: bool):
     workbook_values = read_xlsx_values(xlsx_path)
     return migrate_from_reader(
@@ -683,33 +639,23 @@ def main():
     if load_dotenv is not None:
         load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Migrate CoursePlatform Google Sheets data to Supabase/Postgres.")
+    parser = argparse.ArgumentParser(description="Migrate CoursePlatform XLSX export data to Supabase/Postgres.")
     parser.add_argument("--xlsx", default=os.getenv("COURSEPLATFORM_XLSX"), required=False)
-    parser.add_argument("--spreadsheet-id", default=os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"), required=False)
-    parser.add_argument("--credentials", default=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"), required=False)
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL"), required=False)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
 
-    if args.xlsx:
-        if not args.validate_only and not args.database_url:
-            raise SystemExit("Missing --database-url or DATABASE_URL. Use --validate-only to inspect the XLSX without Supabase.")
-    elif not args.spreadsheet_id:
-        raise SystemExit("Missing --spreadsheet-id or GOOGLE_SHEETS_SPREADSHEET_ID.")
-    elif not args.credentials:
-        raise SystemExit("Missing --credentials or GOOGLE_APPLICATION_CREDENTIALS.")
-    elif not args.database_url:
-        raise SystemExit("Missing --database-url or DATABASE_URL.")
+    if not args.xlsx:
+        raise SystemExit("Missing --xlsx or COURSEPLATFORM_XLSX.")
+    if not args.validate_only and not args.database_url:
+        raise SystemExit("Missing --database-url or DATABASE_URL. Use --validate-only to inspect the XLSX without Supabase.")
 
     started = datetime.now(timezone.utc)
-    if args.xlsx:
-        report = migrate_from_xlsx(args.xlsx, args.database_url, args.dry_run, args.validate_only)
-    else:
-        report = migrate_from_google_sheets(args.spreadsheet_id, args.credentials, args.database_url, args.dry_run)
+    report = migrate_from_xlsx(args.xlsx, args.database_url, args.dry_run, args.validate_only)
     print(json.dumps({
         "startedAt": started.isoformat(),
-        "source": "xlsx" if args.xlsx else "google_sheets",
+        "source": "xlsx",
         "dryRun": args.dry_run,
         "validateOnly": args.validate_only,
         "sheets": report,

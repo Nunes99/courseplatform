@@ -1,71 +1,26 @@
 # Migracao para Supabase + API Python
 
-Este plano prepara a migracao sem destruir o Apps Script atual. O frontend pode continuar usando `config.js` com a URL do Apps Script ate o momento do corte.
+Este documento descreve a arquitetura atual da plataforma: Supabase como base de dados e API Python como backend.
 
 ## Objetivo
 
-- Migrar todos os dados do Google Sheets para Supabase/Postgres.
-- Preservar `studentId`, `publicStudentId`, progresso, submissões, certificados, grupos e cursos.
-- Preservar `accessCode` ja hasheado e `sessionToken` ja hasheado.
-- Usar uma API Python com o mesmo contrato atual: `GET ?action=...` e `POST { action: ... }`.
+- Usar Supabase/Postgres como fonte ativa dos dados.
+- Usar a API Python com o mesmo contrato do frontend: `GET ?action=...` e `POST { action: ... }`.
+- Preservar estudantes, cursos, grupos, modulos, progresso, submisssoes, revisoes e historico.
+- Usar segredos proprios da API Python para autenticacao.
 
-## Arquivos adicionados
+## Arquivos principais
 
-- `supabase/schema.sql`: schema Postgres compatível com as abas atuais.
+- `supabase/schema.sql`: schema Postgres da plataforma.
 - `api/index.py`: entrada Python para Vercel.
 - `backend/courseplatform/*`: API FastAPI/Postgres.
-- `scripts/migrate_sheets_to_supabase.py`: migracao Google Sheets -> Supabase.
-- `.env.example`: variáveis necessárias para dev/deploy.
-- `docs/database-alignment.md`: mapa das abas do Google Sheets para tabelas Supabase.
+- `scripts/migrate_sheets_to_supabase.py`: utilitario de migracao/importacao historica.
+- `.env.example`: variaveis necessarias para desenvolvimento/deploy.
+- `docs/database-alignment.md`: mapa das abas exportadas para tabelas Supabase.
 
-## Alinhamento da base atual
+## Variaveis criticas
 
-A estrutura foi alinhada com o ficheiro `CoursePlatformDB.xlsx` exportado em 2026-07-28. Todas as abas encontradas estao cobertas no schema/migrador: dados principais, progresso, autenticacao, grupos, importacao de estudantes, resultados de importacao, novas credenciais e guia do schema.
-
-Nota: a aba `MediaContent` existe no workbook, mas esta sem dados/cabecalho. A midia atual continua preservada pela chave `MEDIA_CONFIG` em `Settings`; a tabela `courseplatform.media_content` ficou preparada para uso futuro.
-
-## Variáveis críticas
-
-No Apps Script, copie de `Script Properties`:
-
-- `PASSWORD_PEPPER`
-- `ADMIN_MASTER_KEY_HASH`
-
-Essas variáveis precisam ser iguais no Vercel. Sem o mesmo `PASSWORD_PEPPER`, os códigos atuais dos estudantes e tokens ativos não serão validados.
-
-## Passos de migracao
-
-1. Criar projeto no Supabase.
-2. Abrir SQL Editor e executar `supabase/schema.sql`.
-3. Criar uma Service Account no Google Cloud com acesso de leitura ao Google Sheets.
-4. Partilhar a planilha atual com o email da Service Account.
-5. Instalar dependências localmente:
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-6. Validar primeiro o ficheiro Excel exportado, sem Google API e sem Supabase:
-
-```bash
-python scripts/migrate_sheets_to_supabase.py --xlsx "C:\Users\manyu\Downloads\CoursePlatformDB.xlsx" --validate-only
-```
-
-7. Rodar ensaio sem escrever:
-
-```bash
-python scripts/migrate_sheets_to_supabase.py --dry-run
-```
-
-8. Rodar migracao real:
-
-```bash
-python scripts/migrate_sheets_to_supabase.py
-```
-
-9. Configurar variáveis no Vercel:
+Configure no Vercel:
 
 - `DATABASE_URL`
 - `PASSWORD_PEPPER`
@@ -74,34 +29,48 @@ python scripts/migrate_sheets_to_supabase.py
 - `SESSION_HOURS`
 - `CORS_ORIGINS`
 
-10. Fazer deploy pelo GitHub/Vercel.
-11. Testar:
+`PASSWORD_PEPPER` e `ADMIN_MASTER_KEY_HASH` foram gerados pela rotacao de autenticacao da API Python.
+
+## Validacao
+
+Validar ficheiro Excel exportado, sem escrever no Supabase:
+
+```bash
+python scripts/migrate_sheets_to_supabase.py --xlsx "C:\Users\manyu\Downloads\CoursePlatformDB.xlsx" --validate-only
+```
+
+Testar escrita com rollback:
+
+```bash
+python scripts/migrate_sheets_to_supabase.py --xlsx "C:\Users\manyu\Downloads\CoursePlatformDB.xlsx" --dry-run
+```
+
+Migracao real:
+
+```bash
+python scripts/migrate_sheets_to_supabase.py --xlsx "C:\Users\manyu\Downloads\CoursePlatformDB.xlsx"
+```
+
+Health check:
 
 ```text
-https://SEU-PROJETO.vercel.app/api?action=health
+https://courseplatform-mauve.vercel.app/api?action=health
 ```
 
-12. Quando estiver validado, alterar `config.js`:
+Resultado esperado:
 
-```js
-apiUrl: 'https://SEU-PROJETO.vercel.app/api'
+```json
+{
+  "database": true,
+  "databaseConfigured": true,
+  "databaseError": "",
+  "authConfigured": true
+}
 ```
 
-## Corte seguro
+## Estado da API Python
 
-Recomendacao:
-
-1. Fazer migracao em modo leitura.
-2. Testar login de estudante e admin.
-3. Testar dashboard, cursos, estudantes e submissões.
-4. Fazer congelamento curto no Google Sheets.
-5. Rodar migracao final.
-6. Trocar `apiUrl`.
-7. Manter Apps Script publicado como rollback temporario.
-
-## Estado atual da API Python
-
-Ja preparado:
+Acoes publicas e estudante:
 
 - `health`
 - `publicCourseConfig`
@@ -109,22 +78,56 @@ Ja preparado:
 - `verifyCertificate`
 - `login`
 - `logout`
+- `getDashboard`
+- `getMyCourses`
+- `getLesson`
+- `getAttemptStatus`
+- `getMediaConfig`
+- `updateMyProfile`
+- `changeMyAccessCode`
+- `startAttempt`
+- `saveAnswer`
+- `uploadFile`
+- `deleteUploadedFile`
+- `submitAttempt`
+- `getMyCertificate`
+
+Acoes administrativas:
+
 - `adminLogin`
 - `adminLogout`
 - `adminMe`
-- `getDashboard`
-- `getMyCourses`
+- `adminListStaff`
+- `adminSaveStaff`
+- `adminSetStaffStatus`
 - `adminListCourses`
 - `adminGetCourseStructure`
+- `adminSaveCourse`
+- `adminSaveLesson`
+- `adminSaveLessonContent`
 - `adminListGroups`
+- `adminSaveGroup`
+- `adminAssignStudentsToGroup`
 - `adminListStudents`
+- `adminCreateStudent`
+- `adminSetStudentStatus`
+- `adminResetStudentAccessCode`
+- `adminListSubmissions`
+- `adminListPendingSubmissions`
+- `adminGetSubmission`
+- `adminReviewSubmission`
+- `adminAuthorizeRetry`
+- `adminSetLessonAccess`
+- `adminGetMediaConfig`
+- `adminSaveMediaConfig`
 
-Ainda deve ser portado antes do corte total:
+## Corte operacional
 
-- tentativas e submissões completas
-- upload de ficheiros
-- revisões administrativas
-- criacao/edicao de estudantes, cursos, modulos, grupos e staff
-- media save/admin management
+1. Garantir `DATABASE_URL`, `PASSWORD_PEPPER` e `ADMIN_MASTER_KEY_HASH` no Vercel.
+2. Fazer deploy.
+3. Confirmar `health` com `database: true` e `authConfigured: true`.
+4. Testar login de estudante.
+5. Testar login admin.
+6. Testar dashboard, cursos, modulos, submisssoes e media.
 
-Enquanto essas ações não forem portadas, o Apps Script atual continua sendo a API de produção.
+Depois disso, a operacao normal fica concentrada em Supabase + API Python.

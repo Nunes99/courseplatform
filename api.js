@@ -42,7 +42,7 @@ export class CoursePlatformApi {
     this.cacheVersion = 0;
     this.cacheTtlMs = Number(config.apiCacheTtlMs || 45000);
 
-    if (!this.apiUrl || this.apiUrl.includes('COLE_AQUI')) {
+    if (!this.apiUrl || this.apiUrl.includes('CHANGE_ME') || this.apiUrl.includes('YOUR_API_URL')) {
       throw new ApiError(
         'A URL da API ainda nao foi configurada em config.js.',
         'API_URL_NOT_CONFIGURED'

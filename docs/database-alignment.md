@@ -1,13 +1,13 @@
-# Alinhamento da base Google Sheets -> Supabase
+# Alinhamento da exportacao historica -> Supabase
 
 Referencia analisada em 2026-07-28:
 
 - `C:\Users\manyu\Downloads\CoursePlatformDB.xlsx`
 - 25 abas encontradas no workbook.
 - A aba `MediaContent` existe, mas sem cabecalho e sem dados no ficheiro exportado.
-- A configuracao de midia usada atualmente pelo Apps Script continua em `Settings`, chave `MEDIA_CONFIG`, como JSON.
+- A configuracao de midia atual esta preservada em `courseplatform.settings`, chave `MEDIA_CONFIG`, como JSON.
 
-## Abas cobertas pela migracao
+## Abas cobertas pela importacao
 
 | Aba Google Sheets | Tabela Supabase | Estado |
 | --- | --- | --- |
@@ -39,8 +39,8 @@ Referencia analisada em 2026-07-28:
 
 ## Cuidados de compatibilidade
 
-- `studentId`, `publicStudentId`, `accessCode`, progresso, tentativas, revisoes e certificados sao preservados.
-- `accessCode` continua migrado exatamente como esta no Sheets, para manter a autenticacao existente.
+- `studentId`, `publicStudentId`, progresso, tentativas, revisoes e certificados sao preservados.
+- Os codigos de acesso foram re-hashados pela API Python com `PASSWORD_PEPPER` proprio. Os codigos visiveis de transicao ficam apenas no arquivo local ignorado `local-secrets/auth-transition-*.txt`.
 - Datas numericas vindas do Sheets/Excel sao convertidas para `timestamptz`.
 - Campos booleanos como `active`, `isRequired`, `isCorrect`, `retryAuthorized` e `unlockNextLesson` sao convertidos para booleano real.
 - `detailsJson` e `allowedEmails` sao guardados como `jsonb`.
@@ -48,7 +48,7 @@ Referencia analisada em 2026-07-28:
 
 ## Observacao sobre MediaContent
 
-Hoje a plataforma le e grava videos atraves da chave `MEDIA_CONFIG` na aba `Settings`. Por isso, a migracao ja preserva a midia atual via `courseplatform.settings`.
+Hoje a plataforma le e grava videos atraves da chave `MEDIA_CONFIG` em `courseplatform.settings`. Por isso, a migracao ja preserva a midia atual no Supabase.
 
 A tabela `courseplatform.media_content` fica preparada para uma evolucao futura, caso a midia passe a ser guardada em linhas independentes com campos como:
 
