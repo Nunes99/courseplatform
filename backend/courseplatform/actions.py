@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -62,6 +63,13 @@ def database_api_error(error: Exception) -> ApiError:
         "A base de dados nao esta disponivel neste momento.",
         {"errorType": error_name},
     )
+
+
+def diagnostic_error_message(error: Exception) -> str:
+    text = str(error)
+    text = re.sub(r"postgresql://\S+", "[DATABASE_URL]", text)
+    text = re.sub(r"password=[^\s]+", "password=[hidden]", text, flags=re.IGNORECASE)
+    return text[:700]
 
 
 def as_bool(value: Any) -> bool:
@@ -522,6 +530,7 @@ def health(_: dict[str, Any]):
     except Exception as error:
         db_ok = False
         db_error = error.__class__.__name__
+        db_error_message = diagnostic_error_message(error)
         error_text = str(error).lower()
         if "ecircuitbreaker" in error_text:
             db_error_hint = "Supabase pooler bloqueou novas conexoes por muitas falhas de autenticacao. Aguarde alguns minutos e confirme usuario/senha Postgres."
@@ -531,12 +540,15 @@ def health(_: dict[str, Any]):
             db_error_hint = "Timeout de conexao. Confira host, porta, rede e se o projeto Supabase esta ativo."
         elif db_error == "ProgrammingError":
             db_error_hint = "Erro de SQL/configuracao Postgres. Confirme se o schema courseplatform foi criado no mesmo projeto apontado por POSTGRES_URL."
+    else:
+        db_error_message = ""
     return success({
         "version": settings.app_version,
         "database": db_ok,
         "databaseConfigured": bool(settings.database_url),
         "databaseError": "" if db_ok else db_error,
         "databaseErrorHint": "" if db_ok else db_error_hint,
+        "databaseErrorMessage": "" if db_ok else db_error_message,
         "schemaCreated": schema_created,
         "dataDiagnostics": data_diagnostics,
         "authConfigured": db_ok
