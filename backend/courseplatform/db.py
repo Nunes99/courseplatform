@@ -11,6 +11,22 @@ from .config import get_settings
 SCHEMA_SQL_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 
+def _split_schema_sql(schema_sql: str) -> tuple[str, str]:
+    markers = [
+        "grant usage on schema courseplatform",
+        "-- Public management views.",
+    ]
+    indexes = [schema_sql.find(marker) for marker in markers if schema_sql.find(marker) >= 0]
+    if not indexes:
+        return schema_sql, ""
+    split_at = min(indexes)
+    return schema_sql[:split_at], schema_sql[split_at:]
+
+
+def _sql_statements(sql: str) -> list[str]:
+    return [statement.strip() for statement in sql.split(";") if statement.strip()]
+
+
 def _connect():
     settings = get_settings()
     settings.require_database()
@@ -108,8 +124,18 @@ def ensure_schema() -> bool:
     if schema_exists():
         return False
     schema_sql = SCHEMA_SQL_PATH.read_text(encoding="utf-8")
+    critical_sql, optional_sql = _split_schema_sql(schema_sql)
     with connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(schema_sql)
+            cur.execute(critical_sql)
         conn.commit()
+    if optional_sql:
+        with connection() as conn:
+            for statement in _sql_statements(optional_sql):
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(statement)
+                    conn.commit()
+                except psycopg.Error:
+                    conn.rollback()
     return True
