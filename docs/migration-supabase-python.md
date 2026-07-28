@@ -47,19 +47,25 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-6. Rodar ensaio sem escrever:
+6. Validar primeiro o ficheiro Excel exportado, sem Google API e sem Supabase:
+
+```bash
+python scripts/migrate_sheets_to_supabase.py --xlsx "C:\Users\manyu\Downloads\CoursePlatformDB.xlsx" --validate-only
+```
+
+7. Rodar ensaio sem escrever:
 
 ```bash
 python scripts/migrate_sheets_to_supabase.py --dry-run
 ```
 
-7. Rodar migracao real:
+8. Rodar migracao real:
 
 ```bash
 python scripts/migrate_sheets_to_supabase.py
 ```
 
-8. Configurar variáveis no Vercel:
+9. Configurar variáveis no Vercel:
 
 - `DATABASE_URL`
 - `PASSWORD_PEPPER`
@@ -68,14 +74,14 @@ python scripts/migrate_sheets_to_supabase.py
 - `SESSION_HOURS`
 - `CORS_ORIGINS`
 
-9. Fazer deploy pelo GitHub/Vercel.
-10. Testar:
+10. Fazer deploy pelo GitHub/Vercel.
+11. Testar:
 
 ```text
 https://SEU-PROJETO.vercel.app/api?action=health
 ```
 
-11. Quando estiver validado, alterar `config.js`:
+12. Quando estiver validado, alterar `config.js`:
 
 ```js
 apiUrl: 'https://SEU-PROJETO.vercel.app/api'

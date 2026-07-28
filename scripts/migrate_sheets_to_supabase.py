@@ -2,16 +2,35 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile
 
-import psycopg
-from psycopg.types.json import Jsonb
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+try:
+    import psycopg
+    from psycopg.types.json import Jsonb
+except ImportError:
+    psycopg = None
+
+    class Jsonb:
+        def __init__(self, value):
+            self.value = value
+
+try:
+    from google.oauth2.service_account import Credentials
+    from googleapiclient.discovery import build
+except ImportError:
+    Credentials = None
+    build = None
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+EXCEL_MAIN_NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+EXCEL_REL_NS = {"r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+EXCEL_PACKAGE_REL_NS = {"pr": "http://schemas.openxmlformats.org/package/2006/relationships"}
 
 TABLES = [
     ("StudentImport", "student_import", {
@@ -433,6 +452,76 @@ def parse_value(column: str, value: Any):
     return value
 
 
+def excel_column_index(cell_ref: str) -> int:
+    match = re.match(r"([A-Z]+)", cell_ref or "")
+    if not match:
+        return 0
+
+    index = 0
+    for char in match.group(1):
+        index = index * 26 + (ord(char) - 64)
+    return index - 1
+
+
+def read_xlsx_values(path: str | Path) -> dict[str, list[list[Any]]]:
+    workbook_path = Path(path)
+    sheets: dict[str, list[list[Any]]] = {}
+
+    with ZipFile(workbook_path) as archive:
+        shared_strings = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in shared_root.findall("m:si", EXCEL_MAIN_NS):
+                texts = [node.text or "" for node in item.findall(".//m:t", EXCEL_MAIN_NS)]
+                shared_strings.append("".join(texts))
+
+        rels_root = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        rels = {}
+        for rel in rels_root.findall("pr:Relationship", EXCEL_PACKAGE_REL_NS):
+            target = rel.attrib.get("Target", "")
+            if not target.startswith("/"):
+                target = "xl/" + target.lstrip("/")
+            rels[rel.attrib["Id"]] = target
+
+        workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
+
+        def cell_value(cell):
+            cell_type = cell.attrib.get("t")
+            if cell_type == "s":
+                value_node = cell.find("m:v", EXCEL_MAIN_NS)
+                if value_node is None or value_node.text is None:
+                    return ""
+                return shared_strings[int(value_node.text)]
+            if cell_type == "inlineStr":
+                return "".join(node.text or "" for node in cell.findall(".//m:t", EXCEL_MAIN_NS))
+            value_node = cell.find("m:v", EXCEL_MAIN_NS)
+            return value_node.text if value_node is not None and value_node.text is not None else ""
+
+        for sheet in workbook_root.findall(".//m:sheet", EXCEL_MAIN_NS):
+            sheet_name = sheet.attrib["name"]
+            relation_id = sheet.attrib.get(
+                "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+            )
+            target = rels.get(relation_id or "")
+            if not target:
+                sheets[sheet_name] = []
+                continue
+
+            sheet_root = ET.fromstring(archive.read(target))
+            rows = []
+            for row in sheet_root.findall(".//m:sheetData/m:row", EXCEL_MAIN_NS):
+                values = []
+                for cell in row.findall("m:c", EXCEL_MAIN_NS):
+                    index = excel_column_index(cell.attrib.get("r", ""))
+                    while len(values) <= index:
+                        values.append("")
+                    values[index] = cell_value(cell)
+                rows.append(values)
+            sheets[sheet_name] = rows
+
+    return sheets
+
+
 def read_sheet(service, spreadsheet_id: str, sheet_name: str) -> list[dict[str, Any]]:
     result = service.spreadsheets().values().get(
         spreadsheetId=spreadsheet_id,
@@ -456,6 +545,63 @@ def read_sheet(service, spreadsheet_id: str, sheet_name: str) -> list[dict[str, 
     return rows
 
 
+def rows_from_values(sheet_name: str, values: list[list[Any]]) -> list[dict[str, Any]]:
+    if len(values) < 2:
+        return []
+
+    headers = [str(header).strip() for header in values[0]]
+    rows = []
+    for row_number, raw in enumerate(values[1:], start=2):
+        row = {}
+        for index, header in enumerate(headers):
+            if not header:
+                continue
+            row[header] = raw[index] if index < len(raw) else ""
+        if any(value not in ("", None) for value in row.values()):
+            row["__rowNumber"] = row_number
+            row["__rowId"] = hashlib.sha256(f"{sheet_name}:{row_number}".encode("utf-8")).hexdigest()
+            rows.append(row)
+    return rows
+
+
+def read_xlsx_sheet(workbook_values: dict[str, list[list[Any]]], sheet_name: str) -> list[dict[str, Any]]:
+    return rows_from_values(sheet_name, workbook_values.get(sheet_name, []))
+
+
+def mapped_rows_for_sheet(raw_rows: list[dict[str, Any]], mapping: dict[str, str], key: str):
+    mapped_rows = []
+    skipped_missing_key = 0
+    missing_key_examples = []
+    seen_keys = set()
+    duplicate_keys = set()
+
+    for raw in raw_rows:
+        mapped = {}
+        for source, target in mapping.items():
+            parsed = parse_value(target, raw.get(source))
+            if parsed is not None or target not in mapped:
+                mapped[target] = parsed
+
+        key_values = tuple(mapped.get(part) for part in key.split(","))
+        if not all(key_values):
+            skipped_missing_key += 1
+            if len(missing_key_examples) < 5:
+                missing_key_examples.append(raw.get("__rowNumber"))
+            continue
+
+        if key_values in seen_keys:
+            duplicate_keys.add("|".join(str(value) for value in key_values))
+        seen_keys.add(key_values)
+        mapped_rows.append(mapped)
+
+    return mapped_rows, {
+        "mappedRows": len(mapped_rows),
+        "skippedMissingKey": skipped_missing_key,
+        "missingKeyExampleRows": missing_key_examples,
+        "duplicateKeys": sorted(duplicate_keys)[:10],
+    }
+
+
 def upsert_rows(conn, table: str, rows: list[dict[str, Any]], key: str):
     if not rows:
         return 0
@@ -476,50 +622,88 @@ def upsert_rows(conn, table: str, rows: list[dict[str, Any]], key: str):
     return len(rows)
 
 
-def migrate(spreadsheet_id: str, credentials_path: str, database_url: str, dry_run: bool):
+def migrate_from_reader(read_rows, database_url: str, dry_run: bool, validate_only: bool):
+    report = {}
+    if not validate_only and psycopg is None:
+        raise SystemExit("Missing psycopg. Install dependencies with: pip install -r requirements.txt")
+    conn = None if validate_only else psycopg.connect(database_url)
+    try:
+        for sheet_name, table_name, mapping, key in TABLES:
+            raw_rows = read_rows(sheet_name)
+            mapped_rows, sheet_report = mapped_rows_for_sheet(raw_rows, mapping, key)
+            report[sheet_name] = {
+                "table": table_name,
+                "rawRows": len(raw_rows),
+                **sheet_report,
+            }
+            if conn and not dry_run:
+                upsert_rows(conn, table_name, mapped_rows, key)
+        if conn:
+            if dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
+    finally:
+        if conn:
+            conn.close()
+    return report
+
+
+def migrate_from_google_sheets(spreadsheet_id: str, credentials_path: str, database_url: str, dry_run: bool):
+    if Credentials is None or build is None:
+        raise SystemExit("Missing Google API dependencies. Install dependencies with: pip install -r requirements.txt")
     credentials = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
     service = build("sheets", "v4", credentials=credentials)
-    report = {}
-    with psycopg.connect(database_url) as conn:
-        for sheet_name, table_name, mapping, key in TABLES:
-            raw_rows = read_sheet(service, spreadsheet_id, sheet_name)
-            mapped_rows = []
-            for raw in raw_rows:
-                mapped = {}
-                for source, target in mapping.items():
-                    parsed = parse_value(target, raw.get(source))
-                    if parsed is not None or target not in mapped:
-                        mapped[target] = parsed
-                if all(mapped.get(part) for part in key.split(",")):
-                    mapped_rows.append(mapped)
-            report[sheet_name] = len(mapped_rows)
-            if not dry_run:
-                upsert_rows(conn, table_name, mapped_rows, key)
-        if dry_run:
-            conn.rollback()
-        else:
-            conn.commit()
-    return report
+    return migrate_from_reader(
+        lambda sheet_name: read_sheet(service, spreadsheet_id, sheet_name),
+        database_url,
+        dry_run,
+        validate_only=False,
+    )
+
+
+def migrate_from_xlsx(xlsx_path: str, database_url: str | None, dry_run: bool, validate_only: bool):
+    workbook_values = read_xlsx_values(xlsx_path)
+    return migrate_from_reader(
+        lambda sheet_name: read_xlsx_sheet(workbook_values, sheet_name),
+        database_url or "",
+        dry_run,
+        validate_only,
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description="Migrate CoursePlatform Google Sheets data to Supabase/Postgres.")
+    parser.add_argument("--xlsx", default=os.getenv("COURSEPLATFORM_XLSX"), required=False)
     parser.add_argument("--spreadsheet-id", default=os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"), required=False)
     parser.add_argument("--credentials", default=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"), required=False)
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL"), required=False)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
 
-    if not args.spreadsheet_id:
+    if args.xlsx:
+        if not args.validate_only and not args.database_url:
+            raise SystemExit("Missing --database-url or DATABASE_URL. Use --validate-only to inspect the XLSX without Supabase.")
+    elif not args.spreadsheet_id:
         raise SystemExit("Missing --spreadsheet-id or GOOGLE_SHEETS_SPREADSHEET_ID.")
-    if not args.credentials:
+    elif not args.credentials:
         raise SystemExit("Missing --credentials or GOOGLE_APPLICATION_CREDENTIALS.")
-    if not args.database_url:
+    elif not args.database_url:
         raise SystemExit("Missing --database-url or DATABASE_URL.")
 
-    started = datetime.utcnow()
-    report = migrate(args.spreadsheet_id, args.credentials, args.database_url, args.dry_run)
-    print(json.dumps({"startedAt": started.isoformat(), "dryRun": args.dry_run, "rows": report}, indent=2))
+    started = datetime.now(timezone.utc)
+    if args.xlsx:
+        report = migrate_from_xlsx(args.xlsx, args.database_url, args.dry_run, args.validate_only)
+    else:
+        report = migrate_from_google_sheets(args.spreadsheet_id, args.credentials, args.database_url, args.dry_run)
+    print(json.dumps({
+        "startedAt": started.isoformat(),
+        "source": "xlsx" if args.xlsx else "google_sheets",
+        "dryRun": args.dry_run,
+        "validateOnly": args.validate_only,
+        "sheets": report,
+    }, indent=2))
 
 
 if __name__ == "__main__":
