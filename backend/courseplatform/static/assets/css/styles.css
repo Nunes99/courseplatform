@@ -22,6 +22,8 @@
   --radius: 8px;
   --radius-small: 8px;
   --max: 1240px;
+  --admin-sidebar-width: clamp(220px, 15vw, 290px);
+  --admin-gap: clamp(14px, 1.35vw, 26px);
 }
 
 :root[data-theme="dark"] {
@@ -288,6 +290,12 @@ img.header-avatar {
   min-height: calc(100vh - 68px);
   margin: 0 auto;
   padding: 30px 0 64px;
+}
+
+#adminApp.page-shell {
+  width: min(calc(100% - 32px), 1800px);
+  max-width: none;
+  padding-top: clamp(16px, 1.4vw, 28px);
 }
 
 .auth-shell {
@@ -2005,19 +2013,25 @@ input:focus, textarea:focus, select:focus {
 /* Admin */
 .admin-layout {
   display: grid;
-  grid-template-columns: 230px minmax(0,1fr);
-  gap: 28px;
+  grid-template-columns: var(--admin-sidebar-width) minmax(0, 1fr);
+  gap: var(--admin-gap);
+  min-height: calc(100vh - 112px);
+  align-items: start;
 }
 
 .admin-sidebar {
   position: sticky;
-  top: 94px;
+  top: 84px;
+  display: grid;
+  max-height: calc(100vh - 102px);
+  overflow: auto;
   align-self: start;
-  padding: 20px;
+  padding: 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
+  scrollbar-width: thin;
 }
 
 .admin-sidebar h2 {
@@ -2067,6 +2081,7 @@ input:focus, textarea:focus, select:focus {
   align-items: center;
   gap: 10px;
   margin-top: 5px;
+  min-height: 44px;
   padding: 10px 12px;
   border: 0;
   border-radius: var(--radius);
@@ -2089,6 +2104,11 @@ input:focus, textarea:focus, select:focus {
 
 .admin-page-heading { margin-top: 0; }
 
+.admin-main {
+  min-width: 0;
+  width: 100%;
+}
+
 .admin-heading-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2104,7 +2124,7 @@ input:focus, textarea:focus, select:focus {
 
 .admin-filter-bar {
   display: grid;
-  grid-template-columns: minmax(180px, .45fr) minmax(260px, 1fr);
+  grid-template-columns: minmax(190px, .45fr) minmax(320px, 1fr);
   gap: 12px;
   align-items: end;
   margin: 16px 0;
@@ -2128,12 +2148,12 @@ input:focus, textarea:focus, select:focus {
 }
 
 .course-list-filters {
-  grid-template-columns: minmax(260px, 1fr) minmax(140px, .25fr) minmax(170px, .3fr) auto;
+  grid-template-columns: minmax(320px, 1.3fr) minmax(150px, .35fr) minmax(190px, .45fr) auto;
 }
 
 .admin-course-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr));
   gap: 14px;
   margin-top: 16px;
 }
@@ -2292,7 +2312,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .admin-table-wrap {
-  max-height: 68vh;
+  max-height: min(72vh, 820px);
   overflow: auto;
   margin-top: 12px;
   border: 1px solid var(--line);
@@ -2307,7 +2327,7 @@ input:focus, textarea:focus, select:focus {
 
 .admin-table th,
 .admin-table td {
-  padding: 14px 16px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--line);
   text-align: left;
 }
@@ -2406,7 +2426,7 @@ input:focus, textarea:focus, select:focus {
 
 .course-admin-layout {
   display: grid;
-  grid-template-columns: minmax(280px, .7fr) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, .58fr) minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -2475,7 +2495,7 @@ input:focus, textarea:focus, select:focus {
 
 .admin-content-panel,
 .course-overview-form {
-  padding: 22px;
+  padding: clamp(18px, 1.4vw, 26px);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -2547,15 +2567,16 @@ input:focus, textarea:focus, select:focus {
 
 .course-module-list {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(520px, 100%), 1fr));
   gap: 12px;
-  max-height: 620px;
+  max-height: none;
   overflow: auto;
   padding-right: 4px;
 }
 
 .course-module-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: start;
   padding: 16px;
@@ -2576,7 +2597,7 @@ input:focus, textarea:focus, select:focus {
 
 .course-module-card dl {
   display: grid;
-  grid-template-columns: repeat(5, minmax(74px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 8px;
   grid-column: 1 / -1;
   margin: 0;
@@ -2722,14 +2743,15 @@ input:focus, textarea:focus, select:focus {
 
 .admin-video-list {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(520px, 100%), 1fr));
   gap: 12px;
   margin-top: 14px;
 }
 
 .admin-video-card {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 18px;
   padding: 18px;
   border: 1px solid var(--line);
@@ -2850,7 +2872,7 @@ input:focus, textarea:focus, select:focus {
 
 .student-admin-toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) repeat(3, minmax(150px, .8fr)) auto;
+  grid-template-columns: minmax(280px, 1.6fr) repeat(3, minmax(160px, .72fr)) auto;
   gap: 12px;
   align-items: end;
   margin: 16px 0;
@@ -2888,7 +2910,7 @@ input:focus, textarea:focus, select:focus {
 
 .student-admin-grid {
   display: grid;
-  grid-template-columns: repeat(2,minmax(0,1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
   gap: 14px 16px;
   margin-top: 12px;
 }
@@ -3175,6 +3197,17 @@ input:focus, textarea:focus, select:focus {
   font-weight: 800;
 }
 
+@media (min-width: 1500px) {
+  .admin-summary-grid,
+  .admin-content-overview {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+
+  .submission-columns {
+    grid-template-columns: minmax(0, 1fr) minmax(420px, .36fr);
+  }
+}
+
 @media (max-width: 1120px) {
   .admin-layout {
     grid-template-columns: 1fr;
@@ -3183,19 +3216,24 @@ input:focus, textarea:focus, select:focus {
 
   .admin-sidebar {
     position: static;
-    display: grid;
-    grid-template-columns: minmax(190px,1fr) repeat(5,minmax(120px,160px));
+    display: flex;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
     gap: 10px;
     align-items: center;
   }
 
   .admin-sidebar-heading {
+    min-width: 230px;
     margin-bottom: 0;
     padding-bottom: 0;
     border-bottom: 0;
   }
 
   .admin-nav {
+    flex: 0 0 auto;
+    min-width: 132px;
     margin-top: 0;
     justify-content: center;
   }
@@ -3410,10 +3448,13 @@ input:focus, textarea:focus, select:focus {
   }
 
   .admin-sidebar {
+    display: grid;
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
   .admin-nav {
+    width: 100%;
     justify-content: flex-start;
   }
 

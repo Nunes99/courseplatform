@@ -40,7 +40,8 @@ const state = {
   courseFilters: {
     query: '',
     status: 'ALL',
-    content: 'ALL'
+    content: 'ALL',
+    showDeletedItems: false
   },
   selectedSubmission: null,
   studentFilters: {
@@ -2461,6 +2462,9 @@ function renderCourseList() {
   root.querySelectorAll('[data-open-course-detail]').forEach((button) => {
     button.addEventListener('click', () => openCourseDetail(button.dataset.openCourseDetail));
   });
+  root.querySelectorAll('[data-restore-course]').forEach((button) => {
+    button.addEventListener('click', () => restoreCourse(button.dataset.restoreCourse));
+  });
 
   reportHeight();
 }
@@ -2503,6 +2507,7 @@ function filteredAdminCourses() {
 function courseListCardTemplate(item) {
   const course = item.course || {};
   const status = course.status || 'ACTIVE';
+  const isDeleted = status === 'DELETED';
 
   return `
     <article class="admin-course-card">
@@ -2529,10 +2534,17 @@ function courseListCardTemplate(item) {
         </div>
       </dl>
       <div class="admin-course-card-actions">
-        <button class="button button-primary" type="button"
-          data-open-course-detail="${escapeHtml(course.courseId || '')}">
-          Abrir detalhes
-        </button>
+        ${isDeleted ? `
+          <button class="button button-primary" type="button"
+            data-restore-course="${escapeHtml(course.courseId || '')}">
+            Restaurar curso
+          </button>
+        ` : `
+          <button class="button button-primary" type="button"
+            data-open-course-detail="${escapeHtml(course.courseId || '')}">
+            Abrir detalhes
+          </button>
+        `}
       </div>
     </article>
   `;
@@ -2568,6 +2580,8 @@ function renderCourses() {
   }
   const lessons = (state.courseStructure?.lessons || []).filter(({ lesson }) => lesson?.status !== 'DELETED');
   const groups = (state.groups || []).filter(({ group }) => group?.status !== 'DELETED');
+  const visibleLessons = state.courseFilters.showDeletedItems ? (state.courseStructure?.lessons || []) : lessons;
+  const visibleGroups = state.courseFilters.showDeletedItems ? (state.groups || []) : groups;
   const deletedLessons = (state.courseStructure?.lessons || []).filter(({ lesson }) => lesson?.status === 'DELETED').length;
   const deletedGroups = (state.groups || []).filter(({ group }) => group?.status === 'DELETED').length;
   const totalContent = lessons.reduce((sum, item) => sum + (item.content?.length || 0), 0);
@@ -2614,7 +2628,7 @@ function renderCourses() {
       <button type="button" class="${state.courseView === 'groups' ? 'is-active' : ''}" data-course-view="groups">Grupos</button>
     </section>
 
-    ${courseManagementPanel(course, lessons, groups)}
+    ${courseManagementPanel(course, visibleLessons, visibleGroups, { deletedLessons, deletedGroups })}
   `;
 
   document.querySelector('#backToCourseList').addEventListener('click', () => {
@@ -2641,17 +2655,34 @@ function renderCourses() {
   root.querySelectorAll('[data-delete-lesson]').forEach((button) => {
     button.addEventListener('click', () => deleteLesson(button.dataset.deleteLesson));
   });
+  root.querySelectorAll('[data-restore-lesson]').forEach((button) => {
+    button.addEventListener('click', () => restoreLesson(button.dataset.restoreLesson));
+  });
   root.querySelectorAll('[data-edit-group]').forEach((button) => {
     button.addEventListener('click', () => showGroupDialog(button.dataset.editGroup));
   });
   root.querySelectorAll('[data-delete-group]').forEach((button) => {
     button.addEventListener('click', () => deleteGroup(button.dataset.deleteGroup));
   });
+  root.querySelectorAll('[data-restore-group]').forEach((button) => {
+    button.addEventListener('click', () => restoreGroup(button.dataset.restoreGroup));
+  });
+  document.querySelector('#toggleDeletedItems')?.addEventListener('click', () => {
+    state.courseFilters.showDeletedItems = !state.courseFilters.showDeletedItems;
+    renderCourses();
+  });
 
   reportHeight();
 }
 
-function courseManagementPanel(course, lessons, groups) {
+function courseManagementPanel(course, lessons, groups, meta = {}) {
+  const deletedTotal = Number(meta.deletedLessons || 0) + Number(meta.deletedGroups || 0);
+  const deletedToggle = deletedTotal ? `
+    <button class="button button-secondary" id="toggleDeletedItems" type="button">
+      ${state.courseFilters.showDeletedItems ? 'Ocultar eliminados' : `Mostrar eliminados (${deletedTotal})`}
+    </button>
+  ` : '';
+
   if (state.courseView === 'modules') {
     return `
       <section class="admin-content-panel">
@@ -2660,7 +2691,10 @@ function courseManagementPanel(course, lessons, groups) {
             <p class="eyebrow">Nivel 2</p>
             <h2>Modulos do curso</h2>
           </div>
-          <button class="button button-primary" id="newLesson" type="button">Novo modulo</button>
+          <div class="admin-heading-actions">
+            ${deletedToggle}
+            <button class="button button-primary" id="newLesson" type="button">Novo modulo</button>
+          </div>
         </div>
         <div class="course-module-list course-module-list-clean">
           ${lessons.length ? lessons.map(moduleCardTemplate).join('') : `
@@ -2679,7 +2713,10 @@ function courseManagementPanel(course, lessons, groups) {
             <p class="eyebrow">Nivel 3</p>
             <h2>Grupos e estudantes</h2>
           </div>
-          <button class="button button-primary" id="newGroup" type="button">Nova turma</button>
+          <div class="admin-heading-actions">
+            ${deletedToggle}
+            <button class="button button-primary" id="newGroup" type="button">Nova turma</button>
+          </div>
         </div>
         <div class="course-module-list course-module-list-clean">
           ${groups.length ? groups.map(groupCardTemplate).join('') : `
@@ -2746,6 +2783,7 @@ function moduleCardTemplate(item) {
   const lesson = item.lesson || item;
   const contentCount = item.content?.length || 0;
   const questionCount = item.questions?.length || 0;
+  const isDeleted = lesson.status === 'DELETED';
 
   return `
     <article class="course-module-card">
@@ -2762,18 +2800,29 @@ function moduleCardTemplate(item) {
         <div><dt>Questoes</dt><dd>${questionCount}</dd></div>
       </dl>
       <div class="admin-row-actions">
-        <button class="button button-secondary button-small" type="button"
-          data-manage-lesson-access="${escapeHtml(lesson.lessonId)}">
-          Gerir acesso
-        </button>
-        <button class="button button-secondary button-small" type="button"
-          data-edit-lesson="${escapeHtml(lesson.lessonId)}">
-          Editar modulo
-        </button>
-        <button class="button button-danger button-small" type="button"
-          data-delete-lesson="${escapeHtml(lesson.lessonId)}">
-          Eliminar
-        </button>
+        ${isDeleted ? `
+          <button class="button button-primary button-small" type="button"
+            data-restore-lesson="${escapeHtml(lesson.lessonId)}">
+            Restaurar
+          </button>
+          <button class="button button-secondary button-small" type="button"
+            data-edit-lesson="${escapeHtml(lesson.lessonId)}">
+            Rever dados
+          </button>
+        ` : `
+          <button class="button button-secondary button-small" type="button"
+            data-manage-lesson-access="${escapeHtml(lesson.lessonId)}">
+            Gerir acesso
+          </button>
+          <button class="button button-secondary button-small" type="button"
+            data-edit-lesson="${escapeHtml(lesson.lessonId)}">
+            Editar modulo
+          </button>
+          <button class="button button-danger button-small" type="button"
+            data-delete-lesson="${escapeHtml(lesson.lessonId)}">
+            Eliminar
+          </button>
+        `}
       </div>
     </article>
   `;
@@ -2781,6 +2830,7 @@ function moduleCardTemplate(item) {
 
 function groupCardTemplate(item) {
   const group = item.group || item;
+  const isDeleted = group.status === 'DELETED';
   return `
     <article class="course-module-card">
       <div>
@@ -2796,14 +2846,25 @@ function groupCardTemplate(item) {
         <div><dt>Estado</dt><dd>${escapeHtml(statusLabel(group.status))}</dd></div>
       </dl>
       <div class="admin-row-actions">
-        <button class="button button-secondary button-small" type="button"
-          data-edit-group="${escapeHtml(group.groupId)}">
-          Gerir turma
-        </button>
-        <button class="button button-danger button-small" type="button"
-          data-delete-group="${escapeHtml(group.groupId)}">
-          Eliminar
-        </button>
+        ${isDeleted ? `
+          <button class="button button-primary button-small" type="button"
+            data-restore-group="${escapeHtml(group.groupId)}">
+            Restaurar
+          </button>
+          <button class="button button-secondary button-small" type="button"
+            data-edit-group="${escapeHtml(group.groupId)}">
+            Rever dados
+          </button>
+        ` : `
+          <button class="button button-secondary button-small" type="button"
+            data-edit-group="${escapeHtml(group.groupId)}">
+            Gerir turma
+          </button>
+          <button class="button button-danger button-small" type="button"
+            data-delete-group="${escapeHtml(group.groupId)}">
+            Eliminar
+          </button>
+        `}
       </div>
     </article>
   `;
@@ -2961,6 +3022,26 @@ async function deleteCurrentCourse() {
   }
 }
 
+async function restoreCourse(courseId) {
+  const found = (state.courses || []).find((item) => item.course?.courseId === courseId);
+  const course = found?.course;
+  if (!course) return;
+  if (!confirmAdminAction(`Restaurar o curso "${course.title || course.courseCode || course.courseId}"?`)) return;
+
+  try {
+    const result = await api.adminSaveCourse({
+      ...course,
+      status: 'ACTIVE'
+    });
+    state.selectedCourseId = result.course?.courseId || course.courseId;
+    state.courseMode = 'detail';
+    showToast('Curso restaurado.', 'success');
+    await loadCourses();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
 async function deleteLesson(lessonId) {
   const found = (state.courseStructure?.lessons || []).find((item) => item.lesson?.lessonId === lessonId);
   const lesson = found?.lesson;
@@ -2973,6 +3054,24 @@ async function deleteLesson(lessonId) {
       status: 'DELETED'
     });
     showToast('Modulo eliminado.', 'success');
+    await loadCourses();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+async function restoreLesson(lessonId) {
+  const found = (state.courseStructure?.lessons || []).find((item) => item.lesson?.lessonId === lessonId);
+  const lesson = found?.lesson;
+  if (!lesson) return;
+  if (!confirmAdminAction(`Restaurar o modulo "${lesson.title}"?`)) return;
+
+  try {
+    await api.adminSaveLesson({
+      ...lesson,
+      status: 'ACTIVE'
+    });
+    showToast('Modulo restaurado.', 'success');
     await loadCourses();
   } catch (error) {
     handleAdminError(error);
@@ -2992,6 +3091,24 @@ async function deleteGroup(groupId) {
       studentIds: []
     });
     showToast('Turma eliminada.', 'success');
+    await loadCourses();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+async function restoreGroup(groupId) {
+  const found = (state.groups || []).find((item) => item.group?.groupId === groupId);
+  const group = found?.group;
+  if (!group) return;
+  if (!confirmAdminAction(`Restaurar a turma "${group.name}"?`)) return;
+
+  try {
+    await api.adminSaveGroup({
+      ...group,
+      status: 'ACTIVE'
+    });
+    showToast('Turma restaurada.', 'success');
     await loadCourses();
   } catch (error) {
     handleAdminError(error);
