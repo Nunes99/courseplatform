@@ -1,11 +1,14 @@
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from .actions import ApiError, dispatch, public_error
 from .config import get_settings
 
 settings = get_settings()
+PUBLIC_DIR = Path(__file__).resolve().parents[2] / "public"
 
 app = FastAPI(title="CoursePlatform Python API", version=settings.app_version)
 
@@ -20,6 +23,8 @@ app.add_middleware(
 
 async def handle_get_action(request: Request):
     payload = dict(request.query_params)
+    if request.url.path == "/" and not payload.get("action"):
+        return static_file_response("index.html")
     action = payload.get("action", "health")
     try:
         return JSONResponse(dispatch(action, payload))
@@ -46,3 +51,28 @@ async def handle_post_action(request: Request):
 for route_path in ("/", "/api", "/api/index"):
     app.add_api_route(route_path, handle_get_action, methods=["GET"])
     app.add_api_route(route_path, handle_post_action, methods=["POST"])
+
+
+def static_file_response(raw_path: str):
+    path = (raw_path or "index.html").lstrip("/")
+    aliases = {
+        "admin": "admin.html",
+        "verify": "verify.html",
+        "connection-test": "connection-test.html",
+    }
+    path = aliases.get(path, path)
+    candidate = (PUBLIC_DIR / path).resolve()
+    public_root = PUBLIC_DIR.resolve()
+    if not str(candidate).startswith(str(public_root)) or not candidate.is_file():
+        fallback = public_root / "404.html"
+        if fallback.is_file():
+            return FileResponse(fallback, status_code=404)
+        return JSONResponse({"success": False, "error": {"code": "NOT_FOUND", "message": "Recurso nao encontrado."}}, status_code=404)
+    return FileResponse(candidate)
+
+
+async def handle_static_file(static_path: str):
+    return static_file_response(static_path)
+
+
+app.add_api_route("/{static_path:path}", handle_static_file, methods=["GET"])
