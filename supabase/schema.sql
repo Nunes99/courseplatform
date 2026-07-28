@@ -360,3 +360,34 @@ alter table courseplatform.schema_guide enable row level security;
 grant usage on schema courseplatform to service_role;
 grant all on all tables in schema courseplatform to service_role;
 alter default privileges in schema courseplatform grant all on tables to service_role;
+
+-- Public management views.
+-- The source of truth stays in courseplatform.*; these views make the data easy to
+-- inspect from Supabase screens that default to the public schema.
+create or replace view public.students as select * from courseplatform.students;
+create or replace view public.admins as select * from courseplatform.admins;
+create or replace view public.sessions as select * from courseplatform.sessions;
+create or replace view public.courses as select * from courseplatform.courses;
+create or replace view public.lessons as select * from courseplatform.lessons;
+create or replace view public.lesson_content as select * from courseplatform.lesson_content;
+create or replace view public.questions as select * from courseplatform.questions;
+create or replace view public.question_options as select * from courseplatform.question_options;
+create or replace view public.groups as select * from courseplatform.groups;
+create or replace view public.enrollments as select * from courseplatform.enrollments;
+create or replace view public.group_members as select * from courseplatform.group_members;
+create or replace view public.lesson_progress as select * from courseplatform.lesson_progress;
+create or replace view public.attempts as select * from courseplatform.attempts;
+create or replace view public.answers as select * from courseplatform.answers;
+create or replace view public.files as select * from courseplatform.files;
+create or replace view public.reviews as select * from courseplatform.reviews;
+create or replace view public.certificates as select * from courseplatform.certificates;
+create or replace view public.audit_log as select * from courseplatform.audit_log;
+create or replace view public.settings as select * from courseplatform.settings;
+create or replace view public.lists as select * from courseplatform.lists;
+create or replace view public.student_import as select * from courseplatform.student_import;
+create or replace view public.student_import_results as select * from courseplatform.student_import_results;
+create or replace view public.new_credentials as select * from courseplatform.new_credentials;
+create or replace view public.media_content as select * from courseplatform.media_content;
+create or replace view public.schema_guide as select * from courseplatform.schema_guide;
+
+grant select on all tables in schema public to service_role;
