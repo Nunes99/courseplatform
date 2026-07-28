@@ -455,6 +455,7 @@ def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None
 
 
 def health(_: dict[str, Any]):
+    settings = get_settings()
     db_ok = False
     db_error = ""
     try:
@@ -463,13 +464,19 @@ def health(_: dict[str, Any]):
     except Exception as error:
         db_ok = False
         db_error = error.__class__.__name__
+    password_pepper_configured = configured_secret(settings.password_pepper)
+    admin_key_configured = configured_secret(settings.admin_master_key_hash)
     return success({
-        "version": get_settings().app_version,
+        "version": settings.app_version,
         "database": db_ok,
-        "databaseConfigured": bool(get_settings().database_url),
+        "databaseConfigured": bool(settings.database_url),
         "databaseError": "" if db_ok else db_error,
-        "authConfigured": configured_secret(get_settings().password_pepper)
-        and configured_secret(get_settings().admin_master_key_hash),
+        "authConfigured": password_pepper_configured and admin_key_configured,
+        "authDiagnostics": {
+            "passwordPepperConfigured": password_pepper_configured,
+            "adminMasterKeyHashConfigured": admin_key_configured,
+        },
+        "databaseDiagnostics": settings.database_diagnostics,
     })
 
 
