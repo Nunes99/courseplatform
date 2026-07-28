@@ -1,7 +1,7 @@
 import os
 import re
 from functools import lru_cache
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 try:
     from dotenv import load_dotenv
@@ -23,6 +23,30 @@ def _fix_invalid_percent_encoding(value: str) -> str:
     return re.sub(r"%(?![0-9A-Fa-f]{2})", "%25", value)
 
 
+def _normalize_postgres_query(query: str) -> str:
+    allowed = {
+        "application_name",
+        "channel_binding",
+        "connect_timeout",
+        "gssencmode",
+        "keepalives",
+        "keepalives_count",
+        "keepalives_idle",
+        "keepalives_interval",
+        "options",
+        "sslcert",
+        "sslcompression",
+        "sslkey",
+        "sslmode",
+        "sslrootcert",
+        "target_session_attrs",
+    }
+    pairs = [(key, value) for key, value in parse_qsl(query, keep_blank_values=True) if key in allowed]
+    if not any(key == "sslmode" for key, _ in pairs):
+        pairs.append(("sslmode", "require"))
+    return urlencode(pairs)
+
+
 def normalize_database_url(value: str) -> str:
     text = (value or "").strip()
     if not text:
@@ -31,11 +55,12 @@ def normalize_database_url(value: str) -> str:
         return text
 
     parts = urlsplit(text)
+    query = _normalize_postgres_query(parts.query)
     userinfo, separator, hostinfo = parts.netloc.rpartition("@")
     if separator:
         userinfo = _fix_invalid_percent_encoding(userinfo)
-        return urlunsplit((parts.scheme, f"{userinfo}@{hostinfo}", parts.path, parts.query, parts.fragment))
-    return text
+        return urlunsplit((parts.scheme, f"{userinfo}@{hostinfo}", parts.path, query, parts.fragment))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 def _env(name: str) -> str:
