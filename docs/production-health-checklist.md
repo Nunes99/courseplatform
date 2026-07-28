@@ -1,6 +1,6 @@
 # Checklist de producao
 
-Use esta checklist quando o endpoint `/api?action=health` nao devolver `database: true` e `authConfigured: true`.
+Use esta checklist quando o endpoint `/api/index?action=health` nao devolver `database: true` e `authConfigured: true`.
 
 ## Resultado esperado
 

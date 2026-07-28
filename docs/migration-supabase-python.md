@@ -54,7 +54,7 @@ python scripts/migrate_sheets_to_supabase.py --xlsx "C:\Users\manyu\Downloads\Co
 Health check:
 
 ```text
-https://courseplatform-mauve.vercel.app/api?action=health
+https://courseplatform-mauve.vercel.app/api/index?action=health
 ```
 
 Resultado esperado:

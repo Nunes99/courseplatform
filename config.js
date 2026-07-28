@@ -2,8 +2,8 @@ const COURSE_PLATFORM_API_URL =
   window.COURSE_PLATFORM_API_URL ||
   localStorage.getItem('coursePlatformApiUrl') ||
   (window.location.hostname.endsWith('.vercel.app')
-    ? `${window.location.origin}/api`
-    : 'https://courseplatform-mauve.vercel.app/api');
+    ? `${window.location.origin}/api/index`
+    : 'https://courseplatform-mauve.vercel.app/api/index');
 
 window.COURSE_PLATFORM_CONFIG = Object.freeze({
   apiUrl: COURSE_PLATFORM_API_URL,

@@ -112,7 +112,7 @@ export class CoursePlatformApi {
       result = await response.json();
     } catch {
       throw new ApiError(
-        'A API nao devolveu JSON valido. Confirme que a URL aponta para /api no backend Python.',
+        'A API nao devolveu JSON valido. Confirme que a URL aponta para /api/index no backend Python.',
         'INVALID_API_RESPONSE'
       );
     }
