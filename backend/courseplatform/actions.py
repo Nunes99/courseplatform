@@ -457,17 +457,26 @@ def health(_: dict[str, Any]):
     settings = get_settings()
     db_ok = False
     db_error = ""
+    db_error_hint = ""
     try:
         row = fetch_one("select 1 as ok")
         db_ok = bool(row and row["ok"] == 1)
     except Exception as error:
         db_ok = False
         db_error = error.__class__.__name__
+        error_text = str(error).lower()
+        if "ecircuitbreaker" in error_text:
+            db_error_hint = "Supabase pooler bloqueou novas conexoes por muitas falhas de autenticacao. Aguarde alguns minutos e confirme usuario/senha Postgres."
+        elif "authentication" in error_text or "password" in error_text:
+            db_error_hint = "Falha de autenticacao Postgres. Confira POSTGRES_USER/POSTGRES_PASSWORD ou DATABASE_URL."
+        elif "timeout" in error_text or "timed out" in error_text:
+            db_error_hint = "Timeout de conexao. Confira host, porta, rede e se o projeto Supabase esta ativo."
     return success({
         "version": settings.app_version,
         "database": db_ok,
         "databaseConfigured": bool(settings.database_url),
         "databaseError": "" if db_ok else db_error,
+        "databaseErrorHint": "" if db_ok else db_error_hint,
         "authConfigured": db_ok,
         "authDiagnostics": {
             "mode": "supabase_postgres_bcrypt",

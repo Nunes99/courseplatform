@@ -18,7 +18,6 @@ Use esta checklist quando o endpoint `/api?action=health` nao devolver `database
 
 ## Variaveis obrigatorias no Vercel
 
-- `DATABASE_URL`
 - `DEFAULT_COURSE_ID`
 - `SESSION_HOURS`
 - `DB_CONNECT_TIMEOUT`
@@ -27,17 +26,51 @@ Use esta checklist quando o endpoint `/api?action=health` nao devolver `database
 
 Nao use `PASSWORD_PEPPER` nem `ADMIN_MASTER_KEY_HASH`. A autenticacao atual usa hashes bcrypt por utilizador no Supabase/Postgres.
 
-## DATABASE_URL Supabase
+## Conexao Supabase/Postgres
 
-Formato recomendado:
+Pode usar uma destas opcoes.
+
+Opcao 1, recomendada:
+
+- `DATABASE_URL`
+
+Formato:
+
 
 ```text
 postgresql://postgres.PROJECT_REF:PASSWORD_ENCODED@aws-0-eu-west-1.pooler.supabase.com:6543/postgres?sslmode=require
 ```
 
+Opcao 2, variaveis separadas:
+
+- `POSTGRES_HOST`
+- `POSTGRES_DATABASE`
+- `POSTGRES_USER`
+- `POSTGRES_PASSWORD`
+- `POSTGRES_PORT`
+
+Opcao 3, fallback:
+
+- `SUPABASE_URL`
+- `POSTGRES_PASSWORD`
+
+Com `SUPABASE_URL + POSTGRES_PASSWORD`, a API tenta usar o host direto `db.PROJECT_REF.supabase.co:5432`.
+
 Se a senha tiver `%`, o valor deve estar codificado como `%25`. Exemplo: uma senha que comeca por `%abc` deve entrar na URL como `%25abc`.
 
 O health atual tambem normaliza `%` bruto em runtime, mas a configuracao de producao deve ficar corretamente codificada no Vercel.
+
+Estas variaveis nao substituem a senha Postgres para esta API Python:
+
+- `SUPABASE_JWT_SECRET`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_PUBLISHABLE_KEY`
+- `SUPABASE_SECRET_KEY`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+
+Elas podem ser uteis para Supabase Auth/Storage/REST, mas a camada atual usa Postgres direto com `psycopg`.
 
 ## Diagnostico pelo health
 
@@ -50,6 +83,7 @@ O endpoint devolve:
 - `databaseDiagnostics.port`
 - `databaseDiagnostics.database`
 - `databaseDiagnostics.sslmode`
+- `databaseDiagnostics.source`
 - `databaseDiagnostics.issues`
 
 Esses campos nao mostram segredos; servem para confirmar se o ambiente publicado recebeu as variaveis certas.
