@@ -174,6 +174,10 @@ export class CoursePlatformApi {
     return this.studentRequest('getDashboard', { courseId });
   }
 
+  studentHome(courseId = this.courseId) {
+    return this.studentRequest('getStudentHome', { courseId });
+  }
+
   myCourses() {
     return this.studentRequest('getMyCourses', { courseId: this.courseId });
   }

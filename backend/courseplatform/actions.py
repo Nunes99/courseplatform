@@ -458,19 +458,60 @@ def validate_session(token: str, expected_type: str):
     return session
 
 
-def student_context(payload: dict[str, Any]):
-    session = validate_session(payload.get("sessionToken", ""), "STUDENT")
-    student = fetch_one(
+def validate_session_with_conn(conn, token: str, expected_type: str):
+    if not token:
+        raise ApiError("SESSION_REQUIRED", "A sessao nao foi informada.")
+    token_hash = hash_secret(token)
+    session = conn.execute(
+        "select * from courseplatform.sessions where session_token = %s",
+        (token_hash,),
+    ).fetchone()
+    if not session or not session.get("active"):
+        raise ApiError("INVALID_SESSION", "A sessao e invalida ou foi encerrada.")
+    if session["expires_at"] <= utc_now():
+        conn.execute(
+            "update courseplatform.sessions set active = false, revoked_at = now() where session_token = %s",
+            (token_hash,),
+        )
+        conn.commit()
+        raise ApiError("SESSION_EXPIRED", "A sessao expirou. Inicie sessao novamente.")
+    is_admin = str(session["subject_id"]).startswith("ADMIN:")
+    if expected_type == "ADMIN" and not is_admin:
+        raise ApiError("ADMIN_SESSION_REQUIRED", "E necessaria uma sessao administrativa.")
+    if expected_type == "STUDENT" and is_admin:
+        raise ApiError("STUDENT_SESSION_REQUIRED", "E necessaria uma sessao de estudante.")
+    return session
+
+
+def require_session_token(payload: dict[str, Any], key: str = "sessionToken") -> str:
+    token = payload.get(key, "")
+    if not token:
+        raise ApiError("SESSION_REQUIRED", "A sessao nao foi informada.")
+    return token
+
+
+def student_context_with_conn(conn, payload: dict[str, Any]):
+    session = validate_session_with_conn(conn, require_session_token(payload), "STUDENT")
+    student = conn.execute(
         "select * from courseplatform.students where student_id = %s",
         (session["subject_id"],),
-    )
+    ).fetchone()
     if not student or student.get("status") != "ACTIVE":
         raise ApiError("STUDENT_NOT_ACTIVE", "A conta do estudante nao esta ativa.")
     return session, student
 
 
+def student_context(payload: dict[str, Any]):
+    require_session_token(payload)
+    with connection() as conn:
+        return student_context_with_conn(conn, payload)
+
+
 def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None):
-    session = validate_session(payload.get("adminToken", ""), "ADMIN")
+    token = payload.get("adminToken", "")
+    if not token:
+        raise ApiError("ADMIN_SESSION_REQUIRED", "E necessaria uma sessao administrativa.")
+    session = validate_session(token, "ADMIN")
     admin_id = str(session["subject_id"]).replace("ADMIN:", "", 1)
     admin = fetch_one(
         "select * from courseplatform.admins where admin_id = %s",
@@ -593,9 +634,20 @@ def read_media_config(course_id: str):
         return {"logoUrl": "", "videos": []}
 
 
-def student_media_config(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
+def read_media_config_with_conn(conn, course_id: str):
+    key = f"MEDIA_CONFIG:{course_id or get_settings().default_course_id}"
+    row = conn.execute("select value from courseplatform.settings where key = %s", (key,)).fetchone()
+    if not row:
+        row = conn.execute("select value from courseplatform.settings where key = 'MEDIA_CONFIG'").fetchone()
+    if not row or not row.get("value"):
+        return {"logoUrl": "", "videos": []}
+    try:
+        return json.loads(row["value"])
+    except json.JSONDecodeError:
+        return {"logoUrl": "", "videos": []}
+
+
+def student_visible_media(media: dict[str, Any], student: dict[str, Any]):
     email = normalize_email(student.get("email") or "")
     videos = []
     for video in media.get("videos", []):
@@ -608,7 +660,13 @@ def student_media_config(payload: dict[str, Any]):
             videos.append({**video, "allowedEmails": [email]})
         else:
             videos.append({**video, "allowedEmails": []})
-    return success({"mediaConfig": {**media, "videos": videos}})
+    return {**media, "videos": videos}
+
+
+def student_media_config(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
+    return success({"mediaConfig": student_visible_media(media, student)})
 
 
 def public_media_config(payload: dict[str, Any]):
@@ -775,30 +833,70 @@ def admin_me(payload: dict[str, Any]):
 
 
 def my_courses(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    rows = fetch_all(
+    require_session_token(payload)
+    with connection() as conn:
+        _, student = student_context_with_conn(conn, payload)
+        rows = student_courses_rows(conn, student["student_id"])
+    return success({"student": public_student(student), "courses": student_courses_payload(rows)})
+
+
+def student_courses_rows(conn, student_id: str):
+    return conn.execute(
         """
-        select e.*, c.*, g.name as group_name, g.start_date, g.end_date
+        select
+          e.enrollment_id, e.student_id, e.course_id as enrollment_course_id,
+          e.group_id, e.status as enrollment_status, e.enrolled_at, e.completed_at,
+          e.progress_percent, e.final_score, e.certificate_id,
+          c.course_id, c.course_code, c.title, c.description, c.total_hours,
+          c.passing_score, c.status as course_status, c.created_at, c.updated_at,
+          g.name as group_name, g.start_date, g.end_date,
+          (
+            select count(*)
+            from courseplatform.lessons l
+            where l.course_id = c.course_id and l.status = 'ACTIVE'
+          ) as lesson_count
         from courseplatform.enrollments e
         join courseplatform.courses c on c.course_id = e.course_id
         left join courseplatform.groups g on g.group_id = e.group_id
         where e.student_id = %s and c.status <> 'DELETED'
         order by c.title
         """,
-        (student["student_id"],),
-    )
-    return success({"courses": [{"course": public_course(row), "enrollment": public_enrollment(row), "group": {"name": row.get("group_name"), "startDate": iso(row.get("start_date")), "endDate": iso(row.get("end_date"))} if row.get("group_name") else None} for row in rows]})
+        (student_id,),
+    ).fetchall()
 
 
-def dashboard(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    enrollment = fetch_one(
+def student_courses_payload(rows: list[dict[str, Any]]):
+    courses = []
+    for row in rows:
+        enrollment_row = {
+            **row,
+            "course_id": row.get("enrollment_course_id"),
+            "status": row.get("enrollment_status"),
+        }
+        course_row = {
+            **row,
+            "status": row.get("course_status"),
+        }
+        courses.append({
+            "course": public_course(course_row),
+            "enrollment": public_enrollment(enrollment_row),
+            "group": {
+                "name": row.get("group_name"),
+                "startDate": iso(row.get("start_date")),
+                "endDate": iso(row.get("end_date")),
+            } if row.get("group_name") else None,
+            "lessonCount": int(row.get("lesson_count") or 0),
+        })
+    return courses
+
+
+def dashboard_payload(conn, student: dict[str, Any], course_id: str):
+    enrollment = conn.execute(
         "select * from courseplatform.enrollments where student_id = %s and course_id = %s",
         (student["student_id"], course_id),
-    )
-    course = fetch_one("select * from courseplatform.courses where course_id = %s", (course_id,))
-    lessons = fetch_all(
+    ).fetchone()
+    course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+    lessons = conn.execute(
         """
         select l.*, p.progress_id, p.status as progress_status, p.score, p.attempt_count,
                p.unlocked_at, p.started_at, p.submitted_at, p.approved_at,
@@ -820,8 +918,8 @@ def dashboard(payload: dict[str, Any]):
         order by l.lesson_number
         """,
         (student["student_id"], student["student_id"], course_id),
-    )
-    return success({
+    ).fetchall()
+    return {
         "student": public_student(student),
         "course": public_course(course),
         "enrollment": public_enrollment(enrollment),
@@ -856,7 +954,34 @@ def dashboard(payload: dict[str, Any]):
             }
             for row in lessons
         ],
+    }
+
+
+def student_home(payload: dict[str, Any]):
+    require_session_token(payload)
+    with connection() as conn:
+        _, student = student_context_with_conn(conn, payload)
+        course_rows = student_courses_rows(conn, student["student_id"])
+        courses = student_courses_payload(course_rows)
+        requested_course_id = payload.get("courseId") or get_settings().default_course_id
+        available_course_ids = [item["course"]["courseId"] for item in courses if item.get("course")]
+        selected_course_id = requested_course_id if requested_course_id in available_course_ids else (available_course_ids[0] if available_course_ids else requested_course_id)
+        dashboard_data = dashboard_payload(conn, student, selected_course_id)
+        media = read_media_config_with_conn(conn, selected_course_id)
+    return success({
+        "student": public_student(student),
+        "courses": courses,
+        "selectedCourseId": selected_course_id,
+        "dashboard": dashboard_data,
+        "mediaConfig": student_visible_media(media, student),
     })
+
+
+def dashboard(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    with connection() as conn:
+        return success(dashboard_payload(conn, student, course_id))
 
 
 def get_lesson(payload: dict[str, Any]):
@@ -2187,6 +2312,7 @@ ACTIONS = {
     "adminListSubmissions": admin_list_submissions,
     "adminListPendingSubmissions": admin_list_submissions,
     "getDashboard": dashboard,
+    "getStudentHome": student_home,
     "getMyCourses": my_courses,
     "getLesson": get_lesson,
     "getAttemptStatus": attempt_status,

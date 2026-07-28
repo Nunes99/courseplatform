@@ -60,7 +60,7 @@ async function initialize() {
     return;
   }
 
-  await loadPublicMediaConfig();
+  setMediaConfig(localMediaConfig());
   applyBrandLogo();
 
   headerUser.addEventListener('click', openProfileFromHeader);
@@ -79,6 +79,7 @@ async function initialize() {
 
   if (!api.hasStudentSession()) {
     renderLogin();
+    loadPublicMediaConfig().then(applyBrandLogo);
     return;
   }
 
@@ -399,17 +400,15 @@ async function renderDashboard() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar o curso…');
 
-  const courseBundle = await api.myCourses();
-  state.myCourses = courseBundle.courses || [];
-  if (!state.selectedCourseId || !state.myCourses.some((item) => item.course.courseId === state.selectedCourseId)) {
-    state.selectedCourseId = state.myCourses[0]?.course?.courseId || config.courseId || '';
-    localStorage.setItem('courseSelectedCourseId', state.selectedCourseId);
-  }
-
-  const dashboard = await api.dashboard(state.selectedCourseId);
-  state.dashboard = dashboard;
-  await loadStudentMediaConfig();
+  const home = await api.studentHome(state.selectedCourseId);
+  state.myCourses = home.courses || [];
+  state.selectedCourseId = home.selectedCourseId || state.selectedCourseId || config.courseId || '';
+  localStorage.setItem('courseSelectedCourseId', state.selectedCourseId);
+  setMediaConfig(home.mediaConfig || {});
   applyBrandLogo();
+
+  const dashboard = home.dashboard || {};
+  state.dashboard = dashboard;
 
   const greeting = studentGreeting(dashboard.student.fullName);
   headerUser.innerHTML = profileAvatarTemplate(dashboard.student, 'header-avatar');
@@ -616,9 +615,12 @@ async function renderProfile() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar perfil...');
 
-  const courseBundle = await api.myCourses();
-  state.myCourses = courseBundle.courses || [];
-  const student = courseBundle.student || state.dashboard?.student || {};
+  let courseBundle = null;
+  if (!state.dashboard?.student || !state.myCourses.length) {
+    courseBundle = await api.myCourses();
+    state.myCourses = courseBundle.courses || [];
+  }
+  const student = courseBundle?.student || state.dashboard?.student || {};
   headerUser.innerHTML = profileAvatarTemplate(student, 'header-avatar');
   headerUser.title = 'Editar perfil pessoal';
   headerUser.setAttribute('aria-label', 'Editar perfil pessoal');

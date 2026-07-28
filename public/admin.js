@@ -188,12 +188,14 @@ async function logout() {
 function warmAdminCache() {
   if (!api?.hasAdminSession()) return;
 
-  Promise.allSettled([
-    api.adminCourses({ limit: 500 }),
-    api.adminStudents({ limit: 500 }),
-    api.adminMediaConfig(),
-    typeof api.adminStaff === 'function' ? api.adminStaff() : api.adminstaff()
-  ]);
+  window.setTimeout(() => {
+    if (!api?.hasAdminSession()) return;
+    Promise.allSettled([
+      api.adminCourses({ limit: 100 }),
+      api.adminMediaConfig(),
+      canManageStaff() ? (typeof api.adminStaff === 'function' ? api.adminStaff() : api.adminstaff()) : Promise.resolve()
+    ]);
+  }, 1200);
 }
 
 function renderAdminShell() {
