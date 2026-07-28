@@ -27,6 +27,11 @@ except ImportError:
     Credentials = None
     build = None
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 EXCEL_MAIN_NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 EXCEL_REL_NS = {"r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
@@ -355,6 +360,7 @@ TIMESTAMP_COLUMNS = {
     "correction_deadline",
     "created_at",
     "deadline_at",
+    "end_date",
     "enrolled_at",
     "expires_at",
     "generated_at",
@@ -618,7 +624,8 @@ def upsert_rows(conn, table: str, rows: list[dict[str, Any]], key: str):
       on conflict ({conflict_sql}) {conflict_action}
     """
     values = [tuple(row.get(column) for column in columns) for row in rows]
-    conn.executemany(sql, values)
+    with conn.cursor() as cur:
+        cur.executemany(sql, values)
     return len(rows)
 
 
@@ -626,7 +633,7 @@ def migrate_from_reader(read_rows, database_url: str, dry_run: bool, validate_on
     report = {}
     if not validate_only and psycopg is None:
         raise SystemExit("Missing psycopg. Install dependencies with: pip install -r requirements.txt")
-    conn = None if validate_only else psycopg.connect(database_url)
+    conn = None if validate_only else psycopg.connect(database_url, connect_timeout=15)
     try:
         for sheet_name, table_name, mapping, key in TABLES:
             raw_rows = read_rows(sheet_name)
@@ -636,7 +643,7 @@ def migrate_from_reader(read_rows, database_url: str, dry_run: bool, validate_on
                 "rawRows": len(raw_rows),
                 **sheet_report,
             }
-            if conn and not dry_run:
+            if conn:
                 upsert_rows(conn, table_name, mapped_rows, key)
         if conn:
             if dry_run:
@@ -673,6 +680,9 @@ def migrate_from_xlsx(xlsx_path: str, database_url: str | None, dry_run: bool, v
 
 
 def main():
+    if load_dotenv is not None:
+        load_dotenv()
+
     parser = argparse.ArgumentParser(description="Migrate CoursePlatform Google Sheets data to Supabase/Postgres.")
     parser.add_argument("--xlsx", default=os.getenv("COURSEPLATFORM_XLSX"), required=False)
     parser.add_argument("--spreadsheet-id", default=os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"), required=False)

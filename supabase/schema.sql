@@ -56,8 +56,8 @@ create table if not exists courseplatform.courses (
 create table if not exists courseplatform.lessons (
   lesson_id text primary key,
   course_id text not null references courseplatform.courses(course_id) on delete cascade,
-  lesson_number integer not null,
-  title text not null,
+  lesson_number integer,
+  title text,
   slug text,
   summary text,
   theory_minutes numeric default 0,
@@ -65,7 +65,7 @@ create table if not exists courseplatform.lessons (
   individual_minutes numeric default 0,
   passing_score numeric default 60,
   prerequisite_lesson_id text,
-  status text not null default 'ACTIVE',
+  status text default 'ACTIVE',
   created_at timestamptz,
   updated_at timestamptz
 );
@@ -123,7 +123,7 @@ create table if not exists courseplatform.groups (
 
 create table if not exists courseplatform.enrollments (
   enrollment_id text primary key,
-  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  student_id text not null,
   course_id text not null references courseplatform.courses(course_id) on delete cascade,
   group_id text references courseplatform.groups(group_id) on delete set null,
   status text not null default 'ACTIVE',
@@ -149,7 +149,7 @@ create table if not exists courseplatform.group_members (
 create table if not exists courseplatform.lesson_progress (
   progress_id text primary key,
   enrollment_id text not null references courseplatform.enrollments(enrollment_id) on delete cascade,
-  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  student_id text not null,
   lesson_id text not null references courseplatform.lessons(lesson_id) on delete cascade,
   status text not null default 'LOCKED',
   unlocked_at timestamptz,
@@ -165,7 +165,7 @@ create table if not exists courseplatform.lesson_progress (
 create table if not exists courseplatform.attempts (
   attempt_id text primary key,
   progress_id text references courseplatform.lesson_progress(progress_id) on delete set null,
-  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  student_id text not null,
   lesson_id text not null references courseplatform.lessons(lesson_id) on delete cascade,
   attempt_number integer not null default 1,
   started_at timestamptz,
