@@ -3323,7 +3323,7 @@ async function loadAdminMediaConfig(options = {}) {
     setMediaConfig(result.mediaConfig || result);
   } catch {
     setMediaConfig(localMediaConfig());
-    showToast('Media carregada localmente. Publique as funções do Apps Script para sincronizar com Google Sheets.', 'warning');
+    showToast('Media carregada localmente. Confirme a conexao com a API Python para sincronizar com Supabase.', 'warning');
   }
 }
 

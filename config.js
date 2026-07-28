@@ -3,7 +3,7 @@ const COURSE_PLATFORM_API_URL =
   localStorage.getItem('coursePlatformApiUrl') ||
   (window.location.hostname.endsWith('.vercel.app')
     ? `${window.location.origin}/api`
-    : 'https://script.google.com/macros/s/AKfycbxLAzx2IQ9n0uel0ehjagoG67ZwWv4EFFhBuuyCvd9eA22q6D8WaoRM399jhLeOsITA6w/exec');
+    : 'https://courseplatform-mauve.vercel.app/api');
 
 window.COURSE_PLATFORM_CONFIG = Object.freeze({
   apiUrl: COURSE_PLATFORM_API_URL,

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .config import get_settings
@@ -7,6 +7,7 @@ from .db import connection, fetch_all, fetch_one
 from .security import (
     constant_time_equals,
     generate_id,
+    generate_access_code,
     generate_token,
     hash_secret,
     session_expiry,
@@ -48,6 +49,49 @@ def as_bool(value: Any) -> bool:
     return str(value).lower() in {"true", "1", "yes", "sim"}
 
 
+def str_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def configured_secret(value: str) -> bool:
+    text = str_value(value)
+    if not text:
+        return False
+    return not (
+        text.startswith("COLE_AQUI")
+        or text.startswith("copy-from")
+        or text.startswith("igual ao")
+    )
+
+
+def int_value(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def float_value(value: Any, fallback: float = 0.0) -> float:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def parse_datetime(value: Any):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def iso(value: Any) -> str | None:
     if value is None or value == "":
         return None
@@ -56,8 +100,25 @@ def iso(value: Any) -> str | None:
     return str(value)
 
 
+def audit(conn, actor_type: str, actor_id: str, action: str, entity_type: str, entity_id: str, details: dict[str, Any] | None = None):
+    conn.execute(
+        """
+        insert into courseplatform.audit_log
+          (log_id, actor_type, actor_id, action, entity_type, entity_id, details_json, created_at)
+        values (%s, %s, %s, %s, %s, %s, %s, now())
+        """,
+        (generate_id("LOG"), actor_type, actor_id, action, entity_type, entity_id, json.dumps(details or {})),
+    )
+
+
 def normalize_email(email: str) -> str:
     return (email or "").strip().lower()
+
+
+def public_student_id() -> str:
+    import secrets
+
+    return f"STU-{secrets.randbelow(100000):05d}"
 
 
 def require_fields(payload: dict[str, Any], fields: list[str]) -> None:
@@ -91,6 +152,7 @@ def public_student(row: dict[str, Any] | None):
         "interests": row.get("interests"),
         "profilePhotoUrl": row.get("profile_photo_url"),
         "createdAt": iso(row.get("created_at")),
+        "updatedAt": iso(row.get("updated_at")),
         "lastLoginAt": iso(row.get("last_login_at")),
     }
 
@@ -120,6 +182,8 @@ def public_course(row: dict[str, Any] | None):
         "totalHours": float(row.get("total_hours") or 0),
         "passingScore": float(row.get("passing_score") or 0),
         "status": row.get("status"),
+        "createdAt": iso(row.get("created_at")),
+        "updatedAt": iso(row.get("updated_at")),
     }
 
 
@@ -139,6 +203,8 @@ def public_lesson(row: dict[str, Any] | None):
         "passingScore": float(row.get("passing_score") or 0),
         "prerequisiteLessonId": row.get("prerequisite_lesson_id"),
         "status": row.get("status"),
+        "createdAt": iso(row.get("created_at")),
+        "updatedAt": iso(row.get("updated_at")),
     }
 
 
@@ -237,6 +303,10 @@ def public_progress(row: dict[str, Any] | None):
 def public_attempt(row: dict[str, Any] | None):
     if not row:
         return None
+    deadline = row.get("deadline_at")
+    remaining = None
+    if isinstance(deadline, datetime):
+        remaining = max(0, int((deadline - utc_now()).total_seconds()))
     return {
         "attemptId": row["attempt_id"],
         "progressId": row.get("progress_id"),
@@ -250,6 +320,9 @@ def public_attempt(row: dict[str, Any] | None):
         "reviewedAt": iso(row.get("reviewed_at")),
         "reviewComments": row.get("review_comments"),
         "retryAuthorized": as_bool(row.get("retry_authorized")),
+        "remainingSeconds": remaining,
+        "createdAt": iso(row.get("created_at")),
+        "updatedAt": iso(row.get("updated_at")),
     }
 
 
@@ -394,6 +467,8 @@ def health(_: dict[str, Any]):
         "database": db_ok,
         "databaseConfigured": bool(get_settings().database_url),
         "databaseError": "" if db_ok else db_error,
+        "authConfigured": configured_secret(get_settings().password_pepper)
+        and configured_secret(get_settings().admin_master_key_hash),
     })
 
 
@@ -704,6 +779,295 @@ def attempt_status(payload: dict[str, Any]):
     })
 
 
+def update_my_profile(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    photo_url = str_value(payload.get("profilePhotoUrl") or student.get("profile_photo_url"))
+    if str_value(payload.get("profilePhotoBase64")):
+        mime_type = str_value(payload.get("profilePhotoMimeType") or "image/jpeg") or "image/jpeg"
+        base64_data = str_value(payload.get("profilePhotoBase64"))
+        photo_url = f"data:{mime_type};base64,{base64_data}"
+    if as_bool(payload.get("removeProfilePhoto")):
+        photo_url = ""
+
+    patch = {
+        "full_name": str_value(payload.get("fullName") or student.get("full_name")),
+        "country": str_value(payload.get("country")),
+        "organization": str_value(payload.get("organization")),
+        "phone": str_value(payload.get("phone")),
+        "job_title": str_value(payload.get("jobTitle")),
+        "interests": str_value(payload.get("interests")),
+        "profile_photo_url": photo_url,
+    }
+    with connection() as conn:
+        row = conn.execute(
+            """
+            update courseplatform.students
+            set full_name = %s, country = %s, organization = %s, phone = %s,
+                job_title = %s, interests = %s, profile_photo_url = %s, updated_at = now()
+            where student_id = %s
+            returning *
+            """,
+            (
+                patch["full_name"],
+                patch["country"],
+                patch["organization"],
+                patch["phone"],
+                patch["job_title"],
+                patch["interests"],
+                patch["profile_photo_url"],
+                student["student_id"],
+            ),
+        ).fetchone()
+        audit(conn, "STUDENT", student["student_id"], "PROFILE_UPDATED", "STUDENT", student["student_id"])
+        conn.commit()
+    return success({"student": public_student(row)})
+
+
+def change_my_access_code(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["currentAccessCode", "newAccessCode"])
+    if not constant_time_equals(hash_secret(payload["currentAccessCode"]), student.get("access_code")):
+        raise ApiError("INVALID_CURRENT_ACCESS_CODE", "A senha atual nao esta correta.")
+    new_code = str_value(payload.get("newAccessCode"))
+    if len(new_code) < 6:
+        raise ApiError("WEAK_ACCESS_CODE", "A nova senha deve ter pelo menos 6 caracteres.")
+    new_hash = hash_secret(new_code)
+    if constant_time_equals(new_hash, student.get("access_code")):
+        raise ApiError("ACCESS_CODE_UNCHANGED", "A nova senha deve ser diferente da atual.")
+    with connection() as conn:
+        conn.execute(
+            "update courseplatform.students set access_code = %s, updated_at = now() where student_id = %s",
+            (new_hash, student["student_id"]),
+        )
+        conn.execute(
+            "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+            (student["student_id"],),
+        )
+        audit(conn, "STUDENT", student["student_id"], "ACCESS_CODE_CHANGED", "STUDENT", student["student_id"])
+        conn.commit()
+    return success({"requiresLogin": True})
+
+
+def start_attempt(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["lessonId"])
+    lesson_id = payload["lessonId"]
+    progress = fetch_one(
+        """
+        select p.*, l.exercise_minutes, l.individual_minutes
+        from courseplatform.lesson_progress p
+        join courseplatform.lessons l on l.lesson_id = p.lesson_id
+        where p.student_id = %s and p.lesson_id = %s
+        """,
+        (student["student_id"], lesson_id),
+    )
+    if not progress:
+        raise ApiError("LESSON_LOCKED", "Este modulo ainda nao esta disponivel.")
+    if progress.get("status") not in {"AVAILABLE", "IN_PROGRESS", "CORRECTION_REQUIRED", "FAILED", "TIME_EXCEEDED"}:
+        raise ApiError("ATTEMPT_NOT_AVAILABLE", "Nao e possivel iniciar uma tentativa neste estado.")
+
+    existing = fetch_one(
+        """
+        select *
+        from courseplatform.attempts
+        where student_id = %s and lesson_id = %s and status = 'IN_PROGRESS'
+        order by started_at desc nulls last
+        limit 1
+        """,
+        (student["student_id"], lesson_id),
+    )
+    if existing:
+        return success({"attempt": public_attempt(existing)})
+
+    now = utc_now()
+    minutes = int_value(progress.get("exercise_minutes")) + int_value(progress.get("individual_minutes"))
+    if minutes <= 0:
+        minutes = 180
+    attempt_number = int_value(progress.get("attempt_count")) + 1
+    with connection() as conn:
+        attempt = conn.execute(
+            """
+            insert into courseplatform.attempts
+              (attempt_id, progress_id, student_id, lesson_id, attempt_number, started_at,
+               deadline_at, submitted_at, status, score, retry_authorized, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, null, 'IN_PROGRESS', null, false, %s, %s)
+            returning *
+            """,
+            (
+                generate_id("ATT"),
+                progress["progress_id"],
+                student["student_id"],
+                lesson_id,
+                attempt_number,
+                now,
+                now + timedelta(minutes=minutes),
+                now,
+                now,
+            ),
+        ).fetchone()
+        conn.execute(
+            """
+            update courseplatform.lesson_progress
+            set status = 'IN_PROGRESS', started_at = coalesce(started_at, %s),
+                attempt_count = %s, updated_at = %s
+            where progress_id = %s
+            """,
+            (now, attempt_number, now, progress["progress_id"]),
+        )
+        audit(conn, "STUDENT", student["student_id"], "ATTEMPT_STARTED", "ATTEMPT", attempt["attempt_id"])
+        conn.commit()
+    return success({"attempt": public_attempt(attempt)})
+
+
+def save_answer(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["attemptId", "questionId"])
+    attempt = fetch_one(
+        "select * from courseplatform.attempts where attempt_id = %s and student_id = %s",
+        (payload["attemptId"], student["student_id"]),
+    )
+    if not attempt or attempt.get("status") != "IN_PROGRESS":
+        raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa ja nao pode ser editada.")
+    with connection() as conn:
+        answer = conn.execute(
+            """
+            insert into courseplatform.answers
+              (answer_id, attempt_id, question_id, answer_text, selected_option_id, saved_at)
+            values (%s, %s, %s, %s, %s, now())
+            on conflict (attempt_id, question_id) do update
+            set answer_text = excluded.answer_text,
+                selected_option_id = excluded.selected_option_id,
+                saved_at = excluded.saved_at
+            returning *
+            """,
+            (
+                generate_id("ANS"),
+                attempt["attempt_id"],
+                payload["questionId"],
+                str_value(payload.get("answerText")),
+                str_value(payload.get("selectedOptionId")),
+            ),
+        ).fetchone()
+        conn.commit()
+    return success({"answer": public_answer(answer)})
+
+
+def upload_file(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["attemptId", "fileName"])
+    attempt = fetch_one(
+        "select * from courseplatform.attempts where attempt_id = %s and student_id = %s",
+        (payload["attemptId"], student["student_id"]),
+    )
+    if not attempt or attempt.get("status") != "IN_PROGRESS":
+        raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa ja nao pode receber ficheiros.")
+    mime_type = str_value(payload.get("mimeType") or "application/octet-stream")
+    base64_data = str_value(payload.get("base64Data"))
+    drive_url = f"data:{mime_type};base64,{base64_data}" if base64_data else str_value(payload.get("driveUrl"))
+    with connection() as conn:
+        row = conn.execute(
+            """
+            insert into courseplatform.files
+              (file_id, attempt_id, student_id, lesson_id, file_name, mime_type,
+               size_bytes, drive_file_id, drive_url, uploaded_at, status)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), 'ACTIVE')
+            returning *
+            """,
+            (
+                generate_id("FIL"),
+                attempt["attempt_id"],
+                student["student_id"],
+                attempt["lesson_id"],
+                str_value(payload.get("fileName")),
+                mime_type,
+                len(base64_data),
+                "",
+                drive_url,
+            ),
+        ).fetchone()
+        conn.commit()
+    return success({"file": public_file(row)})
+
+
+def delete_uploaded_file(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["fileId"])
+    with connection() as conn:
+        row = conn.execute(
+            """
+            update courseplatform.files
+            set status = 'DELETED'
+            where file_id = %s and student_id = %s
+            returning *
+            """,
+            (payload["fileId"], student["student_id"]),
+        ).fetchone()
+        conn.commit()
+    if not row:
+        raise ApiError("FILE_NOT_FOUND", "Ficheiro nao encontrado.")
+    return success({"file": public_file(row)})
+
+
+def submit_attempt(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["attemptId"])
+    attempt = fetch_one(
+        "select * from courseplatform.attempts where attempt_id = %s and student_id = %s",
+        (payload["attemptId"], student["student_id"]),
+    )
+    if not attempt or attempt.get("status") != "IN_PROGRESS":
+        raise ApiError("ATTEMPT_NOT_SUBMITTABLE", "Esta tentativa nao pode ser submetida.")
+    now = utc_now()
+    status = "TIME_EXCEEDED" if attempt.get("deadline_at") and attempt["deadline_at"] < now else "UNDER_REVIEW"
+    with connection() as conn:
+        updated = conn.execute(
+            """
+            update courseplatform.attempts
+            set status = %s, submitted_at = %s, updated_at = %s
+            where attempt_id = %s
+            returning *
+            """,
+            (status, now, now, attempt["attempt_id"]),
+        ).fetchone()
+        conn.execute(
+            """
+            update courseplatform.lesson_progress
+            set status = %s, submitted_at = %s, updated_at = %s
+            where progress_id = %s
+            """,
+            (status, now, now, attempt.get("progress_id")),
+        )
+        audit(conn, "STUDENT", student["student_id"], "ATTEMPT_SUBMITTED", "ATTEMPT", attempt["attempt_id"], {"status": status})
+        conn.commit()
+    return success({"attempt": public_attempt(updated)})
+
+
+def my_certificate(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    cert = fetch_one(
+        """
+        select cert.*, c.title
+        from courseplatform.certificates cert
+        left join courseplatform.courses c on c.course_id = cert.course_id
+        where cert.student_id = %s and cert.course_id = %s
+        order by cert.issue_date desc nulls last
+        limit 1
+        """,
+        (student["student_id"], course_id),
+    )
+    return success({"certificate": {
+        "certificateId": cert.get("certificate_id"),
+        "certificateNumber": cert.get("certificate_number"),
+        "verificationCode": cert.get("verification_code"),
+        "issueDate": iso(cert.get("issue_date")),
+        "finalScore": None if cert.get("final_score") is None else float(cert.get("final_score")),
+        "driveUrl": cert.get("drive_url"),
+        "status": cert.get("status"),
+        "courseTitle": cert.get("title"),
+    } if cert else None})
+
+
 def admin_list_courses(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     limit, offset, page = pagination(payload)
@@ -952,6 +1316,487 @@ def admin_list_submissions(payload: dict[str, Any]):
     return success({"submissions": [submission_item(row) for row in rows]})
 
 
+def admin_get_submission(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    require_fields(payload, ["attemptId"])
+    attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
+    if not attempt:
+        raise ApiError("ATTEMPT_NOT_FOUND", "Submissao nao encontrada.")
+    student = fetch_one("select * from courseplatform.students where student_id = %s", (attempt["student_id"],))
+    lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (attempt["lesson_id"],))
+    answers = fetch_all(
+        """
+        select q.*, a.*
+        from courseplatform.answers a
+        left join courseplatform.questions q on q.question_id = a.question_id
+        where a.attempt_id = %s
+        order by q.question_order nulls last, a.saved_at
+        """,
+        (attempt["attempt_id"],),
+    )
+    files = fetch_all(
+        "select * from courseplatform.files where attempt_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED' order by uploaded_at",
+        (attempt["attempt_id"],),
+    )
+    reviews = fetch_all("select * from courseplatform.reviews where attempt_id = %s order by reviewed_at desc nulls last", (attempt["attempt_id"],))
+    return success({
+        "student": public_student(student or {"student_id": attempt["student_id"], "full_name": attempt["student_id"], "email": "", "status": "UNKNOWN"}),
+        "lesson": public_lesson(lesson or {"lesson_id": attempt["lesson_id"], "title": attempt["lesson_id"]}),
+        "attempt": public_attempt(attempt),
+        "answers": [
+            {
+                "question": public_question(row) if row.get("question_id") else None,
+                "answer": public_answer(row),
+            }
+            for row in answers
+        ],
+        "files": [public_file(row) for row in files],
+        "reviews": [public_review(row) for row in reviews],
+    })
+
+
+def admin_review_submission(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    require_fields(payload, ["attemptId", "decision", "score"])
+    decision = str_value(payload.get("decision")).upper()
+    if decision not in {"APPROVED", "APPROVED_WITH_NOTES", "CORRECTION_REQUIRED", "FAILED"}:
+        raise ApiError("INVALID_DECISION", "Decisao invalida.")
+    status = "APPROVED" if decision in {"APPROVED", "APPROVED_WITH_NOTES"} else decision
+    score = float_value(payload.get("score"))
+    now = utc_now()
+    attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
+    if not attempt:
+        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa nao encontrada.")
+    with connection() as conn:
+        review = conn.execute(
+            """
+            insert into courseplatform.reviews
+              (review_id, attempt_id, reviewer_id, decision, score, comments,
+               correction_deadline, unlock_next_lesson, reviewed_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            returning *
+            """,
+            (
+                generate_id("REV"),
+                attempt["attempt_id"],
+                admin["admin_id"],
+                decision,
+                score,
+                str_value(payload.get("comments")),
+                parse_datetime(payload.get("correctionDeadline")),
+                status == "APPROVED",
+                now,
+            ),
+        ).fetchone()
+        updated = conn.execute(
+            """
+            update courseplatform.attempts
+            set status = %s, score = %s, reviewer_id = %s, reviewed_at = %s,
+                review_comments = %s, retry_authorized = false, updated_at = %s
+            where attempt_id = %s
+            returning *
+            """,
+            (status, score, admin["admin_id"], now, str_value(payload.get("comments")), now, attempt["attempt_id"]),
+        ).fetchone()
+        conn.execute(
+            """
+            update courseplatform.lesson_progress
+            set status = %s, approved_at = case when %s = 'APPROVED' then %s else approved_at end,
+                score = %s, updated_at = %s
+            where progress_id = %s
+            """,
+            (status, status, now, score, now, attempt.get("progress_id")),
+        )
+        audit(conn, "ADMIN", admin["admin_id"], "SUBMISSION_REVIEWED", "ATTEMPT", attempt["attempt_id"], {"decision": decision, "score": score})
+        conn.commit()
+    return success({"attempt": public_attempt(updated), "review": public_review(review)})
+
+
+def admin_authorize_retry(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    require_fields(payload, ["attemptId"])
+    with connection() as conn:
+        attempt = conn.execute(
+            """
+            update courseplatform.attempts
+            set retry_authorized = true, status = 'CORRECTION_REQUIRED', updated_at = now()
+            where attempt_id = %s
+            returning *
+            """,
+            (payload["attemptId"],),
+        ).fetchone()
+        if not attempt:
+            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa nao encontrada.")
+        conn.execute(
+            "update courseplatform.lesson_progress set status = 'AVAILABLE', updated_at = now() where progress_id = %s",
+            (attempt.get("progress_id"),),
+        )
+        audit(conn, "ADMIN", admin["admin_id"], "RETRY_AUTHORIZED", "ATTEMPT", attempt["attempt_id"])
+        conn.commit()
+    return success({"attempt": public_attempt(attempt)})
+
+
+def admin_save_media_config(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    media = payload.get("mediaConfig") or {"logoUrl": payload.get("logoUrl"), "videos": payload.get("videos", [])}
+    if not isinstance(media, dict):
+        raise ApiError("INVALID_MEDIA_CONFIG", "Configuracao de media invalida.")
+    media.setdefault("logoUrl", "")
+    media.setdefault("videos", [])
+    with connection() as conn:
+        conn.execute(
+            """
+            insert into courseplatform.settings (key, value, value_type, description, updated_at)
+            values ('MEDIA_CONFIG', %s, 'JSON', 'Logotipo e galeria de videos da plataforma.', now())
+            on conflict (key) do update
+            set value = excluded.value, value_type = excluded.value_type,
+                description = excluded.description, updated_at = excluded.updated_at
+            """,
+            (json.dumps(media),),
+        )
+        audit(conn, "ADMIN", admin["admin_id"], "MEDIA_CONFIG_SAVED", "SETTING", "MEDIA_CONFIG")
+        conn.commit()
+    return success({"mediaConfig": media})
+
+
+def admin_save_staff(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER"})
+    require_fields(payload, ["fullName", "email"])
+    admin_id = str_value(payload.get("targetAdminId") or payload.get("adminId")) or generate_id("ADM")
+    role = str_value(payload.get("role") or "REVIEWER").upper()
+    if role not in {"OWNER", "ADMIN", "REVIEWER"}:
+        role = "REVIEWER"
+    status = str_value(payload.get("status") or "ACTIVE").upper()
+    with connection() as conn:
+        row = conn.execute(
+            """
+            insert into courseplatform.admins (admin_id, full_name, email, role, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, now(), now())
+            on conflict (admin_id) do update
+            set full_name = excluded.full_name, email = excluded.email, role = excluded.role,
+                status = excluded.status, updated_at = now()
+            returning *
+            """,
+            (admin_id, str_value(payload.get("fullName")), normalize_email(payload.get("email")), role, status),
+        ).fetchone()
+        audit(conn, "ADMIN", admin["admin_id"], "STAFF_SAVED", "ADMIN", admin_id)
+        conn.commit()
+    return success({"admin": public_admin(row)})
+
+
+def admin_set_staff_status(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER"})
+    require_fields(payload, ["targetAdminId", "status"])
+    with connection() as conn:
+        row = conn.execute(
+            "update courseplatform.admins set status = %s, updated_at = now() where admin_id = %s returning *",
+            (str_value(payload["status"]).upper(), payload["targetAdminId"]),
+        ).fetchone()
+        if not row:
+            raise ApiError("ADMIN_NOT_FOUND", "Staff nao encontrado.")
+        audit(conn, "ADMIN", admin["admin_id"], "STAFF_STATUS_CHANGED", "ADMIN", payload["targetAdminId"], {"status": payload["status"]})
+        conn.commit()
+    return success({"admin": public_admin(row)})
+
+
+def admin_create_student(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["fullName", "email"])
+    access_code = generate_access_code(10)
+    student_id = generate_id("STU")
+    with connection() as conn:
+        public_id = public_student_id()
+        while conn.execute("select 1 from courseplatform.students where public_student_id = %s", (public_id,)).fetchone():
+            public_id = public_student_id()
+        row = conn.execute(
+            """
+            insert into courseplatform.students
+              (student_id, public_student_id, full_name, email, access_code, status,
+               country, organization, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, 'ACTIVE', %s, %s, now(), now())
+            returning *
+            """,
+            (
+                student_id,
+                public_id,
+                str_value(payload.get("fullName")),
+                normalize_email(payload.get("email")),
+                hash_secret(access_code),
+                str_value(payload.get("country")),
+                str_value(payload.get("organization")),
+            ),
+        ).fetchone()
+        audit(conn, "ADMIN", admin["admin_id"], "STUDENT_CREATED", "STUDENT", student_id)
+        conn.commit()
+    return success({"student": public_student(row), "accessCode": access_code})
+
+
+def admin_set_student_status(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["studentId", "status"])
+    with connection() as conn:
+        row = conn.execute(
+            "update courseplatform.students set status = %s, updated_at = now() where student_id = %s returning *",
+            (str_value(payload["status"]).upper(), payload["studentId"]),
+        ).fetchone()
+        if not row:
+            raise ApiError("STUDENT_NOT_FOUND", "Estudante nao encontrado.")
+        audit(conn, "ADMIN", admin["admin_id"], "STUDENT_STATUS_CHANGED", "STUDENT", payload["studentId"], {"status": payload["status"]})
+        conn.commit()
+    return success({"student": public_student(row)})
+
+
+def admin_reset_student_access_code(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["studentId"])
+    access_code = generate_access_code(10)
+    with connection() as conn:
+        row = conn.execute(
+            "update courseplatform.students set access_code = %s, updated_at = now() where student_id = %s returning *",
+            (hash_secret(access_code), payload["studentId"]),
+        ).fetchone()
+        if not row:
+            raise ApiError("STUDENT_NOT_FOUND", "Estudante nao encontrado.")
+        conn.execute("update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s", (payload["studentId"],))
+        audit(conn, "ADMIN", admin["admin_id"], "STUDENT_ACCESS_RESET", "STUDENT", payload["studentId"])
+        conn.commit()
+    return success({"student": public_student(row), "accessCode": access_code})
+
+
+def admin_save_course(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["title"])
+    course_id = str_value(payload.get("courseId")) or generate_id("COURSE")
+    status = str_value(payload.get("status") or "ACTIVE").upper()
+    with connection() as conn:
+        row = conn.execute(
+            """
+            insert into courseplatform.courses
+              (course_id, course_code, title, description, total_hours, passing_score, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, now(), now())
+            on conflict (course_id) do update
+            set course_code = excluded.course_code, title = excluded.title,
+                description = excluded.description, total_hours = excluded.total_hours,
+                passing_score = excluded.passing_score, status = excluded.status, updated_at = now()
+            returning *
+            """,
+            (
+                course_id,
+                str_value(payload.get("courseCode") or course_id),
+                str_value(payload.get("title")),
+                str_value(payload.get("description")),
+                float_value(payload.get("totalHours")),
+                float_value(payload.get("passingScore"), 60),
+                status,
+            ),
+        ).fetchone()
+        audit(conn, "ADMIN", admin["admin_id"], "COURSE_SAVED", "COURSE", course_id)
+        conn.commit()
+    return success({"course": public_course(row)})
+
+
+def admin_save_lesson(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["courseId", "title"])
+    lesson_id = str_value(payload.get("lessonId")) or generate_id("LESSON")
+    status = str_value(payload.get("status") or "ACTIVE").upper()
+    with connection() as conn:
+        row = conn.execute(
+            """
+            insert into courseplatform.lessons
+              (lesson_id, course_id, lesson_number, title, slug, summary, theory_minutes,
+               exercise_minutes, individual_minutes, passing_score, prerequisite_lesson_id,
+               status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+            on conflict (lesson_id) do update
+            set course_id = excluded.course_id, lesson_number = excluded.lesson_number,
+                title = excluded.title, slug = excluded.slug, summary = excluded.summary,
+                theory_minutes = excluded.theory_minutes, exercise_minutes = excluded.exercise_minutes,
+                individual_minutes = excluded.individual_minutes, passing_score = excluded.passing_score,
+                prerequisite_lesson_id = excluded.prerequisite_lesson_id, status = excluded.status,
+                updated_at = now()
+            returning *
+            """,
+            (
+                lesson_id,
+                payload["courseId"],
+                int_value(payload.get("lessonNumber"), 1),
+                str_value(payload.get("title")),
+                str_value(payload.get("slug")),
+                str_value(payload.get("summary")),
+                float_value(payload.get("theoryMinutes")),
+                float_value(payload.get("exerciseMinutes")),
+                float_value(payload.get("individualMinutes")),
+                float_value(payload.get("passingScore"), 60),
+                str_value(payload.get("prerequisiteLessonId")) or None,
+                status,
+            ),
+        ).fetchone()
+        audit(conn, "ADMIN", admin["admin_id"], "LESSON_SAVED", "LESSON", lesson_id)
+        conn.commit()
+    return success({"lesson": public_lesson(row)})
+
+
+def admin_save_lesson_content(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["lessonId", "title"])
+    content_id = str_value(payload.get("contentId")) or generate_id("CNT")
+    with connection() as conn:
+        row = conn.execute(
+            """
+            insert into courseplatform.lesson_content
+              (content_id, lesson_id, section_order, section_type, title, body_html,
+               estimated_minutes, is_required, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+            on conflict (content_id) do update
+            set lesson_id = excluded.lesson_id, section_order = excluded.section_order,
+                section_type = excluded.section_type, title = excluded.title,
+                body_html = excluded.body_html, estimated_minutes = excluded.estimated_minutes,
+                is_required = excluded.is_required, status = excluded.status, updated_at = now()
+            returning *
+            """,
+            (
+                content_id,
+                payload["lessonId"],
+                int_value(payload.get("sectionOrder"), 1),
+                str_value(payload.get("sectionType") or "TEORIA"),
+                str_value(payload.get("title")),
+                str_value(payload.get("bodyHtml")),
+                float_value(payload.get("estimatedMinutes")),
+                as_bool(payload.get("isRequired", True)),
+                str_value(payload.get("status") or "ACTIVE").upper(),
+            ),
+        ).fetchone()
+        audit(conn, "ADMIN", admin["admin_id"], "LESSON_CONTENT_SAVED", "LESSON_CONTENT", content_id)
+        conn.commit()
+    return success({"content": public_content(row)})
+
+
+def admin_save_group(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["courseId", "name"])
+    group_id = str_value(payload.get("groupId")) or generate_id("GRP")
+    student_ids = payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else []
+    with connection() as conn:
+        group = conn.execute(
+            """
+            insert into courseplatform.groups
+              (group_id, group_code, name, course_id, start_date, end_date, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, now(), now())
+            on conflict (group_id) do update
+            set group_code = excluded.group_code, name = excluded.name, course_id = excluded.course_id,
+                start_date = excluded.start_date, end_date = excluded.end_date,
+                status = excluded.status, updated_at = now()
+            returning *
+            """,
+            (
+                group_id,
+                str_value(payload.get("groupCode") or group_id),
+                str_value(payload.get("name")),
+                payload["courseId"],
+                parse_datetime(payload.get("startDate")),
+                parse_datetime(payload.get("endDate")),
+                str_value(payload.get("status") or "ACTIVE").upper(),
+            ),
+        ).fetchone()
+        for student_id in student_ids:
+            conn.execute(
+                """
+                insert into courseplatform.group_members
+                  (group_member_id, group_id, student_id, status, joined_at, updated_at)
+                values (%s, %s, %s, 'ACTIVE', now(), now())
+                on conflict (group_id, student_id) do update
+                set status = 'ACTIVE', updated_at = now()
+                """,
+                (generate_id("GM"), group_id, student_id),
+            )
+        audit(conn, "ADMIN", admin["admin_id"], "GROUP_SAVED", "GROUP", group_id, {"studentCount": len(student_ids)})
+        conn.commit()
+    return success({"group": {"groupId": group["group_id"], "groupCode": group.get("group_code"), "name": group.get("name"), "courseId": group.get("course_id"), "startDate": iso(group.get("start_date")), "endDate": iso(group.get("end_date")), "status": group.get("status")}})
+
+
+def admin_assign_students_to_group(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["groupId"])
+    student_ids = payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else []
+    with connection() as conn:
+        for student_id in student_ids:
+            conn.execute(
+                """
+                insert into courseplatform.group_members
+                  (group_member_id, group_id, student_id, status, joined_at, updated_at)
+                values (%s, %s, %s, 'ACTIVE', now(), now())
+                on conflict (group_id, student_id) do update
+                set status = 'ACTIVE', updated_at = now()
+                """,
+                (generate_id("GM"), payload["groupId"], student_id),
+            )
+        audit(conn, "ADMIN", admin["admin_id"], "GROUP_MEMBERS_ASSIGNED", "GROUP", payload["groupId"], {"studentCount": len(student_ids)})
+        conn.commit()
+    return success({"studentCount": len(student_ids)})
+
+
+def admin_set_lesson_access(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    status = str_value(payload.get("status") or "AVAILABLE").upper()
+    if status not in {"AVAILABLE", "LOCKED", "IN_PROGRESS", "UNDER_REVIEW", "APPROVED", "TIME_EXCEEDED"}:
+        raise ApiError("INVALID_STATUS", "Estado de acesso invalido.")
+    lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
+    student_ids = set(payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else [])
+    group_ids = payload.get("groupIds") if isinstance(payload.get("groupIds"), list) else []
+    if group_ids:
+        rows = fetch_all(
+            "select student_id from courseplatform.group_members where group_id = any(%s) and status = 'ACTIVE'",
+            (group_ids,),
+        )
+        student_ids.update(row["student_id"] for row in rows)
+    if not lesson_ids or not student_ids:
+        raise ApiError("EMPTY_ACCESS_TARGET", "Selecione modulos e estudantes.")
+    updated = 0
+    with connection() as conn:
+        for student_id in student_ids:
+            for lesson_id in lesson_ids:
+                lesson = conn.execute("select * from courseplatform.lessons where lesson_id = %s", (lesson_id,)).fetchone()
+                if not lesson:
+                    continue
+                enrollment = conn.execute(
+                    """
+                    select *
+                    from courseplatform.enrollments
+                    where student_id = %s and course_id = %s
+                    order by enrolled_at desc nulls last
+                    limit 1
+                    """,
+                    (student_id, lesson["course_id"]),
+                ).fetchone()
+                if not enrollment:
+                    enrollment = conn.execute(
+                        """
+                        insert into courseplatform.enrollments
+                          (enrollment_id, student_id, course_id, status, enrolled_at, progress_percent, updated_at)
+                        values (%s, %s, %s, 'ACTIVE', now(), 0, now())
+                        returning *
+                        """,
+                        (generate_id("ENR"), student_id, lesson["course_id"]),
+                    ).fetchone()
+                conn.execute(
+                    """
+                    insert into courseplatform.lesson_progress
+                      (progress_id, enrollment_id, student_id, lesson_id, status, unlocked_at, attempt_count, updated_at)
+                    values (%s, %s, %s, %s, %s, case when %s <> 'LOCKED' then now() else null end, 0, now())
+                    on conflict (enrollment_id, lesson_id) do update
+                    set status = excluded.status,
+                        unlocked_at = case when excluded.status <> 'LOCKED' then coalesce(courseplatform.lesson_progress.unlocked_at, now()) else courseplatform.lesson_progress.unlocked_at end,
+                        updated_at = now()
+                    """,
+                    (generate_id("PRG"), enrollment["enrollment_id"], student_id, lesson_id, status, status),
+                )
+                updated += 1
+        audit(conn, "ADMIN", admin["admin_id"], "LESSON_ACCESS_CHANGED", "LESSON_PROGRESS", "", {"lessonCount": len(lesson_ids), "studentCount": len(student_ids), "status": status})
+        conn.commit()
+    return success({"studentCount": len(student_ids), "lessonCount": len(lesson_ids), "updatedCount": updated})
+
+
 def verify_certificate(payload: dict[str, Any]):
     code = payload.get("code") or payload.get("verificationCode") or ""
     certificate = fetch_one(
@@ -992,10 +1837,33 @@ ACTIONS = {
     "getMyCourses": my_courses,
     "getLesson": get_lesson,
     "getAttemptStatus": attempt_status,
+    "updateMyProfile": update_my_profile,
+    "changeMyAccessCode": change_my_access_code,
+    "startAttempt": start_attempt,
+    "saveAnswer": save_answer,
+    "uploadFile": upload_file,
+    "deleteUploadedFile": delete_uploaded_file,
+    "submitAttempt": submit_attempt,
+    "getMyCertificate": my_certificate,
     "adminListCourses": admin_list_courses,
     "adminGetCourseStructure": admin_course_structure,
     "adminListGroups": admin_list_groups,
     "adminListStudents": admin_list_students,
+    "adminGetSubmission": admin_get_submission,
+    "adminReviewSubmission": admin_review_submission,
+    "adminAuthorizeRetry": admin_authorize_retry,
+    "adminSaveMediaConfig": admin_save_media_config,
+    "adminSaveStaff": admin_save_staff,
+    "adminSetStaffStatus": admin_set_staff_status,
+    "adminCreateStudent": admin_create_student,
+    "adminSetStudentStatus": admin_set_student_status,
+    "adminResetStudentAccessCode": admin_reset_student_access_code,
+    "adminSaveCourse": admin_save_course,
+    "adminSaveLesson": admin_save_lesson,
+    "adminSaveLessonContent": admin_save_lesson_content,
+    "adminSaveGroup": admin_save_group,
+    "adminAssignStudentsToGroup": admin_assign_students_to_group,
+    "adminSetLessonAccess": admin_set_lesson_access,
 }
 
 
