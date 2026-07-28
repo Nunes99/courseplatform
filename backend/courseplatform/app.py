@@ -8,7 +8,10 @@ from .actions import ApiError, dispatch, public_error
 from .config import get_settings
 
 settings = get_settings()
-PUBLIC_DIR = Path(__file__).resolve().parents[2] / "public"
+STATIC_DIRS = [
+    Path(__file__).resolve().parents[2] / "public",
+    Path(__file__).resolve().parent / "static",
+]
 
 app = FastAPI(title="CoursePlatform Python API", version=settings.app_version)
 
@@ -61,14 +64,18 @@ def static_file_response(raw_path: str):
         "connection-test": "connection-test.html",
     }
     path = aliases.get(path, path)
-    candidate = (PUBLIC_DIR / path).resolve()
-    public_root = PUBLIC_DIR.resolve()
-    if not str(candidate).startswith(str(public_root)) or not candidate.is_file():
-        fallback = public_root / "404.html"
+    for static_dir in STATIC_DIRS:
+        static_root = static_dir.resolve()
+        candidate = (static_root / path).resolve()
+        if str(candidate).startswith(str(static_root)) and candidate.is_file():
+            return FileResponse(candidate)
+
+    for static_dir in STATIC_DIRS:
+        fallback = static_dir.resolve() / "404.html"
         if fallback.is_file():
             return FileResponse(fallback, status_code=404)
-        return JSONResponse({"success": False, "error": {"code": "NOT_FOUND", "message": "Recurso nao encontrado."}}, status_code=404)
-    return FileResponse(candidate)
+
+    return JSONResponse({"success": False, "error": {"code": "NOT_FOUND", "message": "Recurso nao encontrado."}}, status_code=404)
 
 
 async def handle_static_file(static_path: str):
