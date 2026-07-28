@@ -18,8 +18,7 @@ app.add_middleware(
 )
 
 
-@app.get("/")
-async def get_action(request: Request):
+async def handle_get_action(request: Request):
     payload = dict(request.query_params)
     action = payload.get("action", "health")
     try:
@@ -28,8 +27,7 @@ async def get_action(request: Request):
         return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)
 
 
-@app.post("/")
-async def post_action(request: Request):
+async def handle_post_action(request: Request):
     try:
         payload = await request.json()
     except Exception:
@@ -43,3 +41,8 @@ async def post_action(request: Request):
         return JSONResponse(dispatch(action, payload))
     except Exception as error:
         return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)
+
+
+for route_path in ("/", "/api", "/api/index"):
+    app.add_api_route(route_path, handle_get_action, methods=["GET"])
+    app.add_api_route(route_path, handle_post_action, methods=["POST"])

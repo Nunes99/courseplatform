@@ -22,7 +22,7 @@ def _connect():
             )
         except psycopg.OperationalError as error:
             last_error = error
-            if attempt >= attempts - 1:
+            if not _is_retriable_operational_error(error) or attempt >= attempts - 1:
                 raise
             time.sleep(0.35 * (attempt + 1))
     raise last_error
@@ -34,10 +34,19 @@ def _read_with_retry(operation):
     for attempt in range(attempts):
         try:
             return operation()
-        except psycopg.OperationalError:
-            if attempt >= attempts - 1:
+        except psycopg.OperationalError as error:
+            if not _is_retriable_operational_error(error) or attempt >= attempts - 1:
                 raise
             time.sleep(0.35 * (attempt + 1))
+
+
+def _is_retriable_operational_error(error: psycopg.OperationalError) -> bool:
+    text = str(error).lower()
+    if "ecircuitbreaker" in text:
+        return False
+    if "authentication" in text or "password" in text:
+        return False
+    return True
 
 
 @contextmanager
