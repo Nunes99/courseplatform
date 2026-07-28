@@ -4,5 +4,27 @@
     "api/**/*.py": {
       "excludeFiles": "{assets/**,docs/**,scripts/**,supabase/**,.git/**,.agents/**,.codex/**}"
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/api",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/admin",
+      "destination": "/admin.html"
+    },
+    {
+      "source": "/verify",
+      "destination": "/verify.html"
+    },
+    {
+      "source": "/",
+      "destination": "/index.html"
+    }
+  ]
 }
