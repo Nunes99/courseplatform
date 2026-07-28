@@ -170,6 +170,8 @@ class Settings:
         self.session_hours = _int_env("SESSION_HOURS", 12)
         self.db_connect_timeout = _int_env("DB_CONNECT_TIMEOUT", 15)
         self.db_connect_retries = _int_env("DB_CONNECT_RETRIES", 3)
+        self.admin_recovery_key = os.getenv("ADMIN_RECOVERY_KEY", "").strip()
+        self.admin_recovery_key_hash = os.getenv("ADMIN_RECOVERY_KEY_HASH", "").strip()
         self.cors_origins = [
             item.strip()
             for item in os.getenv("CORS_ORIGINS", "*").split(",")

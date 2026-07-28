@@ -6,6 +6,7 @@ from typing import Any
 from .config import get_settings
 from .db import connection, ensure_schema, fetch_all, fetch_one, schema_exists
 from .security import (
+    constant_time_equals,
     generate_id,
     generate_access_code,
     generate_token,
@@ -599,6 +600,7 @@ def health(_: dict[str, Any]):
             "mode": "supabase_postgres_bcrypt",
             "requiresPasswordPepper": False,
             "requiresAdminMasterKeyHash": False,
+            "adminRecoveryConfigured": bool(configured_admin_recovery_hashes()),
         },
         "databaseDiagnostics": settings.database_diagnostics,
     })
@@ -813,6 +815,77 @@ def admin_login(payload: dict[str, Any]):
     except Exception as error:
         raise database_api_error(error) from error
     return success({"adminToken": session["token"], "expiresAt": iso(session["expiresAt"]), "admin": public_admin(admin)})
+
+
+def configured_admin_recovery_hashes() -> list[str]:
+    settings = get_settings()
+    hashes = []
+    if settings.admin_recovery_key_hash:
+        hashes.append(settings.admin_recovery_key_hash.lower())
+    if settings.admin_recovery_key:
+        hashes.append(hash_secret(settings.admin_recovery_key))
+    return hashes
+
+
+def verify_admin_recovery_key(recovery_key: str) -> bool:
+    provided_hash = hash_secret(str_value(recovery_key))
+    return any(constant_time_equals(provided_hash, expected_hash) for expected_hash in configured_admin_recovery_hashes())
+
+
+def recover_admin_access(payload: dict[str, Any]):
+    require_fields(payload, ["email", "recoveryKey"])
+    if not configured_admin_recovery_hashes():
+        raise ApiError(
+            "ADMIN_RECOVERY_NOT_CONFIGURED",
+            "A recuperacao administrativa ainda nao esta configurada. Defina ADMIN_RECOVERY_KEY_HASH na Vercel.",
+        )
+    if not verify_admin_recovery_key(payload.get("recoveryKey")):
+        raise ApiError("INVALID_ADMIN_RECOVERY_KEY", "Chave de recuperacao administrativa invalida.")
+
+    email = normalize_email(payload["email"])
+    try:
+        admin = fetch_one("select * from courseplatform.admins where email = %s", (email,))
+    except Exception as error:
+        raise database_api_error(error) from error
+    if not admin or admin.get("status") != "ACTIVE":
+        raise ApiError("ADMIN_RECOVERY_NOT_FOUND", "Nao encontramos uma conta administrativa ativa com esse email.")
+
+    admin_password = generate_access_code(14)
+    try:
+        with connection() as conn:
+            row = conn.execute(
+                """
+                update courseplatform.admins
+                set password_hash = crypt(%s, gen_salt('bf', 12)),
+                    password_changed_at = now(), password_reset_required = true,
+                    updated_at = now()
+                where admin_id = %s
+                returning *
+                """,
+                (admin_password, admin["admin_id"]),
+            ).fetchone()
+            conn.execute(
+                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+                (f"ADMIN:{admin['admin_id']}",),
+            )
+            audit(
+                conn,
+                "SYSTEM",
+                "ADMIN_RECOVERY",
+                "ADMIN_ACCESS_RECOVERED",
+                "ADMIN",
+                admin["admin_id"],
+                {"role": row.get("role"), "email": mask_email(row.get("email") or email)},
+            )
+            conn.commit()
+    except Exception as error:
+        raise database_api_error(error) from error
+
+    return success({
+        "admin": public_admin(row),
+        "email": mask_email(row.get("email") or email),
+        "temporaryAdminKey": admin_password,
+    })
 
 
 def logout(payload: dict[str, Any]):
@@ -2305,6 +2378,7 @@ ACTIONS = {
     "recoverStudentAccess": recover_student_access,
     "logout": logout,
     "adminLogin": admin_login,
+    "recoverAdminAccess": recover_admin_access,
     "adminLogout": logout,
     "adminMe": admin_me,
     "adminGetMediaConfig": admin_media_config,

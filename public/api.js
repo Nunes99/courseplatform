@@ -286,6 +286,13 @@ export class CoursePlatformApi {
     return data;
   }
 
+  recoverAdminAccess(email, recoveryKey) {
+    return this.request('recoverAdminAccess', {
+      email,
+      recoveryKey
+    });
+  }
+
   async adminLogout() {
     const adminToken = this.adminToken();
     try {

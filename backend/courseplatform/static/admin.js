@@ -136,6 +136,9 @@ function renderAdminLogin() {
           <button class="button button-primary button-block" type="submit">
             Entrar
           </button>
+          <button class="text-button login-recovery-link" type="button" id="recoverAdminAccessButton">
+            Recuperar acesso administrativo
+          </button>
         </form>
 
         <div id="adminLoginError" class="form-message form-message-error" hidden></div>
@@ -144,6 +147,10 @@ function renderAdminLogin() {
   `;
 
   document.querySelector('#adminLoginForm').addEventListener('submit', login);
+  document.querySelector('#recoverAdminAccessButton').addEventListener('click', () => {
+    const email = document.querySelector('#adminLoginForm [name="email"]')?.value || '';
+    showAdminRecoveryDialog(email);
+  });
   reportHeight();
 }
 
@@ -166,12 +173,113 @@ async function login(event) {
     warmAdminCache();
     await loadPending();
   } catch (error) {
-    errorBox.textContent = error.message;
+    if (error instanceof ApiError && error.code === 'INVALID_ADMIN_CREDENTIALS') {
+      errorBox.innerHTML = `
+        <span>${escapeHtml(error.message)}</span>
+        <button class="text-button" type="button" id="recoverAfterAdminLoginError">
+          Recuperar acesso
+        </button>
+      `;
+      errorBox.querySelector('#recoverAfterAdminLoginError').addEventListener('click', () => {
+        showAdminRecoveryDialog(data.get('email'));
+      });
+    } else {
+      errorBox.textContent = error.message;
+    }
     errorBox.hidden = false;
   } finally {
     setBusy(button, false);
     reportHeight();
   }
+}
+
+function showAdminRecoveryDialog(prefilledEmail = '') {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card recovery-dialog">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <h2>Recuperar acesso administrativo</h2>
+      <p class="recovery-note">
+        Use a chave de recuperacao configurada no backend para gerar uma nova senha temporaria.
+      </p>
+
+      <form id="adminRecoveryForm" class="form-stack">
+        <label>
+          <span>Email administrativo</span>
+          <input type="email" name="email" autocomplete="email" required
+            value="${escapeHtml(prefilledEmail || '')}" placeholder="admin@email.com">
+        </label>
+        <label>
+          <span>Chave de recuperacao</span>
+          <input type="password" name="recoveryKey" autocomplete="off" required>
+        </label>
+
+        <div id="adminRecoveryResult" class="recovery-result" hidden></div>
+
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-recovery>Cancelar</button>
+          <button class="button button-primary" type="submit">Gerar senha temporaria</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  bindDialogClose(overlay);
+  overlay.querySelector('[data-cancel-recovery]').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#adminRecoveryForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const values = Object.fromEntries(new FormData(form));
+    setBusy(button, true, 'A gerar...');
+
+    try {
+      const result = await api.recoverAdminAccess(values.email, values.recoveryKey);
+      renderAdminRecoveryResult(overlay, result, values.email);
+    } catch (error) {
+      const resultBox = overlay.querySelector('#adminRecoveryResult');
+      resultBox.hidden = false;
+      resultBox.classList.add('is-error');
+      resultBox.textContent = error.message || 'Nao foi possivel recuperar o acesso administrativo.';
+    } finally {
+      setBusy(button, false);
+      reportHeight();
+    }
+  });
+  overlay.querySelector('[name="recoveryKey"]').focus();
+  reportHeight();
+}
+
+function renderAdminRecoveryResult(overlay, result, email) {
+  const resultBox = overlay.querySelector('#adminRecoveryResult');
+  resultBox.hidden = false;
+  resultBox.classList.remove('is-error');
+  resultBox.innerHTML = `
+    <span>Senha temporaria criada para ${escapeHtml(result.email || email)}</span>
+    <strong>${escapeHtml(result.temporaryAdminKey || '')}</strong>
+    <div class="recovery-result-actions">
+      <button class="button button-secondary button-small" type="button" data-copy-temporary-admin-key>
+        Copiar senha
+      </button>
+      <button class="button button-primary button-small" type="button" data-use-temporary-admin-key>
+        Usar no login
+      </button>
+    </div>
+  `;
+  resultBox.querySelector('[data-copy-temporary-admin-key]').addEventListener('click', () => {
+    copyText(result.temporaryAdminKey || '', 'Senha temporaria copiada.');
+  });
+  resultBox.querySelector('[data-use-temporary-admin-key]').addEventListener('click', () => {
+    const loginForm = document.querySelector('#adminLoginForm');
+    if (loginForm) {
+      loginForm.elements.email.value = email || '';
+      loginForm.elements.adminKey.value = result.temporaryAdminKey || '';
+    }
+    overlay.remove();
+    showToast('Senha temporaria preenchida no login.', 'success');
+  });
 }
 
 async function logout() {
