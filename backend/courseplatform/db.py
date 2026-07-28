@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from pathlib import Path
 import time
 from typing import Any, Iterable
 
@@ -6,6 +7,8 @@ import psycopg
 from psycopg.rows import dict_row
 
 from .config import get_settings
+
+SCHEMA_SQL_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 
 def _connect():
@@ -80,3 +83,33 @@ def execute(query: str, params: Iterable[Any] | dict[str, Any] = ()):
         with conn.cursor() as cur:
             cur.execute(query, params)
         conn.commit()
+
+
+def schema_exists() -> bool:
+    row = fetch_one(
+        """
+        select
+          to_regclass('courseplatform.students') is not null
+          and to_regclass('courseplatform.admins') is not null
+          and exists (
+            select 1 from information_schema.columns
+            where table_schema = 'courseplatform' and table_name = 'students' and column_name = 'password_hash'
+          )
+          and exists (
+            select 1 from information_schema.columns
+            where table_schema = 'courseplatform' and table_name = 'admins' and column_name = 'password_hash'
+          ) as ok
+        """
+    )
+    return bool(row and row["ok"])
+
+
+def ensure_schema() -> bool:
+    if schema_exists():
+        return False
+    schema_sql = SCHEMA_SQL_PATH.read_text(encoding="utf-8")
+    with connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(schema_sql)
+        conn.commit()
+    return True

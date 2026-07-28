@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .config import get_settings
-from .db import connection, fetch_all, fetch_one
+from .db import connection, ensure_schema, fetch_all, fetch_one, schema_exists
 from .security import (
     generate_id,
     generate_access_code,
@@ -480,12 +480,45 @@ def health(_: dict[str, Any]):
     db_ok = False
     db_error = ""
     db_error_hint = ""
+    schema_created = False
+    data_diagnostics = {
+        "students": 0,
+        "studentsWithPassword": 0,
+        "admins": 0,
+        "adminsWithPassword": 0,
+        "courses": 0,
+        "lessons": 0,
+        "dataReady": False,
+    }
     try:
-        row = fetch_one("select to_regclass('courseplatform.students') is not null as ok")
-        db_ok = bool(row and row["ok"])
+        db_ok = schema_exists()
         if not db_ok:
+            schema_created = ensure_schema()
+            db_ok = schema_exists()
+        if db_ok:
+            data_row = fetch_one(
+                """
+                select
+                  (select count(*) from courseplatform.students) as students,
+                  (select count(*) from courseplatform.students where password_hash is not null) as students_with_password,
+                  (select count(*) from courseplatform.admins) as admins,
+                  (select count(*) from courseplatform.admins where password_hash is not null) as admins_with_password,
+                  (select count(*) from courseplatform.courses) as courses,
+                  (select count(*) from courseplatform.lessons) as lessons
+                """
+            )
+            data_diagnostics = {
+                "students": int(data_row.get("students") or 0),
+                "studentsWithPassword": int(data_row.get("students_with_password") or 0),
+                "admins": int(data_row.get("admins") or 0),
+                "adminsWithPassword": int(data_row.get("admins_with_password") or 0),
+                "courses": int(data_row.get("courses") or 0),
+                "lessons": int(data_row.get("lessons") or 0),
+                "dataReady": bool((data_row.get("students") or 0) and (data_row.get("admins") or 0)),
+            }
+        else:
             db_error = "SchemaMissing"
-            db_error_hint = "Conexao Postgres ok, mas o schema courseplatform nao foi encontrado. Execute supabase/schema.sql neste banco."
+            db_error_hint = "Conexao Postgres ok, mas o schema courseplatform nao foi encontrado e nao foi possivel cria-lo automaticamente."
     except Exception as error:
         db_ok = False
         db_error = error.__class__.__name__
@@ -504,7 +537,11 @@ def health(_: dict[str, Any]):
         "databaseConfigured": bool(settings.database_url),
         "databaseError": "" if db_ok else db_error,
         "databaseErrorHint": "" if db_ok else db_error_hint,
-        "authConfigured": db_ok,
+        "schemaCreated": schema_created,
+        "dataDiagnostics": data_diagnostics,
+        "authConfigured": db_ok
+        and data_diagnostics["studentsWithPassword"] > 0
+        and data_diagnostics["adminsWithPassword"] > 0,
         "authDiagnostics": {
             "mode": "supabase_postgres_bcrypt",
             "requiresPasswordPepper": False,
@@ -586,6 +623,12 @@ def login(payload: dict[str, Any]):
     except Exception as error:
         raise database_api_error(error) from error
     if not student or student.get("status") != "ACTIVE":
+        total = fetch_one("select count(*) as total from courseplatform.students")
+        if int(total.get("total") or 0) == 0:
+            raise ApiError(
+                "DATABASE_EMPTY",
+                "A base de dados ligada ainda nao tem estudantes. Confirme se o POSTGRES_URL aponta para a base migrada.",
+            )
         raise ApiError("INVALID_CREDENTIALS", "Email ou codigo de acesso invalido.")
     try:
         if not verify_password(payload["accessCode"], student.get("password_hash")):
@@ -613,6 +656,12 @@ def admin_login(payload: dict[str, Any]):
     except Exception as error:
         raise database_api_error(error) from error
     if not admin or admin.get("status") != "ACTIVE":
+        total = fetch_one("select count(*) as total from courseplatform.admins")
+        if int(total.get("total") or 0) == 0:
+            raise ApiError(
+                "DATABASE_EMPTY",
+                "A base de dados ligada ainda nao tem administradores. Confirme se o POSTGRES_URL aponta para a base migrada.",
+            )
         raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
     try:
         if not verify_password(payload["adminKey"], admin.get("password_hash")):

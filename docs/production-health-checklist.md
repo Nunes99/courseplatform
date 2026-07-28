@@ -109,6 +109,14 @@ Esses campos nao mostram segredos; servem para confirmar se o ambiente publicado
 
 Se `databaseError` for `ProgrammingError`, normalmente o deploy conectou ao Postgres, mas o schema esperado nao esta no banco apontado pela variavel ativa. Confirme `databaseDiagnostics.source`, `host` e `database`, e execute `supabase/schema.sql` nesse mesmo projeto Supabase.
 
+A API tambem tenta criar o schema automaticamente quando ele esta ausente, usando a copia empacotada em `backend/courseplatform/schema.sql`. Isso cria tabelas vazias, mas nao recria os dados historicos dos estudantes. Depois disso:
+
+- `schemaCreated: true`: o schema foi criado automaticamente.
+- `dataDiagnostics.dataReady: false`: a base esta vazia ou sem utilizadores com password.
+- `DATABASE_EMPTY`: o login chegou ao banco, mas esse banco nao tem estudantes/admins migrados.
+
+Se aparecer `DATABASE_EMPTY`, o Vercel esta ligado a uma base diferente da base que recebeu os dados migrados, ou os dados ainda nao foram importados para esse projeto Supabase.
+
 ## Testes locais
 
 ```bash
