@@ -154,6 +154,13 @@ export class CoursePlatformApi {
     return data;
   }
 
+  recoverStudentAccess(email, publicStudentId) {
+    return this.request('recoverStudentAccess', {
+      email,
+      publicStudentId
+    });
+  }
+
   async logout() {
     const sessionToken = this.studentToken();
     try {

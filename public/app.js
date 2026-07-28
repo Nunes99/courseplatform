@@ -167,6 +167,9 @@ function renderLogin() {
           <button class="button button-primary button-block" type="submit">
             Entrar na plataforma
           </button>
+          <button class="text-button login-recovery-link" type="button" id="recoverAccessButton">
+            Esqueci a senha de acesso
+          </button>
         </form>
 
         <div id="loginError" class="form-message form-message-error" hidden></div>
@@ -175,6 +178,10 @@ function renderLogin() {
   `;
 
   document.querySelector('#loginForm').addEventListener('submit', login);
+  document.querySelector('#recoverAccessButton').addEventListener('click', () => {
+    const email = document.querySelector('#loginForm [name="email"]')?.value || '';
+    showStudentRecoveryDialog(email);
+  });
   reportHeight();
 }
 
@@ -252,11 +259,125 @@ async function login(event) {
     location.hash = '#/';
     await renderDashboard();
   } catch (error) {
-    errorBox.textContent = error.message;
+    if (error instanceof ApiError && error.code === 'INVALID_CREDENTIALS') {
+      errorBox.innerHTML = `
+        <span>${escapeHtml(error.message)}</span>
+        <button class="text-button" type="button" id="recoverAfterLoginError">
+          Recuperar senha
+        </button>
+      `;
+      errorBox.querySelector('#recoverAfterLoginError').addEventListener('click', () => {
+        showStudentRecoveryDialog(data.get('email'));
+      });
+    } else {
+      errorBox.textContent = error.message;
+    }
     errorBox.hidden = false;
   } finally {
     setBusy(button, false);
     reportHeight();
+  }
+}
+
+function showStudentRecoveryDialog(prefilledEmail = '') {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card recovery-dialog">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <h2>Recuperar senha de acesso</h2>
+      <p class="recovery-note">
+        Informe o email e o ID publico do estudante para gerar uma nova senha temporaria.
+      </p>
+
+      <form id="studentRecoveryForm" class="form-stack">
+        <label>
+          <span>Email</span>
+          <input type="email" name="email" autocomplete="email" required
+            value="${escapeHtml(prefilledEmail || '')}" placeholder="estudante@email.com">
+        </label>
+        <label>
+          <span>ID do estudante</span>
+          <input name="publicStudentId" required placeholder="STU-00000"
+            autocomplete="off" autocapitalize="characters">
+        </label>
+
+        <div id="studentRecoveryResult" class="recovery-result" hidden></div>
+
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-recovery>Cancelar</button>
+          <button class="button button-primary" type="submit">Gerar senha temporaria</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-cancel-recovery]').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.querySelector('#studentRecoveryForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const values = Object.fromEntries(new FormData(form));
+    setBusy(button, true, 'A gerar...');
+
+    try {
+      const result = await api.recoverStudentAccess(values.email, values.publicStudentId);
+      renderStudentRecoveryResult(overlay, result, values.email);
+    } catch (error) {
+      const resultBox = overlay.querySelector('#studentRecoveryResult');
+      resultBox.hidden = false;
+      resultBox.classList.add('is-error');
+      resultBox.textContent = error.message || 'Nao foi possivel recuperar o acesso.';
+    } finally {
+      setBusy(button, false);
+      reportHeight();
+    }
+  });
+  overlay.querySelector('[name="publicStudentId"]').focus();
+  reportHeight();
+}
+
+function renderStudentRecoveryResult(overlay, result, email) {
+  const resultBox = overlay.querySelector('#studentRecoveryResult');
+  resultBox.hidden = false;
+  resultBox.classList.remove('is-error');
+  resultBox.innerHTML = `
+    <span>Senha temporaria criada para ${escapeHtml(result.email || email)}</span>
+    <strong>${escapeHtml(result.temporaryPassword || '')}</strong>
+    <div class="recovery-result-actions">
+      <button class="button button-secondary button-small" type="button" data-copy-temporary-password>
+        Copiar senha
+      </button>
+      <button class="button button-primary button-small" type="button" data-use-temporary-password>
+        Usar no login
+      </button>
+    </div>
+  `;
+  resultBox.querySelector('[data-copy-temporary-password]').addEventListener('click', () => {
+    copyText(result.temporaryPassword || '', 'Senha temporaria copiada.');
+  });
+  resultBox.querySelector('[data-use-temporary-password]').addEventListener('click', () => {
+    const loginForm = document.querySelector('#loginForm');
+    if (loginForm) {
+      loginForm.elements.email.value = email || '';
+      loginForm.elements.accessCode.value = result.temporaryPassword || '';
+    }
+    overlay.remove();
+    showToast('Senha temporaria preenchida no login.', 'success');
+  });
+}
+
+async function copyText(text, successMessage) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(successMessage, 'success');
+  } catch {
+    window.prompt('Copie o texto:', text);
   }
 }
 

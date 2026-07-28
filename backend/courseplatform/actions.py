@@ -660,6 +660,73 @@ def login(payload: dict[str, Any]):
     return success({"sessionToken": session["token"], "expiresAt": iso(session["expiresAt"]), "student": public_student(student)})
 
 
+def mask_email(email: str) -> str:
+    local, separator, domain = (email or "").partition("@")
+    if not separator:
+        return email
+    visible = local[:2] if len(local) > 2 else local[:1]
+    return f"{visible}{'*' * max(2, len(local) - len(visible))}@{domain}"
+
+
+def recover_student_access(payload: dict[str, Any]):
+    require_fields(payload, ["email", "publicStudentId"])
+    email = normalize_email(payload["email"])
+    public_id = str_value(payload.get("publicStudentId")).upper()
+    try:
+        student = fetch_one(
+            """
+            select *
+            from courseplatform.students
+            where email = %s and upper(coalesce(public_student_id, '')) = %s
+            """,
+            (email, public_id),
+        )
+    except Exception as error:
+        raise database_api_error(error) from error
+    if not student or student.get("status") != "ACTIVE":
+        raise ApiError(
+            "RECOVERY_DETAILS_NOT_FOUND",
+            "Nao encontramos uma conta ativa com esse email e ID de estudante.",
+        )
+
+    access_code = generate_access_code(12)
+    try:
+        with connection() as conn:
+            row = conn.execute(
+                """
+                update courseplatform.students
+                set password_hash = crypt(%s, gen_salt('bf', 12)),
+                    password_changed_at = now(), password_reset_required = true,
+                    access_code = null, updated_at = now()
+                where student_id = %s
+                returning *
+                """,
+                (access_code, student["student_id"]),
+            ).fetchone()
+            conn.execute(
+                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+                (student["student_id"],),
+            )
+            audit(
+                conn,
+                "SYSTEM",
+                "STUDENT_RECOVERY",
+                "STUDENT_ACCESS_RECOVERED",
+                "STUDENT",
+                student["student_id"],
+                {"publicStudentId": row.get("public_student_id")},
+            )
+            conn.commit()
+    except Exception as error:
+        raise database_api_error(error) from error
+
+    return success({
+        "email": mask_email(row.get("email") or email),
+        "publicStudentId": row.get("public_student_id") or public_id,
+        "temporaryPassword": access_code,
+    })
+
+
 def admin_login(payload: dict[str, Any]):
     require_fields(payload, ["email", "adminKey"])
     email = normalize_email(payload["email"])
@@ -2110,6 +2177,7 @@ ACTIONS = {
     "getMediaConfig": student_media_config,
     "verifyCertificate": verify_certificate,
     "login": login,
+    "recoverStudentAccess": recover_student_access,
     "logout": logout,
     "adminLogin": admin_login,
     "adminLogout": logout,
