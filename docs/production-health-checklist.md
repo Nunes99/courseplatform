@@ -19,15 +19,13 @@ Use esta checklist quando o endpoint `/api?action=health` nao devolver `database
 ## Variaveis obrigatorias no Vercel
 
 - `DATABASE_URL`
-- `PASSWORD_PEPPER`
-- `ADMIN_MASTER_KEY_HASH`
 - `DEFAULT_COURSE_ID`
 - `SESSION_HOURS`
 - `DB_CONNECT_TIMEOUT`
 - `DB_CONNECT_RETRIES`
 - `CORS_ORIGINS`
 
-`PASSWORD_PEPPER` e `ADMIN_MASTER_KEY_HASH` devem ser os valores reais gerados pela rotacao da API Python, nao os placeholders do `.env.example`.
+Nao use `PASSWORD_PEPPER` nem `ADMIN_MASTER_KEY_HASH`. A autenticacao atual usa hashes bcrypt por utilizador no Supabase/Postgres.
 
 ## DATABASE_URL Supabase
 
@@ -45,8 +43,9 @@ O health atual tambem normaliza `%` bruto em runtime, mas a configuracao de prod
 
 O endpoint devolve:
 
-- `authDiagnostics.passwordPepperConfigured`
-- `authDiagnostics.adminMasterKeyHashConfigured`
+- `authDiagnostics.mode`
+- `authDiagnostics.requiresPasswordPepper`
+- `authDiagnostics.requiresAdminMasterKeyHash`
 - `databaseDiagnostics.host`
 - `databaseDiagnostics.port`
 - `databaseDiagnostics.database`
@@ -60,6 +59,7 @@ Esses campos nao mostram segredos; servem para confirmar se o ambiente publicado
 ```bash
 python scripts/smoke_test_platform.py
 python scripts/migrate_sheets_to_supabase.py --xlsx "C:\Users\manyu\Downloads\CoursePlatformDB.xlsx" --validate-only
+python scripts/migrate_to_supabase_password_auth.py
 ```
 
 Para ambientes sem `local-secrets/auth-transition-*.txt`, defina:
@@ -70,3 +70,25 @@ SMOKE_STUDENT_CODE
 SMOKE_ADMIN_EMAIL
 SMOKE_ADMIN_KEY
 ```
+
+## Migrar autenticacao antiga
+
+Dry-run:
+
+```bash
+python scripts/migrate_to_supabase_password_auth.py
+```
+
+Aplicar gerando novas senhas para utilizadores sem `password_hash`:
+
+```bash
+python scripts/migrate_to_supabase_password_auth.py --apply
+```
+
+Rotacionar todos os estudantes e admins, mesmo quem ja tinha `password_hash`:
+
+```bash
+python scripts/migrate_to_supabase_password_auth.py --apply --rotate-existing
+```
+
+O script guarda as senhas temporarias apenas em `local-secrets/supabase-password-auth-*.txt`, que esta ignorado pelo Git.

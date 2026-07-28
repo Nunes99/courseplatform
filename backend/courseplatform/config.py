@@ -80,8 +80,6 @@ def database_url_diagnostics(value: str) -> dict:
 class Settings:
     def __init__(self):
         self.database_url = normalize_database_url(os.getenv("DATABASE_URL", ""))
-        self.password_pepper = os.getenv("PASSWORD_PEPPER", "")
-        self.admin_master_key_hash = os.getenv("ADMIN_MASTER_KEY_HASH", "")
         self.default_course_id = os.getenv("DEFAULT_COURSE_ID", "COURSE-EAPI-001")
         self.session_hours = _int_env("SESSION_HOURS", 12)
         self.db_connect_timeout = _int_env("DB_CONNECT_TIMEOUT", 15)

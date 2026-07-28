@@ -155,9 +155,9 @@ function renderLogin() {
               placeholder="estudante@email.com">
           </label>
           <label>
-            <span>Código de acesso</span>
+            <span>Senha de acesso</span>
             <input type="password" name="accessCode" autocomplete="current-password"
-              required placeholder="Código fornecido pelo administrador">
+              required placeholder="Senha fornecida pelo administrador">
           </label>
           <button class="button button-primary button-block" type="submit">
             Entrar na plataforma

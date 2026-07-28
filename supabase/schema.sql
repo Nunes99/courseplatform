@@ -7,7 +7,10 @@ create table if not exists courseplatform.students (
   public_student_id text unique,
   full_name text not null,
   email text not null unique,
-  access_code text not null,
+  access_code text,
+  password_hash text,
+  password_changed_at timestamptz,
+  password_reset_required boolean not null default false,
   status text not null default 'ACTIVE',
   country text,
   organization text,
@@ -24,6 +27,9 @@ create table if not exists courseplatform.admins (
   admin_id text primary key,
   full_name text not null,
   email text not null unique,
+  password_hash text,
+  password_changed_at timestamptz,
+  password_reset_required boolean not null default false,
   role text not null default 'REVIEWER',
   status text not null default 'ACTIVE',
   created_at timestamptz,
@@ -319,6 +325,7 @@ create table if not exists courseplatform.schema_guide (
 
 create index if not exists idx_sessions_subject on courseplatform.sessions(subject_id);
 create index if not exists idx_students_email on courseplatform.students(email);
+create index if not exists idx_admins_email on courseplatform.admins(email);
 create index if not exists idx_lessons_course on courseplatform.lessons(course_id, lesson_number);
 create index if not exists idx_enrollments_student_course on courseplatform.enrollments(student_id, course_id);
 create index if not exists idx_progress_student_lesson on courseplatform.lesson_progress(student_id, lesson_id);

@@ -130,7 +130,7 @@ function renderAdminLogin() {
             <input type="email" name="email" required>
           </label>
           <label>
-            <span>Chave administrativa</span>
+            <span>Senha administrativa</span>
             <input type="password" name="adminKey" required>
           </label>
           <button class="button button-primary button-block" type="submit">
@@ -496,7 +496,10 @@ function showStaffDialog(adminId = '') {
     const values = Object.fromEntries(new FormData(form));
     setBusy(button, true, 'A guardar...');
     try {
-      await api.adminSaveStaff(values);
+      const result = await api.adminSaveStaff(values);
+      if (result.adminPassword) {
+        alert(`Staff guardado.\n\nSenha temporaria: ${result.adminPassword}\n\nGuarde a senha antes de fechar.`);
+      }
       showToast('Staff guardado.', 'success');
       overlay.remove();
       await loadStaff();
@@ -1598,7 +1601,7 @@ function studentCardTemplate({ student, enrollments }) {
       <div class="student-admin-actions">
         <button type="button" data-view-student="${escapeHtml(student.studentId)}">Detalhes</button>
         <button type="button" data-copy-email="${escapeHtml(student.email)}">Copiar email</button>
-        <button type="button" data-reset-access="${escapeHtml(student.studentId)}">Novo codigo</button>
+        <button type="button" data-reset-access="${escapeHtml(student.studentId)}">Nova senha</button>
         <button type="button"
           data-toggle-student="${escapeHtml(student.studentId)}"
           data-current-status="${escapeHtml(student.status)}">
@@ -1741,7 +1744,7 @@ function showStudentDetails(studentId) {
           Copiar email
         </button>
         <button class="button button-secondary" type="button" data-reset-access="${escapeHtml(student.studentId)}">
-          Novo codigo
+          Nova senha
         </button>
         <button class="button button-primary" type="button"
           data-toggle-student="${escapeHtml(student.studentId)}"
@@ -3199,7 +3202,7 @@ function showStudentDialog() {
     try {
       const result = await api.adminCreateStudent(values);
       window.alert(
-        `Estudante criado.\n\nCódigo de acesso: ${result.accessCode}\n\nGuarde o código antes de fechar.`
+        `Estudante criado.\n\nSenha temporaria: ${result.accessCode}\n\nGuarde a senha antes de fechar.`
       );
       overlay.remove();
       await loadStudents();
@@ -3217,7 +3220,7 @@ async function resetAccess(studentId) {
   try {
     const result = await api.adminResetAccess(studentId);
     window.alert(
-      `Novo código de acesso: ${result.accessCode}\n\nGuarde-o antes de fechar.`
+      `Nova senha temporaria: ${result.accessCode}\n\nGuarde-a antes de fechar.`
     );
   } catch (error) {
     handleAdminError(error);

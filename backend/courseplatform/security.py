@@ -14,8 +14,7 @@ def utc_now() -> datetime:
 
 
 def hash_secret(value: str) -> str:
-    settings = get_settings()
-    raw = f"{settings.password_pepper}|{value or ''}".encode("utf-8")
+    raw = (value or "").encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 

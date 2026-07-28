@@ -5,7 +5,6 @@ from typing import Any
 from .config import get_settings
 from .db import connection, fetch_all, fetch_one
 from .security import (
-    constant_time_equals,
     generate_id,
     generate_access_code,
     generate_token,
@@ -53,16 +52,16 @@ def str_value(value: Any) -> str:
     return str(value or "").strip()
 
 
-def configured_secret(value: str) -> bool:
+def valid_password(value: str) -> bool:
     text = str_value(value)
-    if not text:
+    return len(text) >= 8
+
+
+def verify_password(password: str, password_hash: str | None) -> bool:
+    if not password_hash:
         return False
-    return not (
-        text.startswith("CHANGE_ME")
-        or text.startswith("YOUR_")
-        or text.startswith("generate-with-python-api-auth-rotation")
-        or text in {"PASSWORD", "SENHA"}
-    )
+    row = fetch_one("select %s = crypt(%s, %s) as ok", (password_hash, password, password_hash))
+    return bool(row and row.get("ok"))
 
 
 def int_value(value: Any, fallback: int = 0) -> int:
@@ -464,17 +463,16 @@ def health(_: dict[str, Any]):
     except Exception as error:
         db_ok = False
         db_error = error.__class__.__name__
-    password_pepper_configured = configured_secret(settings.password_pepper)
-    admin_key_configured = configured_secret(settings.admin_master_key_hash)
     return success({
         "version": settings.app_version,
         "database": db_ok,
         "databaseConfigured": bool(settings.database_url),
         "databaseError": "" if db_ok else db_error,
-        "authConfigured": password_pepper_configured and admin_key_configured,
+        "authConfigured": db_ok,
         "authDiagnostics": {
-            "passwordPepperConfigured": password_pepper_configured,
-            "adminMasterKeyHashConfigured": admin_key_configured,
+            "mode": "supabase_postgres_bcrypt",
+            "requiresPasswordPepper": False,
+            "requiresAdminMasterKeyHash": False,
         },
         "databaseDiagnostics": settings.database_diagnostics,
     })
@@ -550,7 +548,7 @@ def login(payload: dict[str, Any]):
     student = fetch_one("select * from courseplatform.students where email = %s", (email,))
     if not student or student.get("status") != "ACTIVE":
         raise ApiError("INVALID_CREDENTIALS", "Email ou codigo de acesso invalido.")
-    if not constant_time_equals(hash_secret(payload["accessCode"]), student["access_code"]):
+    if not verify_password(payload["accessCode"], student.get("password_hash")):
         raise ApiError("INVALID_CREDENTIALS", "Email ou codigo de acesso invalido.")
     with connection() as conn:
         revoke_sessions(conn, student["student_id"])
@@ -569,8 +567,7 @@ def admin_login(payload: dict[str, Any]):
     admin = fetch_one("select * from courseplatform.admins where email = %s", (email,))
     if not admin or admin.get("status") != "ACTIVE":
         raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
-    expected = get_settings().admin_master_key_hash
-    if not expected or not constant_time_equals(hash_secret(payload["adminKey"]), expected):
+    if not verify_password(payload["adminKey"], admin.get("password_hash")):
         raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
     subject_id = f"ADMIN:{admin['admin_id']}"
     with connection() as conn:
@@ -834,18 +831,23 @@ def update_my_profile(payload: dict[str, Any]):
 def change_my_access_code(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["currentAccessCode", "newAccessCode"])
-    if not constant_time_equals(hash_secret(payload["currentAccessCode"]), student.get("access_code")):
+    if not verify_password(payload["currentAccessCode"], student.get("password_hash")):
         raise ApiError("INVALID_CURRENT_ACCESS_CODE", "A senha atual nao esta correta.")
     new_code = str_value(payload.get("newAccessCode"))
-    if len(new_code) < 6:
-        raise ApiError("WEAK_ACCESS_CODE", "A nova senha deve ter pelo menos 6 caracteres.")
-    new_hash = hash_secret(new_code)
-    if constant_time_equals(new_hash, student.get("access_code")):
+    if not valid_password(new_code):
+        raise ApiError("WEAK_ACCESS_CODE", "A nova senha deve ter pelo menos 8 caracteres.")
+    if verify_password(new_code, student.get("password_hash")):
         raise ApiError("ACCESS_CODE_UNCHANGED", "A nova senha deve ser diferente da atual.")
     with connection() as conn:
         conn.execute(
-            "update courseplatform.students set access_code = %s, updated_at = now() where student_id = %s",
-            (new_hash, student["student_id"]),
+            """
+            update courseplatform.students
+            set password_hash = crypt(%s, gen_salt('bf', 12)),
+                password_changed_at = now(), password_reset_required = false,
+                access_code = null, updated_at = now()
+            where student_id = %s
+            """,
+            (new_code, student["student_id"]),
         )
         conn.execute(
             "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
@@ -1475,21 +1477,46 @@ def admin_save_staff(payload: dict[str, Any]):
     if role not in {"OWNER", "ADMIN", "REVIEWER"}:
         role = "REVIEWER"
     status = str_value(payload.get("status") or "ACTIVE").upper()
+    is_new = not fetch_one("select 1 from courseplatform.admins where admin_id = %s", (admin_id,))
+    admin_password = str_value(payload.get("password"))
+    if is_new and not admin_password:
+        admin_password = generate_access_code(14)
+    if admin_password and not valid_password(admin_password):
+        raise ApiError("WEAK_PASSWORD", "A senha deve ter pelo menos 8 caracteres.")
     with connection() as conn:
         row = conn.execute(
             """
-            insert into courseplatform.admins (admin_id, full_name, email, role, status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, now(), now())
+            insert into courseplatform.admins
+              (admin_id, full_name, email, password_hash, password_changed_at, password_reset_required,
+               role, status, created_at, updated_at)
+            values (%s, %s, %s, case when %s = '' then null else crypt(%s, gen_salt('bf', 12)) end,
+                    case when %s = '' then null else now() end, %s, %s, %s, now(), now())
             on conflict (admin_id) do update
-            set full_name = excluded.full_name, email = excluded.email, role = excluded.role,
-                status = excluded.status, updated_at = now()
+            set full_name = excluded.full_name, email = excluded.email,
+                password_hash = coalesce(excluded.password_hash, courseplatform.admins.password_hash),
+                password_changed_at = coalesce(excluded.password_changed_at, courseplatform.admins.password_changed_at),
+                password_reset_required = case
+                  when excluded.password_hash is null then courseplatform.admins.password_reset_required
+                  else excluded.password_reset_required
+                end,
+                role = excluded.role, status = excluded.status, updated_at = now()
             returning *
             """,
-            (admin_id, str_value(payload.get("fullName")), normalize_email(payload.get("email")), role, status),
+            (
+                admin_id,
+                str_value(payload.get("fullName")),
+                normalize_email(payload.get("email")),
+                admin_password,
+                admin_password,
+                admin_password,
+                bool(admin_password),
+                role,
+                status,
+            ),
         ).fetchone()
         audit(conn, "ADMIN", admin["admin_id"], "STAFF_SAVED", "ADMIN", admin_id)
         conn.commit()
-    return success({"admin": public_admin(row)})
+    return success({"admin": public_admin(row), "adminPassword": admin_password if admin_password else ""})
 
 
 def admin_set_staff_status(payload: dict[str, Any]):
@@ -1510,7 +1537,7 @@ def admin_set_staff_status(payload: dict[str, Any]):
 def admin_create_student(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["fullName", "email"])
-    access_code = generate_access_code(10)
+    access_code = generate_access_code(12)
     student_id = generate_id("STU")
     with connection() as conn:
         public_id = public_student_id()
@@ -1519,9 +1546,11 @@ def admin_create_student(payload: dict[str, Any]):
         row = conn.execute(
             """
             insert into courseplatform.students
-              (student_id, public_student_id, full_name, email, access_code, status,
+              (student_id, public_student_id, full_name, email, access_code, password_hash,
+               password_changed_at, password_reset_required, status,
                country, organization, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, 'ACTIVE', %s, %s, now(), now())
+            values (%s, %s, %s, %s, null, crypt(%s, gen_salt('bf', 12)),
+                    now(), true, 'ACTIVE', %s, %s, now(), now())
             returning *
             """,
             (
@@ -1529,7 +1558,7 @@ def admin_create_student(payload: dict[str, Any]):
                 public_id,
                 str_value(payload.get("fullName")),
                 normalize_email(payload.get("email")),
-                hash_secret(access_code),
+                access_code,
                 str_value(payload.get("country")),
                 str_value(payload.get("organization")),
             ),
@@ -1557,11 +1586,18 @@ def admin_set_student_status(payload: dict[str, Any]):
 def admin_reset_student_access_code(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["studentId"])
-    access_code = generate_access_code(10)
+    access_code = generate_access_code(12)
     with connection() as conn:
         row = conn.execute(
-            "update courseplatform.students set access_code = %s, updated_at = now() where student_id = %s returning *",
-            (hash_secret(access_code), payload["studentId"]),
+            """
+            update courseplatform.students
+            set password_hash = crypt(%s, gen_salt('bf', 12)),
+                password_changed_at = now(), password_reset_required = true,
+                access_code = null, updated_at = now()
+            where student_id = %s
+            returning *
+            """,
+            (access_code, payload["studentId"]),
         ).fetchone()
         if not row:
             raise ApiError("STUDENT_NOT_FOUND", "Estudante nao encontrado.")

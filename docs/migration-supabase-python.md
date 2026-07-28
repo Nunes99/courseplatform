@@ -23,13 +23,13 @@ Este documento descreve a arquitetura atual da plataforma: Supabase como base de
 Configure no Vercel:
 
 - `DATABASE_URL`
-- `PASSWORD_PEPPER`
-- `ADMIN_MASTER_KEY_HASH`
 - `DEFAULT_COURSE_ID`
 - `SESSION_HOURS`
+- `DB_CONNECT_TIMEOUT`
+- `DB_CONNECT_RETRIES`
 - `CORS_ORIGINS`
 
-`PASSWORD_PEPPER` e `ADMIN_MASTER_KEY_HASH` foram gerados pela rotacao de autenticacao da API Python.
+A autenticacao usa `password_hash` bcrypt por estudante/admin no Supabase/Postgres. Nao ha dependencia de `PASSWORD_PEPPER` nem de chave master administrativa global.
 
 ## Validacao
 
@@ -123,7 +123,7 @@ Acoes administrativas:
 
 ## Corte operacional
 
-1. Garantir `DATABASE_URL`, `PASSWORD_PEPPER` e `ADMIN_MASTER_KEY_HASH` no Vercel.
+1. Garantir `DATABASE_URL`, `DEFAULT_COURSE_ID`, `SESSION_HOURS`, `DB_CONNECT_TIMEOUT`, `DB_CONNECT_RETRIES` e `CORS_ORIGINS` no Vercel.
 2. Fazer deploy.
 3. Confirmar `health` com `database: true` e `authConfigured: true`.
 4. Testar login de estudante.

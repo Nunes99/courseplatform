@@ -22,7 +22,11 @@ def _latest_transition_file() -> Path | None:
     folder = Path("local-secrets")
     if not folder.exists():
         return None
-    files = sorted(folder.glob("auth-transition-*.txt"), key=lambda item: item.stat().st_mtime, reverse=True)
+    files = sorted(
+        list(folder.glob("supabase-password-auth-*.txt")) + list(folder.glob("auth-transition-*.txt")),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
     return files[0] if files else None
 
 
@@ -32,8 +36,20 @@ def _read_transition_credentials():
         return {}
     lines = path.read_text(encoding="utf-8").splitlines()
     credentials = {}
-    if len(lines) > 4:
-        credentials["admin_key"] = lines[4].strip()
+    try:
+        admin_header = next(i for i, line in enumerate(lines) if line.startswith("adminId\t"))
+        admin_headers = lines[admin_header].split("\t")
+        for line in lines[admin_header + 1:]:
+            if not line.strip():
+                break
+            row = dict(zip(admin_headers, line.split("\t")))
+            if row.get("email") and row.get("password"):
+                credentials["admin_email"] = row["email"]
+                credentials["admin_key"] = row["password"]
+                break
+    except StopIteration:
+        if len(lines) > 4:
+            credentials["admin_key"] = lines[4].strip()
     try:
         header_index = next(i for i, line in enumerate(lines) if line.startswith("publicStudentId\t"))
     except StopIteration:
@@ -43,9 +59,10 @@ def _read_transition_credentials():
         if not line.strip():
             continue
         row = dict(zip(headers, line.split("\t")))
-        if row.get("email") and row.get("accessCode"):
+        password = row.get("password") or row.get("accessCode")
+        if row.get("email") and password:
             credentials["student_email"] = row["email"]
-            credentials["student_code"] = row["accessCode"]
+            credentials["student_code"] = password
             break
     return credentials
 
@@ -71,6 +88,7 @@ def main():
     student_code = _credential("SMOKE_STUDENT_CODE", transition.get("student_code", ""))
     admin_email = _credential("SMOKE_ADMIN_EMAIL")
     admin_key = _credential("SMOKE_ADMIN_KEY", transition.get("admin_key", ""))
+    admin_email = admin_email or transition.get("admin_email", "")
 
     student_token = None
     admin_token = None

@@ -40,7 +40,7 @@ Referencia analisada em 2026-07-28:
 ## Cuidados de compatibilidade
 
 - `studentId`, `publicStudentId`, progresso, tentativas, revisoes e certificados sao preservados.
-- Os codigos de acesso foram re-hashados pela API Python com `PASSWORD_PEPPER` proprio. Os codigos visiveis de transicao ficam apenas no arquivo local ignorado `local-secrets/auth-transition-*.txt`.
+- A autenticacao atual usa `password_hash` bcrypt por utilizador no Supabase/Postgres. Senhas temporarias de migracao ficam apenas em arquivos locais ignorados `local-secrets/supabase-password-auth-*.txt`.
 - Datas numericas vindas do Sheets/Excel sao convertidas para `timestamptz`.
 - Campos booleanos como `active`, `isRequired`, `isCorrect`, `retryAuthorized` e `unlockNextLesson` sao convertidos para booleano real.
 - `detailsJson` e `allowedEmails` sao guardados como `jsonb`.
