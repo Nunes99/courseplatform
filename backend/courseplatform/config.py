@@ -1,6 +1,14 @@
 import os
 from functools import lru_cache
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv()
+
 
 def _int_env(name: str, fallback: int) -> int:
     try:
