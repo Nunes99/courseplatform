@@ -350,6 +350,10 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminResetStudentAccessCode', { studentId });
   }
 
+  adminRestoreCredentials(payload = {}) {
+    return this.mutateAdmin('adminRestoreCredentials', payload);
+  }
+
   adminCourseStructure(options = {}) {
     return this.cachedAdminRequest('adminGetCourseStructure', {
       courseId: this.courseId

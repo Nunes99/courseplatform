@@ -236,6 +236,12 @@ function renderAdminShell() {
             <span>Staff</span>
           </button>
         ` : ''}
+        ${canManageCredentials() ? `
+          <button class="admin-nav" data-admin-view="credentials">
+            <img src="${iconUrl('key', blueIcon)}" alt="">
+            <span>Credenciais</span>
+          </button>
+        ` : ''}
         <button class="admin-nav" data-admin-view="profile">
           <img src="${iconUrl('user-male-circle', blueIcon)}" alt="">
           <span>Perfil</span>
@@ -261,6 +267,8 @@ function renderAdminShell() {
         renderBrandSettings();
       } else if (button.dataset.adminView === 'staff') {
         loadStaff();
+      } else if (button.dataset.adminView === 'credentials') {
+        renderCredentialsManagement();
       } else if (button.dataset.adminView === 'profile') {
         renderAdminProfile();
       } else {
@@ -312,6 +320,69 @@ function canManageStaff() {
   return ['OWNER', 'ADMIN'].includes(state.admin?.role);
 }
 
+function canManageCredentials() {
+  return ['OWNER', 'ADMIN'].includes(state.admin?.role);
+}
+
+function renderCredentialsManagement() {
+  const main = document.querySelector('#adminMain');
+  const canRestoreStaff = state.admin?.role === 'OWNER';
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Seguranca de acesso</p>
+        <h1>Credenciais</h1>
+      </div>
+    </div>
+
+    <section class="credential-management-grid">
+      <article class="credential-management-card">
+        <img src="${iconUrl('student-male', goldIcon)}" alt="">
+        <div>
+          <span>Estudantes</span>
+          <h2>Restaurar acesso dos participantes</h2>
+          <p>Cria senhas temporarias para contas importadas ou selecionadas.</p>
+        </div>
+        <button class="button button-primary" type="button" data-open-credential-target="STUDENTS">
+          Abrir restauracao
+        </button>
+      </article>
+
+      ${canRestoreStaff ? `
+        <article class="credential-management-card">
+          <img src="${iconUrl('conference-call', goldIcon)}" alt="">
+          <div>
+            <span>Staff</span>
+            <h2>Restaurar acesso administrativo</h2>
+            <p>Disponivel apenas para owner e com invalidacao de sessoes antigas.</p>
+          </div>
+          <button class="button button-primary" type="button" data-open-credential-target="ADMINS">
+            Abrir restauracao
+          </button>
+        </article>
+
+        <article class="credential-management-card">
+          <img src="${iconUrl('key', goldIcon)}" alt="">
+          <div>
+            <span>Lote completo</span>
+            <h2>Tratar estudantes e staff</h2>
+            <p>Usar em migracoes ou correcao geral de contas sem senha.</p>
+          </div>
+          <button class="button button-secondary" type="button" data-open-credential-target="ALL">
+            Abrir lote
+          </button>
+        </article>
+      ` : ''}
+    </section>
+  `;
+
+  root.querySelectorAll('[data-open-credential-target]').forEach((button) => {
+    button.addEventListener('click', () => showCredentialRecoveryDialog(button.dataset.openCredentialTarget));
+  });
+  reportHeight();
+}
+
 async function loadStaff(options = {}) {
   const main = document.querySelector('#adminMain');
   main.innerHTML = loadingTemplate('A carregar staff...');
@@ -342,7 +413,10 @@ function renderStaff() {
         <h1>Administradores e revisores</h1>
       </div>
       <div class="admin-heading-actions">
-        ${state.admin?.role === 'OWNER' ? '<button class="button button-primary" id="newStaff" type="button">Adicionar staff</button>' : ''}
+        ${state.admin?.role === 'OWNER' ? `
+          <button class="button button-secondary" id="restoreStaffCredentials" type="button">Restaurar credenciais</button>
+          <button class="button button-primary" id="newStaff" type="button">Adicionar staff</button>
+        ` : ''}
       </div>
     </div>
 
@@ -383,6 +457,7 @@ function renderStaff() {
   `;
 
   document.querySelector('#newStaff')?.addEventListener('click', () => showStaffDialog());
+  document.querySelector('#restoreStaffCredentials')?.addEventListener('click', () => showCredentialRecoveryDialog('ADMINS'));
   root.querySelectorAll('[data-edit-staff]').forEach((button) => {
     button.addEventListener('click', () => showStaffDialog(button.dataset.editStaff));
   });
@@ -522,6 +597,276 @@ async function setStaffStatus(adminId, status) {
   } catch (error) {
     handleAdminError(error);
   }
+}
+
+async function showCredentialRecoveryDialog(defaultTarget = 'STUDENTS') {
+  await ensureCredentialRecoveryData(defaultTarget);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card credential-dialog">
+      <button class="dialog-close" type="button">x</button>
+      <h2>Restaurar credenciais</h2>
+      <p class="credential-dialog-note">
+        Gere novas senhas temporarias para contas ja existentes no Supabase. O progresso,
+        inscricoes, grupos e submissoes nao sao alterados.
+      </p>
+
+      <form id="credentialRecoveryForm" class="form-stack">
+        <div class="course-form-grid">
+          <label>
+            <span>Tipo de conta</span>
+            <select name="targetType" id="credentialTarget">
+              ${credentialTargetOptions(defaultTarget)}
+            </select>
+          </label>
+          <label>
+            <span>Modo</span>
+            <select name="mode" id="credentialMode">
+              <option value="missing" selected>Apenas contas sem senha</option>
+              <option value="rotate">Substituir senhas selecionadas</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="credential-checkbox-line">
+          <input type="checkbox" name="includeInactive">
+          <span>Incluir contas inativas ou bloqueadas</span>
+        </label>
+
+        <div class="select-all-toolbar">
+          <button class="button button-small button-secondary" type="button" data-select-credentials="all">Selecionar todos</button>
+          <button class="button button-small button-secondary" type="button" data-select-credentials="none">Limpar selecao</button>
+        </div>
+
+        <div id="credentialCandidateList" class="credential-candidate-list">
+          ${credentialCandidateListTemplate(defaultTarget)}
+        </div>
+
+        <div id="credentialRecoveryResult" class="credential-result" hidden></div>
+
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Gerar senhas</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  bindDialogClose(overlay);
+  overlay.querySelector('[data-cancel-dialog]').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#credentialTarget').addEventListener('change', async (event) => {
+    const targetType = event.currentTarget.value;
+    await ensureCredentialRecoveryData(targetType);
+    overlay.querySelector('#credentialCandidateList').innerHTML = credentialCandidateListTemplate(targetType);
+  });
+  overlay.querySelectorAll('[data-select-credentials]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const checked = button.dataset.selectCredentials === 'all';
+      overlay.querySelectorAll('[name="credentialAccount"]').forEach((input) => {
+        input.checked = checked;
+      });
+    });
+  });
+  overlay.querySelector('#credentialRecoveryForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const selected = [...form.querySelectorAll('[name="credentialAccount"]:checked')]
+      .map((input) => input.value.split('|'));
+    if (!selected.length) {
+      showToast('Selecione pelo menos uma conta.', 'warning');
+      return;
+    }
+
+    const mode = form.elements.mode.value;
+    const message = mode === 'rotate'
+      ? 'Isto vai substituir as senhas atuais das contas selecionadas e encerrar sessoes abertas. Continuar?'
+      : 'Gerar senha temporaria apenas para contas selecionadas que ainda nao possuem senha?';
+    if (!confirmAdminAction(message)) return;
+
+    const studentIds = selected.filter(([type]) => type === 'STUDENT').map(([, id]) => id);
+    const adminIds = selected.filter(([type]) => type === 'ADMIN').map(([, id]) => id);
+    setBusy(button, true, 'A gerar...');
+
+    try {
+      const result = await api.adminRestoreCredentials({
+        targetType: form.elements.targetType.value,
+        studentIds,
+        adminIds,
+        onlyMissingPassword: mode === 'missing',
+        includeInactive: form.elements.includeInactive.checked
+      });
+      renderCredentialRecoveryResult(overlay, result.credentials || [], result.summary || {});
+      showToast('Credenciais restauradas.', 'success');
+      await refreshCredentialSources(form.elements.targetType.value);
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  });
+  reportHeight();
+}
+
+async function ensureCredentialRecoveryData(targetType) {
+  const target = String(targetType || '').toUpperCase();
+  const promises = [];
+  if ((target === 'STUDENTS' || target === 'ALL') && !state.students.length) {
+    promises.push(api.adminStudents({ limit: 500 }, { force: true }).then((result) => {
+      state.students = result.students || [];
+    }));
+  }
+  if ((target === 'ADMINS' || target === 'ALL') && state.admin?.role === 'OWNER' && !state.staff.length) {
+    promises.push(api.adminStaff({ force: true }).then((result) => {
+      state.staff = result.staff || [];
+      state.admin = result.currentAdmin || state.admin;
+    }));
+  }
+  if (promises.length) {
+    try {
+      await Promise.all(promises);
+    } catch (error) {
+      handleAdminError(error);
+    }
+  }
+}
+
+async function refreshCredentialSources(targetType) {
+  const target = String(targetType || '').toUpperCase();
+  if (target === 'STUDENTS' || target === 'ALL') {
+    const result = await api.adminStudents({ limit: 500 }, { force: true });
+    state.students = result.students || [];
+  }
+  if ((target === 'ADMINS' || target === 'ALL') && state.admin?.role === 'OWNER') {
+    const result = await api.adminStaff({ force: true });
+    state.staff = result.staff || [];
+    state.admin = result.currentAdmin || state.admin;
+  }
+}
+
+function credentialTargetOptions(selected) {
+  const options = [
+    ['STUDENTS', 'Estudantes']
+  ];
+  if (state.admin?.role === 'OWNER') {
+    options.push(['ADMINS', 'Staff administrativo'], ['ALL', 'Estudantes e staff']);
+  }
+  return options.map(([value, label]) => studentFilterOption(value, label, selected)).join('');
+}
+
+function credentialCandidates(targetType) {
+  const target = String(targetType || 'STUDENTS').toUpperCase();
+  const students = target === 'ADMINS' ? [] : state.students.map(({ student }) => ({
+    type: 'STUDENT',
+    id: student.studentId,
+    title: student.fullName,
+    meta: `${student.publicStudentId || student.studentId} - ${student.email}`,
+    status: student.status
+  }));
+  const admins = target === 'STUDENTS' ? [] : state.staff.map((admin) => ({
+    type: 'ADMIN',
+    id: admin.adminId,
+    title: admin.fullName,
+    meta: `${admin.role} - ${admin.email}`,
+    status: admin.status
+  }));
+  return [...students, ...admins];
+}
+
+function credentialCandidateListTemplate(targetType) {
+  const candidates = credentialCandidates(targetType);
+  if (!candidates.length) {
+    return '<p class="empty-note">Nenhuma conta disponivel para este filtro.</p>';
+  }
+  return candidates.map((item) => `
+    <label class="credential-candidate">
+      <input type="checkbox" name="credentialAccount" value="${escapeHtml(item.type)}|${escapeHtml(item.id)}" checked>
+      <span>
+        <strong>${escapeHtml(item.title)}</strong>
+        <small>${escapeHtml(item.meta)}</small>
+      </span>
+      <em class="status-pill ${statusClass(item.status)}">${statusLabel(item.status)}</em>
+    </label>
+  `).join('');
+}
+
+function renderCredentialRecoveryResult(overlay, credentials, summary) {
+  const resultBox = overlay.querySelector('#credentialRecoveryResult');
+  resultBox.hidden = false;
+  resultBox.innerHTML = `
+    <div class="credential-result-heading">
+      <div>
+        <span>Resultado</span>
+        <strong>${Number(summary.total || credentials.length)} senha(s) temporaria(s) criada(s)</strong>
+      </div>
+      <div class="admin-heading-actions">
+        <button class="button button-small button-secondary" type="button" data-copy-credentials>Copiar lista</button>
+        <button class="button button-small button-secondary" type="button" data-download-credentials>Exportar CSV</button>
+      </div>
+    </div>
+    ${credentials.length ? `
+      <div class="credential-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Tipo</th>
+              <th>Nome</th>
+              <th>Email</th>
+              <th>ID</th>
+              <th>Senha temporaria</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${credentials.map((item) => `
+              <tr>
+                <td>${item.type === 'ADMIN' ? 'Staff' : 'Estudante'}</td>
+                <td>${escapeHtml(item.fullName || '')}</td>
+                <td>${escapeHtml(item.email || '')}</td>
+                <td>${escapeHtml(item.publicId || item.id || '')}</td>
+                <td><code>${escapeHtml(item.temporaryPassword || '')}</code></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : '<p class="empty-note">Nenhuma conta precisava de nova senha neste modo.</p>'}
+  `;
+  resultBox.querySelector('[data-copy-credentials]')?.addEventListener('click', () => {
+    copyText(credentialsCsv(credentials, '\t'), 'Lista de credenciais copiada.');
+  });
+  resultBox.querySelector('[data-download-credentials]')?.addEventListener('click', () => {
+    downloadCredentialsCsv(credentials);
+  });
+}
+
+function credentialsCsv(credentials, separator = ',') {
+  const rows = [
+    ['tipo', 'nome', 'email', 'id', 'senha_temporaria'],
+    ...credentials.map((item) => [
+      item.type === 'ADMIN' ? 'staff' : 'estudante',
+      item.fullName || '',
+      item.email || '',
+      item.publicId || item.id || '',
+      item.temporaryPassword || ''
+    ])
+  ];
+  return rows.map((row) => row.map((cell) => {
+    const value = String(cell).replace(/"/g, '""');
+    return `"${value}"`;
+  }).join(separator)).join('\n');
+}
+
+function downloadCredentialsCsv(credentials) {
+  const blob = new Blob([credentialsCsv(credentials)], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `credenciais-temporarias-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function renderAdminProfile() {
@@ -1412,9 +1757,14 @@ function renderStudentsV2() {
         <p class="eyebrow">Participantes</p>
         <h1>Estudantes</h1>
       </div>
-      <button class="button button-primary" id="newStudent">
-        Adicionar estudante
-      </button>
+      <div class="admin-heading-actions">
+        <button class="button button-secondary" id="restoreStudentCredentials" type="button">
+          Restaurar credenciais
+        </button>
+        <button class="button button-primary" id="newStudent" type="button">
+          Adicionar estudante
+        </button>
+      </div>
     </div>
 
     <section class="admin-summary-grid" aria-label="Resumo de participantes">
@@ -1508,6 +1858,7 @@ function renderStudentsV2() {
   `;
 
   document.querySelector('#newStudent').addEventListener('click', showStudentDialog);
+  document.querySelector('#restoreStudentCredentials').addEventListener('click', () => showCredentialRecoveryDialog('STUDENTS'));
   document.querySelector('#studentSearch').addEventListener('input', (event) => {
     state.studentFilters.query = event.currentTarget.value;
     renderPreservingFocus(renderStudentsV2);

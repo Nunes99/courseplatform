@@ -1772,6 +1772,157 @@ input:focus, textarea:focus, select:focus {
   box-shadow: var(--shadow);
 }
 
+.credential-dialog {
+  width: min(100%, 980px);
+}
+
+.credential-dialog-note {
+  margin: 0 0 18px;
+  color: var(--muted);
+}
+
+.credential-checkbox-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.credential-checkbox-line input {
+  width: 18px;
+  min-height: auto;
+}
+
+.credential-candidate-list {
+  display: grid;
+  max-height: 340px;
+  gap: 8px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.credential-candidate {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.credential-candidate input {
+  width: 18px;
+  min-height: auto;
+}
+
+.credential-candidate strong,
+.credential-candidate small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credential-candidate small {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.credential-candidate em {
+  font-style: normal;
+}
+
+.credential-result {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--success) 32%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+}
+
+.credential-result-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.credential-result-heading span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.credential-result-heading strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 18px;
+}
+
+.credential-table-wrap {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.credential-management-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.credential-management-card {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.credential-management-card img {
+  width: 38px;
+  height: 38px;
+  padding: 7px;
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.credential-management-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.credential-management-card h2 {
+  margin: 4px 0 6px;
+  font-size: 20px;
+}
+
+.credential-management-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.credential-management-card .button {
+  width: 100%;
+}
+
 .dialog-close {
   position: absolute;
   top: 12px;
@@ -3189,8 +3340,14 @@ input:focus, textarea:focus, select:focus {
   }
 
   .student-card-header,
-  .student-detail-header {
+  .student-detail-header,
+  .credential-candidate {
     grid-template-columns: 1fr;
+  }
+
+  .credential-result-heading {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .student-meta-grid,

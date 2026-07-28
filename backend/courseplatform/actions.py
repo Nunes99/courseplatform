@@ -1708,6 +1708,134 @@ def admin_reset_student_access_code(payload: dict[str, Any]):
     return success({"student": public_student(row), "accessCode": access_code})
 
 
+def credential_restore_item(kind: str, row: dict[str, Any], temporary_password: str) -> dict[str, Any]:
+    if kind == "ADMIN":
+        return {
+            "type": "ADMIN",
+            "id": row.get("admin_id"),
+            "publicId": row.get("admin_id"),
+            "fullName": row.get("full_name"),
+            "email": row.get("email"),
+            "role": row.get("role"),
+            "status": row.get("status"),
+            "temporaryPassword": temporary_password,
+        }
+    return {
+        "type": "STUDENT",
+        "id": row.get("student_id"),
+        "publicId": row.get("public_student_id") or row.get("student_id"),
+        "fullName": row.get("full_name"),
+        "email": row.get("email"),
+        "status": row.get("status"),
+        "temporaryPassword": temporary_password,
+    }
+
+
+def admin_restore_credentials(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    target_type = str_value(payload.get("targetType") or "STUDENTS").upper()
+    if target_type not in {"STUDENTS", "ADMINS", "ALL"}:
+        raise ApiError("INVALID_TARGET", "Tipo de conta invalido para restauracao de credenciais.")
+    if target_type in {"ADMINS", "ALL"} and admin.get("role") != "OWNER":
+        raise ApiError("FORBIDDEN", "Apenas o owner pode restaurar credenciais de staff.")
+
+    only_missing_password = as_bool(payload.get("onlyMissingPassword", True))
+    include_inactive = as_bool(payload.get("includeInactive", False))
+    student_ids = [str_value(item) for item in payload.get("studentIds") or [] if str_value(item)]
+    admin_ids = [str_value(item) for item in payload.get("adminIds") or [] if str_value(item)]
+    credentials: list[dict[str, Any]] = []
+
+    with connection() as conn:
+        if target_type in {"STUDENTS", "ALL"}:
+            students = conn.execute(
+                """
+                select student_id, public_student_id, full_name, email, status, password_hash
+                from courseplatform.students
+                where (%s or status = 'ACTIVE')
+                  and (%s = 0 or student_id = any(%s::text[]))
+                  and (%s = false or password_hash is null)
+                order by full_name
+                limit 1000
+                """,
+                (include_inactive, len(student_ids), student_ids, only_missing_password),
+            ).fetchall()
+            for student in students:
+                temporary_password = generate_access_code(12)
+                row = conn.execute(
+                    """
+                    update courseplatform.students
+                    set password_hash = crypt(%s, gen_salt('bf', 12)),
+                        password_changed_at = now(), password_reset_required = true,
+                        access_code = null, updated_at = now()
+                    where student_id = %s
+                    returning student_id, public_student_id, full_name, email, status
+                    """,
+                    (temporary_password, student["student_id"]),
+                ).fetchone()
+                conn.execute(
+                    "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+                    (student["student_id"],),
+                )
+                credentials.append(credential_restore_item("STUDENT", row, temporary_password))
+
+        if target_type in {"ADMINS", "ALL"}:
+            admins = conn.execute(
+                """
+                select admin_id, full_name, email, role, status, password_hash
+                from courseplatform.admins
+                where (%s or status = 'ACTIVE')
+                  and (%s = 0 or admin_id = any(%s::text[]))
+                  and (%s = false or password_hash is null)
+                order by case role when 'OWNER' then 1 when 'ADMIN' then 2 else 3 end, full_name
+                limit 200
+                """,
+                (include_inactive, len(admin_ids), admin_ids, only_missing_password),
+            ).fetchall()
+            for staff in admins:
+                temporary_password = generate_access_code(14)
+                row = conn.execute(
+                    """
+                    update courseplatform.admins
+                    set password_hash = crypt(%s, gen_salt('bf', 12)),
+                        password_changed_at = now(), password_reset_required = true,
+                        updated_at = now()
+                    where admin_id = %s
+                    returning admin_id, full_name, email, role, status
+                    """,
+                    (temporary_password, staff["admin_id"]),
+                ).fetchone()
+                conn.execute(
+                    "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+                    (f"ADMIN:{staff['admin_id']}",),
+                )
+                credentials.append(credential_restore_item("ADMIN", row, temporary_password))
+
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "CREDENTIALS_RESTORED",
+            "ACCOUNT",
+            target_type,
+            {
+                "total": len(credentials),
+                "targetType": target_type,
+                "onlyMissingPassword": only_missing_password,
+                "includeInactive": include_inactive,
+            },
+        )
+        conn.commit()
+
+    summary = {
+        "students": sum(1 for item in credentials if item["type"] == "STUDENT"),
+        "admins": sum(1 for item in credentials if item["type"] == "ADMIN"),
+        "total": len(credentials),
+        "onlyMissingPassword": only_missing_password,
+        "includeInactive": include_inactive,
+    }
+    return success({"credentials": credentials, "summary": summary})
+
+
 def admin_save_course(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["title"])
@@ -2003,6 +2131,7 @@ ACTIONS = {
     "adminCreateStudent": admin_create_student,
     "adminSetStudentStatus": admin_set_student_status,
     "adminResetStudentAccessCode": admin_reset_student_access_code,
+    "adminRestoreCredentials": admin_restore_credentials,
     "adminSaveCourse": admin_save_course,
     "adminSaveLesson": admin_save_lesson,
     "adminSaveLessonContent": admin_save_lesson_content,
