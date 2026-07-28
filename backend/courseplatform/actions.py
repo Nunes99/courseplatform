@@ -42,6 +42,28 @@ def public_error(error: Exception) -> dict[str, Any]:
     }
 
 
+def database_api_error(error: Exception) -> ApiError:
+    error_name = error.__class__.__name__
+    text = str(error).lower()
+    if "undefinedcolumn" in text or "undefinedtable" in text or error_name == "ProgrammingError":
+        return ApiError(
+            "DATABASE_SCHEMA_ERROR",
+            "A base de dados esta ligada, mas o schema/tabelas da plataforma nao estao completos.",
+            {"errorType": error_name},
+        )
+    if "authentication" in text or "password" in text or "ecircuitbreaker" in text:
+        return ApiError(
+            "DATABASE_AUTH_ERROR",
+            "A API nao conseguiu autenticar no Postgres. Verifique POSTGRES_URL/POSTGRES_PASSWORD no Vercel.",
+            {"errorType": error_name},
+        )
+    return ApiError(
+        "DATABASE_UNAVAILABLE",
+        "A base de dados nao esta disponivel neste momento.",
+        {"errorType": error_name},
+    )
+
+
 def as_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -559,35 +581,51 @@ def admin_media_config(payload: dict[str, Any]):
 def login(payload: dict[str, Any]):
     require_fields(payload, ["email", "accessCode"])
     email = normalize_email(payload["email"])
-    student = fetch_one("select * from courseplatform.students where email = %s", (email,))
+    try:
+        student = fetch_one("select * from courseplatform.students where email = %s", (email,))
+    except Exception as error:
+        raise database_api_error(error) from error
     if not student or student.get("status") != "ACTIVE":
         raise ApiError("INVALID_CREDENTIALS", "Email ou codigo de acesso invalido.")
-    if not verify_password(payload["accessCode"], student.get("password_hash")):
-        raise ApiError("INVALID_CREDENTIALS", "Email ou codigo de acesso invalido.")
-    with connection() as conn:
-        revoke_sessions(conn, student["student_id"])
-        session = create_session(conn, student["student_id"], payload.get("userAgent", ""), payload.get("ipHash", ""))
-        conn.execute(
-            "update courseplatform.students set last_login_at = now(), updated_at = now() where student_id = %s",
-            (student["student_id"],),
-        )
-        conn.commit()
+    try:
+        if not verify_password(payload["accessCode"], student.get("password_hash")):
+            raise ApiError("INVALID_CREDENTIALS", "Email ou codigo de acesso invalido.")
+        with connection() as conn:
+            revoke_sessions(conn, student["student_id"])
+            session = create_session(conn, student["student_id"], payload.get("userAgent", ""), payload.get("ipHash", ""))
+            conn.execute(
+                "update courseplatform.students set last_login_at = now(), updated_at = now() where student_id = %s",
+                (student["student_id"],),
+            )
+            conn.commit()
+    except ApiError:
+        raise
+    except Exception as error:
+        raise database_api_error(error) from error
     return success({"sessionToken": session["token"], "expiresAt": iso(session["expiresAt"]), "student": public_student(student)})
 
 
 def admin_login(payload: dict[str, Any]):
     require_fields(payload, ["email", "adminKey"])
     email = normalize_email(payload["email"])
-    admin = fetch_one("select * from courseplatform.admins where email = %s", (email,))
+    try:
+        admin = fetch_one("select * from courseplatform.admins where email = %s", (email,))
+    except Exception as error:
+        raise database_api_error(error) from error
     if not admin or admin.get("status") != "ACTIVE":
         raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
-    if not verify_password(payload["adminKey"], admin.get("password_hash")):
-        raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
-    subject_id = f"ADMIN:{admin['admin_id']}"
-    with connection() as conn:
-        revoke_sessions(conn, subject_id)
-        session = create_session(conn, subject_id, payload.get("userAgent", ""), payload.get("ipHash", ""))
-        conn.commit()
+    try:
+        if not verify_password(payload["adminKey"], admin.get("password_hash")):
+            raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
+        subject_id = f"ADMIN:{admin['admin_id']}"
+        with connection() as conn:
+            revoke_sessions(conn, subject_id)
+            session = create_session(conn, subject_id, payload.get("userAgent", ""), payload.get("ipHash", ""))
+            conn.commit()
+    except ApiError:
+        raise
+    except Exception as error:
+        raise database_api_error(error) from error
     return success({"adminToken": session["token"], "expiresAt": iso(session["expiresAt"]), "admin": public_admin(admin)})
 
 

@@ -103,24 +103,23 @@ export class CoursePlatformApi {
   }
 
   async parseResponse(response) {
-    if (!response.ok) {
-      throw new ApiError(`Erro HTTP ${response.status}.`, 'HTTP_ERROR');
-    }
-
     let result;
     try {
       result = await response.json();
     } catch {
+      if (!response.ok) {
+        throw new ApiError(`Erro HTTP ${response.status}.`, 'HTTP_ERROR');
+      }
       throw new ApiError(
         'A API nao devolveu JSON valido. Confirme que a URL aponta para /api/index no backend Python.',
         'INVALID_API_RESPONSE'
       );
     }
 
-    if (!result.success) {
+    if (!response.ok || !result.success) {
       throw new ApiError(
-        result.error?.message || 'Erro na API.',
-        result.error?.code || 'API_ERROR',
+        result.error?.message || `Erro HTTP ${response.status}.`,
+        result.error?.code || 'HTTP_ERROR',
         result.error?.details || null
       );
     }
