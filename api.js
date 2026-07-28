@@ -44,7 +44,7 @@ export class CoursePlatformApi {
 
     if (!this.apiUrl || this.apiUrl.includes('COLE_AQUI')) {
       throw new ApiError(
-        'A URL da API ainda não foi configurada em assets/js/config.js.',
+        'A URL da API ainda nao foi configurada em config.js.',
         'API_URL_NOT_CONFIGURED'
       );
     }
@@ -96,7 +96,7 @@ export class CoursePlatformApi {
 
   networkError(error) {
     return new ApiError(
-      'Não foi possível comunicar com a API. Confirme a publicação do Apps Script e execute o teste de ligação.',
+      'Nao foi possivel comunicar com a API. Confirme a URL em config.js e as variaveis do backend.',
       'NETWORK_ERROR',
       { originalMessage: error.message }
     );
@@ -112,7 +112,7 @@ export class CoursePlatformApi {
       result = await response.json();
     } catch {
       throw new ApiError(
-        'A API não devolveu JSON válido. Confirme que está a usar a URL terminada em /exec.',
+        'A API nao devolveu JSON valido. Confirme que a URL aponta para /api no backend Python.',
         'INVALID_API_RESPONSE'
       );
     }

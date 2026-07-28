@@ -18,7 +18,7 @@ def pool() -> ConnectionPool:
             conninfo=settings.database_url,
             min_size=0,
             max_size=5,
-            kwargs={"row_factory": dict_row},
+            kwargs={"connect_timeout": 15, "row_factory": dict_row},
         )
     return _pool
 

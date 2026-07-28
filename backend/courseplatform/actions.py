@@ -269,6 +269,40 @@ def public_review(row: dict[str, Any] | None):
     }
 
 
+def public_answer(row: dict[str, Any] | None):
+    if not row:
+        return None
+    return {
+        "answerId": row["answer_id"],
+        "attemptId": row.get("attempt_id"),
+        "questionId": row.get("question_id"),
+        "answerText": row.get("answer_text"),
+        "selectedOptionId": row.get("selected_option_id"),
+        "isCorrect": None if row.get("is_correct") is None else as_bool(row.get("is_correct")),
+        "awardedPoints": None if row.get("awarded_points") is None else float(row["awarded_points"]),
+        "savedAt": iso(row.get("saved_at")),
+        "submittedAt": iso(row.get("submitted_at")),
+    }
+
+
+def public_file(row: dict[str, Any] | None):
+    if not row:
+        return None
+    return {
+        "fileId": row["file_id"],
+        "attemptId": row.get("attempt_id"),
+        "studentId": row.get("student_id"),
+        "lessonId": row.get("lesson_id"),
+        "fileName": row.get("file_name"),
+        "mimeType": row.get("mime_type"),
+        "sizeBytes": int(row.get("size_bytes") or 0),
+        "driveFileId": row.get("drive_file_id"),
+        "driveUrl": row.get("drive_url"),
+        "uploadedAt": iso(row.get("uploaded_at")),
+        "status": row.get("status"),
+    }
+
+
 def create_session(conn, subject_id: str, user_agent: str = "", ip_hash: str = ""):
     plain_token = generate_token()
     token_hash = hash_secret(plain_token)
@@ -348,12 +382,19 @@ def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None
 
 def health(_: dict[str, Any]):
     db_ok = False
+    db_error = ""
     try:
         row = fetch_one("select 1 as ok")
         db_ok = bool(row and row["ok"] == 1)
-    except Exception:
+    except Exception as error:
         db_ok = False
-    return success({"version": get_settings().app_version, "database": db_ok})
+        db_error = error.__class__.__name__
+    return success({
+        "version": get_settings().app_version,
+        "database": db_ok,
+        "databaseConfigured": bool(get_settings().database_url),
+        "databaseError": "" if db_ok else db_error,
+    })
 
 
 def public_course_config(payload: dict[str, Any]):
@@ -386,6 +427,24 @@ def read_media_config(course_id: str):
         return {"logoUrl": "", "videos": []}
 
 
+def student_media_config(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
+    email = normalize_email(student.get("email") or "")
+    videos = []
+    for video in media.get("videos", []):
+        if video.get("status", "ACTIVE") != "ACTIVE":
+            continue
+        if video.get("visibility") == "SELECTED":
+            allowed = [normalize_email(item) for item in video.get("allowedEmails", [])]
+            if email not in allowed:
+                continue
+            videos.append({**video, "allowedEmails": [email]})
+        else:
+            videos.append({**video, "allowedEmails": []})
+    return success({"mediaConfig": {**media, "videos": videos}})
+
+
 def public_media_config(payload: dict[str, Any]):
     media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
     videos = [
@@ -394,6 +453,12 @@ def public_media_config(payload: dict[str, Any]):
         if video.get("status", "ACTIVE") == "ACTIVE" and video.get("visibility") != "SELECTED"
     ]
     return success({"mediaConfig": {**media, "videos": videos}})
+
+
+def admin_media_config(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
+    return success({"mediaConfig": media})
 
 
 def login(payload: dict[str, Any]):
@@ -476,14 +541,25 @@ def dashboard(payload: dict[str, Any]):
     lessons = fetch_all(
         """
         select l.*, p.progress_id, p.status as progress_status, p.score, p.attempt_count,
-               p.unlocked_at, p.started_at, p.submitted_at, p.approved_at
+               p.unlocked_at, p.started_at, p.submitted_at, p.approved_at,
+               a.attempt_id, a.attempt_number, a.started_at as attempt_started_at,
+               a.deadline_at, a.submitted_at as attempt_submitted_at,
+               a.status as attempt_status, a.score as attempt_score,
+               a.reviewed_at, a.review_comments, a.retry_authorized
         from courseplatform.lessons l
         left join courseplatform.lesson_progress p
           on p.lesson_id = l.lesson_id and p.student_id = %s
+        left join lateral (
+          select *
+          from courseplatform.attempts a
+          where a.lesson_id = l.lesson_id and a.student_id = %s
+          order by coalesce(a.started_at, a.created_at) desc nulls last
+          limit 1
+        ) a on true
         where l.course_id = %s and l.status = 'ACTIVE'
         order by l.lesson_number
         """,
-        (student["student_id"], course_id),
+        (student["student_id"], student["student_id"], course_id),
     )
     return success({
         "student": public_student(student),
@@ -503,9 +579,128 @@ def dashboard(payload: dict[str, Any]):
                     "submitted_at": row.get("submitted_at"),
                     "approved_at": row.get("approved_at"),
                 }),
+                "activeAttempt": public_attempt({
+                    "attempt_id": row.get("attempt_id"),
+                    "progress_id": row.get("progress_id"),
+                    "lesson_id": row.get("lesson_id"),
+                    "attempt_number": row.get("attempt_number"),
+                    "started_at": row.get("attempt_started_at"),
+                    "deadline_at": row.get("deadline_at"),
+                    "submitted_at": row.get("attempt_submitted_at"),
+                    "status": row.get("attempt_status"),
+                    "score": row.get("attempt_score"),
+                    "reviewed_at": row.get("reviewed_at"),
+                    "review_comments": row.get("review_comments"),
+                    "retry_authorized": row.get("retry_authorized"),
+                }) if row.get("attempt_id") else None,
             }
             for row in lessons
         ],
+    })
+
+
+def get_lesson(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["lessonId"])
+    lesson_id = payload["lessonId"]
+    lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (lesson_id,))
+    if not lesson:
+        raise ApiError("LESSON_NOT_FOUND", "Modulo nao encontrado.")
+    progress = fetch_one(
+        """
+        select *
+        from courseplatform.lesson_progress
+        where student_id = %s and lesson_id = %s
+        """,
+        (student["student_id"], lesson_id),
+    )
+    content = fetch_all(
+        """
+        select *
+        from courseplatform.lesson_content
+        where lesson_id = %s and coalesce(status, 'ACTIVE') = 'ACTIVE'
+        order by section_order
+        """,
+        (lesson_id,),
+    )
+    questions = fetch_all(
+        """
+        select *
+        from courseplatform.questions
+        where lesson_id = %s and coalesce(status, 'ACTIVE') = 'ACTIVE'
+        order by question_order
+        """,
+        (lesson_id,),
+    )
+    question_ids = [row["question_id"] for row in questions]
+    options_by_question: dict[str, list[dict[str, Any]]] = {question_id: [] for question_id in question_ids}
+    if question_ids:
+        options = fetch_all(
+            "select * from courseplatform.question_options where question_id = any(%s) order by option_order",
+            (question_ids,),
+        )
+        for option in options:
+            options_by_question[option["question_id"]].append(option)
+    return success({
+        "lesson": public_lesson(lesson),
+        "progress": public_progress(progress or {
+            "progress_id": "",
+            "lesson_id": lesson_id,
+            "status": "LOCKED",
+            "attempt_count": 0,
+        }),
+        "content": [public_content(row) for row in content],
+        "questions": [
+            {
+                **public_question(question),
+                "options": [public_option(option) for option in options_by_question.get(question["question_id"], [])],
+            }
+            for question in questions
+        ],
+    })
+
+
+def attempt_status(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["attemptId"])
+    attempt = fetch_one(
+        """
+        select *
+        from courseplatform.attempts
+        where attempt_id = %s and student_id = %s
+        """,
+        (payload["attemptId"], student["student_id"]),
+    )
+    if not attempt:
+        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa nao encontrada.")
+    answers = fetch_all(
+        "select * from courseplatform.answers where attempt_id = %s order by saved_at",
+        (attempt["attempt_id"],),
+    )
+    files = fetch_all(
+        """
+        select *
+        from courseplatform.files
+        where attempt_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'
+        order by uploaded_at
+        """,
+        (attempt["attempt_id"],),
+    )
+    latest_review = fetch_one(
+        """
+        select *
+        from courseplatform.reviews
+        where attempt_id = %s
+        order by reviewed_at desc nulls last
+        limit 1
+        """,
+        (attempt["attempt_id"],),
+    )
+    return success({
+        "attempt": public_attempt(attempt),
+        "answers": [public_answer(row) for row in answers],
+        "files": [public_file(row) for row in files],
+        "latestReview": public_review(latest_review),
     })
 
 
@@ -622,6 +817,141 @@ def admin_list_students(payload: dict[str, Any]):
     return success({"students": [{"student": public_student(row), "enrollments": [public_enrollment(item) for item in row.get("enrollments", [])], "memberships": [public_group_member(item) for item in row.get("memberships", [])]} for row in rows]})
 
 
+def admin_list_staff(payload: dict[str, Any]):
+    _, current_admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    rows = fetch_all(
+        """
+        select *
+        from courseplatform.admins
+        where (%s = 'ALL' or status = %s)
+          and (%s = '' or lower(full_name || ' ' || email || ' ' || role) like %s)
+        order by
+          case role when 'OWNER' then 1 when 'ADMIN' then 2 else 3 end,
+          full_name
+        limit %s
+        """,
+        (
+            (payload.get("status") or "ALL").upper(),
+            (payload.get("status") or "ALL").upper(),
+            payload.get("query") or "",
+            f"%{(payload.get('query') or '').lower()}%",
+            int(payload.get("limit") or 500),
+        ),
+    )
+    return success({
+        "staff": [public_admin(row) for row in rows],
+        "currentAdmin": public_admin(current_admin),
+    })
+
+
+def submission_item(row: dict[str, Any]):
+    student = {
+        "student_id": row.get("attempt_student_id") or row.get("student_id"),
+        "public_student_id": row.get("public_student_id"),
+        "full_name": row.get("full_name") or row.get("attempt_student_id") or "Estudante sem cadastro",
+        "email": row.get("email") or "",
+        "status": row.get("student_status") or "UNKNOWN",
+        "country": row.get("country"),
+        "organization": row.get("organization"),
+        "phone": row.get("phone"),
+        "job_title": row.get("job_title"),
+        "interests": row.get("interests"),
+        "profile_photo_url": row.get("profile_photo_url"),
+        "created_at": row.get("student_created_at"),
+        "last_login_at": row.get("last_login_at"),
+    }
+    lesson = {
+        "lesson_id": row.get("attempt_lesson_id") or row.get("lesson_id"),
+        "course_id": row.get("course_id"),
+        "lesson_number": row.get("lesson_number"),
+        "title": row.get("title") or row.get("attempt_lesson_id") or "Modulo sem titulo",
+        "slug": row.get("slug"),
+        "summary": row.get("summary"),
+        "theory_minutes": row.get("theory_minutes"),
+        "exercise_minutes": row.get("exercise_minutes"),
+        "individual_minutes": row.get("individual_minutes"),
+        "passing_score": row.get("passing_score"),
+        "prerequisite_lesson_id": row.get("prerequisite_lesson_id"),
+        "status": row.get("lesson_status"),
+    }
+    review = None
+    if row.get("review_id"):
+        review = {
+            "review_id": row.get("review_id"),
+            "attempt_id": row.get("attempt_id"),
+            "reviewer_id": row.get("reviewer_id"),
+            "decision": row.get("decision"),
+            "score": row.get("review_score"),
+            "comments": row.get("comments"),
+            "correction_deadline": row.get("correction_deadline"),
+            "unlock_next_lesson": row.get("unlock_next_lesson"),
+            "reviewed_at": row.get("review_reviewed_at"),
+        }
+    return {
+        "student": public_student(student),
+        "lesson": public_lesson(lesson),
+        "attempt": public_attempt(row),
+        "latestReview": public_review(review),
+        "fileCount": int(row.get("file_count") or 0),
+    }
+
+
+def admin_list_submissions(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    status = (payload.get("status") or "ALL").upper()
+    query = (payload.get("query") or "").strip().lower()
+    limit = min(int(payload.get("limit") or 300), 500)
+    rows = fetch_all(
+        """
+        with latest_reviews as (
+          select distinct on (attempt_id) *
+          from courseplatform.reviews
+          order by attempt_id, reviewed_at desc nulls last
+        ),
+        file_counts as (
+          select attempt_id, count(*) as file_count
+          from courseplatform.files
+          where coalesce(status, 'ACTIVE') <> 'DELETED'
+          group by attempt_id
+        )
+        select
+          a.*,
+          a.student_id as attempt_student_id,
+          a.lesson_id as attempt_lesson_id,
+          s.student_id, s.public_student_id, s.full_name, s.email, s.status as student_status,
+          s.country, s.organization, s.phone, s.job_title, s.interests,
+          s.profile_photo_url, s.created_at as student_created_at, s.last_login_at,
+          l.lesson_id, l.course_id, l.lesson_number, l.title, l.slug, l.summary,
+          l.theory_minutes, l.exercise_minutes, l.individual_minutes, l.passing_score,
+          l.prerequisite_lesson_id, l.status as lesson_status,
+          lr.review_id, lr.reviewer_id, lr.decision, lr.score as review_score,
+          lr.comments, lr.correction_deadline, lr.unlock_next_lesson, lr.reviewed_at as review_reviewed_at,
+          coalesce(fc.file_count, 0) as file_count
+        from courseplatform.attempts a
+        left join courseplatform.students s on s.student_id = a.student_id
+        left join courseplatform.lessons l on l.lesson_id = a.lesson_id
+        left join latest_reviews lr on lr.attempt_id = a.attempt_id
+        left join file_counts fc on fc.attempt_id = a.attempt_id
+        where
+          (
+            %s = 'ALL'
+            or (%s = 'REVIEWED' and a.status in ('APPROVED', 'CORRECTION_REQUIRED', 'FAILED'))
+            or a.status = %s
+          )
+          and (
+            %s = ''
+            or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
+              coalesce(l.title, '') || ' ' || coalesce(a.review_comments, '') || ' ' ||
+              coalesce(l.lesson_id, '') || ' ' || coalesce(a.attempt_id, '')) like %s
+          )
+        order by coalesce(a.submitted_at, a.started_at, a.created_at) desc nulls last
+        limit %s
+        """,
+        (status, status, status, query, f"%{query}%", limit),
+    )
+    return success({"submissions": [submission_item(row) for row in rows]})
+
+
 def verify_certificate(payload: dict[str, Any]):
     code = payload.get("code") or payload.get("verificationCode") or ""
     certificate = fetch_one(
@@ -647,14 +977,21 @@ ACTIONS = {
     "health": health,
     "publicCourseConfig": public_course_config,
     "publicMediaConfig": public_media_config,
+    "getMediaConfig": student_media_config,
     "verifyCertificate": verify_certificate,
     "login": login,
     "logout": logout,
     "adminLogin": admin_login,
     "adminLogout": logout,
     "adminMe": admin_me,
+    "adminGetMediaConfig": admin_media_config,
+    "adminListStaff": admin_list_staff,
+    "adminListSubmissions": admin_list_submissions,
+    "adminListPendingSubmissions": admin_list_submissions,
     "getDashboard": dashboard,
     "getMyCourses": my_courses,
+    "getLesson": get_lesson,
+    "getAttemptStatus": attempt_status,
     "adminListCourses": admin_list_courses,
     "adminGetCourseStructure": admin_course_structure,
     "adminListGroups": admin_list_groups,
