@@ -1841,7 +1841,7 @@ function renderConfigurationError(error) {
     <div class="configuration-error">
       <h1>Configuração incompleta</h1>
       <p>${escapeHtml(error.message)}</p>
-      <code>web/assets/js/config.js</code>
+      <code>public/config.js</code>
     </div>
   `;
 }

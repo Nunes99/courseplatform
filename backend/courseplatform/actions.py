@@ -459,8 +459,11 @@ def health(_: dict[str, Any]):
     db_error = ""
     db_error_hint = ""
     try:
-        row = fetch_one("select 1 as ok")
-        db_ok = bool(row and row["ok"] == 1)
+        row = fetch_one("select to_regclass('courseplatform.students') is not null as ok")
+        db_ok = bool(row and row["ok"])
+        if not db_ok:
+            db_error = "SchemaMissing"
+            db_error_hint = "Conexao Postgres ok, mas o schema courseplatform nao foi encontrado. Execute supabase/schema.sql neste banco."
     except Exception as error:
         db_ok = False
         db_error = error.__class__.__name__
@@ -471,6 +474,8 @@ def health(_: dict[str, Any]):
             db_error_hint = "Falha de autenticacao Postgres. Confira POSTGRES_USER/POSTGRES_PASSWORD ou DATABASE_URL."
         elif "timeout" in error_text or "timed out" in error_text:
             db_error_hint = "Timeout de conexao. Confira host, porta, rede e se o projeto Supabase esta ativo."
+        elif db_error == "ProgrammingError":
+            db_error_hint = "Erro de SQL/configuracao Postgres. Confirme se o schema courseplatform foi criado no mesmo projeto apontado por POSTGRES_URL."
     return success({
         "version": settings.app_version,
         "database": db_ok,

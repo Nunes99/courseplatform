@@ -16,6 +16,25 @@ Use esta checklist quando o endpoint `/api/index?action=health` nao devolver `da
 }
 ```
 
+## Estrutura do projeto no Vercel
+
+A plataforma nao depende de `vercel.json`.
+
+- `public/`: site estatico publicado na raiz do dominio.
+- `api/index.py`: funcao Python publicada como `/api/index`.
+- `backend/courseplatform/`: codigo interno usado pela funcao Python.
+- `supabase/schema.sql`: schema atual da base.
+
+No painel do Vercel, o **Root Directory** deve estar vazio ou `./`. Nao use `api` como Root Directory, senao o deploy cria apenas a funcao e ignora o site.
+
+Links esperados:
+
+- `/`
+- `/admin.html`
+- `/verify.html`
+- `/connection-test.html`
+- `/api/index?action=health`
+
 ## Variaveis obrigatorias no Vercel
 
 - `DEFAULT_COURSE_ID`
@@ -88,12 +107,12 @@ O endpoint devolve:
 
 Esses campos nao mostram segredos; servem para confirmar se o ambiente publicado recebeu as variaveis certas.
 
+Se `databaseError` for `ProgrammingError`, normalmente o deploy conectou ao Postgres, mas o schema esperado nao esta no banco apontado pela variavel ativa. Confirme `databaseDiagnostics.source`, `host` e `database`, e execute `supabase/schema.sql` nesse mesmo projeto Supabase.
+
 ## Testes locais
 
 ```bash
 python scripts/smoke_test_platform.py
-python scripts/migrate_sheets_to_supabase.py --xlsx "C:\Users\manyu\Downloads\CoursePlatformDB.xlsx" --validate-only
-python scripts/migrate_to_supabase_password_auth.py
 ```
 
 Para ambientes sem `local-secrets/auth-transition-*.txt`, defina:
@@ -105,24 +124,4 @@ SMOKE_ADMIN_EMAIL
 SMOKE_ADMIN_KEY
 ```
 
-## Migrar autenticacao antiga
-
-Dry-run:
-
-```bash
-python scripts/migrate_to_supabase_password_auth.py
-```
-
-Aplicar gerando novas senhas para utilizadores sem `password_hash`:
-
-```bash
-python scripts/migrate_to_supabase_password_auth.py --apply
-```
-
-Rotacionar todos os estudantes e admins, mesmo quem ja tinha `password_hash`:
-
-```bash
-python scripts/migrate_to_supabase_password_auth.py --apply --rotate-existing
-```
-
-O script guarda as senhas temporarias apenas em `local-secrets/supabase-password-auth-*.txt`, que esta ignorado pelo Git.
+As migracoes antigas foram removidas do fluxo operacional. Novos dados devem ser registados diretamente no Supabase pela API Python.
