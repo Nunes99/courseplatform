@@ -434,6 +434,7 @@ function studentAppShell(activeView, content, page = {}) {
           <p>Estudos</p>
           ${navItems.map((item) => `
             <a class="${item.id === activeView ? 'is-active' : ''}" href="${escapeHtml(item.href)}"
+              aria-label="${escapeHtml(item.label)}" title="${escapeHtml(item.label)}"
               ${item.id === 'support' && config.institutionalUrl ? 'target="_blank" rel="noopener"' : ''}>
               <img src="${iconUrl(item.icon, goldIcon)}" alt="">
               <span>${escapeHtml(item.label)}</span>

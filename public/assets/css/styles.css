@@ -6843,3 +6843,191 @@ textarea::placeholder {
     width: 100%;
   }
 }
+
+/* Supabase-like compact side rails */
+@media (min-width: 721px) {
+  :root {
+    --admin-sidebar-width: 48px;
+    --student-sidebar-width: 48px;
+  }
+
+  .student-app-shell,
+  .admin-layout {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .student-sidebar,
+  .admin-sidebar {
+    position: sticky;
+    z-index: 40;
+    top: 48px;
+    display: grid;
+    width: 48px;
+    height: calc(100vh - 48px);
+    min-height: 0;
+    grid-auto-rows: min-content;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 8px 6px;
+    overflow: visible;
+    border-right: 1px solid var(--workspace-line);
+    border-bottom: 0;
+    background: #0d0f0f;
+  }
+
+  .admin-sidebar {
+    align-content: start;
+    grid-template-rows: auto;
+  }
+
+  .student-sidebar-heading,
+  .admin-sidebar-heading {
+    display: grid;
+    min-width: 0;
+    justify-content: center;
+    padding: 0 0 8px;
+    border-bottom: 1px solid var(--workspace-line);
+  }
+
+  .student-sidebar-heading > div,
+  .admin-sidebar-heading h2 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .student-sidebar-symbol,
+  .admin-sidebar-symbol {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+  }
+
+  .student-nav {
+    display: grid;
+    align-content: start;
+    justify-items: center;
+    gap: 6px;
+  }
+
+  .student-nav p {
+    display: none;
+  }
+
+  .student-nav a,
+  .admin-nav {
+    position: relative;
+    display: grid;
+    width: 34px;
+    min-width: 0;
+    height: 34px;
+    min-height: 34px;
+    justify-content: center;
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+  }
+
+  .student-nav a::before,
+  .admin-nav::before {
+    display: none;
+  }
+
+  .student-nav a:hover,
+  .student-nav a.is-active,
+  .admin-nav:hover,
+  .admin-nav.is-active {
+    border-color: var(--workspace-line);
+    background: var(--workspace-elevated);
+  }
+
+  .student-nav a.is-active,
+  .admin-nav.is-active {
+    color: var(--workspace-accent);
+    box-shadow: inset 0 0 0 1px rgba(62, 207, 142, .26);
+  }
+
+  .student-nav img,
+  .admin-nav img {
+    width: 17px;
+    height: 17px;
+    margin: 0;
+    opacity: .92;
+  }
+
+  .student-nav a span,
+  .admin-nav span,
+  .student-sidebar-profile span {
+    position: absolute;
+    z-index: 80;
+    top: 50%;
+    left: calc(100% + 10px);
+    max-width: 240px;
+    padding: 6px 9px;
+    border: 1px solid var(--workspace-line-strong);
+    border-radius: 7px;
+    background: #171b1b;
+    color: var(--workspace-text);
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.2;
+    opacity: 0;
+    pointer-events: none;
+    text-overflow: ellipsis;
+    transform: translate3d(-4px, -50%, 0);
+    transition: opacity .12s ease, transform .12s ease;
+    white-space: nowrap;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, .28);
+  }
+
+  .student-sidebar-profile span {
+    display: grid;
+    min-width: 190px;
+    gap: 2px;
+  }
+
+  .student-sidebar-profile span strong,
+  .student-sidebar-profile span small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .student-nav a:hover span,
+  .student-nav a:focus-visible span,
+  .admin-nav:hover span,
+  .admin-nav:focus-visible span,
+  .student-sidebar-profile:hover span,
+  .student-sidebar-profile:focus-visible span {
+    opacity: 1;
+    transform: translate3d(0, -50%, 0);
+  }
+
+  .student-sidebar-profile {
+    position: relative;
+    display: grid;
+    width: 34px;
+    height: 34px;
+    align-self: end;
+    justify-self: center;
+    padding: 0;
+    place-items: center;
+    border-radius: 999px;
+    background: transparent;
+  }
+
+  .student-sidebar-avatar {
+    width: 28px;
+    height: 28px;
+  }
+
+  .student-topbar,
+  .admin-main {
+    margin-left: 0;
+  }
+}

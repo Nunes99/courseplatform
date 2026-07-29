@@ -322,7 +322,7 @@ function renderAdminShell() {
   logoutButton.hidden = false;
   adminIdentity.hidden = false;
   if (state.admin) {
-    adminIdentity.textContent = `${state.admin.fullName} · ${state.admin.role}`;
+    adminIdentity.textContent = `${state.admin.fullName} - ${state.admin.role}`;
   }
 
   root.innerHTML = `
@@ -332,47 +332,47 @@ function renderAdminShell() {
           ${brandSymbolTemplate('admin-sidebar-symbol')}
           <h2>Gestao da Summer School</h2>
         </div>
-        <button class="admin-nav is-active" data-admin-view="pending">
+        <button class="admin-nav is-active" data-admin-view="pending" aria-label="Submissoes" title="Submissoes">
           <img src="${iconUrl('inbox', blueIcon)}" alt="">
           <span>Submissoes</span>
         </button>
-        <button class="admin-nav" data-admin-view="students">
+        <button class="admin-nav" data-admin-view="students" aria-label="Estudantes" title="Estudantes">
           <img src="${iconUrl('student-male', blueIcon)}" alt="">
           <span>Estudantes</span>
         </button>
-        <button class="admin-nav" data-admin-view="courses">
+        <button class="admin-nav" data-admin-view="courses" aria-label="Cursos" title="Cursos">
           <img src="${iconUrl('book-shelf', blueIcon)}" alt="">
           <span>Cursos</span>
         </button>
-        <button class="admin-nav" data-admin-view="videos">
+        <button class="admin-nav" data-admin-view="videos" aria-label="Videos" title="Videos">
           <img src="${iconUrl('video-playlist', blueIcon)}" alt="">
           <span>Videos</span>
         </button>
-        <button class="admin-nav" data-admin-view="brand">
+        <button class="admin-nav" data-admin-view="brand" aria-label="Marca" title="Marca">
           <img src="${iconUrl('picture', blueIcon)}" alt="">
           <span>Marca</span>
         </button>
-        <button class="admin-nav" data-admin-view="certifications">
+        <button class="admin-nav" data-admin-view="certifications" aria-label="Certificacoes" title="Certificacoes">
           <img src="${iconUrl('diploma', blueIcon)}" alt="">
           <span>Certificacoes</span>
         </button>
-        <button class="admin-nav" data-admin-view="surveys">
+        <button class="admin-nav" data-admin-view="surveys" aria-label="Inqueritos" title="Inqueritos">
           <img src="${iconUrl('survey', blueIcon)}" alt="">
           <span>Inqueritos</span>
         </button>
         ${canManageStaff() ? `
-          <button class="admin-nav" data-admin-view="staff">
+          <button class="admin-nav" data-admin-view="staff" aria-label="Staff" title="Staff">
             <img src="${iconUrl('conference-call', blueIcon)}" alt="">
             <span>Staff</span>
           </button>
         ` : ''}
         ${canManageCredentials() ? `
-          <button class="admin-nav" data-admin-view="credentials">
+          <button class="admin-nav" data-admin-view="credentials" aria-label="Credenciais" title="Credenciais">
             <img src="${iconUrl('key', blueIcon)}" alt="">
             <span>Credenciais</span>
           </button>
         ` : ''}
-        <button class="admin-nav" data-admin-view="profile">
+        <button class="admin-nav" data-admin-view="profile" aria-label="Perfil" title="Perfil">
           <img src="${iconUrl('user-male-circle', blueIcon)}" alt="">
           <span>Perfil</span>
         </button>
