@@ -172,6 +172,9 @@ class Settings:
         self.db_connect_retries = _int_env("DB_CONNECT_RETRIES", 3)
         self.admin_recovery_key = os.getenv("ADMIN_RECOVERY_KEY", "").strip()
         self.admin_recovery_key_hash = os.getenv("ADMIN_RECOVERY_KEY_HASH", "").strip()
+        self.supabase_url = os.getenv("SUPABASE_URL", os.getenv("NEXT_PUBLIC_SUPABASE_URL", "")).strip().rstrip("/")
+        self.supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        self.supabase_storage_bucket = os.getenv("SUPABASE_CERTIFICATE_BUCKET", "courseplatform-certificate-assets").strip()
         self.cors_origins = [
             item.strip()
             for item in os.getenv("CORS_ORIGINS", "*").split(",")

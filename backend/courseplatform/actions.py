@@ -1,4 +1,8 @@
+import base64
 import json
+import mimetypes
+import urllib.error
+import urllib.request
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -420,6 +424,7 @@ alter table courseplatform.certificates add column if not exists approved_at tim
 alter table courseplatform.certificates add column if not exists status_note text;
 alter table courseplatform.certificates add column if not exists status_updated_by text;
 alter table courseplatform.certificates add column if not exists status_updated_at timestamptz;
+alter table courseplatform.certificates add column if not exists template_snapshot_json jsonb not null default '{}'::jsonb;
 
 create table if not exists courseplatform.certificate_settings (
   course_id text primary key references courseplatform.courses(course_id) on delete cascade,
@@ -428,6 +433,7 @@ create table if not exists courseplatform.certificate_settings (
   professional_price text,
   payment_instructions text,
   professional_preview_url text,
+  certificate_profile_json jsonb not null default '{}'::jsonb,
   updated_by text,
   updated_at timestamptz
 );
@@ -486,6 +492,7 @@ def public_certificate(row: dict[str, Any] | None):
         "paymentStatus": row.get("payment_status") or "NOT_REQUIRED",
         "statusNote": row.get("status_note"),
         "statusUpdatedAt": iso(row.get("status_updated_at")),
+        "templateSnapshot": row.get("template_snapshot_json") or {},
         "courseTitle": row.get("course_title") or row.get("title"),
         "studentName": row.get("student_name") or row.get("full_name"),
     }
@@ -545,7 +552,81 @@ def default_certificate_settings(course: dict[str, Any] | None = None):
         "professionalPrice": "",
         "paymentInstructions": "Adicione aqui as instrucoes de pagamento do certificado profissional.",
         "professionalPreviewUrl": "",
+        "certificateProfile": default_certificate_profile(course),
     }
+
+
+def default_certificate_profile(course: dict[str, Any] | None = None):
+    course_title = (course or {}).get("title") or "Curso profissional"
+    contents = "\n".join([
+        "Conteudos essenciais do curso",
+        "Atividades praticas e estudos de caso",
+        "Discussao tecnica e avaliacao final",
+    ])
+    return {
+        "layoutStyle": "qualification",
+        "issuerName": "LMTWEBNAIRS",
+        "certificateTitle": "Certificado de Qualificacao",
+        "qualificationType": "Qualificacao profissional",
+        "issueLocation": "Cidade de Maputo, Mocambique",
+        "verificationBaseUrl": "",
+        "directorName": "Direcao Academica",
+        "directorTitle": "Diretor Academico",
+        "coordinatorName": "Coordenacao do Programa",
+        "coordinatorTitle": "Coordenador do Programa",
+        "productCredit": "LMTWEBNAIRS Summer School, produto da LMTWEB, desenvolvido pela LEMOTE.",
+        "certifiedContents": contents if not course_title else contents.replace("curso", course_title),
+        "printAccess": "paid",
+        "printFee": "",
+        "printCurrency": "MZN",
+        "paymentAccountName": "",
+        "paymentAccountNumber": "",
+        "paymentInstructions": "Adicione aqui as instrucoes de pagamento do certificado profissional.",
+        "assets": {
+            "logoUrl": "",
+            "productLogoUrl": "",
+            "directorSignatureUrl": "",
+            "academicStampUrl": "",
+            "coordinatorSignatureUrl": "",
+            "institutionalSealUrl": "",
+        },
+    }
+
+
+def normalize_certificate_profile(value: Any, course: dict[str, Any] | None = None) -> dict[str, Any]:
+    defaults = default_certificate_profile(course)
+    source = value if isinstance(value, dict) else {}
+    assets = source.get("assets") if isinstance(source.get("assets"), dict) else {}
+    normalized = {**defaults}
+    for key in [
+        "layoutStyle",
+        "issuerName",
+        "certificateTitle",
+        "qualificationType",
+        "issueLocation",
+        "verificationBaseUrl",
+        "directorName",
+        "directorTitle",
+        "coordinatorName",
+        "coordinatorTitle",
+        "productCredit",
+        "certifiedContents",
+        "printAccess",
+        "printFee",
+        "printCurrency",
+        "paymentAccountName",
+        "paymentAccountNumber",
+        "paymentInstructions",
+    ]:
+        if key in source:
+            normalized[key] = str_value(source.get(key))
+    normalized["printAccess"] = normalized["printAccess"] if normalized["printAccess"] in {"free", "paid", "blocked"} else defaults["printAccess"]
+    normalized["printCurrency"] = normalized["printCurrency"] or defaults["printCurrency"]
+    normalized["assets"] = {
+        key: str_value(assets.get(key))
+        for key in defaults["assets"].keys()
+    }
+    return normalized
 
 
 def normalize_survey_questions(value: Any) -> list[dict[str, Any]]:
@@ -583,12 +664,32 @@ def certificate_settings_payload(row: dict[str, Any] | None, course: dict[str, A
     if not row:
         return defaults
     survey_questions = row.get("survey_questions_json") or defaults["surveyQuestions"]
+    profile = normalize_certificate_profile(row.get("certificate_profile_json"), course)
     return {
         "congratulationsMessage": row.get("congratulations_message") or defaults["congratulationsMessage"],
         "surveyQuestions": normalize_survey_questions(survey_questions),
         "professionalPrice": row.get("professional_price") or "",
         "paymentInstructions": row.get("payment_instructions") or defaults["paymentInstructions"],
         "professionalPreviewUrl": row.get("professional_preview_url") or "",
+        "certificateProfile": profile,
+    }
+
+
+def certificate_template_snapshot(conn, course_id: str, certificate_type: str = "SIMPLE") -> dict[str, Any]:
+    course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+    row = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
+    settings = certificate_settings_payload(row, course)
+    profile = normalize_certificate_profile(settings.get("certificateProfile"), course)
+    if not profile.get("certifiedContents"):
+        profile["certifiedContents"] = certificate_content_summary(conn, course_id)
+    return {
+        "version": 1,
+        "certificateType": certificate_type,
+        "capturedAt": iso(utc_now()),
+        "courseId": course_id,
+        "courseTitle": (course or {}).get("title"),
+        "courseHours": float((course or {}).get("total_hours") or 0),
+        "profile": profile,
     }
 
 
@@ -703,9 +804,9 @@ def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
         insert into courseplatform.certificates
           (certificate_id, student_id, course_id, certificate_number, verification_code,
            issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
-           recognition_level, content_summary, max_downloads, payment_status)
+           recognition_level, content_summary, template_snapshot_json, max_downloads, payment_status)
         values (%s, %s, %s, %s, %s, now(), %s, '', '', 'ISSUED', 'SIMPLE',
-                'PARTICIPATION', %s, null, 'NOT_REQUIRED')
+                'PARTICIPATION', %s, %s, null, 'NOT_REQUIRED')
         returning *
         """,
         (
@@ -716,6 +817,7 @@ def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
             certificate_verification_code(),
             (enrollment or {}).get("final_score"),
             certificate_content_summary(conn, course_id),
+            json.dumps(certificate_template_snapshot(conn, course_id, "SIMPLE")),
         ),
     ).fetchone()
     return {**cert, "course_title": (course or {}).get("title"), "student_name": student.get("full_name")}, enrollment, course, True
@@ -1650,6 +1752,9 @@ def save_answer(payload: dict[str, Any]):
                 str_value(payload.get("selectedOptionId")),
             ),
         ).fetchone()
+        snapshot = cert.get("template_snapshot_json") if cert else None
+        if cert and not snapshot:
+            snapshot = certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
         conn.commit()
     return success({"answer": public_answer(answer)})
 
@@ -1907,6 +2012,9 @@ def record_certificate_download(payload: dict[str, Any]):
             """,
             (payload["certificateId"],),
         ).fetchone()
+        snapshot = cert.get("template_snapshot_json") if cert else None
+        if cert and not snapshot:
+            snapshot = certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
         conn.commit()
     return success({"certificate": public_certificate(cert)})
 
@@ -1938,6 +2046,7 @@ def certificate_pdf_payload(payload: dict[str, Any]):
         download_count = int(cert.get("download_count") or 0)
         if max_downloads is not None and download_count >= int(max_downloads):
             raise ApiError("DOWNLOAD_LIMIT_REACHED", "O limite de downloads deste certificado foi atingido.")
+        snapshot = cert.get("template_snapshot_json") or certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
         conn.commit()
     cert = {
         **cert,
@@ -1950,11 +2059,13 @@ def certificate_pdf_payload(payload: dict[str, Any]):
     verification_code = certificate.get("verificationCode") or certificate.get("certificateNumber") or ""
     separator = "&" if "?" in verification_base_url else "?"
     verification_url = f"{verification_base_url}{separator}code={verification_code}" if verification_code else verification_base_url
+    profile = normalize_certificate_profile((snapshot or {}).get("profile"), {"title": certificate.get("courseTitle")})
+    workload = f"{int((snapshot or {}).get('courseHours') or 30)} horas" if model == "professional" else "10 horas"
     return {
         "certificate": certificate,
         "model": model,
         "pdfData": {
-            "issuer_name": "LMTWEBNAIRS Summer School",
+            "issuer_name": profile.get("issuerName") or "LMTWEBNAIRS Summer School",
             "student_name": certificate.get("studentName"),
             "course_title": certificate.get("courseTitle"),
             "certificate_number": certificate.get("certificateNumber"),
@@ -1962,8 +2073,9 @@ def certificate_pdf_payload(payload: dict[str, Any]):
             "verification_url": verification_url,
             "issue_date": certificate.get("issueDate"),
             "final_score": certificate.get("finalScore"),
-            "content_summary": certificate.get("contentSummary"),
-            "workload": "30 HORAS" if model == "professional" else "10 HORAS",
+            "content_summary": profile.get("certifiedContents") or certificate.get("contentSummary"),
+            "workload": workload,
+            "certificate_profile": profile,
         },
     }
 
@@ -1987,6 +2099,9 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
             """,
             (payload["certificateId"],),
         ).fetchone()
+        snapshot = cert.get("template_snapshot_json") if cert else None
+        if cert and not snapshot:
+            snapshot = certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
         conn.commit()
     if not cert:
         raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
@@ -2003,11 +2118,13 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
     verification_code = certificate.get("verificationCode") or certificate.get("certificateNumber") or ""
     separator = "&" if "?" in verification_base_url else "?"
     verification_url = f"{verification_base_url}{separator}code={verification_code}" if verification_code else verification_base_url
+    profile = normalize_certificate_profile((snapshot or {}).get("profile"), {"title": certificate.get("courseTitle")})
+    workload = f"{int((snapshot or {}).get('courseHours') or 30)} horas" if model == "professional" else "10 horas"
     return {
         "certificate": certificate,
         "model": model,
         "pdfData": {
-            "issuer_name": "LMTWEBNAIRS Summer School",
+            "issuer_name": profile.get("issuerName") or "LMTWEBNAIRS Summer School",
             "student_name": certificate.get("studentName"),
             "course_title": certificate.get("courseTitle"),
             "certificate_number": certificate.get("certificateNumber"),
@@ -2015,8 +2132,9 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
             "verification_url": verification_url,
             "issue_date": certificate.get("issueDate"),
             "final_score": certificate.get("finalScore"),
-            "content_summary": certificate.get("contentSummary"),
-            "workload": "30 HORAS" if model == "professional" else "10 HORAS",
+            "content_summary": profile.get("certifiedContents") or certificate.get("contentSummary"),
+            "workload": workload,
+            "certificate_profile": profile,
         },
     }
 
@@ -3167,7 +3285,7 @@ def admin_refresh_certificate_format(payload: dict[str, Any]):
         if certificate_id:
             rows = conn.execute(
                 """
-                select certificate_id, course_id
+                select certificate_id, course_id, certificate_type
                 from courseplatform.certificates
                 where certificate_id = %s
                 """,
@@ -3176,7 +3294,7 @@ def admin_refresh_certificate_format(payload: dict[str, Any]):
         else:
             rows = conn.execute(
                 """
-                select certificate_id, course_id
+                select certificate_id, course_id, certificate_type
                 from courseplatform.certificates
                 where coalesce(status, 'ISSUED') <> 'DELETED'
                   and (%s = '' or course_id = %s)
@@ -3191,10 +3309,12 @@ def admin_refresh_certificate_format(payload: dict[str, Any]):
         refreshed = []
         for row in rows:
             summary = certificate_content_summary(conn, row["course_id"])
+            snapshot = certificate_template_snapshot(conn, row["course_id"], row.get("certificate_type") or "SIMPLE")
             certificate = conn.execute(
                 """
                 update courseplatform.certificates
                 set content_summary = %s,
+                    template_snapshot_json = %s,
                     status_note = %s,
                     status_updated_by = %s,
                     status_updated_at = now()
@@ -3203,6 +3323,7 @@ def admin_refresh_certificate_format(payload: dict[str, Any]):
                 """,
                 (
                     summary,
+                    json.dumps(snapshot),
                     "Formato e conteudo do certificado atualizados pelo administrador.",
                     admin["admin_id"],
                     row["certificate_id"],
@@ -3262,11 +3383,11 @@ def admin_review_certificate_request(payload: dict[str, Any]):
                 insert into courseplatform.certificates
                   (certificate_id, student_id, course_id, certificate_number, verification_code,
                    issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
-                   recognition_level, content_summary, professional_request_id,
+                   recognition_level, content_summary, template_snapshot_json, professional_request_id,
                    download_count, max_downloads, payment_status, approved_by, approved_at)
                 values (%s, %s, %s, %s, %s, now(),
                   (select final_score from courseplatform.enrollments where student_id = %s and course_id = %s limit 1),
-                  '', '', 'ISSUED', 'PROFESSIONAL', 'CONTENT_DETAILED', %s, %s, 0, 5,
+                  '', '', 'ISSUED', 'PROFESSIONAL', 'CONTENT_DETAILED', %s, %s, %s, 0, 5,
                   'CONFIRMED', %s, now())
                 returning *
                 """,
@@ -3279,6 +3400,7 @@ def admin_review_certificate_request(payload: dict[str, Any]):
                     request["student_id"],
                     request["course_id"],
                     certificate_content_summary(conn, request["course_id"]),
+                    json.dumps(certificate_template_snapshot(conn, request["course_id"], "PROFESSIONAL")),
                     request["request_id"],
                     admin["admin_id"],
                 ),
@@ -3331,41 +3453,169 @@ def admin_get_certificate_settings(payload: dict[str, Any]):
 def admin_save_certificate_settings(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     course_id = payload.get("courseId") or get_settings().default_course_id
-    survey_questions = payload.get("surveyQuestions") if isinstance(payload.get("surveyQuestions"), list) else []
-    survey_questions = normalize_survey_questions(survey_questions)
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
+        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+        current = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
+        current_payload = certificate_settings_payload(current, course)
+        survey_questions = normalize_survey_questions(payload.get("surveyQuestions")) if isinstance(payload.get("surveyQuestions"), list) else current_payload.get("surveyQuestions", [])
+        profile = normalize_certificate_profile(payload.get("certificateProfile") or current_payload.get("certificateProfile"), course)
         row = conn.execute(
             """
             insert into courseplatform.certificate_settings
               (course_id, congratulations_message, survey_questions_json,
                professional_price, payment_instructions, professional_preview_url,
-               updated_by, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, now())
+               certificate_profile_json, updated_by, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, now())
             on conflict (course_id) do update
             set congratulations_message = excluded.congratulations_message,
                 survey_questions_json = excluded.survey_questions_json,
                 professional_price = excluded.professional_price,
                 payment_instructions = excluded.payment_instructions,
                 professional_preview_url = excluded.professional_preview_url,
+                certificate_profile_json = excluded.certificate_profile_json,
                 updated_by = excluded.updated_by,
                 updated_at = now()
             returning *
             """,
             (
                 course_id,
-                str_value(payload.get("congratulationsMessage")),
+                str_value(payload.get("congratulationsMessage")) or current_payload.get("congratulationsMessage"),
                 json.dumps(survey_questions),
-                str_value(payload.get("professionalPrice")),
-                str_value(payload.get("paymentInstructions")),
-                str_value(payload.get("professionalPreviewUrl")),
+                str_value(payload.get("professionalPrice")) or profile.get("printFee") or current_payload.get("professionalPrice"),
+                str_value(payload.get("paymentInstructions")) or profile.get("paymentInstructions") or current_payload.get("paymentInstructions"),
+                str_value(payload.get("professionalPreviewUrl")) or current_payload.get("professionalPreviewUrl"),
+                json.dumps(profile),
                 admin["admin_id"],
             ),
         ).fetchone()
-        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
         audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_SETTINGS_SAVED", "COURSE", course_id)
         conn.commit()
     return success({"settings": certificate_settings_payload(row, course), "course": public_course(course)})
+
+
+def admin_list_certificate_surveys(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        rows = conn.execute(
+            """
+            select c.*, cs.survey_questions_json, cs.congratulations_message, cs.updated_at
+            from courseplatform.courses c
+            left join courseplatform.certificate_settings cs on cs.course_id = c.course_id
+            where coalesce(c.status, 'ACTIVE') <> 'DELETED'
+            order by c.title
+            """
+        ).fetchall()
+        conn.commit()
+    surveys = []
+    for row in rows:
+        settings = certificate_settings_payload(row, row)
+        surveys.append({
+            "course": public_course(row),
+            "congratulationsMessage": settings.get("congratulationsMessage"),
+            "surveyQuestions": settings.get("surveyQuestions"),
+            "questionCount": len(settings.get("surveyQuestions") or []),
+            "updatedAt": iso(row.get("updated_at")),
+        })
+    return success({"surveys": surveys})
+
+
+def admin_save_certificate_survey(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    survey_questions = normalize_survey_questions(payload.get("surveyQuestions") if isinstance(payload.get("surveyQuestions"), list) else [])
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+        if not course:
+            raise ApiError("COURSE_NOT_FOUND", "Curso nao encontrado.")
+        current = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
+        current_payload = certificate_settings_payload(current, course)
+        profile = normalize_certificate_profile(current_payload.get("certificateProfile"), course)
+        row = conn.execute(
+            """
+            insert into courseplatform.certificate_settings
+              (course_id, congratulations_message, survey_questions_json,
+               professional_price, payment_instructions, professional_preview_url,
+               certificate_profile_json, updated_by, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, now())
+            on conflict (course_id) do update
+            set congratulations_message = excluded.congratulations_message,
+                survey_questions_json = excluded.survey_questions_json,
+                updated_by = excluded.updated_by,
+                updated_at = now()
+            returning *
+            """,
+            (
+                course_id,
+                str_value(payload.get("congratulationsMessage")) or current_payload.get("congratulationsMessage"),
+                json.dumps(survey_questions),
+                current_payload.get("professionalPrice"),
+                current_payload.get("paymentInstructions"),
+                current_payload.get("professionalPreviewUrl"),
+                json.dumps(profile),
+                admin["admin_id"],
+            ),
+        ).fetchone()
+        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_SURVEY_SAVED", "COURSE", course_id)
+        conn.commit()
+    return success({"settings": certificate_settings_payload(row, course), "course": public_course(course)})
+
+
+def admin_upload_certificate_asset(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["courseId", "assetKey", "fileName", "mimeType", "dataUrl"])
+    course_id = str_value(payload.get("courseId"))
+    asset_key = str_value(payload.get("assetKey"))
+    allowed_keys = set(default_certificate_profile().get("assets", {}).keys())
+    if asset_key not in allowed_keys:
+        raise ApiError("INVALID_ASSET_KEY", "Tipo de elemento grafico invalido.")
+    mime_type = str_value(payload.get("mimeType"))
+    if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+        raise ApiError("INVALID_FILE_TYPE", "Use PNG, JPEG ou WebP.")
+    data_url = str_value(payload.get("dataUrl"))
+    marker = ";base64,"
+    if marker not in data_url:
+        raise ApiError("INVALID_FILE_DATA", "Ficheiro invalido.")
+    encoded = data_url.split(marker, 1)[1]
+    try:
+        file_bytes = base64.b64decode(encoded, validate=True)
+    except Exception as exc:
+        raise ApiError("INVALID_FILE_DATA", "Ficheiro invalido.") from exc
+    if len(file_bytes) > 3 * 1024 * 1024:
+        raise ApiError("FILE_TOO_LARGE", "O ficheiro deve ter ate 3 MB.")
+
+    settings = get_settings()
+    extension = mimetypes.guess_extension(mime_type) or ".png"
+    object_path = f"{course_id}/{asset_key}-{certificate_token(8)}{extension}"
+    storage_saved = False
+    storage_error = ""
+    if settings.supabase_url and settings.supabase_service_role_key:
+        try:
+            request = urllib.request.Request(
+                f"{settings.supabase_url}/storage/v1/object/{settings.supabase_storage_bucket}/{object_path}",
+                data=file_bytes,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {settings.supabase_service_role_key}",
+                    "apikey": settings.supabase_service_role_key,
+                    "Content-Type": mime_type,
+                    "x-upsert": "true",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=15) as response:
+                storage_saved = 200 <= response.status < 300
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+            storage_error = str(exc)
+
+    return success({
+        "assetKey": asset_key,
+        "assetUrl": data_url,
+        "storagePath": object_path if storage_saved else "",
+        "storageSaved": storage_saved,
+        "storageError": storage_error,
+    })
 
 
 def verify_certificate(payload: dict[str, Any]):
@@ -3439,6 +3689,9 @@ ACTIONS = {
     "adminReviewCertificateRequest": admin_review_certificate_request,
     "adminGetCertificateSettings": admin_get_certificate_settings,
     "adminSaveCertificateSettings": admin_save_certificate_settings,
+    "adminListCertificateSurveys": admin_list_certificate_surveys,
+    "adminSaveCertificateSurvey": admin_save_certificate_survey,
+    "adminUploadCertificateAsset": admin_upload_certificate_asset,
     "adminSaveMediaConfig": admin_save_media_config,
     "adminSaveStaff": admin_save_staff,
     "adminSetStaffStatus": admin_set_staff_status,

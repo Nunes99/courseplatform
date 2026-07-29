@@ -536,6 +536,18 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminSaveCertificateSettings', payload);
   }
 
+  adminCertificateSurveys(options = {}) {
+    return this.cachedAdminRequest('adminListCertificateSurveys', {}, options);
+  }
+
+  adminSaveCertificateSurvey(payload) {
+    return this.mutateAdmin('adminSaveCertificateSurvey', payload);
+  }
+
+  adminUploadCertificateAsset(payload) {
+    return this.mutateAdmin('adminUploadCertificateAsset', payload);
+  }
+
   adminMediaConfig(options = {}) {
     return this.cachedAdminRequest('adminGetMediaConfig', {
       courseId: this.courseId

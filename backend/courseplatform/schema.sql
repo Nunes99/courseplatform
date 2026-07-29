@@ -258,6 +258,10 @@ alter table courseplatform.certificates add column if not exists max_downloads i
 alter table courseplatform.certificates add column if not exists payment_status text not null default 'NOT_REQUIRED';
 alter table courseplatform.certificates add column if not exists approved_by text;
 alter table courseplatform.certificates add column if not exists approved_at timestamptz;
+alter table courseplatform.certificates add column if not exists status_note text;
+alter table courseplatform.certificates add column if not exists status_updated_by text;
+alter table courseplatform.certificates add column if not exists status_updated_at timestamptz;
+alter table courseplatform.certificates add column if not exists template_snapshot_json jsonb not null default '{}'::jsonb;
 
 create table if not exists courseplatform.certificate_settings (
   course_id text primary key references courseplatform.courses(course_id) on delete cascade,
@@ -266,6 +270,7 @@ create table if not exists courseplatform.certificate_settings (
   professional_price text,
   payment_instructions text,
   professional_preview_url text,
+  certificate_profile_json jsonb not null default '{}'::jsonb,
   updated_by text,
   updated_at timestamptz
 );

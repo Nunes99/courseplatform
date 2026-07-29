@@ -2152,6 +2152,8 @@ function showCertificatePreview(certificateId) {
 function certificatePreviewTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
   const title = isProfessional ? 'CERTIFICADO PROFISSIONAL DE CONCLUSAO' : 'CERTIFICADO DE PARTICIPACAO';
+  const profile = certificate.templateSnapshot?.profile || {};
+  const assets = profile.assets || {};
   const summary = String(certificate.contentSummary || '')
     .split(/\n+/)
     .map((line) => line.trim())
@@ -2162,28 +2164,30 @@ function certificatePreviewTemplate(certificate) {
       <div class="certificate-preview-inner certificate-document certificate-document-professional">
         <div class="certificate-professional-layout">
           <section class="certificate-professional-left">
-            <div class="certificate-logo-mark">LMT</div>
-            <p class="certificate-institution">${escapeHtml(config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
-            <h1>Certificado de Qualificacao</h1>
-            <p>sobre o aumento da qualificacao profissional</p>
+            ${assets.logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(assets.logoUrl)}" alt="">` : '<div class="certificate-logo-mark">LMT</div>'}
+            <p class="certificate-institution">${escapeHtml(profile.issuerName || config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
+            <h1>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificacao')}</h1>
+            <p>${escapeHtml(profile.qualificationType || 'sobre o aumento da qualificacao profissional')}</p>
             <strong>${escapeHtml(certificateDisplayNumber(certificate) || '')}</strong>
             <span>Documento de qualificacao</span>
             <small>Numero de registo</small>
             <strong>${escapeHtml(certificate.verificationCode || '')}</strong>
             <div class="certificate-place-date">
-              <b>Cidade de Maputo, Mocambique</b>
+              <b>${escapeHtml(profile.issueLocation || 'Cidade de Maputo, Mocambique')}</b>
               <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
             </div>
             <div class="certificate-signature-block">
+              ${assets.academicStampUrl ? `<img class="certificate-stamp-image" src="${escapeHtml(assets.academicStampUrl)}" alt="">` : ''}
+              ${assets.directorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.directorSignatureUrl)}" alt="">` : ''}
               <span></span>
-              <b>Diretor Academico</b>
-              <small>LMTWEBNAIRS</small>
+              <b>${escapeHtml(profile.directorName || 'Diretor Academico')}</b>
+              <small>${escapeHtml(profile.directorTitle || 'LMTWEBNAIRS')}</small>
             </div>
           </section>
           <section class="certificate-professional-right">
             <p class="certificate-preview-lead">O presente documento certifica que</p>
             <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
-            <p>concluiu com sucesso o programa de aumento de qualificacao profissional na LMTWEBNAIRS Summer School</p>
+            <p>concluiu com sucesso o programa de aumento de qualificacao profissional na ${escapeHtml(profile.issuerName || 'LMTWEBNAIRS Summer School')}</p>
             <span>curso/programa</span>
             <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
             <p>demonstrando aproveitamento satisfatorio em atividades academicas, estudos de caso, discussoes tecnicas e avaliacao final.</p>
@@ -2196,11 +2200,12 @@ function certificatePreviewTemplate(certificate) {
             <div class="certificate-professional-footer">
               <strong>Carga horaria: 30 horas</strong>
               <div class="certificate-signature-block">
+                ${assets.coordinatorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.coordinatorSignatureUrl)}" alt="">` : ''}
                 <span></span>
-                <b>Coordenador do Programa</b>
-                <small>LMTWEBNAIRS</small>
+                <b>${escapeHtml(profile.coordinatorName || 'Coordenador do Programa')}</b>
+                <small>${escapeHtml(profile.coordinatorTitle || 'LMTWEBNAIRS')}</small>
               </div>
-              <div class="certificate-preview-seal">L</div>
+              ${assets.institutionalSealUrl ? `<img class="certificate-seal-image" src="${escapeHtml(assets.institutionalSealUrl)}" alt="">` : '<div class="certificate-preview-seal">L</div>'}
             </div>
           </section>
         </div>

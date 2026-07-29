@@ -47,6 +47,7 @@ const state = {
   selectedSubmission: null,
   certificateRequests: [],
   certificates: [],
+  certificateSurveys: [],
   certificateFilters: {
     status: 'ALL',
     certificateStatus: 'ACTIVE',
@@ -354,6 +355,10 @@ function renderAdminShell() {
           <img src="${iconUrl('diploma', blueIcon)}" alt="">
           <span>Certificacoes</span>
         </button>
+        <button class="admin-nav" data-admin-view="surveys">
+          <img src="${iconUrl('survey', blueIcon)}" alt="">
+          <span>Inqueritos</span>
+        </button>
         ${canManageStaff() ? `
           <button class="admin-nav" data-admin-view="staff">
             <img src="${iconUrl('conference-call', blueIcon)}" alt="">
@@ -391,6 +396,8 @@ function renderAdminShell() {
         renderBrandSettings();
       } else if (button.dataset.adminView === 'certifications') {
         loadCertifications();
+      } else if (button.dataset.adminView === 'surveys') {
+        loadCertificateSurveys();
       } else if (button.dataset.adminView === 'staff') {
         loadStaff();
       } else if (button.dataset.adminView === 'credentials') {
@@ -1207,32 +1214,10 @@ function renderCertifications() {
               ${certificateCourseOptions()}
             </select>
           </label>
-          <label>
-            <span>Mensagem de parabens</span>
-            <textarea name="congratulationsMessage" rows="4">${escapeHtml(settings.congratulationsMessage || '')}</textarea>
-          </label>
-          <div class="certificate-survey-builder">
-            <div class="student-detail-section-heading">
-              <h3>Inquerito de multiplas escolhas</h3>
-              <span>10 perguntas</span>
-            </div>
-            ${adminSurveyQuestionFields(settings.surveyQuestions || [])}
-          </div>
-          <label>
-            <span>Valor do certificado profissional</span>
-            <input name="professionalPrice" value="${escapeHtml(settings.professionalPrice || '')}" placeholder="Ex.: 25 EUR">
-          </label>
-          <label>
-            <span>Instrucoes de pagamento</span>
-            <textarea name="paymentInstructions" rows="5">${escapeHtml(settings.paymentInstructions || '')}</textarea>
-          </label>
-          <label>
-            <span>Link do modelo/preview profissional</span>
-            <input name="professionalPreviewUrl" value="${escapeHtml(settings.professionalPreviewUrl || '')}" placeholder="https://...">
-          </label>
+          ${certificateProfileFormFields(settings.certificateProfile || {})}
           <div class="dialog-actions">
             <button class="button button-secondary" type="reset">Cancelar alteracoes</button>
-            <button class="button button-primary" type="submit">Guardar configuracao</button>
+            <button class="button button-primary" type="submit">Guardar identidade do curso</button>
           </div>
         </form>
       </article>
@@ -1251,7 +1236,8 @@ function renderCertifications() {
             verificationCode: 'LSS2026F5B649DE76',
             studentName: 'Nome do Formando',
             courseTitle: (state.courses || []).find(({ course }) => course.courseId === state.selectedCourseId)?.course?.title || 'Curso profissional',
-            contentSummary: settings.contentSummary || '',
+            contentSummary: settings.certificateProfile?.certifiedContents || '',
+            templateSnapshot: { profile: settings.certificateProfile || {} },
             issueDate: new Date().toISOString(),
             finalScore: 100
           })}
@@ -1268,6 +1254,9 @@ function renderCertifications() {
     renderCertifications();
   });
   document.querySelector('#certificateSettingsForm').addEventListener('submit', saveCertificateSettings);
+  root.querySelectorAll('[data-certificate-asset]').forEach((input) => {
+    input.addEventListener('change', uploadCertificateAsset);
+  });
   document.querySelector('#certificateStatusFilter').addEventListener('change', (event) => {
     state.certificateFilters.status = event.currentTarget.value;
     loadCertifications();
@@ -1289,10 +1278,10 @@ function renderCertifications() {
     ));
   });
   root.querySelectorAll('[data-open-admin-certificate]').forEach((button) => {
-    button.addEventListener('click', () => openAdminCertificatePreview(certificateFromDataset(button.dataset)));
+    button.addEventListener('click', () => openAdminCertificatePreview(certificateForAdminButton(button)));
   });
   root.querySelectorAll('[data-download-admin-certificate]').forEach((button) => {
-    button.addEventListener('click', () => downloadAdminCertificate(certificateFromDataset(button.dataset)));
+    button.addEventListener('click', () => downloadAdminCertificate(certificateForAdminButton(button)));
   });
   root.querySelectorAll('[data-set-certificate-status]').forEach((button) => {
     button.addEventListener('click', () => setCertificateStatusFromButton(button));
@@ -1313,6 +1302,117 @@ function certificateCourseOptions() {
       ${escapeHtml(course.title || course.courseCode || course.courseId)}
     </option>
   `).join('');
+}
+
+function certificateProfileFormFields(profile = {}) {
+  const assets = profile.assets || {};
+  return `
+    <div class="certificate-template-form-grid">
+      <label>
+        <span>Entidade emissora</span>
+        <input name="issuerName" value="${escapeHtml(profile.issuerName || 'LMTWEBNAIRS')}">
+      </label>
+      <label>
+        <span>Titulo do certificado</span>
+        <input name="certificateTitle" value="${escapeHtml(profile.certificateTitle || 'Certificado de Qualificacao')}">
+      </label>
+      <label>
+        <span>Tipo de qualificacao</span>
+        <input name="qualificationType" value="${escapeHtml(profile.qualificationType || 'Qualificacao profissional')}">
+      </label>
+      <label>
+        <span>Local de emissao</span>
+        <input name="issueLocation" value="${escapeHtml(profile.issueLocation || 'Cidade de Maputo, Mocambique')}">
+      </label>
+      <label>
+        <span>Nome do responsavel academico</span>
+        <input name="directorName" value="${escapeHtml(profile.directorName || 'Direcao Academica')}">
+      </label>
+      <label>
+        <span>Cargo do responsavel academico</span>
+        <input name="directorTitle" value="${escapeHtml(profile.directorTitle || 'Diretor Academico')}">
+      </label>
+      <label>
+        <span>Nome do coordenador</span>
+        <input name="coordinatorName" value="${escapeHtml(profile.coordinatorName || 'Coordenacao do Programa')}">
+      </label>
+      <label>
+        <span>Cargo do coordenador</span>
+        <input name="coordinatorTitle" value="${escapeHtml(profile.coordinatorTitle || 'Coordenador do Programa')}">
+      </label>
+      <label class="form-span-2">
+        <span>Identificacao do produto</span>
+        <input name="productCredit" value="${escapeHtml(profile.productCredit || '')}">
+      </label>
+      <label class="form-span-2">
+        <span>Conteudos certificados</span>
+        <textarea name="certifiedContents" rows="5" placeholder="Um conteudo por linha">${escapeHtml(profile.certifiedContents || '')}</textarea>
+      </label>
+    </div>
+    <div class="certificate-payment-policy">
+      <div class="profile-section-heading">
+        <h3>Politica de impressao</h3>
+        <p>Defina se o certificado profissional exige pagamento e aprovacao administrativa.</p>
+      </div>
+      <div class="certificate-template-form-grid">
+        <label>
+          <span>Acesso a impressao</span>
+          <select name="printAccess">
+            ${studentFilterOption('free', 'Impressao livre', profile.printAccess || 'paid')}
+            ${studentFilterOption('paid', 'Pagamento obrigatorio', profile.printAccess || 'paid')}
+            ${studentFilterOption('blocked', 'Bloqueado por padrao', profile.printAccess || 'paid')}
+          </select>
+        </label>
+        <label>
+          <span>Valor</span>
+          <input name="printFee" value="${escapeHtml(profile.printFee || '')}" placeholder="1000">
+        </label>
+        <label>
+          <span>Moeda</span>
+          <select name="printCurrency">
+            ${studentFilterOption('MZN', 'MZN - Metical', profile.printCurrency || 'MZN')}
+            ${studentFilterOption('USD', 'USD - Dolar', profile.printCurrency || 'MZN')}
+            ${studentFilterOption('EUR', 'EUR - Euro', profile.printCurrency || 'MZN')}
+          </select>
+        </label>
+        <label>
+          <span>Titular da conta</span>
+          <input name="paymentAccountName" value="${escapeHtml(profile.paymentAccountName || '')}">
+        </label>
+        <label class="form-span-2">
+          <span>Numero da conta ou carteira movel</span>
+          <input name="paymentAccountNumber" value="${escapeHtml(profile.paymentAccountNumber || '')}">
+        </label>
+        <label class="form-span-2">
+          <span>Instrucoes de pagamento</span>
+          <textarea name="paymentInstructions" rows="3">${escapeHtml(profile.paymentInstructions || '')}</textarea>
+        </label>
+      </div>
+    </div>
+    <div class="certificate-assets-heading">
+      <strong>Elementos graficos opcionais</strong>
+      <small>PNG, JPEG ou WebP, ate 3 MB por ficheiro. O upload passa pelo backend administrativo.</small>
+    </div>
+    <div class="certificate-asset-grid">
+      ${certificateAssetField('logoUrl', 'Logotipo principal', assets.logoUrl)}
+      ${certificateAssetField('productLogoUrl', 'Logotipo do produto', assets.productLogoUrl)}
+      ${certificateAssetField('directorSignatureUrl', 'Assinatura academica', assets.directorSignatureUrl)}
+      ${certificateAssetField('academicStampUrl', 'Carimbo academico', assets.academicStampUrl)}
+      ${certificateAssetField('coordinatorSignatureUrl', 'Assinatura da coordenacao', assets.coordinatorSignatureUrl)}
+      ${certificateAssetField('institutionalSealUrl', 'Selo institucional', assets.institutionalSealUrl)}
+    </div>
+  `;
+}
+
+function certificateAssetField(name, label, value = '') {
+  return `
+    <label class="asset-upload-card">
+      <span>${escapeHtml(label)}</span>
+      <img src="${escapeHtml(value || '')}" alt="" ${value ? '' : 'hidden'}>
+      <input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value || '')}">
+      <input type="file" accept="image/png,image/jpeg,image/webp" data-certificate-asset="${escapeHtml(name)}">
+    </label>
+  `;
 }
 
 function adminCertificateRowTemplate(certificate) {
@@ -1541,6 +1641,135 @@ function surveyQuestionsFromSettingsForm(form) {
   }).filter((item) => item.prompt && item.options.length);
 }
 
+async function loadCertificateSurveys(options = {}) {
+  const main = document.querySelector('#adminMain');
+  if (!options.silent) {
+    main.innerHTML = loadingTemplate('A carregar inqueritos...');
+  }
+  try {
+    const result = await api.adminCertificateSurveys(options);
+    state.certificateSurveys = result.surveys || [];
+    renderCertificateSurveys();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+function renderCertificateSurveys() {
+  const main = document.querySelector('#adminMain');
+  const surveys = state.certificateSurveys || [];
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Feedback pedagogico</p>
+        <h1>Inqueritos por curso</h1>
+        <p>Configure as perguntas que aparecem ao estudante antes da solicitacao do certificado profissional.</p>
+      </div>
+      <button class="button button-secondary" id="refreshSurveys" type="button">Atualizar lista</button>
+    </div>
+
+    <section class="admin-content-panel survey-admin-panel">
+      <div class="course-section-heading">
+        <div>
+          <p class="eyebrow">Lista de inqueritos</p>
+          <h2>Cursos configurados</h2>
+        </div>
+        <span>${surveys.length} registos</span>
+      </div>
+      <div class="survey-admin-list">
+        ${surveys.length ? surveys.map(certificateSurveyRowTemplate).join('') : `
+          <div class="student-empty-state">Ainda nao existem cursos para configurar inqueritos.</div>
+        `}
+      </div>
+    </section>
+  `;
+  document.querySelector('#refreshSurveys')?.addEventListener('click', () => loadCertificateSurveys({ force: true }));
+  root.querySelectorAll('[data-edit-certificate-survey]').forEach((button) => {
+    button.addEventListener('click', () => openCertificateSurveyDialog(button.dataset.editCertificateSurvey));
+  });
+  reportHeight();
+}
+
+function certificateSurveyRowTemplate(item) {
+  const course = item.course || {};
+  return `
+    <article class="survey-admin-row">
+      <div>
+        <span class="survey-row-icon">${escapeHtml(String(item.questionCount || 0).padStart(2, '0'))}</span>
+      </div>
+      <div>
+        <p class="eyebrow">Inquerito de conclusao</p>
+        <h3>${escapeHtml(course.title || course.courseCode || course.courseId || 'Curso')}</h3>
+        <p>${escapeHtml(item.congratulationsMessage || 'Mensagem de conclusao ainda nao personalizada.')}</p>
+      </div>
+      <dl>
+        <div><dt>Perguntas</dt><dd>${escapeHtml(item.questionCount || 0)}</dd></div>
+        <div><dt>Atualizado</dt><dd>${escapeHtml(formatDate(item.updatedAt))}</dd></div>
+      </dl>
+      <button class="button button-secondary" type="button" data-edit-certificate-survey="${escapeHtml(course.courseId)}">
+        Abrir editor
+      </button>
+    </article>
+  `;
+}
+
+function openCertificateSurveyDialog(courseId) {
+  const item = (state.certificateSurveys || []).find((survey) => survey.course?.courseId === courseId);
+  if (!item) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card survey-editor-dialog">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <div class="dialog-heading">
+        <p class="eyebrow">Inquerito do curso</p>
+        <h2>${escapeHtml(item.course?.title || 'Curso')}</h2>
+      </div>
+      <form id="certificateSurveyForm" class="form-stack">
+        <input type="hidden" name="courseId" value="${escapeHtml(item.course?.courseId || '')}">
+        <label>
+          <span>Mensagem de parabens</span>
+          <textarea name="congratulationsMessage" rows="3">${escapeHtml(item.congratulationsMessage || '')}</textarea>
+        </label>
+        <div class="certificate-survey-builder">
+          ${adminSurveyQuestionFields(item.surveyQuestions || [])}
+        </div>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Guardar inquerito</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  bindDialogClose(overlay);
+  overlay.querySelector('#certificateSurveyForm').addEventListener('submit', saveCertificateSurvey);
+  reportHeight();
+}
+
+async function saveCertificateSurvey(event) {
+  event.preventDefault();
+  if (!confirmAdminAction('Deseja guardar este inquerito?')) return;
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = new FormData(form);
+  setBusy(button, true, 'A guardar...');
+  try {
+    await api.adminSaveCertificateSurvey({
+      courseId: values.get('courseId'),
+      congratulationsMessage: values.get('congratulationsMessage'),
+      surveyQuestions: surveyQuestionsFromSettingsForm(form)
+    });
+    showToast('Inquerito guardado.', 'success');
+    form.closest('.dialog-overlay')?.remove();
+    await loadCertificateSurveys({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
 async function saveCertificateSettings(event) {
   event.preventDefault();
   if (!confirmAdminAction('Deseja guardar a configuracao de certificacoes deste curso?')) return;
@@ -1549,13 +1778,13 @@ async function saveCertificateSettings(event) {
   const values = new FormData(form);
   setBusy(button, true, 'A guardar...');
   try {
+    const profile = certificateProfileFromForm(form);
     const result = await api.adminSaveCertificateSettings({
       courseId: values.get('courseId'),
-      congratulationsMessage: values.get('congratulationsMessage'),
-      surveyQuestions: surveyQuestionsFromSettingsForm(form),
-      professionalPrice: values.get('professionalPrice'),
-      paymentInstructions: values.get('paymentInstructions'),
-      professionalPreviewUrl: values.get('professionalPreviewUrl')
+      certificateProfile: profile,
+      professionalPrice: profile.printFee,
+      paymentInstructions: profile.paymentInstructions,
+      professionalPreviewUrl: profile.verificationBaseUrl
     });
     state.certificateSettings = result.settings || {};
     showToast('Configuracao de certificacoes guardada.', 'success');
@@ -1565,6 +1794,87 @@ async function saveCertificateSettings(event) {
   } finally {
     setBusy(button, false);
   }
+}
+
+function certificateProfileFromForm(form) {
+  const values = new FormData(form);
+  return {
+    issuerName: values.get('issuerName'),
+    certificateTitle: values.get('certificateTitle'),
+    qualificationType: values.get('qualificationType'),
+    issueLocation: values.get('issueLocation'),
+    directorName: values.get('directorName'),
+    directorTitle: values.get('directorTitle'),
+    coordinatorName: values.get('coordinatorName'),
+    coordinatorTitle: values.get('coordinatorTitle'),
+    productCredit: values.get('productCredit'),
+    certifiedContents: values.get('certifiedContents'),
+    printAccess: values.get('printAccess'),
+    printFee: values.get('printFee'),
+    printCurrency: values.get('printCurrency'),
+    paymentAccountName: values.get('paymentAccountName'),
+    paymentAccountNumber: values.get('paymentAccountNumber'),
+    paymentInstructions: values.get('paymentInstructions'),
+    verificationBaseUrl: values.get('professionalPreviewUrl') || '',
+    assets: {
+      logoUrl: values.get('logoUrl'),
+      productLogoUrl: values.get('productLogoUrl'),
+      directorSignatureUrl: values.get('directorSignatureUrl'),
+      academicStampUrl: values.get('academicStampUrl'),
+      coordinatorSignatureUrl: values.get('coordinatorSignatureUrl'),
+      institutionalSealUrl: values.get('institutionalSealUrl')
+    }
+  };
+}
+
+async function uploadCertificateAsset(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    showToast('Use PNG, JPEG ou WebP.', 'error');
+    input.value = '';
+    return;
+  }
+  if (file.size > 3 * 1024 * 1024) {
+    showToast('O ficheiro deve ter ate 3 MB.', 'error');
+    input.value = '';
+    return;
+  }
+  const dataUrl = await fileToDataUrl(file);
+  const assetKey = input.dataset.certificateAsset;
+  input.disabled = true;
+  try {
+    const result = await api.adminUploadCertificateAsset({
+      courseId: state.selectedCourseId,
+      assetKey,
+      fileName: file.name,
+      mimeType: file.type,
+      dataUrl
+    });
+    const card = input.closest('.asset-upload-card');
+    const preview = card?.querySelector('img');
+    const hidden = card?.querySelector(`input[type="hidden"][name="${assetKey}"]`);
+    if (preview) {
+      preview.src = result.assetUrl || dataUrl;
+      preview.hidden = false;
+    }
+    if (hidden) hidden.value = result.assetUrl || dataUrl;
+    showToast(result.storageSaved ? 'Asset carregado no Supabase Storage.' : 'Asset preparado no backend administrativo.', 'success');
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    input.disabled = false;
+  }
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
 }
 
 async function reviewCertificateRequest(requestId, decision) {
@@ -1592,6 +1902,11 @@ function certificateFromDataset(dataset = {}) {
     verificationCode: dataset.verificationCode || '',
     contentSummary: dataset.contentSummary || ''
   };
+}
+
+function certificateForAdminButton(button) {
+  const fallback = certificateFromDataset(button.dataset);
+  return (state.certificates || []).find((item) => item.certificateId === fallback.certificateId) || fallback;
 }
 
 function adminCertificateDisplayNumber(certificate = {}) {
@@ -1627,6 +1942,8 @@ function openAdminCertificatePreview(certificate) {
 function adminCertificatePreviewTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
   const title = isProfessional ? 'CERTIFICADO PROFISSIONAL DE CONCLUSAO' : 'CERTIFICADO DE PARTICIPACAO';
+  const profile = certificate.templateSnapshot?.profile || {};
+  const assets = profile.assets || {};
   const summary = String(certificate.contentSummary || '')
     .split(/\n+/)
     .map((line) => line.trim())
@@ -1637,28 +1954,30 @@ function adminCertificatePreviewTemplate(certificate) {
       <div class="certificate-preview-inner certificate-document certificate-document-professional">
         <div class="certificate-professional-layout">
           <section class="certificate-professional-left">
-            <div class="certificate-logo-mark">LMT</div>
-            <p class="certificate-institution">${escapeHtml(config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
-            <h1>Certificado de Qualificacao</h1>
-            <p>sobre o aumento da qualificacao profissional</p>
+            ${assets.logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(assets.logoUrl)}" alt="">` : '<div class="certificate-logo-mark">LMT</div>'}
+            <p class="certificate-institution">${escapeHtml(profile.issuerName || config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
+            <h1>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificacao')}</h1>
+            <p>${escapeHtml(profile.qualificationType || 'sobre o aumento da qualificacao profissional')}</p>
             <strong>${escapeHtml(adminCertificateDisplayNumber(certificate) || certificate.certificateId)}</strong>
             <span>Documento de qualificacao</span>
             <small>Numero de registo</small>
             <strong>${escapeHtml(certificate.verificationCode || '')}</strong>
             <div class="certificate-place-date">
-              <b>Cidade de Maputo, Mocambique</b>
+              <b>${escapeHtml(profile.issueLocation || 'Cidade de Maputo, Mocambique')}</b>
               <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
             </div>
             <div class="certificate-signature-block">
+              ${assets.academicStampUrl ? `<img class="certificate-stamp-image" src="${escapeHtml(assets.academicStampUrl)}" alt="">` : ''}
+              ${assets.directorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.directorSignatureUrl)}" alt="">` : ''}
               <span></span>
-              <b>Diretor Academico</b>
-              <small>LMTWEBNAIRS</small>
+              <b>${escapeHtml(profile.directorName || 'Diretor Academico')}</b>
+              <small>${escapeHtml(profile.directorTitle || 'LMTWEBNAIRS')}</small>
             </div>
           </section>
           <section class="certificate-professional-right">
             <p class="certificate-preview-lead">O presente documento certifica que</p>
             <h2>${escapeHtml(certificate.studentName || 'Nome do Formando')}</h2>
-            <p>concluiu com sucesso o programa de aumento de qualificacao profissional na LMTWEBNAIRS Summer School</p>
+            <p>concluiu com sucesso o programa de aumento de qualificacao profissional na ${escapeHtml(profile.issuerName || 'LMTWEBNAIRS Summer School')}</p>
             <span>curso/programa</span>
             <h3>${escapeHtml(certificate.courseTitle || 'Curso profissional')}</h3>
             <p>demonstrando aproveitamento satisfatorio em atividades academicas, estudos de caso, discussoes tecnicas e avaliacao final.</p>
@@ -1671,11 +1990,12 @@ function adminCertificatePreviewTemplate(certificate) {
             <div class="certificate-professional-footer">
               <strong>Carga horaria: 30 horas</strong>
               <div class="certificate-signature-block">
+                ${assets.coordinatorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.coordinatorSignatureUrl)}" alt="">` : ''}
                 <span></span>
-                <b>Coordenador do Programa</b>
-                <small>LMTWEBNAIRS</small>
+                <b>${escapeHtml(profile.coordinatorName || 'Coordenador do Programa')}</b>
+                <small>${escapeHtml(profile.coordinatorTitle || 'LMTWEBNAIRS')}</small>
               </div>
-              <div class="certificate-preview-seal">L</div>
+              ${assets.institutionalSealUrl ? `<img class="certificate-seal-image" src="${escapeHtml(assets.institutionalSealUrl)}" alt="">` : '<div class="certificate-preview-seal">L</div>'}
             </div>
           </section>
         </div>
