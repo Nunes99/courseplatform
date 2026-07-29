@@ -397,6 +397,81 @@ async function logout() {
   renderLogin();
 }
 
+function studentAppShell(activeView, content, page = {}) {
+  const student = state.dashboard?.student || {};
+  const course = state.dashboard?.course || {};
+  const currentCourse = state.myCourses.find((item) => item.course?.courseId === state.selectedCourseId)?.course || course;
+  const navItems = [
+    { id: 'overview', label: 'Visao geral', href: '#/', icon: 'classroom' },
+    { id: 'courses', label: 'Meus cursos', href: '#/', icon: 'book-shelf' },
+    { id: 'lessons', label: 'Aulas e modulos', href: '#/', icon: 'reading' },
+    { id: 'submissions', label: 'Submissoes', href: '#/', icon: 'upload-to-cloud' },
+    { id: 'grades', label: 'Notas e feedback', href: '#/', icon: 'checked-checkbox' },
+    { id: 'certifications', label: 'Certificados', href: '#/certifications', icon: 'diploma' },
+    { id: 'support', label: 'Suporte', href: config.institutionalUrl || '#/', icon: 'help' },
+    { id: 'profile', label: 'Perfil', href: '#/profile', icon: 'user-male-circle' }
+  ];
+  const title = page.title || 'Painel do estudante';
+  const eyebrow = page.eyebrow || 'Area do estudante';
+  const description = page.description || currentCourse?.title || 'Acompanhe cursos, atividades, progresso e certificados.';
+  return `
+    <div class="student-app-shell">
+      <aside class="student-sidebar" aria-label="Navegacao do estudante">
+        <div class="student-sidebar-heading">
+          ${brandSymbolTemplate('student-sidebar-symbol')}
+          <div>
+            <strong>LMTWEBNAIRS</strong>
+            <small>Area do estudante</small>
+          </div>
+        </div>
+        <nav class="student-nav">
+          <p>Estudos</p>
+          ${navItems.map((item) => `
+            <a class="${item.id === activeView ? 'is-active' : ''}" href="${escapeHtml(item.href)}"
+              ${item.id === 'support' && config.institutionalUrl ? 'target="_blank" rel="noopener"' : ''}>
+              <img src="${iconUrl(item.icon, goldIcon)}" alt="">
+              <span>${escapeHtml(item.label)}</span>
+            </a>
+          `).join('')}
+        </nav>
+        <a class="student-sidebar-profile" href="#/profile">
+          ${profileAvatarTemplate(student, 'student-sidebar-avatar')}
+          <span>
+            <strong>${escapeHtml(student.fullName || 'Estudante')}</strong>
+            <small>${escapeHtml(student.publicStudentId || student.email || '')}</small>
+          </span>
+        </a>
+      </aside>
+      <section class="student-main-frame">
+        <div class="student-topbar">
+          <div>
+            <p class="breadcrumb-line">LMTWEBNAIRS / ${escapeHtml(eyebrow)}</p>
+            <h1>${escapeHtml(title)}</h1>
+          </div>
+          <div class="student-topbar-actions">
+            <label class="global-search">
+              <span class="sr-only">Pesquisar</span>
+              <input type="search" placeholder="Pesquisar cursos, aulas ou certificados">
+            </label>
+            <a class="icon-button" href="#/certifications" aria-label="Certificados">◎</a>
+            <a class="icon-button" href="#/profile" aria-label="Perfil">${profileAvatarTemplate(student, 'topbar-avatar')}</a>
+          </div>
+        </div>
+        <div class="student-page-heading">
+          <div>
+            <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+            <h2>${escapeHtml(title)}</h2>
+            <p>${escapeHtml(description)}</p>
+          </div>
+        </div>
+        <div class="student-content-area">
+          ${content}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 async function renderDashboard() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar o curso…');
@@ -428,7 +503,7 @@ async function renderDashboard() {
     ? '<a class="button button-secondary" href="#/certifications">Minhas certificacoes</a>'
     : '';
 
-  root.innerHTML = `
+  root.innerHTML = studentAppShell('overview', `
     <section class="dashboard-hero">
       <div class="hero-copy">
         <p class="eyebrow">${escapeHtml(platformYear)}</p>
@@ -534,7 +609,11 @@ async function renderDashboard() {
         <div><strong>4.</strong><span>Acompanhe a avaliação.</span></div>
       </div>
     </section>
-  `;
+  `, {
+    eyebrow: 'Visao geral',
+    title: 'Painel do estudante',
+    description: dashboard.course?.title || 'Acompanhe o seu percurso academico.'
+  });
 
   root.querySelectorAll('[data-open-lesson]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -632,7 +711,7 @@ async function renderProfile() {
   if (mobileMenuButton) mobileMenuButton.hidden = false;
   logoutButton.hidden = true;
 
-  root.innerHTML = `
+  root.innerHTML = studentAppShell('profile', `
     <section class="profile-shell profile-shell-modern">
       <div class="profile-header-card">
         <div class="profile-identity">
@@ -766,7 +845,11 @@ async function renderProfile() {
         </section>
       </div>
     </section>
-  `;
+  `, {
+    eyebrow: 'Perfil e configuracoes',
+    title: 'Perfil pessoal',
+    description: 'Atualize os seus dados, fotografia e senha de acesso.'
+  });
 
   document.querySelector('#profileForm').addEventListener('submit', saveProfile);
   document.querySelector('#passwordForm').addEventListener('submit', changePassword);
@@ -1812,13 +1895,17 @@ async function renderCertifications() {
   state.certifications = { ...result, settings, certificates, requests, activeRequest };
 
   if (!result.completed) {
-    root.innerHTML = `
+    root.innerHTML = studentAppShell('certifications', `
       <div class="completion-card standalone-card">
         <h1>Certificacoes ainda indisponiveis</h1>
         <p>Conclua e tenha aprovados todos os modulos do curso para liberar os certificados.</p>
         <a class="button button-secondary" href="#/">Voltar ao curso</a>
       </div>
-    `;
+    `, {
+      eyebrow: 'Certificados',
+      title: 'Minhas certificacoes',
+      description: 'Os certificados ficam disponiveis depois da conclusao do curso.'
+    });
     reportHeight();
     return;
   }
@@ -1827,7 +1914,7 @@ async function renderCertifications() {
     ? certificates
     : [simpleCertificate].filter(Boolean);
 
-  root.innerHTML = `
+  root.innerHTML = studentAppShell('certifications', `
     <section class="certifications-shell certifications-page">
       <div class="certifications-header">
         <div class="certifications-header-icon" aria-hidden="true">◎</div>
@@ -1850,7 +1937,11 @@ async function renderCertifications() {
           : professionalRequestFlowTemplate(settings, activeRequest, blockedProfessionalCertificate)}
       </section>
     </section>
-  `;
+  `, {
+    eyebrow: 'Certificados',
+    title: 'Minhas certificacoes',
+    description: 'Visualize, baixe e acompanhe os seus certificados oficiais.'
+  });
 
   root.querySelectorAll('[data-preview-certificate]').forEach((button) => {
     button.addEventListener('click', () => showCertificatePreview(button.dataset.previewCertificate));
