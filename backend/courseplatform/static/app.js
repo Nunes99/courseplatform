@@ -1898,22 +1898,42 @@ function certificateDisplayNumber(certificate = {}) {
 }
 
 function professionalRequestFlowTemplate(settings, request, blockedCertificate = null) {
+  const payment = certificatePaymentPolicy(settings);
+  if (payment.blocked) {
+    return `
+      <article class="certificate-upgrade-card">
+        <p class="eyebrow">Certificado profissional</p>
+        <h2>Emissao temporariamente indisponivel</h2>
+        <p>A administracao ainda nao liberou novas solicitacoes para este certificado. Quando estiver disponivel, as condicoes de emissao vao aparecer aqui.</p>
+      </article>
+    `;
+  }
+
   if (request?.status === 'PAYMENT_SUBMITTED') {
     return `
       <article class="certificate-upgrade-card">
         <p class="eyebrow">Certificado profissional</p>
-        <h2>Comprovativo recebido</h2>
-        <p>A administracao vai rever o pagamento e liberar o certificado profissional se estiver tudo correto.</p>
+        <h2>${payment.requiresPayment ? 'Comprovativo recebido' : 'Pedido recebido'}</h2>
+        <p>A administracao vai rever a solicitacao e liberar o certificado profissional se estiver tudo correto.</p>
       </article>
     `;
   }
 
   if (request?.status === 'REQUESTED') {
+    if (!payment.requiresPayment) {
+      return `
+        <article class="certificate-upgrade-card">
+          <p class="eyebrow">Certificado profissional</p>
+          <h2>Pedido recebido</h2>
+          <p>A administracao vai rever a solicitacao e liberar o certificado profissional se estiver tudo correto.</p>
+        </article>
+      `;
+    }
     return `
       <article class="certificate-upgrade-card">
         <p class="eyebrow">Certificado profissional</p>
         <h2>Pagamento pendente</h2>
-        <p>${escapeHtml(settings.paymentInstructions || 'Envie o comprovativo para a administracao concluir a revisao.')}</p>
+        ${paymentConditionsTemplate(payment)}
         <button class="button button-primary" type="button"
           data-open-payment-dialog="${escapeHtml(request.requestId)}">
           Enviar comprovativo
@@ -1932,14 +1952,47 @@ function professionalRequestFlowTemplate(settings, request, blockedCertificate =
           : 'Um modelo institucional com descricao dos conteudos aprendidos, verificacao oficial, campos de assinatura e acabamento profissional.'}</p>
       </div>
       <div class="professional-certificate-mock">
-        <strong>${escapeHtml(config.organizationName || 'Instituicao emissora')}</strong>
+        <strong>${escapeHtml(payment.issuerName || config.organizationName || 'Instituicao emissora')}</strong>
         <span>Certificado profissional</span>
-        <small>Conteudos, reconhecimento diferenciado e assinaturas</small>
+        <small>${payment.requiresPayment ? `Pagamento: ${escapeHtml(payment.amountLabel)}` : 'Sem pagamento obrigatorio'}</small>
       </div>
+      ${paymentConditionsTemplate(payment)}
       <button class="button button-primary" type="button" data-open-professional-survey>
         Quero certificado profissional
       </button>
     </article>
+  `;
+}
+
+function certificatePaymentPolicy(settings = {}) {
+  const profile = settings.certificateProfile || {};
+  const requiresPayment = (profile.printAccess || 'paid') === 'paid';
+  const amount = profile.printFee || settings.professionalPrice || '';
+  const currency = profile.printCurrency || 'MZN';
+  return {
+    requiresPayment,
+    blocked: profile.printAccess === 'blocked',
+    issuerName: profile.issuerName || '',
+    amount,
+    currency,
+    amountLabel: amount ? `${amount} ${currency}` : 'Valor a confirmar',
+    accountName: profile.paymentAccountName || '',
+    accountNumber: profile.paymentAccountNumber || '',
+    instructions: profile.paymentInstructions || settings.paymentInstructions || 'Siga as instrucoes de pagamento informadas pela administracao.'
+  };
+}
+
+function paymentConditionsTemplate(payment) {
+  return `
+    <div class="certificate-payment-conditions">
+      <div><span>Condicao</span><strong>${payment.requiresPayment ? 'Pagamento obrigatorio' : 'Sem pagamento obrigatorio'}</strong></div>
+      ${payment.requiresPayment ? `
+        <div><span>Valor</span><strong>${escapeHtml(payment.amountLabel)}</strong></div>
+        ${payment.accountName ? `<div><span>Titular</span><strong>${escapeHtml(payment.accountName)}</strong></div>` : ''}
+        ${payment.accountNumber ? `<div><span>Conta/carteira</span><strong>${escapeHtml(payment.accountNumber)}</strong></div>` : ''}
+      ` : ''}
+      <p>${escapeHtml(payment.instructions)}</p>
+    </div>
   `;
 }
 
@@ -2043,10 +2096,11 @@ async function submitProfessionalCertificateRequest(event, overlay = null) {
   setBusy(button, true, 'A enviar...');
   try {
     const result = await api.requestProfessionalCertificate(state.selectedCourseId, surveyAnswers);
-    showToast('Pedido criado. Envie o comprovativo de pagamento.', 'success');
+    const payment = certificatePaymentPolicy(state.certifications?.settings || {});
+    showToast(payment.requiresPayment ? 'Pedido criado. Envie o comprovativo de pagamento.' : 'Pedido criado para revisao administrativa.', 'success');
     overlay?.remove();
     await renderCertifications();
-    showPaymentDialog(result.request?.requestId);
+    if (payment.requiresPayment) showPaymentDialog(result.request?.requestId);
   } catch (error) {
     handleError(error);
   } finally {
@@ -2057,6 +2111,7 @@ async function submitProfessionalCertificateRequest(event, overlay = null) {
 function showPaymentDialog(requestId) {
   if (!requestId) return;
   const settings = state.certifications?.settings || {};
+  const payment = certificatePaymentPolicy(settings);
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `
@@ -2070,8 +2125,7 @@ function showPaymentDialog(requestId) {
           </div>
         </div>
         <div class="certificate-payment-box">
-          <strong>${escapeHtml(settings.professionalPrice || 'Valor a confirmar')}</strong>
-          <p>${escapeHtml(settings.paymentInstructions || 'Siga as instrucoes de pagamento informadas pela administracao.')}</p>
+          ${paymentConditionsTemplate(payment)}
         </div>
         <input type="hidden" name="requestId" value="${escapeHtml(requestId)}">
         <label class="file-control">

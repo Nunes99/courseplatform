@@ -1911,6 +1911,15 @@ def request_professional_certificate(payload: dict[str, Any]):
         _, _, _, completed = ensure_simple_certificate(conn, student, course_id)
         if not completed:
             raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado profissional.")
+        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+        settings_row = conn.execute(
+            "select * from courseplatform.certificate_settings where course_id = %s",
+            (course_id,),
+        ).fetchone()
+        profile = certificate_settings_payload(settings_row, course).get("certificateProfile") or {}
+        if profile.get("printAccess") == "blocked":
+            raise ApiError("CERTIFICATE_PRINT_BLOCKED", "A emissao deste certificado profissional ainda nao esta disponivel.")
+        initial_status = "REQUESTED" if profile.get("printAccess") == "paid" else "PAYMENT_SUBMITTED"
         existing = conn.execute(
             """
             select cr.*
@@ -1929,11 +1938,16 @@ def request_professional_certificate(payload: dict[str, Any]):
             request = conn.execute(
                 """
                 update courseplatform.certificate_requests
-                set survey_answers_json = %s, updated_at = now()
+                set survey_answers_json = %s,
+                    status = case
+                      when %s = 'PAYMENT_SUBMITTED' and status = 'REQUESTED' then 'PAYMENT_SUBMITTED'
+                      else status
+                    end,
+                    updated_at = now()
                 where request_id = %s
                 returning *
                 """,
-                (json.dumps(survey_answers), existing["request_id"]),
+                (json.dumps(survey_answers), initial_status, existing["request_id"]),
             ).fetchone()
         else:
             request = conn.execute(
@@ -1941,10 +1955,10 @@ def request_professional_certificate(payload: dict[str, Any]):
                 insert into courseplatform.certificate_requests
                   (request_id, student_id, course_id, request_type, status,
                    survey_answers_json, created_at, updated_at)
-                values (%s, %s, %s, 'PROFESSIONAL', 'REQUESTED', %s, now(), now())
+                values (%s, %s, %s, 'PROFESSIONAL', %s, %s, now(), now())
                 returning *
                 """,
-                (generate_id("CREQ"), student["student_id"], course_id, json.dumps(survey_answers)),
+                (generate_id("CREQ"), student["student_id"], course_id, initial_status, json.dumps(survey_answers)),
             ).fetchone()
         conn.commit()
     return success({"request": public_certificate_request(request)})

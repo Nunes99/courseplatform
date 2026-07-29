@@ -48,6 +48,7 @@ const state = {
   certificateRequests: [],
   certificates: [],
   certificateSurveys: [],
+  certificateSurveyResponses: [],
   certificateFilters: {
     status: 'ALL',
     certificateStatus: 'ACTIVE',
@@ -1186,7 +1187,7 @@ function renderCertifications() {
           <select id="certificateStatusFilter">
             ${studentFilterOption('ALL', 'Todos', state.certificateFilters.status)}
             ${studentFilterOption('REQUESTED', 'Solicitados', state.certificateFilters.status)}
-            ${studentFilterOption('PAYMENT_SUBMITTED', 'Com comprovativo', state.certificateFilters.status)}
+            ${studentFilterOption('PAYMENT_SUBMITTED', 'Prontos para revisao', state.certificateFilters.status)}
             ${studentFilterOption('APPROVED', 'Aprovados', state.certificateFilters.status)}
             ${studentFilterOption('REJECTED', 'Rejeitados', state.certificateFilters.status)}
           </select>
@@ -1230,7 +1231,7 @@ function renderCertifications() {
           </div>
         </div>
         <div class="certificate-preview-sheet is-professional certificate-admin-mini-preview">
-          ${adminCertificatePreviewTemplate({
+          ${adminCertificateThumbnailTemplate({
             certificateType: 'PROFESSIONAL',
             certificateNumber: 'LSS-2026-F5B649DE76',
             verificationCode: 'LSS2026F5B649DE76',
@@ -1415,6 +1416,34 @@ function certificateAssetField(name, label, value = '') {
   `;
 }
 
+function adminCertificateThumbnailTemplate(certificate) {
+  const profile = certificate.templateSnapshot?.profile || {};
+  const assets = profile.assets || {};
+  const topics = String(certificate.contentSummary || '')
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return `
+    <div class="certificate-thumbnail">
+      <div class="certificate-thumbnail-left">
+        ${assets.logoUrl ? `<img src="${escapeHtml(assets.logoUrl)}" alt="">` : '<span>LMT</span>'}
+        <strong>${escapeHtml(profile.issuerName || 'LMTWEBNAIRS')}</strong>
+        <h3>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificacao')}</h3>
+        <small>${escapeHtml(certificate.certificateNumber || '')}</small>
+      </div>
+      <div class="certificate-thumbnail-right">
+        <p>O presente documento certifica que</p>
+        <h2>${escapeHtml(certificate.studentName || 'Nome do Formando')}</h2>
+        <strong>${escapeHtml(certificate.courseTitle || 'Curso profissional')}</strong>
+        <ul>
+          ${topics.map((topic) => `<li>${escapeHtml(topic)}</li>`).join('')}
+        </ul>
+      </div>
+    </div>
+  `;
+}
+
 function adminCertificateRowTemplate(certificate) {
   const deleted = certificate.status === 'DELETED';
   const blocked = certificate.status === 'BLOCKED';
@@ -1511,7 +1540,7 @@ function certificateRequestCardTemplate(request) {
     driveUrl: request.paymentReceiptUrl,
     mimeType: request.paymentReceiptMimeType,
     uploadedAt: request.submittedAt
-  }) : '<p class="empty-note">Comprovativo ainda nao submetido.</p>';
+  }) : '<p class="empty-note">Sem comprovativo anexado. Em cursos com emissao livre, o pedido pode ser aprovado sem pagamento.</p>';
   const canReview = request.status === 'PAYMENT_SUBMITTED';
   const certificateActions = request.certificateId ? `
     <button class="button button-small button-secondary" type="button"
@@ -1544,9 +1573,6 @@ function certificateRequestCardTemplate(request) {
         <span class="status-pill ${statusClass(request.status)}">${statusLabel(request.status)}</span>
         <h3>${escapeHtml(request.studentName || request.studentEmail || request.studentId)}</h3>
         <p>${escapeHtml(request.courseTitle || request.courseId)} &middot; ${escapeHtml(request.requestId)}</p>
-      </div>
-      <div class="certificate-survey-preview">
-        ${surveyAnswersTemplate(request.surveyAnswers)}
       </div>
       ${receipt}
       <div class="admin-row-actions">
@@ -1647,8 +1673,13 @@ async function loadCertificateSurveys(options = {}) {
     main.innerHTML = loadingTemplate('A carregar inqueritos...');
   }
   try {
-    const result = await api.adminCertificateSurveys(options);
+    const [result, responsesResult] = await Promise.all([
+      api.adminCertificateSurveys(options),
+      api.adminCertificateRequests({ status: 'ALL', query: '', limit: 300 }, options)
+    ]);
     state.certificateSurveys = result.surveys || [];
+    state.certificateSurveyResponses = (responsesResult.requests || [])
+      .filter((request) => Object.keys(request.surveyAnswers || {}).length);
     renderCertificateSurveys();
   } catch (error) {
     handleAdminError(error);
@@ -1658,6 +1689,7 @@ async function loadCertificateSurveys(options = {}) {
 function renderCertificateSurveys() {
   const main = document.querySelector('#adminMain');
   const surveys = state.certificateSurveys || [];
+  const responses = state.certificateSurveyResponses || [];
   main.innerHTML = `
     <div class="admin-page-heading">
       <div>
@@ -1682,12 +1714,44 @@ function renderCertificateSurveys() {
         `}
       </div>
     </section>
+
+    <section class="admin-content-panel survey-admin-panel">
+      <div class="course-section-heading">
+        <div>
+          <p class="eyebrow">Respostas recebidas</p>
+          <h2>Feedback dos estudantes</h2>
+        </div>
+        <span>${responses.length} respostas</span>
+      </div>
+      <div class="survey-response-list">
+        ${responses.length ? responses.map(certificateSurveyResponseTemplate).join('') : `
+          <div class="student-empty-state">Ainda nao existem respostas de inqueritos.</div>
+        `}
+      </div>
+    </section>
   `;
   document.querySelector('#refreshSurveys')?.addEventListener('click', () => loadCertificateSurveys({ force: true }));
   root.querySelectorAll('[data-edit-certificate-survey]').forEach((button) => {
     button.addEventListener('click', () => openCertificateSurveyDialog(button.dataset.editCertificateSurvey));
   });
   reportHeight();
+}
+
+function certificateSurveyResponseTemplate(request) {
+  return `
+    <article class="survey-response-card">
+      <header>
+        <div>
+          <p class="eyebrow">${escapeHtml(request.courseTitle || request.courseId || 'Curso')}</p>
+          <h3>${escapeHtml(request.studentName || request.studentEmail || request.studentId || 'Estudante')}</h3>
+        </div>
+        <span class="status-pill ${statusClass(request.status)}">${statusLabel(request.status)}</span>
+      </header>
+      <div class="certificate-survey-preview">
+        ${surveyAnswersTemplate(request.surveyAnswers)}
+      </div>
+    </article>
+  `;
 }
 
 function certificateSurveyRowTemplate(item) {

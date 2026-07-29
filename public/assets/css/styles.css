@@ -1848,6 +1848,109 @@ input:focus, textarea:focus, select:focus {
   padding: 10px;
 }
 
+.certificate-admin-mini-preview .certificate-thumbnail {
+  min-height: 270px;
+}
+
+.certificate-thumbnail {
+  display: grid;
+  grid-template-columns: minmax(180px, .78fr) minmax(260px, 1.22fr);
+  gap: 22px;
+  align-items: center;
+  width: 100%;
+  min-width: 620px;
+  aspect-ratio: 297 / 210;
+  padding: clamp(18px, 2.2vw, 34px);
+  border: 6px double var(--accent);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(90deg, rgba(201, 153, 61, .05), transparent 42%, rgba(18, 62, 105, .04)),
+    #fffdf6;
+  color: var(--primary);
+  overflow: hidden;
+}
+
+.certificate-thumbnail-left,
+.certificate-thumbnail-right {
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+  text-align: center;
+}
+
+.certificate-thumbnail-left {
+  gap: 10px;
+}
+
+.certificate-thumbnail-left img,
+.certificate-thumbnail-left span {
+  display: grid;
+  width: 68px;
+  height: 68px;
+  place-items: center;
+  border: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 50%;
+  color: var(--accent);
+  font-weight: 900;
+  object-fit: contain;
+}
+
+.certificate-thumbnail-left strong,
+.certificate-thumbnail-left h3,
+.certificate-thumbnail-left small,
+.certificate-thumbnail-right p,
+.certificate-thumbnail-right h2,
+.certificate-thumbnail-right strong {
+  margin: 0;
+}
+
+.certificate-thumbnail-left h3 {
+  max-width: 260px;
+  color: var(--accent);
+  font-size: clamp(18px, 2vw, 26px);
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.certificate-thumbnail-left small {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.certificate-thumbnail-right {
+  gap: 10px;
+}
+
+.certificate-thumbnail-right h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--primary);
+  font-size: clamp(22px, 2.6vw, 34px);
+  line-height: 1.05;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.certificate-thumbnail-right strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: clamp(15px, 1.5vw, 20px);
+  line-height: 1.18;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.certificate-thumbnail-right ul {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 14px;
+  width: 100%;
+  margin: 0;
+  padding-left: 18px;
+  text-align: left;
+  font-size: 11px;
+}
+
 .certificate-template-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1969,6 +2072,37 @@ input:focus, textarea:focus, select:focus {
   font-weight: 900;
 }
 
+.survey-response-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.survey-response-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.survey-response-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.survey-response-card h3 {
+  margin: 0;
+  color: var(--primary);
+}
+
+.survey-response-card .certificate-survey-preview {
+  margin: 0;
+}
+
 .certificate-logo-image {
   max-width: clamp(58px, 8vw, 108px);
   max-height: clamp(42px, 6vw, 84px);
@@ -2044,6 +2178,45 @@ input:focus, textarea:focus, select:focus {
   display: block;
   margin-bottom: 8px;
   font-size: 18px;
+}
+
+.certificate-payment-conditions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.certificate-payment-conditions div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.certificate-payment-conditions span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.certificate-payment-conditions strong {
+  margin: 0;
+  color: var(--primary);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.certificate-payment-conditions p {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  color: var(--text);
+  white-space: pre-wrap;
 }
 
 .certifications-page {
@@ -2254,6 +2427,7 @@ input:focus, textarea:focus, select:focus {
   gap: clamp(8px, 1vw, 14px);
   aspect-ratio: 297 / 210;
   width: 100%;
+  min-width: 720px;
   min-height: 0;
   overflow: hidden;
   place-items: center stretch;
@@ -2267,7 +2441,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .certificate-document-professional {
-  min-width: 760px;
+  min-width: 860px;
   border-color: var(--accent);
   background:
     linear-gradient(90deg, rgba(201, 153, 61, .04), transparent 42%, rgba(18, 62, 105, .03)),
@@ -2315,7 +2489,7 @@ input:focus, textarea:focus, select:focus {
 .certificate-professional-left h1 {
   max-width: 270px;
   color: var(--accent);
-  font-size: clamp(18px, 2vw, 28px);
+  font-size: clamp(17px, 1.8vw, 26px);
   line-height: 1.08;
 }
 
@@ -2363,14 +2537,25 @@ input:focus, textarea:focus, select:focus {
 }
 
 .certificate-professional-right h2 {
+  display: -webkit-box;
+  overflow: hidden;
   color: var(--primary);
-  font-size: clamp(17px, 2.35vw, 34px);
+  font-size: clamp(18px, 2.05vw, 31px);
+  line-height: 1.05;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .certificate-professional-right h3 {
+  display: -webkit-box;
+  overflow: hidden;
   color: var(--primary);
-  font-size: clamp(13px, 1.5vw, 22px);
+  font-size: clamp(13px, 1.3vw, 20px);
   line-height: 1.18;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .certificate-professional-footer {
@@ -2390,11 +2575,15 @@ input:focus, textarea:focus, select:focus {
 
 .certificate-document-main {
   display: grid;
-  gap: clamp(6px, .9vw, 12px);
+  gap: clamp(5px, .75vw, 10px);
   place-items: center;
   min-width: 0;
   max-width: min(100%, 760px);
   justify-self: center;
+}
+
+.certificate-document-participation .certificate-document-main {
+  max-width: min(100%, 700px);
 }
 
 .certificate-corner {
@@ -2447,8 +2636,8 @@ input:focus, textarea:focus, select:focus {
 .certificate-preview-inner h1 {
   margin: 0;
   color: var(--primary);
-  font-size: clamp(24px, 3vw, 42px);
-  line-height: 1;
+  font-size: clamp(22px, 2.7vw, 38px);
+  line-height: 1.02;
   text-transform: uppercase;
 }
 
@@ -2464,18 +2653,28 @@ input:focus, textarea:focus, select:focus {
 }
 
 .certificate-preview-inner h2 {
+  display: -webkit-box;
   margin: 0;
+  overflow: hidden;
   color: var(--primary);
-  font-size: clamp(22px, 2.6vw, 38px);
-  line-height: 1;
+  font-size: clamp(20px, 2.35vw, 34px);
+  line-height: 1.04;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .certificate-preview-inner h3 {
+  display: -webkit-box;
   margin: 0;
+  overflow: hidden;
   color: var(--primary);
-  max-width: 82%;
-  font-size: clamp(16px, 1.8vw, 25px);
-  line-height: 1.12;
+  max-width: min(88%, 620px);
+  font-size: clamp(15px, 1.55vw, 22px);
+  line-height: 1.14;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .certificate-preview-lead {
@@ -2490,6 +2689,11 @@ input:focus, textarea:focus, select:focus {
   border-top: 1px solid color-mix(in srgb, var(--accent) 62%, transparent);
   color: var(--text);
   text-align: left;
+}
+
+.certificate-document-participation .certificate-content-summary {
+  max-height: 86px;
+  overflow: hidden;
 }
 
 .certificate-content-summary strong {
@@ -2545,12 +2749,12 @@ input:focus, textarea:focus, select:focus {
 
 .certificate-preview-seal {
   display: grid;
-  width: 64px;
-  height: 64px;
+  width: 58px;
+  height: 58px;
   place-items: center;
   align-self: center;
   justify-self: center;
-  border: 7px solid color-mix(in srgb, var(--accent) 78%, #ffffff);
+  border: 6px solid color-mix(in srgb, var(--accent) 78%, #ffffff);
   border-radius: 50%;
   background: #ffffff;
   color: var(--primary);
@@ -2568,10 +2772,15 @@ input:focus, textarea:focus, select:focus {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 20px;
+  gap: 12px 18px;
   width: 100%;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.certificate-preview-meta span {
+  overflow-wrap: anywhere;
 }
 
 .certificate-signature-row span {
