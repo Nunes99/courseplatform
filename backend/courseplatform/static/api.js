@@ -278,6 +278,31 @@ export class CoursePlatformApi {
     return this.studentRequest('recordCertificateDownload', { certificateId });
   }
 
+  async certificatePdf(certificateId, model = 'auto') {
+    const apiUrl = new URL(this.apiUrl);
+    const url = new URL(`/api/certificates/${encodeURIComponent(certificateId)}/pdf`, apiUrl.origin);
+    url.searchParams.set('sessionToken', this.studentToken());
+    url.searchParams.set('model', model);
+
+    let response;
+    try {
+      response = await fetch(url.toString(), {
+        method: 'GET',
+        redirect: 'follow',
+        cache: 'no-store'
+      });
+    } catch (error) {
+      throw this.networkError(error);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (response.ok && contentType.includes('application/pdf')) {
+      return response.blob();
+    }
+
+    return this.parseResponse(response);
+  }
+
   mediaConfig(courseId = this.courseId) {
     return this.studentRequest('getMediaConfig', { courseId });
   }

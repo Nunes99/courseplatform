@@ -2,9 +2,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
-from .actions import ApiError, dispatch, public_error
+from .actions import ApiError, certificate_pdf_payload, dispatch, public_error, record_certificate_download
+from .certificate_pdf import build_course_certificate_pdf
 from .config import get_settings
 
 settings = get_settings()
@@ -54,6 +55,31 @@ async def handle_post_action(request: Request):
 for route_path in ("/", "/api", "/api/index"):
     app.add_api_route(route_path, handle_get_action, methods=["GET"])
     app.add_api_route(route_path, handle_post_action, methods=["POST"])
+
+
+async def handle_certificate_pdf(certificate_id: str, request: Request):
+    verification_base_url = f"{str(request.base_url).rstrip('/')}/verify.html"
+    payload = {
+        "certificateId": certificate_id,
+        "sessionToken": request.query_params.get("sessionToken") or request.headers.get("x-session-token") or "",
+        "verificationBaseUrl": verification_base_url,
+    }
+    try:
+        result = certificate_pdf_payload(payload)
+        pdf_bytes = build_course_certificate_pdf(result["pdfData"], result["model"])
+        record_certificate_download(payload)
+        certificate_number = result["certificate"].get("certificateNumber") or certificate_id
+        filename = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in certificate_number)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'},
+        )
+    except Exception as error:
+        return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)
+
+
+app.add_api_route("/api/certificates/{certificate_id}/pdf", handle_certificate_pdf, methods=["GET"])
 
 
 def static_file_response(raw_path: str):

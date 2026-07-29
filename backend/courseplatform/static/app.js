@@ -2176,13 +2176,13 @@ function certificatePreviewTemplate(certificate) {
 
 async function downloadCertificate(certificateId, overlay = null) {
   try {
-    const result = await api.recordCertificateDownload(certificateId);
-    const certificate = result.certificate;
-    const blob = createCertificatePdf(certificate);
+    const cachedCertificate = state.certifications?.certificates?.find((item) => item.certificateId === certificateId);
+    const model = cachedCertificate?.certificateType === 'PROFESSIONAL' ? 'professional' : 'participation';
+    const blob = await api.certificatePdf(certificateId, model);
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${certificateDisplayNumber(certificate) || certificate.certificateId}.pdf`;
+    link.download = `${certificateDisplayNumber(cachedCertificate) || certificateId}.pdf`;
     link.click();
     URL.revokeObjectURL(url);
     showToast('Certificado baixado.', 'success');
@@ -2191,107 +2191,6 @@ async function downloadCertificate(certificateId, overlay = null) {
   } catch (error) {
     handleError(error);
   }
-}
-
-function createCertificatePdf(certificate) {
-  const isProfessional = certificate.certificateType === 'PROFESSIONAL';
-  const title = isProfessional ? 'Certificado Profissional' : 'Certificado de Participacao';
-  const page = { width: 842, height: 595 };
-  const commands = [];
-  const text = (value, x, y, size = 12, font = 'F1') => {
-    commands.push(`BT /${font} ${size} Tf ${x} ${y} Td (${pdfText(value)}) Tj ET`);
-  };
-  const rect = (x, y, w, h, stroke = true, fill = false) => {
-    commands.push(`${x} ${y} ${w} ${h} re ${fill ? (stroke ? 'B' : 'f') : 'S'}`);
-  };
-  const line = (x1, y1, x2, y2) => {
-    commands.push(`${x1} ${y1} m ${x2} ${y2} l S`);
-  };
-
-  commands.push(isProfessional ? '0.985 0.972 0.925 rg' : '0.996 0.992 0.965 rg');
-  rect(0, 0, page.width, page.height, false, true);
-  commands.push('0.78 0.62 0.28 RG');
-  rect(36, 36, page.width - 72, page.height - 72);
-  if (isProfessional) {
-    rect(50, 50, page.width - 100, page.height - 100);
-    commands.push('0.0 0.21 0.36 RG');
-    line(120, 438, 722, 438);
-    line(120, 154, 722, 154);
-  }
-  commands.push('0.0 0.16 0.28 rg');
-
-  text(config.organizationName || 'Instituicao emissora', 306, isProfessional ? 500 : 490, 15, 'F2');
-  text(title, isProfessional ? 258 : 270, isProfessional ? 455 : 442, isProfessional ? 34 : 31, 'F2');
-  text('Certificamos que', 350, isProfessional ? 400 : 390, 13);
-  text(certificate.studentName || state.dashboard?.student?.fullName || '', 255, isProfessional ? 360 : 350, 25, 'F2');
-  text('concluiu com sucesso o curso', 327, isProfessional ? 325 : 318, 13);
-  text(certificate.courseTitle || state.dashboard?.course?.title || '', 245, isProfessional ? 292 : 286, 20, 'F2');
-
-  if (isProfessional) {
-    const summary = wrapPdfText(certificate.contentSummary || 'Conteudos detalhados do curso.', 74);
-    text('Conteudos abordados', 118, 246, 13, 'F2');
-    summary.slice(0, 5).forEach((lineText, index) => text(lineText, 118, 226 - (index * 16), 10));
-    line(130, 100, 310, 100);
-    line(532, 100, 712, 100);
-    text('Direcao academica', 168, 82, 11);
-    text('Coordenacao do curso', 566, 82, 11);
-  }
-
-  text(`Numero: ${certificateDisplayNumber(certificate) || ''}`, 80, 56, 10);
-  text(`Data: ${formatDate(certificate.issueDate)}`, 330, 56, 10);
-  text(`Verificacao: ${certificate.verificationCode || ''}`, 580, 56, 10);
-  return buildPdf(page.width, page.height, commands.join('\n'));
-}
-
-function buildPdf(width, height, content) {
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>`,
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
-    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`
-  ];
-  let pdf = '%PDF-1.4\n';
-  const offsets = [0];
-  objects.forEach((object, index) => {
-    offsets.push(pdf.length);
-    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-  });
-  const xref = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  offsets.slice(1).forEach((offset) => {
-    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
-  });
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return new Blob([pdf], { type: 'application/pdf' });
-}
-
-function pdfText(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\x20-\x7E]/g, '')
-    .replace(/\\/g, '\\\\')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)');
-}
-
-function wrapPdfText(value, length) {
-  const words = pdfText(value).split(/\s+/).filter(Boolean);
-  const lines = [];
-  let line = '';
-  words.forEach((word) => {
-    const next = `${line} ${word}`.trim();
-    if (next.length > length && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = next;
-    }
-  });
-  if (line) lines.push(line);
-  return lines;
 }
 
 function showReviewDialog(attemptData) {

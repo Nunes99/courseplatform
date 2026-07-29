@@ -1883,6 +1883,61 @@ def record_certificate_download(payload: dict[str, Any]):
     return success({"certificate": public_certificate(cert)})
 
 
+def certificate_pdf_payload(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["certificateId"])
+    verification_base_url = str_value(payload.get("verificationBaseUrl")) or "verify.html"
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        cert = conn.execute(
+            """
+            select cert.*, c.title as course_title, s.full_name as student_name,
+                   e.final_score as enrollment_score
+            from courseplatform.certificates cert
+            join courseplatform.courses c on c.course_id = cert.course_id
+            join courseplatform.students s on s.student_id = cert.student_id
+            left join courseplatform.enrollments e
+              on e.student_id = cert.student_id and e.course_id = cert.course_id
+            where cert.certificate_id = %s and cert.student_id = %s
+            """,
+            (payload["certificateId"], student["student_id"]),
+        ).fetchone()
+        if not cert:
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+        max_downloads = cert.get("max_downloads")
+        download_count = int(cert.get("download_count") or 0)
+        if max_downloads is not None and download_count >= int(max_downloads):
+            raise ApiError("DOWNLOAD_LIMIT_REACHED", "O limite de downloads deste certificado foi atingido.")
+        conn.commit()
+    cert = {
+        **cert,
+        "course_title": cert.get("course_title"),
+        "student_name": cert.get("student_name"),
+        "final_score": cert.get("final_score") or cert.get("enrollment_score"),
+    }
+    certificate = public_certificate(cert)
+    model = "professional" if certificate.get("certificateType") == "PROFESSIONAL" else "participation"
+    verification_code = certificate.get("verificationCode") or certificate.get("certificateNumber") or ""
+    separator = "&" if "?" in verification_base_url else "?"
+    verification_url = f"{verification_base_url}{separator}code={verification_code}" if verification_code else verification_base_url
+    return {
+        "certificate": certificate,
+        "model": model,
+        "pdfData": {
+            "issuer_name": "LMTWEBNAIRS Summer School",
+            "student_name": certificate.get("studentName"),
+            "course_title": certificate.get("courseTitle"),
+            "certificate_number": certificate.get("certificateNumber"),
+            "verification_code": verification_code,
+            "verification_url": verification_url,
+            "issue_date": certificate.get("issueDate"),
+            "final_score": certificate.get("finalScore"),
+            "content_summary": certificate.get("contentSummary"),
+            "workload": "30 HORAS" if model == "professional" else "10 HORAS",
+        },
+    }
+
+
 def admin_list_courses(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     limit, offset, page = pagination(payload)

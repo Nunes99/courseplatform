@@ -1980,6 +1980,7 @@ input:focus, textarea:focus, select:focus {
 .certificate-preview-inner {
   display: grid;
   gap: 12px;
+  aspect-ratio: 297 / 210;
   min-height: 420px;
   place-items: center;
   padding: clamp(24px, 4vw, 48px);
