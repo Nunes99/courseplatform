@@ -1871,7 +1871,7 @@ function certificationListItemTemplate(certificate) {
   return `
     <article class="certification-list-item ${isProfessional ? 'is-professional' : ''}">
       <div class="certification-seal" aria-hidden="true">
-        <span>★</span>
+        <span>LMT</span>
       </div>
       <div class="certification-list-copy">
         <p class="eyebrow">${label}</p>
@@ -2147,29 +2147,53 @@ function showCertificatePreview(certificateId) {
 
 function certificatePreviewTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
-  const title = isProfessional ? 'Certificado Profissional' : 'Certificado de Participacao';
+  const title = isProfessional ? 'CERTIFICADO PROFISSIONAL DE CONCLUSAO' : 'CERTIFICADO DE PARTICIPACAO';
+  const summary = String(certificate.contentSummary || '')
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 6);
   return `
-    <div class="certificate-preview-inner">
-      <p class="certificate-institution">${escapeHtml(config.organizationName || 'Instituicao emissora')}</p>
-      <h1>${escapeHtml(title)}</h1>
-      <p class="certificate-preview-lead">Certificamos que</p>
-      <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
-      <p>concluiu com sucesso o curso</p>
-      <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
-      ${isProfessional && certificate.contentSummary ? `
-        <div class="certificate-content-summary">${escapeHtml(certificate.contentSummary)}</div>
-      ` : ''}
-      <div class="certificate-preview-meta">
-        <span>${escapeHtml(certificateDisplayNumber(certificate) || '')}</span>
-        <span>${formatDate(certificate.issueDate)}</span>
-        <span>${escapeHtml(certificate.verificationCode || '')}</span>
+    <div class="certificate-preview-inner certificate-document ${isProfessional ? 'certificate-document-professional' : 'certificate-document-participation'}">
+      <span class="certificate-corner certificate-corner-tl"></span>
+      <span class="certificate-corner certificate-corner-tr"></span>
+      <span class="certificate-corner certificate-corner-bl"></span>
+      <span class="certificate-corner certificate-corner-br"></span>
+      <div class="certificate-document-main">
+        <p class="certificate-institution">${escapeHtml(config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
+        <h1>${escapeHtml(title)}</h1>
+        <p class="certificate-preview-lead">certifica que</p>
+        <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
+        <p>${isProfessional ? 'concluiu com exito o programa profissional' : 'participou com sucesso do curso'}</p>
+        <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
+        ${isProfessional && summary.length ? `
+          <div class="certificate-content-summary">
+            <strong>O programa abordou:</strong>
+            <ul>
+              ${summary.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}
+            </ul>
+          </div>
+        ` : ''}
       </div>
+      ${isProfessional ? `
+        <div class="certificate-preview-metrics">
+          <span><small>Carga horaria</small><strong>30 HORAS</strong></span>
+          <span><small>Data de emissao</small><strong>${escapeHtml(formatDate(certificate.issueDate))}</strong></span>
+          <span><small>Nota final</small><strong>${certificate.finalScore == null ? '--/100' : `${escapeHtml(certificate.finalScore)}/100`}</strong></span>
+        </div>
+      ` : ''}
+      <div class="certificate-preview-seal">${isProfessional ? 'LMT' : 'LMT<br>SUMMER<br>SCHOOL'}</div>
       ${isProfessional ? `
         <div class="certificate-signature-row">
           <span>Direcao academica</span>
-          <span>Coordenacao do curso</span>
+          <span>Coordenacao do programa</span>
         </div>
       ` : ''}
+      <div class="certificate-preview-meta">
+        <span>N. do certificado: ${escapeHtml(certificateDisplayNumber(certificate) || '')}</span>
+        <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
+        <span>Codigo: ${escapeHtml(certificate.verificationCode || '')}</span>
+      </div>
     </div>
   `;
 }
@@ -2384,3 +2408,4 @@ function handleError(error, toast = true) {
     showToast(error.message || 'Ocorreu um erro.', 'error');
   }
 }
+

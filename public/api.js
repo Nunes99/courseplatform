@@ -281,7 +281,6 @@ export class CoursePlatformApi {
   async certificatePdf(certificateId, model = 'auto') {
     const apiUrl = new URL(this.apiUrl);
     const url = new URL(`/api/certificates/${encodeURIComponent(certificateId)}/pdf`, apiUrl.origin);
-    url.searchParams.set('sessionToken', this.studentToken());
     url.searchParams.set('model', model);
 
     let response;
@@ -289,7 +288,37 @@ export class CoursePlatformApi {
       response = await fetch(url.toString(), {
         method: 'GET',
         redirect: 'follow',
-        cache: 'no-store'
+        cache: 'no-store',
+        headers: {
+          'x-session-token': this.studentToken()
+        }
+      });
+    } catch (error) {
+      throw this.networkError(error);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (response.ok && contentType.includes('application/pdf')) {
+      return response.blob();
+    }
+
+    return this.parseResponse(response);
+  }
+
+  async adminCertificatePdf(certificateId, model = 'auto') {
+    const apiUrl = new URL(this.apiUrl);
+    const url = new URL(`/api/certificates/${encodeURIComponent(certificateId)}/pdf`, apiUrl.origin);
+    url.searchParams.set('model', model);
+
+    let response;
+    try {
+      response = await fetch(url.toString(), {
+        method: 'GET',
+        redirect: 'follow',
+        cache: 'no-store',
+        headers: {
+          'x-admin-token': this.adminToken()
+        }
       });
     } catch (error) {
       throw this.networkError(error);

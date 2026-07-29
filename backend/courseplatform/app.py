@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from .actions import ApiError, certificate_pdf_payload, dispatch, public_error, record_certificate_download
+from .actions import ApiError, admin_certificate_pdf_payload, certificate_pdf_payload, dispatch, public_error, record_certificate_download
 from .certificate_pdf import build_course_certificate_pdf
 from .config import get_settings
 
@@ -59,15 +59,18 @@ for route_path in ("/", "/api", "/api/index"):
 
 async def handle_certificate_pdf(certificate_id: str, request: Request):
     verification_base_url = f"{str(request.base_url).rstrip('/')}/verify.html"
+    admin_token = request.query_params.get("adminToken") or request.headers.get("x-admin-token") or ""
     payload = {
         "certificateId": certificate_id,
         "sessionToken": request.query_params.get("sessionToken") or request.headers.get("x-session-token") or "",
+        "adminToken": admin_token,
         "verificationBaseUrl": verification_base_url,
     }
     try:
-        result = certificate_pdf_payload(payload)
+        result = admin_certificate_pdf_payload(payload) if admin_token else certificate_pdf_payload(payload)
         pdf_bytes = build_course_certificate_pdf(result["pdfData"], result["model"])
-        record_certificate_download(payload)
+        if not admin_token:
+            record_certificate_download(payload)
         certificate_number = result["certificate"].get("certificateNumber") or certificate_id
         filename = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in certificate_number)
         return Response(

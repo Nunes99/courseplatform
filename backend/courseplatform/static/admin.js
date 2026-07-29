@@ -414,6 +414,9 @@ function confirmAdminAction(message) {
 
 function bindDialogClose(overlay) {
   overlay.querySelector('.dialog-close')?.addEventListener('click', () => overlay.remove());
+  overlay.querySelectorAll('[data-close-dialog]').forEach((button) => {
+    button.addEventListener('click', () => overlay.remove());
+  });
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) overlay.remove();
   });
@@ -1201,6 +1204,12 @@ function renderCertifications() {
       button.dataset.decision
     ));
   });
+  root.querySelectorAll('[data-open-admin-certificate]').forEach((button) => {
+    button.addEventListener('click', () => openAdminCertificatePreview(certificateFromDataset(button.dataset)));
+  });
+  root.querySelectorAll('[data-download-admin-certificate]').forEach((button) => {
+    button.addEventListener('click', () => downloadAdminCertificate(certificateFromDataset(button.dataset)));
+  });
   reportHeight();
 }
 
@@ -1221,6 +1230,30 @@ function certificateRequestCardTemplate(request) {
     uploadedAt: request.submittedAt
   }) : '<p class="empty-note">Comprovativo ainda nao submetido.</p>';
   const canReview = request.status === 'PAYMENT_SUBMITTED';
+  const certificateActions = request.certificateId ? `
+    <button class="button button-small button-secondary" type="button"
+      data-open-admin-certificate
+      data-certificate-id="${escapeHtml(request.certificateId)}"
+      data-certificate-number="${escapeHtml(request.certificateNumber || '')}"
+      data-certificate-type="${escapeHtml(request.certificateType || 'PROFESSIONAL')}"
+      data-student-name="${escapeHtml(request.studentName || '')}"
+      data-course-title="${escapeHtml(request.courseTitle || '')}"
+      data-issue-date="${escapeHtml(request.certificateIssueDate || '')}"
+      data-final-score="${escapeHtml(request.certificateFinalScore == null ? '' : request.certificateFinalScore)}"
+      data-verification-code="${escapeHtml(request.verificationCode || '')}"
+      data-content-summary="${escapeHtml(request.contentSummary || '')}">
+      Ver certificado
+    </button>
+    <button class="button button-small button-primary" type="button"
+      data-download-admin-certificate
+      data-certificate-id="${escapeHtml(request.certificateId)}"
+      data-certificate-number="${escapeHtml(request.certificateNumber || '')}"
+      data-certificate-type="${escapeHtml(request.certificateType || 'PROFESSIONAL')}"
+      data-student-name="${escapeHtml(request.studentName || '')}"
+      data-course-title="${escapeHtml(request.courseTitle || '')}">
+      Baixar PDF
+    </button>
+  ` : '';
 
   return `
     <article class="certificate-request-card">
@@ -1244,6 +1277,7 @@ function certificateRequestCardTemplate(request) {
           data-decision="REJECTED" ${canReview ? '' : 'disabled'}>
           Rejeitar
         </button>
+        ${certificateActions}
       </div>
     </article>
   `;
@@ -1358,6 +1392,121 @@ async function reviewCertificateRequest(requestId, decision) {
     await api.adminReviewCertificateRequest({ requestId, decision, adminNotes });
     showToast('Pedido de certificado atualizado.', 'success');
     await loadCertifications({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+function certificateFromDataset(dataset = {}) {
+  return {
+    certificateId: dataset.certificateId || '',
+    certificateNumber: dataset.certificateNumber || '',
+    certificateType: dataset.certificateType || 'SIMPLE',
+    studentName: dataset.studentName || '',
+    courseTitle: dataset.courseTitle || '',
+    issueDate: dataset.issueDate || '',
+    finalScore: dataset.finalScore || '',
+    verificationCode: dataset.verificationCode || '',
+    contentSummary: dataset.contentSummary || ''
+  };
+}
+
+function adminCertificateDisplayNumber(certificate = {}) {
+  return String(certificate.certificateNumber || '')
+    .replace(/SIMPLE/gi, 'PART')
+    .replace(/PARTICIPATION/gi, 'PART');
+}
+
+function openAdminCertificatePreview(certificate) {
+  if (!certificate?.certificateId) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card certificate-preview-dialog">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <div class="certificate-preview-sheet ${certificate.certificateType === 'PROFESSIONAL' ? 'is-professional' : ''}">
+        ${adminCertificatePreviewTemplate(certificate)}
+      </div>
+      <div class="dialog-actions">
+        <button class="button button-secondary" type="button" data-close-dialog>Fechar</button>
+        <button class="button button-primary" type="button" data-download-admin-certificate>
+          Baixar PDF oficial
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  bindDialogClose(overlay);
+  overlay.querySelector('[data-download-admin-certificate]')?.addEventListener('click', () => downloadAdminCertificate(certificate, overlay));
+  reportHeight();
+}
+
+function adminCertificatePreviewTemplate(certificate) {
+  const isProfessional = certificate.certificateType === 'PROFESSIONAL';
+  const title = isProfessional ? 'CERTIFICADO PROFISSIONAL DE CONCLUSAO' : 'CERTIFICADO DE PARTICIPACAO';
+  const summary = String(certificate.contentSummary || '')
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  return `
+    <div class="certificate-preview-inner certificate-document ${isProfessional ? 'certificate-document-professional' : 'certificate-document-participation'}">
+      <span class="certificate-corner certificate-corner-tl"></span>
+      <span class="certificate-corner certificate-corner-tr"></span>
+      <span class="certificate-corner certificate-corner-bl"></span>
+      <span class="certificate-corner certificate-corner-br"></span>
+      <div class="certificate-document-main">
+        <p class="certificate-institution">${escapeHtml(config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
+        <h1>${escapeHtml(title)}</h1>
+        <p class="certificate-preview-lead">certifica que</p>
+        <h2>${escapeHtml(certificate.studentName || 'Nome do participante')}</h2>
+        <p>${isProfessional ? 'concluiu com exito o programa profissional' : 'participou com sucesso do curso'}</p>
+        <h3>${escapeHtml(certificate.courseTitle || 'Curso')}</h3>
+        ${isProfessional && summary.length ? `
+          <div class="certificate-content-summary">
+            <strong>O programa abordou:</strong>
+            <ul>
+              ${summary.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}
+            </ul>
+          </div>
+        ` : ''}
+      </div>
+      ${isProfessional ? `
+        <div class="certificate-preview-metrics">
+          <span><small>Carga horaria</small><strong>30 HORAS</strong></span>
+          <span><small>Data de emissao</small><strong>${escapeHtml(formatDate(certificate.issueDate))}</strong></span>
+          <span><small>Nota final</small><strong>${certificate.finalScore ? `${escapeHtml(certificate.finalScore)}/100` : '--/100'}</strong></span>
+        </div>
+      ` : ''}
+      <div class="certificate-preview-seal">${isProfessional ? 'LMT' : 'LMT<br>SUMMER<br>SCHOOL'}</div>
+      ${isProfessional ? `
+        <div class="certificate-signature-row">
+          <span>Direcao academica</span>
+          <span>Coordenacao do programa</span>
+        </div>
+      ` : ''}
+      <div class="certificate-preview-meta">
+        <span>N. do certificado: ${escapeHtml(adminCertificateDisplayNumber(certificate) || certificate.certificateId)}</span>
+        <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
+        <span>Codigo: ${escapeHtml(certificate.verificationCode || '')}</span>
+      </div>
+    </div>
+  `;
+}
+
+async function downloadAdminCertificate(certificate, overlay = null) {
+  if (!certificate?.certificateId) return;
+  try {
+    const model = certificate.certificateType === 'PROFESSIONAL' ? 'professional' : 'participation';
+    const blob = await api.adminCertificatePdf(certificate.certificateId, model);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${adminCertificateDisplayNumber(certificate) || certificate.certificateId}.pdf`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast('Certificado baixado.', 'success');
+    overlay?.remove();
   } catch (error) {
     handleAdminError(error);
   }
@@ -2738,6 +2887,12 @@ function renderStudentDetailsOverlay(overlay, details) {
       overlay
     ));
   });
+  overlay.querySelectorAll('[data-open-admin-certificate]').forEach((button) => {
+    button.addEventListener('click', () => openAdminCertificatePreview(certificateFromDataset(button.dataset)));
+  });
+  overlay.querySelectorAll('[data-download-admin-certificate]').forEach((button) => {
+    button.addEventListener('click', () => downloadAdminCertificate(certificateFromDataset(button.dataset)));
+  });
   reportHeight();
 }
 
@@ -2811,6 +2966,28 @@ function adminStudentCertificateTemplate(certificate) {
     <article class="student-mini-record">
       <strong>${escapeHtml(certificate.certificateNumber || certificate.certificateId)}</strong>
       <span>${escapeHtml(certificate.courseTitle || certificate.courseId)} &middot; ${escapeHtml(certificate.certificateType || 'SIMPLE')} &middot; ${escapeHtml(statusLabel(certificate.status))}</span>
+      <div class="admin-row-actions">
+        <button class="button button-small button-secondary" type="button"
+          data-open-admin-certificate
+          data-certificate-id="${escapeHtml(certificate.certificateId)}"
+          data-certificate-number="${escapeHtml(certificate.certificateNumber || '')}"
+          data-certificate-type="${escapeHtml(certificate.certificateType || '')}"
+          data-student-name="${escapeHtml(certificate.studentName || '')}"
+          data-course-title="${escapeHtml(certificate.courseTitle || '')}"
+          data-issue-date="${escapeHtml(certificate.issueDate || '')}"
+          data-final-score="${escapeHtml(certificate.finalScore == null ? '' : certificate.finalScore)}"
+          data-verification-code="${escapeHtml(certificate.verificationCode || '')}"
+          data-content-summary="${escapeHtml(certificate.contentSummary || '')}">
+          Ver
+        </button>
+        <button class="button button-small button-primary" type="button"
+          data-download-admin-certificate
+          data-certificate-id="${escapeHtml(certificate.certificateId)}"
+          data-certificate-number="${escapeHtml(certificate.certificateNumber || '')}"
+          data-certificate-type="${escapeHtml(certificate.certificateType || '')}">
+          Baixar
+        </button>
+      </div>
     </article>
   `;
 }
