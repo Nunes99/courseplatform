@@ -9462,3 +9462,92 @@ body:has(.admin-layout) .button-small {
     grid-column: 1;
   }
 }
+
+/* Compact action and status standard */
+:root {
+  --compact-control-height: 30px;
+}
+
+.button,
+.button-small,
+.hero-actions .button,
+.student-list-action,
+body:has(.student-app-shell) .button,
+body:has(.student-app-shell) .button-small,
+body:has(.admin-layout) .button,
+body:has(.admin-layout) .button-small,
+body:has(.admin-layout) .student-list-action {
+  min-height: var(--compact-control-height);
+  height: var(--compact-control-height);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.status-pill,
+.submission-status-pill,
+.certificate-generation-pill {
+  box-sizing: border-box;
+  min-height: var(--compact-control-height);
+  height: var(--compact-control-height);
+  width: auto;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+button.text-button,
+.student-admin-actions button:not(.button),
+.file-actions button {
+  min-height: var(--compact-control-height);
+  height: var(--compact-control-height);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.theme-toggle,
+.header-user,
+.icon-button,
+.mobile-menu-button,
+.video-sound-button,
+.dialog-close,
+body:has(.student-app-shell) .theme-toggle,
+body:has(.student-app-shell) .header-user,
+body:has(.student-app-shell) .icon-button,
+body:has(.admin-layout) .theme-toggle {
+  width: var(--compact-control-height);
+  min-width: var(--compact-control-height);
+  height: var(--compact-control-height);
+  min-height: var(--compact-control-height);
+  padding: 0;
+  border-radius: 6px;
+}
+
+.admin-identity,
+body:has(.admin-layout) .admin-identity {
+  min-height: var(--compact-control-height);
+  height: var(--compact-control-height);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.student-list-action img,
+.button img {
+  width: 14px;
+  height: 14px;
+}
+
+.student-view-overview .video-panel {
+  display: block;
+}

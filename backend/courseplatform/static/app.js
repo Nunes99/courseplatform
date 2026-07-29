@@ -825,6 +825,16 @@ async function renderDashboard(view = 'overview') {
         </div>
       </article>
     </section>
+    <section class="video-panel" aria-label="Galeria de videos">
+      <div class="video-panel-copy">
+        <p class="eyebrow">Galeria</p>
+        <h2>Videos da Summer School</h2>
+        <p>Assista aos videos de apoio adicionados pela administracao.</p>
+      </div>
+      <div class="video-gallery ${videos.length ? '' : 'is-empty'}">
+        ${videos.length ? videos.map(videoCardTemplate).join('') : '<div class="video-empty">Ainda nao existem videos publicados.</div>'}
+      </div>
+    </section>
     <section class="information-panel">
       <h3>Como funciona a plataforma</h3>
       <div class="information-grid">
@@ -845,16 +855,6 @@ async function renderDashboard(view = 'overview') {
     </section>
   `;
   const lessonsContent = `
-    <section class="video-panel" aria-label="Galeria de videos">
-      <div class="video-panel-copy">
-        <p class="eyebrow">Galeria</p>
-        <h2>Videos da Summer School</h2>
-        <p>Assista aos videos de apoio adicionados pela administracao.</p>
-      </div>
-      <div class="video-gallery ${videos.length ? '' : 'is-empty'}">
-        ${videos.length ? videos.map(videoCardTemplate).join('') : '<div class="video-empty">Ainda nao existem videos publicados.</div>'}
-      </div>
-    </section>
     <section class="section-heading lesson-section-heading">
       <div>
         <p class="eyebrow">Percurso formativo</p>

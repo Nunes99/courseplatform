@@ -176,7 +176,7 @@ def public_student(row: dict[str, Any] | None):
         return None
     return {
         "studentId": row["student_id"],
-        "publicStudentId": row.get("public_student_id") or row["student_id"],
+        "publicStudentId": row.get("public_student_id") or "",
         "fullName": row.get("full_name"),
         "email": row.get("email"),
         "status": row.get("status"),
@@ -2297,7 +2297,7 @@ def submission_item(row: dict[str, Any]):
     student = {
         "student_id": row.get("attempt_student_id") or row.get("student_id"),
         "public_student_id": row.get("public_student_id"),
-        "full_name": row.get("full_name") or row.get("attempt_student_id") or "Estudante sem cadastro",
+        "full_name": row.get("full_name") or "Estudante sem cadastro",
         "email": row.get("email") or "",
         "status": row.get("student_status") or "UNKNOWN",
         "country": row.get("country"),
@@ -2435,7 +2435,7 @@ def admin_get_submission(payload: dict[str, Any]):
     )
     reviews = fetch_all("select * from courseplatform.reviews where attempt_id = %s order by reviewed_at desc nulls last", (attempt["attempt_id"],))
     return success({
-        "student": public_student(student or {"student_id": attempt["student_id"], "full_name": attempt["student_id"], "email": "", "status": "UNKNOWN"}),
+        "student": public_student(student or {"student_id": attempt["student_id"], "full_name": "Estudante sem cadastro", "email": "", "status": "UNKNOWN"}),
         "lesson": public_lesson(lesson or {"lesson_id": attempt["lesson_id"], "title": attempt["lesson_id"]}),
         "attempt": public_attempt(attempt),
         "answers": [
@@ -2720,7 +2720,7 @@ def credential_restore_item(kind: str, row: dict[str, Any], temporary_password: 
     return {
         "type": "STUDENT",
         "id": row.get("student_id"),
-        "publicId": row.get("public_student_id") or row.get("student_id"),
+        "publicId": row.get("public_student_id") or "",
         "fullName": row.get("full_name"),
         "email": row.get("email"),
         "status": row.get("status"),

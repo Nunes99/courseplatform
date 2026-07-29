@@ -981,7 +981,7 @@ function credentialCandidates(targetType) {
     type: 'STUDENT',
     id: student.studentId,
     title: student.fullName,
-    meta: `${student.publicStudentId || student.studentId} - ${student.email}`,
+    meta: `${studentPublicIdLabel(student.publicStudentId)} - ${student.email}`,
     status: student.status
   }));
   const admins = target === 'STUDENTS' ? [] : state.staff.map((admin) => ({
@@ -1043,7 +1043,9 @@ function renderCredentialRecoveryResult(overlay, credentials, summary) {
                 <td>${item.type === 'ADMIN' ? 'Staff' : 'Estudante'}</td>
                 <td>${escapeHtml(item.fullName || '')}</td>
                 <td>${escapeHtml(item.email || '')}</td>
-                <td>${escapeHtml(item.publicId || item.id || '')}</td>
+                <td>${escapeHtml(item.type === 'ADMIN'
+                  ? (item.publicId || item.id || '')
+                  : studentPublicIdLabel(item.publicId))}</td>
                 <td><code>${escapeHtml(item.temporaryPassword || '')}</code></td>
               </tr>
             `).join('')}
@@ -1067,7 +1069,7 @@ function credentialsCsv(credentials, separator = ',') {
       item.type === 'ADMIN' ? 'staff' : 'estudante',
       item.fullName || '',
       item.email || '',
-      item.publicId || item.id || '',
+      item.type === 'ADMIN' ? (item.publicId || item.id || '') : studentPublicIdLabel(item.publicId),
       item.temporaryPassword || ''
     ])
   ];
@@ -1542,8 +1544,7 @@ function adminCertificateRowTemplate(certificate) {
         <small>${escapeHtml(certificateType)}</small>
       </div>
       <div>
-        <strong>${escapeHtml(certificate.studentName || certificate.studentId || 'Estudante')}</strong>
-        <small>${escapeHtml(certificate.studentId || '')}</small>
+        <strong>${escapeHtml(certificate.studentName || 'Estudante')}</strong>
       </div>
       <div>${escapeHtml(certificate.courseTitle || certificate.courseId || 'Curso')}</div>
       <div>${certificate.finalScore == null || certificate.finalScore === '' ? '-' : `${escapeHtml(certificate.finalScore)}%`}</div>
@@ -1581,7 +1582,7 @@ function adminCertificateCardTemplate(certificate) {
           <span class="status-pill ${statusClass(certificate.status)}">${statusLabel(certificate.status)}</span>
           <p class="eyebrow">${certificate.certificateType === 'PROFESSIONAL' ? 'Certificado profissional' : 'Certificado de Participacao'}</p>
           <h3>${escapeHtml(certificate.courseTitle || certificate.courseId || 'Curso')}</h3>
-          <p>${escapeHtml(certificate.studentName || certificate.studentId || 'Estudante')} &middot; ${escapeHtml(formatDate(certificate.issueDate))}</p>
+          <p>${escapeHtml(certificate.studentName || 'Estudante')} &middot; ${escapeHtml(formatDate(certificate.issueDate))}</p>
           <code>${escapeHtml(adminCertificateDisplayNumber(certificate) || certificate.certificateId)}</code>
         </div>
       </div>
@@ -1652,7 +1653,7 @@ function certificateRequestCardTemplate(request) {
     <article class="certificate-request-card">
       <div>
         <span class="status-pill ${statusClass(request.status)}">${statusLabel(request.status)}</span>
-        <h3>${escapeHtml(request.studentName || request.studentEmail || request.studentId)}</h3>
+        <h3>${escapeHtml(request.studentName || request.studentEmail || 'Estudante')}</h3>
         <p>${escapeHtml(request.courseTitle || request.courseId)} &middot; ${escapeHtml(request.requestId)}</p>
       </div>
       ${receipt}
@@ -1824,7 +1825,7 @@ function certificateSurveyResponseTemplate(request) {
       <header>
         <div>
           <p class="eyebrow">${escapeHtml(request.courseTitle || request.courseId || 'Curso')}</p>
-          <h3>${escapeHtml(request.studentName || request.studentEmail || request.studentId || 'Estudante')}</h3>
+          <h3>${escapeHtml(request.studentName || request.studentEmail || 'Estudante')}</h3>
         </div>
         <span class="status-pill ${statusClass(request.status)}">${statusLabel(request.status)}</span>
       </header>
@@ -2684,7 +2685,7 @@ function accessStudentCheckboxes() {
   return students.map(({ student }) => `
     <label class="access-checkbox-option">
       <input type="checkbox" name="studentIds" value="${escapeHtml(student.studentId)}">
-      <span>${escapeHtml(student.publicStudentId || student.studentId)} - ${escapeHtml(student.fullName)}</span>
+      <span>${escapeHtml(studentPublicIdLabel(student.publicStudentId))} - ${escapeHtml(student.fullName)}</span>
     </label>
   `).join('');
 }
@@ -3426,7 +3427,7 @@ function studentCardTemplate({ student, enrollments }) {
           <span class="student-avatar">${escapeHtml(studentInitials(student.fullName))}</span>
           <span class="student-list-primary">
             <strong>${escapeHtml(student.fullName)}</strong>
-            <small>${escapeHtml(student.publicStudentId || student.studentId)}</small>
+            <small>${escapeHtml(studentPublicIdLabel(student.publicStudentId))}</small>
             <small>${escapeHtml(student.email)}</small>
           </span>
         </div>
@@ -3550,6 +3551,11 @@ function studentInitials(fullName) {
   return `${first}${last}`.toUpperCase();
 }
 
+function studentPublicIdLabel(value) {
+  const publicId = String(value || '').trim().toUpperCase();
+  return /^STU-\d{5}$/.test(publicId) ? publicId : 'Sem ID publico';
+}
+
 async function showStudentDetailsV2(studentId) {
   const record = state.students.find(({ student }) => student.studentId === studentId);
   const overlay = document.createElement('div');
@@ -3590,12 +3596,12 @@ function renderStudentDetailsOverlay(overlay, details) {
       <div>
         <span class="status-pill ${statusClass(student.status)}">${statusLabel(student.status)}</span>
         <h2>${escapeHtml(student.fullName)}</h2>
-        <p>${escapeHtml(student.publicStudentId || student.studentId)} &middot; ${escapeHtml(student.email)}</p>
+        <p>${escapeHtml(studentPublicIdLabel(student.publicStudentId))} &middot; ${escapeHtml(student.email)}</p>
       </div>
     </div>
 
     <dl class="student-detail-grid student-detail-grid-expanded">
-      <div><dt>ID publico</dt><dd>${escapeHtml(student.publicStudentId || student.studentId)}</dd></div>
+      <div><dt>ID publico</dt><dd>${escapeHtml(studentPublicIdLabel(student.publicStudentId))}</dd></div>
       <div><dt>Email</dt><dd>${escapeHtml(student.email || 'Sem registo')}</dd></div>
       <div><dt>Telefone</dt><dd>${escapeHtml(student.phone || 'Sem registo')}</dd></div>
       <div><dt>Pais</dt><dd>${escapeHtml(student.country || 'Sem registo')}</dd></div>
@@ -3840,7 +3846,7 @@ function showStudentDetails(studentId) {
       </div>
 
       <dl class="student-detail-grid">
-        <div><dt>ID publico</dt><dd>${escapeHtml(student.publicStudentId || student.studentId)}</dd></div>
+        <div><dt>ID publico</dt><dd>${escapeHtml(studentPublicIdLabel(student.publicStudentId))}</dd></div>
         <div><dt>Pais</dt><dd>${escapeHtml(student.country || 'Sem registo')}</dd></div>
         <div><dt>Organizacao</dt><dd>${escapeHtml(student.organization || 'Sem registo')}</dd></div>
         <div><dt>Criado em</dt><dd>${escapeHtml(formatDate(student.createdAt))}</dd></div>
@@ -3930,7 +3936,7 @@ function exportStudentsCsv(records) {
 
   records.forEach(({ student, enrollments }) => {
     rows.push([
-      student.publicStudentId || student.studentId || '',
+      studentPublicIdLabel(student.publicStudentId),
       student.fullName || '',
       student.email || '',
       statusLabel(student.status),
@@ -4632,7 +4638,7 @@ function moduleAccessStudentCheckboxes(courseId, students) {
     <label class="video-student-option">
       <input type="checkbox" name="studentIds" value="${escapeHtml(student.studentId)}">
       <span>
-        <strong>${escapeHtml(student.publicStudentId || student.studentId)} - ${escapeHtml(student.fullName)}</strong>
+        <strong>${escapeHtml(studentPublicIdLabel(student.publicStudentId))} - ${escapeHtml(student.fullName)}</strong>
         <small>${escapeHtml(student.email)}</small>
       </span>
     </label>
@@ -4908,7 +4914,7 @@ function showGroupDialog(groupId = '') {
                 <input type="checkbox" name="studentIds" value="${escapeHtml(student.studentId)}"
                   ${activeStudentIds.includes(student.studentId) ? 'checked' : ''}>
                 <span>
-                  <strong>${escapeHtml(student.publicStudentId || student.studentId)} · ${escapeHtml(student.fullName)}</strong>
+                  <strong>${escapeHtml(studentPublicIdLabel(student.publicStudentId))} · ${escapeHtml(student.fullName)}</strong>
                   <small>${escapeHtml(student.email)}</small>
                 </span>
               </label>
