@@ -102,8 +102,8 @@ async function route() {
       return;
     }
 
-    if (routeName === 'certificate') {
-      await renderCertificate();
+    if (routeName === 'certificate' || routeName === 'certifications') {
+      await renderCertifications();
       return;
     }
 
@@ -424,7 +424,7 @@ async function renderDashboard() {
   const videos = videoGallery();
 
   const certificateButton = dashboard.enrollment.status === 'COMPLETED'
-    ? '<a class="button button-secondary" href="#/certificate">Ver certificado</a>'
+    ? '<a class="button button-secondary" href="#/certifications">Minhas certificacoes</a>'
     : '';
 
   root.innerHTML = `
@@ -443,6 +443,9 @@ async function renderDashboard() {
         <div class="hero-actions">
           <a class="button button-light" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">
             Página do evento
+          </a>
+          <a class="button button-secondary" href="#/certifications">
+            Minhas certificacoes
           </a>
         </div>
       </div>
@@ -1791,6 +1794,290 @@ async function renderCertificate() {
   `;
 
   reportHeight();
+}
+
+async function renderCertifications() {
+  clearTimers();
+  root.innerHTML = loadingTemplate('A carregar as certificacoes...');
+
+  const result = await api.certifications(state.selectedCourseId);
+  const settings = result.settings || {};
+  const certificates = result.certificates || [];
+  const requests = result.requests || [];
+  const simpleCertificate = result.simpleCertificate;
+  const professionalCertificate = certificates.find((item) => item.certificateType === 'PROFESSIONAL');
+  const activeRequest = requests.find((item) => ['REQUESTED', 'PAYMENT_SUBMITTED', 'APPROVED'].includes(item.status));
+
+  if (!result.completed) {
+    root.innerHTML = `
+      <div class="completion-card standalone-card">
+        <h1>Certificacoes ainda indisponiveis</h1>
+        <p>Conclua e tenha aprovados todos os modulos do curso para liberar os certificados.</p>
+        <a class="button button-secondary" href="#/">Voltar ao curso</a>
+      </div>
+    `;
+    reportHeight();
+    return;
+  }
+
+  root.innerHTML = `
+    <section class="certifications-shell">
+      <div class="admin-page-heading">
+        <div>
+          <p class="eyebrow">Minhas certificacoes</p>
+          <h1>Certificados do curso</h1>
+          <p>${escapeHtml(settings.congratulationsMessage || 'Parabens pela conclusao do curso.')}</p>
+        </div>
+        <a class="button button-secondary" href="#/">Voltar ao curso</a>
+      </div>
+
+      <section class="certificate-student-grid">
+        ${simpleCertificate ? certificateStudentCard(simpleCertificate, 'Certificado simples de participacao') : `
+          <article class="certificate-card certificate-student-card">
+            <h2>Certificado simples em preparacao</h2>
+            <p>Estamos a preparar o seu certificado de participacao.</p>
+          </article>
+        `}
+
+        <article class="certificate-card certificate-student-card certificate-professional-preview">
+          <p class="eyebrow">Opcional</p>
+          <h2>Certificado profissional personalizado</h2>
+          <p>Inclui resumo dos conteudos aprendidos, nivel de reconhecimento diferenciado, logotipos e campos de assinatura.</p>
+          ${settings.professionalPreviewUrl ? `
+            <a class="button button-secondary" href="${escapeHtml(settings.professionalPreviewUrl)}" target="_blank" rel="noopener">
+              Ver modelo
+            </a>
+          ` : `
+            <div class="professional-certificate-mock">
+              <strong>${escapeHtml(config.organizationName || 'LMTWEBNAIRS')}</strong>
+              <span>Certificado profissional personalizado</span>
+              <small>Conteudos, assinatura e verificacao oficial</small>
+            </div>
+          `}
+        </article>
+      </section>
+
+      <section class="certificate-flow-panel">
+        ${professionalCertificate
+          ? professionalCertificateTemplate(professionalCertificate)
+          : professionalRequestFlowTemplate(settings, activeRequest)}
+      </section>
+
+      <section class="certificate-history-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Historico</p>
+            <h2>Todos os certificados</h2>
+          </div>
+        </div>
+        <div class="certificate-history-list">
+          ${certificates.length ? certificates.map((certificate) => certificateStudentCard(certificate, certificate.certificateType === 'PROFESSIONAL' ? 'Certificado profissional' : 'Certificado simples')).join('') : `
+            <div class="video-empty">Ainda nao existem certificados emitidos.</div>
+          `}
+        </div>
+      </section>
+    </section>
+  `;
+
+  root.querySelectorAll('[data-download-certificate]').forEach((button) => {
+    button.addEventListener('click', () => downloadCertificate(button.dataset.downloadCertificate));
+  });
+  document.querySelector('#professionalCertificateForm')?.addEventListener('submit', submitProfessionalCertificateRequest);
+  document.querySelector('#professionalPaymentForm')?.addEventListener('submit', submitProfessionalCertificatePayment);
+  reportHeight();
+}
+
+function certificateStudentCard(certificate, title) {
+  const remaining = certificate.maxDownloads == null
+    ? 'Sem limite'
+    : `${Math.max(0, Number(certificate.maxDownloads || 0) - Number(certificate.downloadCount || 0))} de ${certificate.maxDownloads}`;
+  return `
+    <article class="certificate-card certificate-student-card">
+      <p class="eyebrow">${escapeHtml(certificate.certificateType || 'SIMPLE')}</p>
+      <h2>${escapeHtml(title)}</h2>
+      <div class="certificate-data">
+        <div><span>Numero</span><strong>${escapeHtml(certificate.certificateNumber || '-')}</strong></div>
+        <div><span>Data</span><strong>${formatDate(certificate.issueDate)}</strong></div>
+        <div><span>Verificacao</span><strong>${escapeHtml(certificate.verificationCode || '-')}</strong></div>
+        <div><span>Downloads</span><strong>${escapeHtml(remaining)}</strong></div>
+      </div>
+      <div class="hero-actions">
+        <button class="button button-primary" type="button"
+          data-download-certificate="${escapeHtml(certificate.certificateId)}">
+          Baixar certificado
+        </button>
+        ${certificate.driveUrl ? `
+          <a class="button button-secondary" href="${escapeHtml(certificate.driveUrl)}" target="_blank" rel="noopener">
+            Abrir ficheiro
+          </a>
+        ` : ''}
+      </div>
+    </article>
+  `;
+}
+
+function professionalRequestFlowTemplate(settings, request) {
+  if (request?.status === 'PAYMENT_SUBMITTED') {
+    return `
+      <div class="completion-card">
+        <h2>Comprovativo recebido</h2>
+        <p>A administracao vai rever o pagamento e liberar o certificado profissional se estiver tudo correto.</p>
+      </div>
+    `;
+  }
+
+  if (request?.status === 'REQUESTED') {
+    return paymentUploadTemplate(settings, request);
+  }
+
+  return `
+    <form id="professionalCertificateForm" class="profile-card form-stack">
+      <div class="profile-section-heading">
+        <div>
+          <p class="eyebrow">Inquerito</p>
+          <h2>Antes do certificado profissional</h2>
+        </div>
+      </div>
+      <p class="profile-security-note">As suas respostas ajudam-nos a melhorar o curso e a preparar melhor o certificado profissional.</p>
+      ${(settings.surveyQuestions || []).map((question, index) => `
+        <label>
+          <span>${escapeHtml(question)}</span>
+          <textarea name="survey-${index}" data-survey-question="${escapeHtml(question)}" rows="4" required></textarea>
+        </label>
+      `).join('')}
+      <button class="button button-primary" type="submit">Quero certificado profissional</button>
+    </form>
+  `;
+}
+
+function paymentUploadTemplate(settings, request) {
+  return `
+    <form id="professionalPaymentForm" class="profile-card form-stack">
+      <div class="profile-section-heading">
+        <div>
+          <p class="eyebrow">Pagamento</p>
+          <h2>Enviar comprovativo</h2>
+        </div>
+      </div>
+      <div class="certificate-payment-box">
+        <strong>${escapeHtml(settings.professionalPrice || 'Valor a confirmar')}</strong>
+        <p>${escapeHtml(settings.paymentInstructions || 'Siga as instrucoes de pagamento informadas pela administracao.')}</p>
+      </div>
+      <input type="hidden" name="requestId" value="${escapeHtml(request.requestId)}">
+      <label class="file-control">
+        <input name="paymentReceipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" required>
+        <span class="button button-secondary profile-photo-button">Selecionar comprovativo</span>
+      </label>
+      <button class="button button-primary" type="submit">Enviar comprovativo</button>
+    </form>
+  `;
+}
+
+function professionalCertificateTemplate(certificate) {
+  return `
+    <div class="completion-card">
+      <h2>Certificado profissional liberado</h2>
+      <p>O seu certificado profissional esta pronto. Pode baixar ate atingir o limite definido.</p>
+      ${certificateStudentCard(certificate, 'Certificado profissional personalizado')}
+    </div>
+  `;
+}
+
+async function submitProfessionalCertificateRequest(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const surveyAnswers = {};
+  form.querySelectorAll('[data-survey-question]').forEach((field) => {
+    surveyAnswers[field.dataset.surveyQuestion] = field.value.trim();
+  });
+  setBusy(button, true, 'A enviar...');
+  try {
+    await api.requestProfessionalCertificate(state.selectedCourseId, surveyAnswers);
+    showToast('Pedido criado. Envie o comprovativo de pagamento.', 'success');
+    await renderCertifications();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function submitProfessionalCertificatePayment(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const file = form.querySelector('[name="paymentReceipt"]')?.files?.[0];
+  const requestId = new FormData(form).get('requestId');
+  if (!file) {
+    showToast('Selecione o comprovativo de pagamento.', 'warning');
+    return;
+  }
+  setBusy(button, true, 'A enviar...');
+  try {
+    await api.submitProfessionalCertificatePayment(requestId, file);
+    showToast('Comprovativo enviado para revisao.', 'success');
+    await renderCertifications();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function downloadCertificate(certificateId) {
+  try {
+    const result = await api.recordCertificateDownload(certificateId);
+    const certificate = result.certificate;
+    const html = certificateDownloadHtml(certificate);
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${certificate.certificateNumber || certificate.certificateId}.html`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showToast('Certificado baixado.', 'success');
+    await renderCertifications();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function certificateDownloadHtml(certificate) {
+  const title = certificate.certificateType === 'PROFESSIONAL'
+    ? 'Certificado profissional personalizado'
+    : 'Certificado de participacao';
+  return `<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:0;padding:48px;color:#102a43;background:#f8fafc}
+    .certificate{max-width:980px;margin:auto;padding:56px;border:10px solid #c9a55b;background:white;text-align:center}
+    h1{font-size:38px;margin:20px 0} h2{font-size:30px;margin:18px 0;color:#00365b}
+    .meta{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:30px 0;text-align:left}
+    .meta div{padding:14px;border:1px solid #d9e2ec}.summary{white-space:pre-line;text-align:left;margin-top:24px}
+  </style>
+</head>
+<body>
+  <main class="certificate">
+    <p>${escapeHtml(config.organizationName || 'LMTWEBNAIRS')}</p>
+    <h1>${escapeHtml(title)}</h1>
+    <p>Certificamos a conclusao oficial do curso.</p>
+    <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
+    <p>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</p>
+    <section class="meta">
+      <div><strong>Numero:</strong> ${escapeHtml(certificate.certificateNumber || '')}</div>
+      <div><strong>Data:</strong> ${formatDate(certificate.issueDate)}</div>
+      <div><strong>Verificacao:</strong> ${escapeHtml(certificate.verificationCode || '')}</div>
+      <div><strong>Nivel:</strong> ${escapeHtml(certificate.recognitionLevel || '')}</div>
+    </section>
+    ${certificate.contentSummary ? `<section class="summary"><strong>Conteudos:</strong><br>${escapeHtml(certificate.contentSummary)}</section>` : ''}
+  </main>
+</body>
+</html>`;
 }
 
 function showReviewDialog(attemptData) {

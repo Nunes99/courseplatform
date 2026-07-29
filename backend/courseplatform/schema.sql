@@ -249,6 +249,46 @@ create table if not exists courseplatform.certificates (
   status text not null default 'ISSUED'
 );
 
+alter table courseplatform.certificates add column if not exists certificate_type text not null default 'SIMPLE';
+alter table courseplatform.certificates add column if not exists recognition_level text not null default 'PARTICIPATION';
+alter table courseplatform.certificates add column if not exists content_summary text;
+alter table courseplatform.certificates add column if not exists professional_request_id text;
+alter table courseplatform.certificates add column if not exists download_count integer not null default 0;
+alter table courseplatform.certificates add column if not exists max_downloads integer;
+alter table courseplatform.certificates add column if not exists payment_status text not null default 'NOT_REQUIRED';
+alter table courseplatform.certificates add column if not exists approved_by text;
+alter table courseplatform.certificates add column if not exists approved_at timestamptz;
+
+create table if not exists courseplatform.certificate_settings (
+  course_id text primary key references courseplatform.courses(course_id) on delete cascade,
+  congratulations_message text,
+  survey_questions_json jsonb not null default '[]'::jsonb,
+  professional_price text,
+  payment_instructions text,
+  professional_preview_url text,
+  updated_by text,
+  updated_at timestamptz
+);
+
+create table if not exists courseplatform.certificate_requests (
+  request_id text primary key,
+  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  course_id text not null references courseplatform.courses(course_id) on delete cascade,
+  certificate_id text references courseplatform.certificates(certificate_id) on delete set null,
+  request_type text not null default 'PROFESSIONAL',
+  status text not null default 'REQUESTED',
+  survey_answers_json jsonb not null default '{}'::jsonb,
+  payment_receipt_name text,
+  payment_receipt_url text,
+  payment_receipt_mime_type text,
+  submitted_at timestamptz,
+  reviewed_by text,
+  reviewed_at timestamptz,
+  admin_notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz
+);
+
 create table if not exists courseplatform.audit_log (
   log_id text primary key,
   actor_type text,
@@ -343,6 +383,7 @@ create index if not exists idx_attempts_student_lesson on courseplatform.attempt
 create index if not exists idx_attempts_status_dates on courseplatform.attempts(status, submitted_at, reviewed_at);
 create index if not exists idx_reviews_attempt on courseplatform.reviews(attempt_id, reviewed_at);
 create index if not exists idx_files_attempt on courseplatform.files(attempt_id, status);
+create index if not exists idx_certificate_requests_student_course on courseplatform.certificate_requests(student_id, course_id, status);
 create index if not exists idx_group_members_group on courseplatform.group_members(group_id, status);
 create index if not exists idx_student_import_email on courseplatform.student_import(email);
 create index if not exists idx_new_credentials_student on courseplatform.new_credentials(student_id, status);

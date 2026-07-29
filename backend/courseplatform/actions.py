@@ -407,6 +407,260 @@ def public_file(row: dict[str, Any] | None):
     }
 
 
+CERTIFICATE_FEATURE_SQL = """
+alter table courseplatform.certificates add column if not exists certificate_type text not null default 'SIMPLE';
+alter table courseplatform.certificates add column if not exists recognition_level text not null default 'PARTICIPATION';
+alter table courseplatform.certificates add column if not exists content_summary text;
+alter table courseplatform.certificates add column if not exists professional_request_id text;
+alter table courseplatform.certificates add column if not exists download_count integer not null default 0;
+alter table courseplatform.certificates add column if not exists max_downloads integer;
+alter table courseplatform.certificates add column if not exists payment_status text not null default 'NOT_REQUIRED';
+alter table courseplatform.certificates add column if not exists approved_by text;
+alter table courseplatform.certificates add column if not exists approved_at timestamptz;
+
+create table if not exists courseplatform.certificate_settings (
+  course_id text primary key references courseplatform.courses(course_id) on delete cascade,
+  congratulations_message text,
+  survey_questions_json jsonb not null default '[]'::jsonb,
+  professional_price text,
+  payment_instructions text,
+  professional_preview_url text,
+  updated_by text,
+  updated_at timestamptz
+);
+
+create table if not exists courseplatform.certificate_requests (
+  request_id text primary key,
+  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  course_id text not null references courseplatform.courses(course_id) on delete cascade,
+  certificate_id text references courseplatform.certificates(certificate_id) on delete set null,
+  request_type text not null default 'PROFESSIONAL',
+  status text not null default 'REQUESTED',
+  survey_answers_json jsonb not null default '{}'::jsonb,
+  payment_receipt_name text,
+  payment_receipt_url text,
+  payment_receipt_mime_type text,
+  submitted_at timestamptz,
+  reviewed_by text,
+  reviewed_at timestamptz,
+  admin_notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz
+);
+
+create index if not exists idx_certificate_requests_student_course
+  on courseplatform.certificate_requests(student_id, course_id, status);
+"""
+
+
+def execute_statements(conn, sql: str) -> None:
+    for statement in [part.strip() for part in sql.split(";") if part.strip()]:
+        conn.execute(statement)
+
+
+def ensure_certificate_feature_schema(conn) -> None:
+    execute_statements(conn, CERTIFICATE_FEATURE_SQL)
+
+
+def public_certificate(row: dict[str, Any] | None):
+    if not row:
+        return None
+    return {
+        "certificateId": row["certificate_id"],
+        "studentId": row.get("student_id"),
+        "courseId": row.get("course_id"),
+        "certificateNumber": row.get("certificate_number"),
+        "verificationCode": row.get("verification_code"),
+        "issueDate": iso(row.get("issue_date")),
+        "finalScore": None if row.get("final_score") is None else float(row["final_score"]),
+        "driveUrl": row.get("drive_url"),
+        "status": row.get("status"),
+        "certificateType": row.get("certificate_type") or "SIMPLE",
+        "recognitionLevel": row.get("recognition_level") or "PARTICIPATION",
+        "contentSummary": row.get("content_summary"),
+        "downloadCount": int(row.get("download_count") or 0),
+        "maxDownloads": None if row.get("max_downloads") is None else int(row["max_downloads"]),
+        "paymentStatus": row.get("payment_status") or "NOT_REQUIRED",
+        "courseTitle": row.get("course_title") or row.get("title"),
+        "studentName": row.get("student_name") or row.get("full_name"),
+    }
+
+
+def public_certificate_request(row: dict[str, Any] | None):
+    if not row:
+        return None
+    return {
+        "requestId": row["request_id"],
+        "studentId": row.get("student_id"),
+        "courseId": row.get("course_id"),
+        "certificateId": row.get("certificate_id"),
+        "requestType": row.get("request_type"),
+        "status": row.get("status"),
+        "surveyAnswers": row.get("survey_answers_json") or {},
+        "paymentReceiptName": row.get("payment_receipt_name"),
+        "paymentReceiptUrl": row.get("payment_receipt_url"),
+        "paymentReceiptMimeType": row.get("payment_receipt_mime_type"),
+        "submittedAt": iso(row.get("submitted_at")),
+        "reviewedBy": row.get("reviewed_by"),
+        "reviewedAt": iso(row.get("reviewed_at")),
+        "adminNotes": row.get("admin_notes"),
+        "createdAt": iso(row.get("created_at")),
+        "updatedAt": iso(row.get("updated_at")),
+        "studentName": row.get("full_name"),
+        "studentEmail": row.get("email"),
+        "courseTitle": row.get("title"),
+    }
+
+
+def default_certificate_settings(course: dict[str, Any] | None = None):
+    course_title = (course or {}).get("title") or "o curso"
+    return {
+        "congratulationsMessage": (
+            f"Parabens pela conclusao de {course_title}. "
+            "A sua participacao foi registada com sucesso."
+        ),
+        "surveyQuestions": [
+            "Como avalia a qualidade geral do curso?",
+            "Que conteudos foram mais relevantes para si?",
+            "Como pretende aplicar o que aprendeu?"
+        ],
+        "professionalPrice": "",
+        "paymentInstructions": "Adicione aqui as instrucoes de pagamento do certificado profissional.",
+        "professionalPreviewUrl": "",
+    }
+
+
+def certificate_settings_payload(row: dict[str, Any] | None, course: dict[str, Any] | None = None):
+    defaults = default_certificate_settings(course)
+    if not row:
+        return defaults
+    survey_questions = row.get("survey_questions_json") or defaults["surveyQuestions"]
+    return {
+        "congratulationsMessage": row.get("congratulations_message") or defaults["congratulationsMessage"],
+        "surveyQuestions": survey_questions if isinstance(survey_questions, list) else defaults["surveyQuestions"],
+        "professionalPrice": row.get("professional_price") or "",
+        "paymentInstructions": row.get("payment_instructions") or defaults["paymentInstructions"],
+        "professionalPreviewUrl": row.get("professional_preview_url") or "",
+    }
+
+
+def certificate_number(prefix: str) -> str:
+    return f"{prefix}-{utc_now().year}-{generate_access_code(8).upper()}"
+
+
+def certificate_content_summary(conn, course_id: str) -> str:
+    rows = conn.execute(
+        """
+        select lesson_number, title, coalesce(summary, '') as summary
+        from courseplatform.lessons
+        where course_id = %s and coalesce(status, 'ACTIVE') = 'ACTIVE'
+        order by lesson_number
+        """,
+        (course_id,),
+    ).fetchall()
+    return "\n".join(
+        f"Modulo {int(row.get('lesson_number') or 0)}: {row.get('title') or ''}".strip()
+        for row in rows
+    )
+
+
+def course_completion_snapshot(conn, student_id: str, course_id: str):
+    enrollment = conn.execute(
+        "select * from courseplatform.enrollments where student_id = %s and course_id = %s",
+        (student_id, course_id),
+    ).fetchone()
+    course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+    lesson_total = conn.execute(
+        """
+        select count(*) as total
+        from courseplatform.lessons
+        where course_id = %s and coalesce(status, 'ACTIVE') = 'ACTIVE'
+        """,
+        (course_id,),
+    ).fetchone()
+    approved_total = conn.execute(
+        """
+        select count(distinct p.lesson_id) as total
+        from courseplatform.lesson_progress p
+        join courseplatform.lessons l on l.lesson_id = p.lesson_id
+        where p.student_id = %s and l.course_id = %s
+          and p.status = 'APPROVED' and coalesce(l.status, 'ACTIVE') = 'ACTIVE'
+        """,
+        (student_id, course_id),
+    ).fetchone()
+    total = int((lesson_total or {}).get("total") or 0)
+    approved = int((approved_total or {}).get("total") or 0)
+    progress = float((enrollment or {}).get("progress_percent") or 0)
+    completed = bool(enrollment) and (
+        enrollment.get("status") == "COMPLETED" or progress >= 100 or (total > 0 and approved >= total)
+    )
+    return enrollment, course, total, approved, completed
+
+
+def sync_enrollment_completion(conn, enrollment: dict[str, Any] | None, completed: bool, final_score: float | None = None):
+    if not enrollment or not completed:
+        return enrollment
+    if enrollment.get("status") == "COMPLETED" and float(enrollment.get("progress_percent") or 0) >= 100:
+        return enrollment
+    return conn.execute(
+        """
+        update courseplatform.enrollments
+        set status = 'COMPLETED',
+            progress_percent = 100,
+            final_score = coalesce(%s, final_score),
+            completed_at = coalesce(completed_at, now()),
+            updated_at = now()
+        where enrollment_id = %s
+        returning *
+        """,
+        (final_score, enrollment["enrollment_id"]),
+    ).fetchone()
+
+
+def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
+    ensure_certificate_feature_schema(conn)
+    enrollment, course, _, _, completed = course_completion_snapshot(conn, student["student_id"], course_id)
+    enrollment = sync_enrollment_completion(conn, enrollment, completed, (enrollment or {}).get("final_score"))
+    if not completed:
+        return None, enrollment, course, False
+    existing = conn.execute(
+        """
+        select cert.*, c.title as course_title, s.full_name as student_name
+        from courseplatform.certificates cert
+        join courseplatform.courses c on c.course_id = cert.course_id
+        join courseplatform.students s on s.student_id = cert.student_id
+        where cert.student_id = %s and cert.course_id = %s
+          and coalesce(cert.certificate_type, 'SIMPLE') = 'SIMPLE'
+        order by cert.issue_date desc nulls last
+        limit 1
+        """,
+        (student["student_id"], course_id),
+    ).fetchone()
+    if existing:
+        return existing, enrollment, course, True
+    cert = conn.execute(
+        """
+        insert into courseplatform.certificates
+          (certificate_id, student_id, course_id, certificate_number, verification_code,
+           issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
+           recognition_level, content_summary, max_downloads, payment_status)
+        values (%s, %s, %s, %s, %s, now(), %s, '', '', 'ISSUED', 'SIMPLE',
+                'PARTICIPATION', %s, null, 'NOT_REQUIRED')
+        returning *
+        """,
+        (
+            generate_id("CERT"),
+            student["student_id"],
+            course_id,
+            certificate_number("CERT-SIMPLE"),
+            generate_access_code(12).upper(),
+            (enrollment or {}).get("final_score"),
+            certificate_content_summary(conn, course_id),
+        ),
+    ).fetchone()
+    return {**cert, "course_title": (course or {}).get("title"), "student_name": student.get("full_name")}, enrollment, course, True
+
+
 def create_session(conn, subject_id: str, user_agent: str = "", ip_hash: str = ""):
     plain_token = generate_token()
     token_hash = hash_secret(plain_token)
@@ -1433,27 +1687,163 @@ def submit_attempt(payload: dict[str, Any]):
 def my_certificate(payload: dict[str, Any]):
     _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
-    cert = fetch_one(
-        """
-        select cert.*, c.title
-        from courseplatform.certificates cert
-        left join courseplatform.courses c on c.course_id = cert.course_id
-        where cert.student_id = %s and cert.course_id = %s
-        order by cert.issue_date desc nulls last
-        limit 1
-        """,
-        (student["student_id"], course_id),
-    )
-    return success({"certificate": {
-        "certificateId": cert.get("certificate_id"),
-        "certificateNumber": cert.get("certificate_number"),
-        "verificationCode": cert.get("verification_code"),
-        "issueDate": iso(cert.get("issue_date")),
-        "finalScore": None if cert.get("final_score") is None else float(cert.get("final_score")),
-        "driveUrl": cert.get("drive_url"),
-        "status": cert.get("status"),
-        "courseTitle": cert.get("title"),
-    } if cert else None})
+    with connection() as conn:
+        cert, _, _, _ = ensure_simple_certificate(conn, student, course_id)
+        conn.commit()
+    return success({"certificate": public_certificate(cert)})
+
+
+def my_certifications(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    with connection() as conn:
+        simple_cert, enrollment, course, completed = ensure_simple_certificate(conn, student, course_id)
+        settings_row = conn.execute(
+            "select * from courseplatform.certificate_settings where course_id = %s",
+            (course_id,),
+        ).fetchone()
+        certificates = conn.execute(
+            """
+            select cert.*, c.title as course_title, s.full_name as student_name
+            from courseplatform.certificates cert
+            join courseplatform.courses c on c.course_id = cert.course_id
+            join courseplatform.students s on s.student_id = cert.student_id
+            where cert.student_id = %s and cert.course_id = %s
+            order by cert.issue_date desc nulls last
+            """,
+            (student["student_id"], course_id),
+        ).fetchall()
+        requests = conn.execute(
+            """
+            select cr.*, s.full_name, s.email, c.title
+            from courseplatform.certificate_requests cr
+            join courseplatform.students s on s.student_id = cr.student_id
+            join courseplatform.courses c on c.course_id = cr.course_id
+            where cr.student_id = %s and cr.course_id = %s
+            order by coalesce(cr.updated_at, cr.created_at) desc
+            """,
+            (student["student_id"], course_id),
+        ).fetchall()
+        conn.commit()
+    return success({
+        "student": public_student(student),
+        "course": public_course(course),
+        "enrollment": public_enrollment(enrollment),
+        "completed": completed,
+        "simpleCertificate": public_certificate(simple_cert),
+        "certificates": [public_certificate(row) for row in certificates],
+        "requests": [public_certificate_request(row) for row in requests],
+        "settings": certificate_settings_payload(settings_row, course),
+    })
+
+
+def request_professional_certificate(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    survey_answers = payload.get("surveyAnswers") if isinstance(payload.get("surveyAnswers"), dict) else {}
+    with connection() as conn:
+        _, _, _, completed = ensure_simple_certificate(conn, student, course_id)
+        if not completed:
+            raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado profissional.")
+        existing = conn.execute(
+            """
+            select *
+            from courseplatform.certificate_requests
+            where student_id = %s and course_id = %s
+              and request_type = 'PROFESSIONAL'
+              and status in ('REQUESTED', 'PAYMENT_SUBMITTED', 'APPROVED')
+            order by created_at desc
+            limit 1
+            """,
+            (student["student_id"], course_id),
+        ).fetchone()
+        if existing:
+            request = conn.execute(
+                """
+                update courseplatform.certificate_requests
+                set survey_answers_json = %s, updated_at = now()
+                where request_id = %s
+                returning *
+                """,
+                (json.dumps(survey_answers), existing["request_id"]),
+            ).fetchone()
+        else:
+            request = conn.execute(
+                """
+                insert into courseplatform.certificate_requests
+                  (request_id, student_id, course_id, request_type, status,
+                   survey_answers_json, created_at, updated_at)
+                values (%s, %s, %s, 'PROFESSIONAL', 'REQUESTED', %s, now(), now())
+                returning *
+                """,
+                (generate_id("CREQ"), student["student_id"], course_id, json.dumps(survey_answers)),
+            ).fetchone()
+        conn.commit()
+    return success({"request": public_certificate_request(request)})
+
+
+def submit_professional_certificate_payment(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["requestId", "receiptFileName"])
+    receipt_mime = str_value(payload.get("receiptMimeType") or "application/octet-stream")
+    receipt_base64 = str_value(payload.get("receiptBase64"))
+    receipt_url = f"data:{receipt_mime};base64,{receipt_base64}" if receipt_base64 else str_value(payload.get("receiptUrl"))
+    if not receipt_url:
+        raise ApiError("RECEIPT_REQUIRED", "Carregue o comprovativo de pagamento.")
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        request = conn.execute(
+            """
+            update courseplatform.certificate_requests
+            set status = 'PAYMENT_SUBMITTED',
+                payment_receipt_name = %s,
+                payment_receipt_url = %s,
+                payment_receipt_mime_type = %s,
+                submitted_at = now(),
+                updated_at = now()
+            where request_id = %s and student_id = %s
+            returning *
+            """,
+            (
+                str_value(payload.get("receiptFileName")),
+                receipt_url,
+                receipt_mime,
+                payload["requestId"],
+                student["student_id"],
+            ),
+        ).fetchone()
+        conn.commit()
+    if not request:
+        raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado nao encontrado.")
+    return success({"request": public_certificate_request(request)})
+
+
+def record_certificate_download(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    require_fields(payload, ["certificateId"])
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        cert = conn.execute(
+            "select * from courseplatform.certificates where certificate_id = %s and student_id = %s",
+            (payload["certificateId"], student["student_id"]),
+        ).fetchone()
+        if not cert:
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+        max_downloads = cert.get("max_downloads")
+        download_count = int(cert.get("download_count") or 0)
+        if max_downloads is not None and download_count >= int(max_downloads):
+            raise ApiError("DOWNLOAD_LIMIT_REACHED", "O limite de downloads deste certificado foi atingido.")
+        cert = conn.execute(
+            """
+            update courseplatform.certificates
+            set download_count = download_count + 1
+            where certificate_id = %s
+            returning *
+            """,
+            (payload["certificateId"],),
+        ).fetchone()
+        conn.commit()
+    return success({"certificate": public_certificate(cert)})
 
 
 def admin_list_courses(payload: dict[str, Any]):
@@ -1712,16 +2102,26 @@ def admin_get_submission(payload: dict[str, Any]):
         raise ApiError("ATTEMPT_NOT_FOUND", "Submissao nao encontrada.")
     student = fetch_one("select * from courseplatform.students where student_id = %s", (attempt["student_id"],))
     lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (attempt["lesson_id"],))
-    answers = fetch_all(
+    questions = fetch_all(
         """
-        select q.*, a.*
-        from courseplatform.answers a
-        left join courseplatform.questions q on q.question_id = a.question_id
-        where a.attempt_id = %s
-        order by q.question_order nulls last, a.saved_at
+        select *
+        from courseplatform.questions
+        where lesson_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'
+        order by question_order
         """,
-        (attempt["attempt_id"],),
+        (attempt["lesson_id"],),
     )
+    answers = fetch_all("select * from courseplatform.answers where attempt_id = %s", (attempt["attempt_id"],))
+    answer_by_question = {row["question_id"]: row for row in answers}
+    question_ids = [row["question_id"] for row in questions]
+    options_by_question: dict[str, list[dict[str, Any]]] = {question_id: [] for question_id in question_ids}
+    if question_ids:
+        options = fetch_all(
+            "select * from courseplatform.question_options where question_id = any(%s) order by option_order",
+            (question_ids,),
+        )
+        for option in options:
+            options_by_question[option["question_id"]].append(option)
     files = fetch_all(
         "select * from courseplatform.files where attempt_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED' order by uploaded_at",
         (attempt["attempt_id"],),
@@ -1733,10 +2133,23 @@ def admin_get_submission(payload: dict[str, Any]):
         "attempt": public_attempt(attempt),
         "answers": [
             {
-                "question": public_question(row) if row.get("question_id") else None,
-                "answer": public_answer(row),
+                "question": {
+                    **public_question(question),
+                    "options": [public_option(option) for option in options_by_question.get(question["question_id"], [])],
+                },
+                "answer": public_answer(answer_by_question.get(question["question_id"])) or {
+                    "answerId": "",
+                    "attemptId": attempt["attempt_id"],
+                    "questionId": question["question_id"],
+                    "answerText": "",
+                    "selectedOptionId": "",
+                    "isCorrect": None,
+                    "awardedPoints": None,
+                    "savedAt": None,
+                    "submittedAt": None,
+                },
             }
-            for row in answers
+            for question in questions
         ],
         "files": [public_file(row) for row in files],
         "reviews": [public_review(row) for row in reviews],
@@ -2347,6 +2760,294 @@ def admin_set_lesson_access(payload: dict[str, Any]):
     return success({"studentCount": len(student_ids), "lessonCount": len(lesson_ids), "updatedCount": updated})
 
 
+def admin_student_details(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    require_fields(payload, ["studentId"])
+    student_id = payload["studentId"]
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        student = conn.execute("select * from courseplatform.students where student_id = %s", (student_id,)).fetchone()
+        if not student:
+            raise ApiError("STUDENT_NOT_FOUND", "Estudante nao encontrado.")
+        enrollment_rows = conn.execute(
+            """
+            select e.*, c.title as course_title, c.course_code, g.name as group_name
+            from courseplatform.enrollments e
+            left join courseplatform.courses c on c.course_id = e.course_id
+            left join courseplatform.groups g on g.group_id = e.group_id
+            where e.student_id = %s
+            order by coalesce(e.updated_at, e.enrolled_at) desc nulls last
+            """,
+            (student_id,),
+        ).fetchall()
+        progress_rows = conn.execute(
+            """
+            select p.*, l.course_id, l.lesson_number, l.title as lesson_title,
+                   a.attempt_id, a.attempt_number, a.status as attempt_status,
+                   a.score as attempt_score, a.submitted_at as attempt_submitted_at,
+                   a.reviewed_at as attempt_reviewed_at,
+                   coalesce(f.file_count, 0) as file_count
+            from courseplatform.lesson_progress p
+            join courseplatform.lessons l on l.lesson_id = p.lesson_id
+            left join lateral (
+              select *
+              from courseplatform.attempts a
+              where a.student_id = p.student_id and a.lesson_id = p.lesson_id
+              order by coalesce(a.updated_at, a.created_at) desc nulls last
+              limit 1
+            ) a on true
+            left join lateral (
+              select count(*) as file_count
+              from courseplatform.files f
+              where f.student_id = p.student_id and f.lesson_id = p.lesson_id
+                and coalesce(f.status, 'ACTIVE') <> 'DELETED'
+            ) f on true
+            where p.student_id = %s
+            order by l.course_id, l.lesson_number
+            """,
+            (student_id,),
+        ).fetchall()
+        group_rows = conn.execute(
+            """
+            select gm.*, g.name, g.group_code, g.course_id, g.start_date, g.end_date
+            from courseplatform.group_members gm
+            join courseplatform.groups g on g.group_id = gm.group_id
+            where gm.student_id = %s
+            order by g.name
+            """,
+            (student_id,),
+        ).fetchall()
+        certificates = conn.execute(
+            """
+            select cert.*, c.title as course_title, s.full_name as student_name
+            from courseplatform.certificates cert
+            join courseplatform.courses c on c.course_id = cert.course_id
+            join courseplatform.students s on s.student_id = cert.student_id
+            where cert.student_id = %s
+            order by cert.issue_date desc nulls last
+            """,
+            (student_id,),
+        ).fetchall()
+        requests = conn.execute(
+            """
+            select cr.*, s.full_name, s.email, c.title
+            from courseplatform.certificate_requests cr
+            join courseplatform.students s on s.student_id = cr.student_id
+            join courseplatform.courses c on c.course_id = cr.course_id
+            where cr.student_id = %s
+            order by coalesce(cr.updated_at, cr.created_at) desc
+            """,
+            (student_id,),
+        ).fetchall()
+    return success({
+        "student": public_student(student),
+        "enrollments": [
+            {
+                **public_enrollment(row),
+                "courseTitle": row.get("course_title"),
+                "courseCode": row.get("course_code"),
+                "groupName": row.get("group_name"),
+            }
+            for row in enrollment_rows
+        ],
+        "lessonProgress": [
+            {
+                "progress": public_progress(row),
+                "courseId": row.get("course_id"),
+                "lesson": {
+                    "lessonId": row.get("lesson_id"),
+                    "lessonNumber": int(row.get("lesson_number") or 0),
+                    "title": row.get("lesson_title"),
+                },
+                "attempt": public_attempt({
+                    "attempt_id": row.get("attempt_id"),
+                    "progress_id": row.get("progress_id"),
+                    "lesson_id": row.get("lesson_id"),
+                    "attempt_number": row.get("attempt_number"),
+                    "status": row.get("attempt_status"),
+                    "score": row.get("attempt_score"),
+                    "submitted_at": row.get("attempt_submitted_at"),
+                    "reviewed_at": row.get("attempt_reviewed_at"),
+                }) if row.get("attempt_id") else None,
+                "fileCount": int(row.get("file_count") or 0),
+            }
+            for row in progress_rows
+        ],
+        "groups": [
+            {
+                "groupMember": public_group_member(row),
+                "group": {
+                    "groupId": row.get("group_id"),
+                    "groupCode": row.get("group_code"),
+                    "name": row.get("name"),
+                    "courseId": row.get("course_id"),
+                    "startDate": iso(row.get("start_date")),
+                    "endDate": iso(row.get("end_date")),
+                },
+            }
+            for row in group_rows
+        ],
+        "certificates": [public_certificate(row) for row in certificates],
+        "certificateRequests": [public_certificate_request(row) for row in requests],
+    })
+
+
+def admin_list_certificate_requests(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    status = (payload.get("status") or "ALL").upper()
+    query = (payload.get("query") or "").strip().lower()
+    limit = min(int(payload.get("limit") or 200), 500)
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        rows = conn.execute(
+            """
+            select cr.*, s.full_name, s.email, c.title
+            from courseplatform.certificate_requests cr
+            join courseplatform.students s on s.student_id = cr.student_id
+            join courseplatform.courses c on c.course_id = cr.course_id
+            where (%s = 'ALL' or cr.status = %s)
+              and (
+                %s = ''
+                or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
+                  coalesce(c.title, '') || ' ' || coalesce(cr.request_id, '')) like %s
+              )
+            order by coalesce(cr.submitted_at, cr.updated_at, cr.created_at) desc
+            limit %s
+            """,
+            (status, status, query, f"%{query}%", limit),
+        ).fetchall()
+        conn.commit()
+    return success({"requests": [public_certificate_request(row) for row in rows]})
+
+
+def admin_review_certificate_request(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["requestId", "decision"])
+    decision = str_value(payload.get("decision")).upper()
+    if decision not in {"APPROVED", "REJECTED"}:
+        raise ApiError("INVALID_DECISION", "Decisao invalida.")
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        request = conn.execute(
+            "select * from courseplatform.certificate_requests where request_id = %s",
+            (payload["requestId"],),
+        ).fetchone()
+        if not request:
+            raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado nao encontrado.")
+        certificate = None
+        if decision == "APPROVED":
+            student = conn.execute("select * from courseplatform.students where student_id = %s", (request["student_id"],)).fetchone()
+            course = conn.execute("select * from courseplatform.courses where course_id = %s", (request["course_id"],)).fetchone()
+            certificate = conn.execute(
+                """
+                insert into courseplatform.certificates
+                  (certificate_id, student_id, course_id, certificate_number, verification_code,
+                   issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
+                   recognition_level, content_summary, professional_request_id,
+                   download_count, max_downloads, payment_status, approved_by, approved_at)
+                values (%s, %s, %s, %s, %s, now(),
+                  (select final_score from courseplatform.enrollments where student_id = %s and course_id = %s limit 1),
+                  '', '', 'ISSUED', 'PROFESSIONAL', 'CONTENT_DETAILED', %s, %s, 0, 5,
+                  'CONFIRMED', %s, now())
+                returning *
+                """,
+                (
+                    generate_id("CERT"),
+                    request["student_id"],
+                    request["course_id"],
+                    certificate_number("CERT-PRO"),
+                    generate_access_code(12).upper(),
+                    request["student_id"],
+                    request["course_id"],
+                    certificate_content_summary(conn, request["course_id"]),
+                    request["request_id"],
+                    admin["admin_id"],
+                ),
+            ).fetchone()
+            request = conn.execute(
+                """
+                update courseplatform.certificate_requests
+                set status = 'APPROVED',
+                    certificate_id = %s,
+                    reviewed_by = %s,
+                    reviewed_at = now(),
+                    admin_notes = %s,
+                    updated_at = now()
+                where request_id = %s
+                returning *
+                """,
+                (certificate["certificate_id"], admin["admin_id"], str_value(payload.get("adminNotes")), request["request_id"]),
+            ).fetchone()
+            certificate = {**certificate, "course_title": (course or {}).get("title"), "student_name": (student or {}).get("full_name")}
+        else:
+            request = conn.execute(
+                """
+                update courseplatform.certificate_requests
+                set status = 'REJECTED',
+                    reviewed_by = %s,
+                    reviewed_at = now(),
+                    admin_notes = %s,
+                    updated_at = now()
+                where request_id = %s
+                returning *
+                """,
+                (admin["admin_id"], str_value(payload.get("adminNotes")), request["request_id"]),
+            ).fetchone()
+        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_REQUEST_REVIEWED", "CERTIFICATE_REQUEST", request["request_id"], {"decision": decision})
+        conn.commit()
+    return success({"request": public_certificate_request(request), "certificate": public_certificate(certificate)})
+
+
+def admin_get_certificate_settings(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+        row = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
+        conn.commit()
+    return success({"settings": certificate_settings_payload(row, course), "course": public_course(course)})
+
+
+def admin_save_certificate_settings(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    survey_questions = payload.get("surveyQuestions") if isinstance(payload.get("surveyQuestions"), list) else []
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        row = conn.execute(
+            """
+            insert into courseplatform.certificate_settings
+              (course_id, congratulations_message, survey_questions_json,
+               professional_price, payment_instructions, professional_preview_url,
+               updated_by, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, now())
+            on conflict (course_id) do update
+            set congratulations_message = excluded.congratulations_message,
+                survey_questions_json = excluded.survey_questions_json,
+                professional_price = excluded.professional_price,
+                payment_instructions = excluded.payment_instructions,
+                professional_preview_url = excluded.professional_preview_url,
+                updated_by = excluded.updated_by,
+                updated_at = now()
+            returning *
+            """,
+            (
+                course_id,
+                str_value(payload.get("congratulationsMessage")),
+                json.dumps([str_value(item) for item in survey_questions if str_value(item)]),
+                str_value(payload.get("professionalPrice")),
+                str_value(payload.get("paymentInstructions")),
+                str_value(payload.get("professionalPreviewUrl")),
+                admin["admin_id"],
+            ),
+        ).fetchone()
+        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_SETTINGS_SAVED", "COURSE", course_id)
+        conn.commit()
+    return success({"settings": certificate_settings_payload(row, course), "course": public_course(course)})
+
+
 def verify_certificate(payload: dict[str, Any]):
     code = payload.get("code") or payload.get("verificationCode") or ""
     certificate = fetch_one(
@@ -2392,6 +3093,10 @@ ACTIONS = {
     "getAttemptStatus": attempt_status,
     "updateMyProfile": update_my_profile,
     "changeMyAccessCode": change_my_access_code,
+    "getMyCertifications": my_certifications,
+    "requestProfessionalCertificate": request_professional_certificate,
+    "submitProfessionalCertificatePayment": submit_professional_certificate_payment,
+    "recordCertificateDownload": record_certificate_download,
     "startAttempt": start_attempt,
     "saveAnswer": save_answer,
     "uploadFile": upload_file,
@@ -2402,9 +3107,14 @@ ACTIONS = {
     "adminGetCourseStructure": admin_course_structure,
     "adminListGroups": admin_list_groups,
     "adminListStudents": admin_list_students,
+    "adminGetStudentDetails": admin_student_details,
     "adminGetSubmission": admin_get_submission,
     "adminReviewSubmission": admin_review_submission,
     "adminAuthorizeRetry": admin_authorize_retry,
+    "adminListCertificateRequests": admin_list_certificate_requests,
+    "adminReviewCertificateRequest": admin_review_certificate_request,
+    "adminGetCertificateSettings": admin_get_certificate_settings,
+    "adminSaveCertificateSettings": admin_save_certificate_settings,
     "adminSaveMediaConfig": admin_save_media_config,
     "adminSaveStaff": admin_save_staff,
     "adminSetStaffStatus": admin_set_staff_status,

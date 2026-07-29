@@ -3,6 +3,7 @@ import {
   escapeHtml,
   formatBytes,
   formatDate,
+  parseSelectedOptions,
   reportHeight,
   setBusy,
   showToast,
@@ -44,6 +45,12 @@ const state = {
     showDeletedItems: false
   },
   selectedSubmission: null,
+  certificateRequests: [],
+  certificateFilters: {
+    status: 'ALL',
+    query: ''
+  },
+  certificateSettings: null,
   studentFilters: {
     query: '',
     status: 'ALL',
@@ -341,6 +348,10 @@ function renderAdminShell() {
           <img src="${iconUrl('picture', blueIcon)}" alt="">
           <span>Marca</span>
         </button>
+        <button class="admin-nav" data-admin-view="certifications">
+          <img src="${iconUrl('diploma', blueIcon)}" alt="">
+          <span>Certificacoes</span>
+        </button>
         ${canManageStaff() ? `
           <button class="admin-nav" data-admin-view="staff">
             <img src="${iconUrl('conference-call', blueIcon)}" alt="">
@@ -376,6 +387,8 @@ function renderAdminShell() {
         renderVideos();
       } else if (button.dataset.adminView === 'brand') {
         renderBrandSettings();
+      } else if (button.dataset.adminView === 'certifications') {
+        loadCertifications();
       } else if (button.dataset.adminView === 'staff') {
         loadStaff();
       } else if (button.dataset.adminView === 'credentials') {
@@ -1027,6 +1040,262 @@ function renderAdminProfile() {
   reportHeight();
 }
 
+async function loadCertifications(options = {}) {
+  const main = document.querySelector('#adminMain');
+  if (!options.silent) {
+    main.innerHTML = loadingTemplate('A carregar certificacoes...');
+  }
+
+  try {
+    const [requestsResult, coursesResult] = await Promise.all([
+      api.adminCertificateRequests({
+        status: state.certificateFilters.status,
+        query: state.certificateFilters.query,
+        limit: 300
+      }, options),
+      api.adminCourses({ limit: 500 }, options)
+    ]);
+    state.certificateRequests = requestsResult.requests || [];
+    state.courses = coursesResult.courses || state.courses || [];
+    const firstCourse = state.courses.find((item) => item.course?.status !== 'DELETED')?.course;
+    state.selectedCourseId = state.selectedCourseId || firstCourse?.courseId || config.courseId;
+    const settingsResult = await api.adminCertificateSettings(state.selectedCourseId, options);
+    state.certificateSettings = settingsResult.settings || {};
+    renderCertifications();
+  } catch (error) {
+    if (options.silent) {
+      console.warn('Falha ao atualizar certificacoes em segundo plano:', error);
+      return;
+    }
+    handleAdminError(error);
+  }
+}
+
+function renderCertifications() {
+  const main = document.querySelector('#adminMain');
+  const settings = state.certificateSettings || {};
+  const requests = state.certificateRequests || [];
+  const pendingCount = requests.filter((item) => ['REQUESTED', 'PAYMENT_SUBMITTED'].includes(item.status)).length;
+  const approvedCount = requests.filter((item) => item.status === 'APPROVED').length;
+  const rejectedCount = requests.filter((item) => item.status === 'REJECTED').length;
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Certificacoes</p>
+        <h1>Certificados e pedidos profissionais</h1>
+      </div>
+    </div>
+
+    <section class="admin-summary-grid" aria-label="Resumo de certificacoes">
+      <article class="insight-card">
+        <img src="${iconUrl('time', goldIcon)}" alt="">
+        <div><span>Pendentes</span><strong>${pendingCount}</strong></div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('ok', goldIcon)}" alt="">
+        <div><span>Aprovados</span><strong>${approvedCount}</strong></div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('cancel', goldIcon)}" alt="">
+        <div><span>Rejeitados</span><strong>${rejectedCount}</strong></div>
+      </article>
+    </section>
+
+    <section class="certificate-admin-grid">
+      <article class="admin-content-panel">
+        <div class="course-section-heading">
+          <div>
+            <p class="eyebrow">Mensagem e pagamento</p>
+            <h2>Configuracao do curso</h2>
+          </div>
+        </div>
+        <form id="certificateSettingsForm" class="form-stack">
+          <label>
+            <span>Curso</span>
+            <select id="certificateCourse" name="courseId">
+              ${certificateCourseOptions()}
+            </select>
+          </label>
+          <label>
+            <span>Mensagem de parabens</span>
+            <textarea name="congratulationsMessage" rows="4">${escapeHtml(settings.congratulationsMessage || '')}</textarea>
+          </label>
+          <label>
+            <span>Perguntas do inquerito (uma por linha)</span>
+            <textarea name="surveyQuestions" rows="5">${escapeHtml((settings.surveyQuestions || []).join('\n'))}</textarea>
+          </label>
+          <label>
+            <span>Valor do certificado profissional</span>
+            <input name="professionalPrice" value="${escapeHtml(settings.professionalPrice || '')}" placeholder="Ex.: 25 EUR">
+          </label>
+          <label>
+            <span>Instrucoes de pagamento</span>
+            <textarea name="paymentInstructions" rows="5">${escapeHtml(settings.paymentInstructions || '')}</textarea>
+          </label>
+          <label>
+            <span>Link do modelo/preview profissional</span>
+            <input name="professionalPreviewUrl" value="${escapeHtml(settings.professionalPreviewUrl || '')}" placeholder="https://...">
+          </label>
+          <div class="dialog-actions">
+            <button class="button button-secondary" type="reset">Cancelar alteracoes</button>
+            <button class="button button-primary" type="submit">Guardar configuracao</button>
+          </div>
+        </form>
+      </article>
+
+      <article class="admin-content-panel">
+        <div class="course-section-heading">
+          <div>
+            <p class="eyebrow">Revisao</p>
+            <h2>Pedidos profissionais</h2>
+          </div>
+        </div>
+        <section class="admin-filter-bar certificate-filter-bar">
+          <label>
+            <span>Estado</span>
+            <select id="certificateStatusFilter">
+              ${studentFilterOption('ALL', 'Todos', state.certificateFilters.status)}
+              ${studentFilterOption('REQUESTED', 'Solicitados', state.certificateFilters.status)}
+              ${studentFilterOption('PAYMENT_SUBMITTED', 'Com comprovativo', state.certificateFilters.status)}
+              ${studentFilterOption('APPROVED', 'Aprovados', state.certificateFilters.status)}
+              ${studentFilterOption('REJECTED', 'Rejeitados', state.certificateFilters.status)}
+            </select>
+          </label>
+          <label>
+            <span>Pesquisar</span>
+            <input id="certificateSearch" type="search" value="${escapeHtml(state.certificateFilters.query)}"
+              placeholder="Nome, email, curso ou pedido">
+          </label>
+        </section>
+        <div class="certificate-request-list">
+          ${requests.length ? requests.map(certificateRequestCardTemplate).join('') : `
+            <div class="student-empty-state">Sem pedidos para os filtros atuais.</div>
+          `}
+        </div>
+      </article>
+    </section>
+  `;
+
+  document.querySelector('#certificateCourse').addEventListener('change', async (event) => {
+    state.selectedCourseId = event.currentTarget.value;
+    const settingsResult = await api.adminCertificateSettings(state.selectedCourseId, { force: true });
+    state.certificateSettings = settingsResult.settings || {};
+    renderCertifications();
+  });
+  document.querySelector('#certificateSettingsForm').addEventListener('submit', saveCertificateSettings);
+  document.querySelector('#certificateStatusFilter').addEventListener('change', (event) => {
+    state.certificateFilters.status = event.currentTarget.value;
+    loadCertifications();
+  });
+  document.querySelector('#certificateSearch').addEventListener('input', (event) => {
+    state.certificateFilters.query = event.currentTarget.value;
+    loadCertifications({ silent: true }).then(renderCertifications);
+  });
+  root.querySelectorAll('[data-review-certificate-request]').forEach((button) => {
+    button.addEventListener('click', () => reviewCertificateRequest(
+      button.dataset.reviewCertificateRequest,
+      button.dataset.decision
+    ));
+  });
+  reportHeight();
+}
+
+function certificateCourseOptions() {
+  const courses = state.courses || [];
+  return courses.map(({ course }) => `
+    <option value="${escapeHtml(course.courseId)}" ${course.courseId === state.selectedCourseId ? 'selected' : ''}>
+      ${escapeHtml(course.title || course.courseCode || course.courseId)}
+    </option>
+  `).join('');
+}
+
+function certificateRequestCardTemplate(request) {
+  const receipt = request.paymentReceiptUrl ? adminFileCardTemplate({
+    fileName: request.paymentReceiptName || 'Comprovativo',
+    driveUrl: request.paymentReceiptUrl,
+    mimeType: request.paymentReceiptMimeType,
+    uploadedAt: request.submittedAt
+  }) : '<p class="empty-note">Comprovativo ainda nao submetido.</p>';
+  const canReview = request.status === 'PAYMENT_SUBMITTED';
+
+  return `
+    <article class="certificate-request-card">
+      <div>
+        <span class="status-pill ${statusClass(request.status)}">${statusLabel(request.status)}</span>
+        <h3>${escapeHtml(request.studentName || request.studentEmail || request.studentId)}</h3>
+        <p>${escapeHtml(request.courseTitle || request.courseId)} &middot; ${escapeHtml(request.requestId)}</p>
+      </div>
+      <div class="certificate-survey-preview">
+        ${surveyAnswersTemplate(request.surveyAnswers)}
+      </div>
+      ${receipt}
+      <div class="admin-row-actions">
+        <button class="button button-small button-primary" type="button"
+          data-review-certificate-request="${escapeHtml(request.requestId)}"
+          data-decision="APPROVED" ${canReview ? '' : 'disabled'}>
+          Aprovar
+        </button>
+        <button class="button button-small button-danger" type="button"
+          data-review-certificate-request="${escapeHtml(request.requestId)}"
+          data-decision="REJECTED" ${canReview ? '' : 'disabled'}>
+          Rejeitar
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function surveyAnswersTemplate(value = {}) {
+  const entries = Object.entries(value || {});
+  if (!entries.length) return '<p class="empty-note">Sem respostas de inquerito.</p>';
+  return entries.map(([question, answer]) => `
+    <div class="survey-answer-line">
+      <strong>${escapeHtml(question)}</strong>
+      <span>${escapeHtml(answer || 'Sem resposta')}</span>
+    </div>
+  `).join('');
+}
+
+async function saveCertificateSettings(event) {
+  event.preventDefault();
+  if (!confirmAdminAction('Deseja guardar a configuracao de certificacoes deste curso?')) return;
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = new FormData(form);
+  setBusy(button, true, 'A guardar...');
+  try {
+    const result = await api.adminSaveCertificateSettings({
+      courseId: values.get('courseId'),
+      congratulationsMessage: values.get('congratulationsMessage'),
+      surveyQuestions: String(values.get('surveyQuestions') || '').split('\n'),
+      professionalPrice: values.get('professionalPrice'),
+      paymentInstructions: values.get('paymentInstructions'),
+      professionalPreviewUrl: values.get('professionalPreviewUrl')
+    });
+    state.certificateSettings = result.settings || {};
+    showToast('Configuracao de certificacoes guardada.', 'success');
+    renderCertifications();
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function reviewCertificateRequest(requestId, decision) {
+  const label = decision === 'APPROVED' ? 'aprovar' : 'rejeitar';
+  if (!confirmAdminAction(`Deseja ${label} este pedido de certificado profissional?`)) return;
+  const adminNotes = window.prompt('Observacoes administrativas (opcional):', '') || '';
+  try {
+    await api.adminReviewCertificateRequest({ requestId, decision, adminNotes });
+    showToast('Pedido de certificado atualizado.', 'success');
+    await loadCertifications({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
 async function loadPending(options = {}) {
   const main = document.querySelector('#adminMain');
   if (!options.silent) {
@@ -1568,6 +1837,9 @@ function renderSubmission() {
     </a>
   `).join('');
 
+  const enhancedAnswers = data.answers.map(answerReviewTemplate).join('');
+  const enhancedFiles = data.files.map(adminFileCardTemplate).join('');
+
   main.innerHTML = `
     <button class="text-button" id="backPending">Voltar para submissoes</button>
 
@@ -1586,7 +1858,7 @@ function renderSubmission() {
     <div class="submission-columns">
       <section>
         <h2>Respostas</h2>
-        ${answers || '<p class="empty-note">Nenhuma resposta registada.</p>'}
+        ${enhancedAnswers || '<p class="empty-note">Nenhuma resposta registada.</p>'}
       </section>
 
       <aside>
@@ -1633,7 +1905,7 @@ function renderSubmission() {
 
         <div class="review-files">
           <h2>Ficheiros</h2>
-          ${files || '<p class="empty-note">Nenhum ficheiro.</p>'}
+          ${enhancedFiles || '<p class="empty-note">Nenhum ficheiro.</p>'}
         </div>
 
         <div class="review-files">
@@ -1662,6 +1934,115 @@ function renderSubmission() {
     button.addEventListener('click', () => applySingleStudentAccess(button.dataset.studentAccess));
   });
   reportHeight();
+}
+
+function answerReviewTemplate({ question, answer }) {
+  const studentAnswer = answerDisplayValue(question, answer);
+  const correctAnswer = correctAnswerDisplayValue(question);
+  const explanation = question?.explanation ? `
+    <div class="answer-feedback-note">
+      <strong>Explicacao:</strong>
+      <span>${escapeHtml(question.explanation)}</span>
+    </div>
+  ` : '';
+
+  return `
+    <article class="admin-answer admin-answer-compare">
+      <p class="eyebrow">Questao ${escapeHtml(question?.questionOrder || '')}</p>
+      <h3>${escapeHtml(question?.prompt || answer?.questionId || 'Questao')}</h3>
+      <div class="answer-comparison-grid">
+        <div class="answer-value">
+          <span>Resposta do estudante</span>
+          <strong>${studentAnswer || 'Sem resposta'}</strong>
+        </div>
+        <div class="answer-value answer-value-correct">
+          <span>Resposta correta</span>
+          <strong>${correctAnswer || 'Sem resposta correta registada'}</strong>
+        </div>
+      </div>
+      ${explanation}
+    </article>
+  `;
+}
+
+function answerDisplayValue(question, answer = {}) {
+  const selected = parseSelectedOptions(answer?.selectedOptionId);
+  if (selected.length) {
+    return selected.map((optionId) => escapeHtml(optionLabel(question, optionId))).join('<br>');
+  }
+  return escapeHtml(answer?.answerText || '').replaceAll('\n', '<br>');
+}
+
+function correctAnswerDisplayValue(question = {}) {
+  const options = Array.isArray(question.options) ? question.options : [];
+  const correctOptions = options.filter((option) => option.isCorrect);
+  if (correctOptions.length) {
+    return correctOptions.map((option) => escapeHtml(optionDisplayText(option))).join('<br>');
+  }
+  return escapeHtml(question.correctAnswer || '').replaceAll('\n', '<br>');
+}
+
+function optionLabel(question = {}, optionId) {
+  const option = (question.options || []).find((item) => item.optionId === optionId);
+  return option ? optionDisplayText(option) : optionId;
+}
+
+function optionDisplayText(option = {}) {
+  return [option.optionLabel, option.optionText].filter(Boolean).join(' - ') || option.optionId || '';
+}
+
+function adminFileCardTemplate(file) {
+  const openUrl = fileOpenUrl(file);
+  const downloadUrl = fileDownloadUrl(file);
+  const canOpen = Boolean(openUrl);
+  const canDownload = Boolean(downloadUrl);
+
+  return `
+    <article class="admin-file-card">
+      <div>
+        <strong>${escapeHtml(file.fileName || 'Ficheiro')}</strong>
+        <span>${formatBytes(file.sizeBytes)} &middot; ${formatDate(file.uploadedAt)}</span>
+      </div>
+      <div class="admin-file-actions">
+        ${canOpen ? `
+          <a class="button button-small button-secondary" href="${escapeHtml(openUrl)}" target="_blank" rel="noopener">
+            Abrir
+          </a>
+        ` : '<span class="status-pill status-failed">Sem link</span>'}
+        ${canDownload ? `
+          <a class="button button-small button-primary" href="${escapeHtml(downloadUrl)}"
+            download="${escapeHtml(file.fileName || 'ficheiro')}">
+            Baixar
+          </a>
+        ` : ''}
+      </div>
+    </article>
+  `;
+}
+
+function fileOpenUrl(file = {}) {
+  return file.driveUrl || '';
+}
+
+function fileDownloadUrl(file = {}) {
+  const rawUrl = file.driveUrl || '';
+  if (!rawUrl) return '';
+  if (rawUrl.startsWith('data:')) return rawUrl;
+  const driveId = file.driveFileId || googleDriveFileId(rawUrl);
+  if (driveId) {
+    return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(driveId)}`;
+  }
+  return rawUrl;
+}
+
+function googleDriveFileId(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (!url.hostname.includes('drive.google.com')) return '';
+    return url.searchParams.get('id') || url.pathname.match(/\/file\/d\/([^/]+)/)?.[1] || '';
+  } catch {
+    return '';
+  }
 }
 
 function decisionFromAttemptStatus(status) {
@@ -1992,7 +2373,7 @@ function renderStudentsV2() {
   });
 
   root.querySelectorAll('[data-view-student]').forEach((button) => {
-    button.addEventListener('click', () => showStudentDetails(button.dataset.viewStudent));
+    button.addEventListener('click', () => showStudentDetailsV2(button.dataset.viewStudent));
   });
 
   root.querySelectorAll('[data-copy-email]').forEach((button) => {
@@ -2155,6 +2536,245 @@ function studentInitials(fullName) {
   const first = parts[0]?.[0] || 'E';
   const last = parts.length > 1 ? parts.at(-1)[0] : '';
   return `${first}${last}`.toUpperCase();
+}
+
+async function showStudentDetailsV2(studentId) {
+  const record = state.students.find(({ student }) => student.studentId === studentId);
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card student-detail-dialog student-detail-dialog-wide">
+      <button class="dialog-close" type="button">x</button>
+      ${loadingTemplate('A carregar detalhes do estudante...')}
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  bindDialogClose(overlay);
+
+  try {
+    const details = await api.adminStudentDetails(studentId, { force: true });
+    renderStudentDetailsOverlay(overlay, details);
+  } catch (error) {
+    overlay.remove();
+    handleAdminError(error);
+    if (record) showStudentDetails(studentId);
+  }
+}
+
+function renderStudentDetailsOverlay(overlay, details) {
+  const student = details.student;
+  const enrollments = details.enrollments || [];
+  const lessonProgress = details.lessonProgress || [];
+  const groups = details.groups || [];
+  const certificates = details.certificates || [];
+  const requests = details.certificateRequests || [];
+  const progress = primaryProgress(enrollments);
+  const card = overlay.querySelector('.dialog-card');
+
+  card.innerHTML = `
+    <button class="dialog-close" type="button">x</button>
+    <div class="student-detail-header">
+      <span class="student-avatar student-avatar-large">${escapeHtml(studentInitials(student.fullName))}</span>
+      <div>
+        <span class="status-pill ${statusClass(student.status)}">${statusLabel(student.status)}</span>
+        <h2>${escapeHtml(student.fullName)}</h2>
+        <p>${escapeHtml(student.publicStudentId || student.studentId)} &middot; ${escapeHtml(student.email)}</p>
+      </div>
+    </div>
+
+    <dl class="student-detail-grid student-detail-grid-expanded">
+      <div><dt>ID publico</dt><dd>${escapeHtml(student.publicStudentId || student.studentId)}</dd></div>
+      <div><dt>Email</dt><dd>${escapeHtml(student.email || 'Sem registo')}</dd></div>
+      <div><dt>Telefone</dt><dd>${escapeHtml(student.phone || 'Sem registo')}</dd></div>
+      <div><dt>Pais</dt><dd>${escapeHtml(student.country || 'Sem registo')}</dd></div>
+      <div><dt>Organizacao</dt><dd>${escapeHtml(student.organization || 'Sem registo')}</dd></div>
+      <div><dt>Funcao</dt><dd>${escapeHtml(student.jobTitle || 'Sem registo')}</dd></div>
+      <div><dt>Interesses</dt><dd>${escapeHtml(student.interests || 'Sem registo')}</dd></div>
+      <div><dt>Ultimo acesso</dt><dd>${escapeHtml(formatDate(student.lastLoginAt))}</dd></div>
+    </dl>
+
+    <section class="student-detail-section">
+      <div class="student-detail-section-heading">
+        <h3>Percurso academico</h3>
+        <strong>${progress}%</strong>
+      </div>
+      <div class="student-progress-track">
+        <span style="width:${progress}%"></span>
+      </div>
+      <div class="student-enrollment-list">
+        ${enrollments.length ? enrollments.map(studentDetailEnrollmentTemplate).join('') : `
+          <div class="student-empty-state">Sem inscricoes registadas.</div>
+        `}
+      </div>
+    </section>
+
+    <section class="student-detail-section">
+      <div class="student-detail-section-heading">
+        <h3>Acesso por modulo</h3>
+        <span>${lessonProgress.length} registos</span>
+      </div>
+      <div class="student-module-access-list">
+        ${lessonProgress.length ? lessonProgress.map(studentLessonAccessTemplate).join('') : `
+          <div class="student-empty-state">Sem progresso por modulo registado.</div>
+        `}
+      </div>
+    </section>
+
+    <section class="student-detail-section">
+      <div class="student-detail-section-heading">
+        <h3>Grupos, certificados e pedidos</h3>
+      </div>
+      <div class="student-detail-columns">
+        <div>
+          <h4>Grupos</h4>
+          ${groups.length ? groups.map(studentGroupTemplate).join('') : '<p class="empty-note">Sem grupos associados.</p>'}
+        </div>
+        <div>
+          <h4>Certificados</h4>
+          ${certificates.length ? certificates.map(adminStudentCertificateTemplate).join('') : '<p class="empty-note">Sem certificados emitidos.</p>'}
+          <h4>Pedidos profissionais</h4>
+          ${requests.length ? requests.map(adminStudentCertificateRequestTemplate).join('') : '<p class="empty-note">Sem pedidos profissionais.</p>'}
+        </div>
+      </div>
+    </section>
+
+    <div class="student-detail-actions">
+      <button class="button button-secondary" type="button" data-copy-email="${escapeHtml(student.email)}">
+        Copiar email
+      </button>
+      <button class="button button-secondary" type="button" data-reset-access="${escapeHtml(student.studentId)}">
+        Nova senha
+      </button>
+      <button class="button button-primary" type="button"
+        data-toggle-student="${escapeHtml(student.studentId)}"
+        data-current-status="${escapeHtml(student.status)}">
+        ${student.status === 'ACTIVE' ? 'Bloquear estudante' : 'Ativar estudante'}
+      </button>
+    </div>
+  `;
+
+  bindDialogClose(overlay);
+  overlay.querySelector('[data-copy-email]')?.addEventListener('click', (event) => {
+    copyText(event.currentTarget.dataset.copyEmail, 'Email copiado.');
+  });
+  overlay.querySelector('[data-reset-access]')?.addEventListener('click', () => resetAccess(student.studentId));
+  overlay.querySelector('[data-toggle-student]')?.addEventListener('click', async () => {
+    overlay.remove();
+    await toggleStudent(student.studentId, student.status);
+  });
+  overlay.querySelectorAll('[data-student-lesson-access]').forEach((button) => {
+    button.addEventListener('click', () => updateStudentLessonAccessFromDetails(
+      student,
+      button.dataset.lessonId,
+      button.dataset.courseId,
+      button.dataset.studentLessonAccess,
+      overlay
+    ));
+  });
+  reportHeight();
+}
+
+function studentDetailEnrollmentTemplate(enrollment) {
+  const progress = Math.max(0, Math.min(100, Number(enrollment.progressPercent || 0)));
+  return `
+    <article class="student-enrollment-card">
+      <div>
+        <span class="status-pill ${statusClass(enrollment.status)}">${statusLabel(enrollment.status)}</span>
+        <h4>${escapeHtml(enrollment.courseTitle || enrollment.courseId || 'Curso')}</h4>
+        <p>${escapeHtml(enrollment.courseCode || enrollment.courseId || '')}</p>
+      </div>
+      <dl>
+        <div><dt>Progresso</dt><dd>${progress}%</dd></div>
+        <div><dt>Grupo</dt><dd>${escapeHtml(enrollment.groupName || enrollment.groupId || '-')}</dd></div>
+        <div><dt>Nota final</dt><dd>${enrollment.finalScore == null ? '-' : escapeHtml(enrollment.finalScore)}</dd></div>
+        <div><dt>Certificado</dt><dd>${escapeHtml(enrollment.certificateId || '-')}</dd></div>
+      </dl>
+    </article>
+  `;
+}
+
+function studentLessonAccessTemplate(item) {
+  const lesson = item.lesson || {};
+  const progress = item.progress || {};
+  const attempt = item.attempt;
+  return `
+    <article class="student-module-access-card">
+      <div>
+        <span class="status-pill ${statusClass(progress.status)}">${statusLabel(progress.status)}</span>
+        <h4>Modulo ${escapeHtml(lesson.lessonNumber || '')}: ${escapeHtml(lesson.title || lesson.lessonId || '')}</h4>
+        <p>${escapeHtml(item.courseId || '')} &middot; ${item.fileCount || 0} ficheiro(s)</p>
+      </div>
+      <dl>
+        <div><dt>Tentativa</dt><dd>${attempt ? escapeHtml(attempt.attemptNumber) : '-'}</dd></div>
+        <div><dt>Estado</dt><dd>${attempt ? escapeHtml(statusLabel(attempt.status)) : '-'}</dd></div>
+        <div><dt>Nota</dt><dd>${attempt?.score == null ? '-' : escapeHtml(attempt.score)}</dd></div>
+        <div><dt>Submetido</dt><dd>${escapeHtml(formatDate(attempt?.submittedAt))}</dd></div>
+      </dl>
+      <div class="admin-row-actions">
+        <button class="button button-small button-secondary" type="button"
+          data-student-lesson-access="AVAILABLE"
+          data-course-id="${escapeHtml(item.courseId || '')}"
+          data-lesson-id="${escapeHtml(lesson.lessonId || progress.lessonId || '')}">
+          Liberar
+        </button>
+        <button class="button button-small button-danger" type="button"
+          data-student-lesson-access="LOCKED"
+          data-course-id="${escapeHtml(item.courseId || '')}"
+          data-lesson-id="${escapeHtml(lesson.lessonId || progress.lessonId || '')}">
+          Restringir
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function studentGroupTemplate(item) {
+  const group = item.group || {};
+  const member = item.groupMember || {};
+  return `
+    <article class="student-mini-record">
+      <strong>${escapeHtml(group.name || group.groupId || 'Grupo')}</strong>
+      <span>${escapeHtml(group.courseId || '')} &middot; ${escapeHtml(statusLabel(member.status))}</span>
+    </article>
+  `;
+}
+
+function adminStudentCertificateTemplate(certificate) {
+  return `
+    <article class="student-mini-record">
+      <strong>${escapeHtml(certificate.certificateNumber || certificate.certificateId)}</strong>
+      <span>${escapeHtml(certificate.courseTitle || certificate.courseId)} &middot; ${escapeHtml(certificate.certificateType || 'SIMPLE')} &middot; ${escapeHtml(statusLabel(certificate.status))}</span>
+    </article>
+  `;
+}
+
+function adminStudentCertificateRequestTemplate(request) {
+  return `
+    <article class="student-mini-record">
+      <strong>${escapeHtml(request.requestId)}</strong>
+      <span>${escapeHtml(request.courseTitle || request.courseId)} &middot; ${escapeHtml(statusLabel(request.status))}</span>
+    </article>
+  `;
+}
+
+async function updateStudentLessonAccessFromDetails(student, lessonId, courseId, status, overlay) {
+  const label = status === 'AVAILABLE' ? 'liberar' : 'restringir';
+  if (!lessonId || !courseId) return;
+  if (!confirmAdminAction(`Deseja ${label} este modulo para ${student.fullName}?`)) return;
+  try {
+    await api.adminSetLessonAccess({
+      courseId,
+      status,
+      lessonIds: [lessonId],
+      studentIds: [student.studentId],
+      groupIds: []
+    });
+    showToast('Acesso do modulo atualizado.', 'success');
+    const details = await api.adminStudentDetails(student.studentId, { force: true });
+    renderStudentDetailsOverlay(overlay, details);
+  } catch (error) {
+    handleAdminError(error);
+  }
 }
 
 function showStudentDetails(studentId) {

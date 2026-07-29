@@ -253,6 +253,31 @@ export class CoursePlatformApi {
     return this.studentRequest('getMyCertificate', { courseId });
   }
 
+  certifications(courseId = this.courseId) {
+    return this.studentRequest('getMyCertifications', { courseId });
+  }
+
+  requestProfessionalCertificate(courseId = this.courseId, surveyAnswers = {}) {
+    return this.studentRequest('requestProfessionalCertificate', {
+      courseId,
+      surveyAnswers
+    });
+  }
+
+  async submitProfessionalCertificatePayment(requestId, file) {
+    const prepared = await prepareFileForUpload(file, this.config);
+    return this.studentRequest('submitProfessionalCertificatePayment', {
+      requestId,
+      receiptFileName: prepared.fileName,
+      receiptMimeType: prepared.mimeType,
+      receiptBase64: prepared.base64Data
+    });
+  }
+
+  recordCertificateDownload(certificateId) {
+    return this.studentRequest('recordCertificateDownload', { certificateId });
+  }
+
   mediaConfig(courseId = this.courseId) {
     return this.studentRequest('getMediaConfig', { courseId });
   }
@@ -356,6 +381,10 @@ export class CoursePlatformApi {
     return this.cachedAdminRequest('adminListStudents', payload, cacheOptions);
   }
 
+  adminStudentDetails(studentId, options = {}) {
+    return this.cachedAdminRequest('adminGetStudentDetails', { studentId }, options);
+  }
+
   adminCreateStudent(payload) {
     return this.mutateAdmin('adminCreateStudent', payload);
   }
@@ -419,6 +448,22 @@ export class CoursePlatformApi {
 
   adminSetLessonAccess(payload) {
     return this.mutateAdmin('adminSetLessonAccess', payload);
+  }
+
+  adminCertificateRequests(filters = {}, options = {}) {
+    return this.cachedAdminRequest('adminListCertificateRequests', filters, options);
+  }
+
+  adminReviewCertificateRequest(payload) {
+    return this.mutateAdmin('adminReviewCertificateRequest', payload);
+  }
+
+  adminCertificateSettings(courseId = this.courseId, options = {}) {
+    return this.cachedAdminRequest('adminGetCertificateSettings', { courseId }, options);
+  }
+
+  adminSaveCertificateSettings(payload) {
+    return this.mutateAdmin('adminSaveCertificateSettings', payload);
   }
 
   adminMediaConfig(options = {}) {
