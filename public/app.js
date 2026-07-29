@@ -113,7 +113,12 @@ async function route() {
       return;
     }
 
-    await renderDashboard();
+    if (['courses', 'lessons', 'submissions', 'grades'].includes(routeName)) {
+      await renderDashboard(routeName);
+      return;
+    }
+
+    await renderDashboard('overview');
   } catch (error) {
     handleError(error);
   }
@@ -403,19 +408,20 @@ function studentAppShell(activeView, content, page = {}) {
   const currentCourse = state.myCourses.find((item) => item.course?.courseId === state.selectedCourseId)?.course || course;
   const navItems = [
     { id: 'overview', label: 'Visao geral', href: '#/', icon: 'classroom' },
-    { id: 'courses', label: 'Meus cursos', href: '#/', icon: 'book-shelf' },
-    { id: 'lessons', label: 'Aulas e modulos', href: '#/', icon: 'reading' },
-    { id: 'submissions', label: 'Submissoes', href: '#/', icon: 'upload-to-cloud' },
-    { id: 'grades', label: 'Notas e feedback', href: '#/', icon: 'checked-checkbox' },
+    { id: 'courses', label: 'Meus cursos', href: '#/courses', icon: 'book-shelf' },
+    { id: 'lessons', label: 'Aulas e modulos', href: '#/lessons', icon: 'reading' },
+    { id: 'submissions', label: 'Submissoes', href: '#/submissions', icon: 'upload-to-cloud' },
+    { id: 'grades', label: 'Notas e feedback', href: '#/grades', icon: 'checked-checkbox' },
     { id: 'certifications', label: 'Certificados', href: '#/certifications', icon: 'diploma' },
     { id: 'support', label: 'Suporte', href: config.institutionalUrl || '#/', icon: 'help' },
     { id: 'profile', label: 'Perfil', href: '#/profile', icon: 'user-male-circle' }
   ];
   const title = page.title || 'Painel do estudante';
+  const topbarTitle = page.topbarTitle || 'Area do estudante';
   const eyebrow = page.eyebrow || 'Area do estudante';
   const description = page.description || currentCourse?.title || 'Acompanhe cursos, atividades, progresso e certificados.';
   return `
-    <div class="student-app-shell">
+    <div class="student-app-shell student-view-${escapeHtml(activeView)}">
       <aside class="student-sidebar" aria-label="Navegacao do estudante">
         <div class="student-sidebar-heading">
           ${brandSymbolTemplate('student-sidebar-symbol')}
@@ -446,7 +452,7 @@ function studentAppShell(activeView, content, page = {}) {
         <div class="student-topbar">
           <div>
             <p class="breadcrumb-line">LMTWEBNAIRS / ${escapeHtml(eyebrow)}</p>
-            <h1>${escapeHtml(title)}</h1>
+            <h1>${escapeHtml(topbarTitle)}</h1>
           </div>
           <div class="student-topbar-actions">
             <label class="global-search">
@@ -457,7 +463,7 @@ function studentAppShell(activeView, content, page = {}) {
             <a class="icon-button" href="#/profile" aria-label="Perfil">${profileAvatarTemplate(student, 'topbar-avatar')}</a>
           </div>
         </div>
-        <div class="student-page-heading">
+        <div class="student-page-heading" ${page.compactHeading ? 'hidden' : ''}>
           <div>
             <p class="eyebrow">${escapeHtml(eyebrow)}</p>
             <h2>${escapeHtml(title)}</h2>
@@ -472,7 +478,7 @@ function studentAppShell(activeView, content, page = {}) {
   `;
 }
 
-async function renderDashboard() {
+async function renderDashboard(view = 'overview') {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar o curso…');
 
@@ -502,8 +508,36 @@ async function renderDashboard() {
   const certificateButton = dashboard.enrollment.status === 'COMPLETED'
     ? '<a class="button button-secondary" href="#/certifications">Minhas certificacoes</a>'
     : '';
+  const pageMeta = {
+    overview: {
+      eyebrow: 'Visao geral',
+      title: 'Painel do estudante',
+      description: dashboard.course?.title || 'Acompanhe o seu percurso academico.',
+      compactHeading: true
+    },
+    courses: {
+      eyebrow: 'Meus cursos',
+      title: 'Cursos disponiveis',
+      description: 'Consulte os cursos associados ao seu perfil e escolha o percurso que pretende abrir.'
+    },
+    lessons: {
+      eyebrow: 'Aulas e modulos',
+      title: 'Conteudos do curso',
+      description: 'Acompanhe aulas, videos, materiais e o estado de cada modulo.'
+    },
+    submissions: {
+      eyebrow: 'Submissoes',
+      title: 'Trabalhos e atividades',
+      description: 'Veja o estado das atividades, submissoes e revisoes pendentes.'
+    },
+    grades: {
+      eyebrow: 'Notas e feedback',
+      title: 'Desempenho academico',
+      description: 'Acompanhe pontuacoes, aprovacoes e feedback das atividades.'
+    }
+  };
 
-  root.innerHTML = studentAppShell('overview', `
+  root.innerHTML = studentAppShell(view, `
     <section class="dashboard-hero">
       <div class="hero-copy">
         <p class="eyebrow">${escapeHtml(platformYear)}</p>
@@ -574,6 +608,34 @@ async function renderDashboard() {
       </article>
     </section>
 
+    <section class="student-submission-panel" aria-label="Submissoes do estudante">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Submissoes</p>
+          <h2>Trabalhos e atividades</h2>
+        </div>
+      </div>
+      <div class="student-status-list">
+        ${dashboard.lessons.length ? dashboard.lessons.map(studentSubmissionRowTemplate).join('') : `
+          <div class="video-empty">Ainda nao existem atividades associadas ao curso.</div>
+        `}
+      </div>
+    </section>
+
+    <section class="student-grade-panel" aria-label="Notas e feedback">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Notas e feedback</p>
+          <h2>Desempenho por modulo</h2>
+        </div>
+      </div>
+      <div class="student-status-list">
+        ${dashboard.lessons.length ? dashboard.lessons.map(studentGradeRowTemplate).join('') : `
+          <div class="video-empty">Ainda nao existem notas para apresentar.</div>
+        `}
+      </div>
+    </section>
+
     <section class="video-panel" aria-label="Galeria de vídeos">
       <div class="video-panel-copy">
         <p class="eyebrow">Galeria</p>
@@ -588,7 +650,7 @@ async function renderDashboard() {
       </div>
     </section>
 
-    <section class="section-heading">
+    <section class="section-heading lesson-section-heading">
       <div>
         <p class="eyebrow">Percurso formativo</p>
         <h2>Aulas da Summer School</h2>
@@ -609,11 +671,7 @@ async function renderDashboard() {
         <div><strong>4.</strong><span>Acompanhe a avaliação.</span></div>
       </div>
     </section>
-  `, {
-    eyebrow: 'Visao geral',
-    title: 'Painel do estudante',
-    description: dashboard.course?.title || 'Acompanhe o seu percurso academico.'
-  });
+  `, pageMeta[view] || pageMeta.overview);
 
   root.querySelectorAll('[data-open-lesson]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -625,7 +683,7 @@ async function renderDashboard() {
     button.addEventListener('click', async () => {
       state.selectedCourseId = button.dataset.selectStudentCourse;
       localStorage.setItem('courseSelectedCourseId', state.selectedCourseId);
-      await renderDashboard();
+      await renderDashboard(view);
     });
   });
 
@@ -673,6 +731,42 @@ function studentCourseCardTemplate(item) {
         ${active ? 'disabled' : ''}>
         ${active ? 'Curso aberto' : 'Abrir curso'}
       </button>
+    </article>
+  `;
+}
+
+function studentSubmissionRowTemplate(item) {
+  const { lesson, progress, activeAttempt } = item;
+  const reviewable = activeAttempt && ['UNDER_REVIEW', 'CORRECTION_REQUIRED', 'FAILED', 'TIME_EXCEEDED'].includes(progress.status);
+  const locked = progress.status === 'LOCKED';
+  const action = reviewable
+    ? `<button class="button button-secondary button-small" type="button" data-check-attempt="${escapeHtml(activeAttempt.attemptId)}">Abrir revisao</button>`
+    : `<button class="button ${locked ? 'button-disabled' : 'button-primary'} button-small" type="button" ${locked ? 'disabled' : `data-open-lesson="${escapeHtml(lesson.lessonId)}"`}>${locked ? 'Bloqueada' : 'Abrir atividade'}</button>`;
+  return `
+    <article class="student-status-row">
+      <div class="student-status-index">${escapeHtml(String(lesson.lessonNumber || '').padStart(2, '0'))}</div>
+      <div>
+        <h3>${escapeHtml(lesson.title)}</h3>
+        <p>${escapeHtml(lesson.summary || 'Atividade associada ao modulo.')}</p>
+      </div>
+      <span class="status-pill ${statusClass(progress.status)}">${escapeHtml(statusLabel(progress.status))}</span>
+      <div class="student-status-actions">${action}</div>
+    </article>
+  `;
+}
+
+function studentGradeRowTemplate(item) {
+  const { lesson, progress } = item;
+  const score = progress.score === null || progress.score === undefined ? '-' : `${progress.score}%`;
+  return `
+    <article class="student-status-row student-grade-row">
+      <div class="student-status-index">${escapeHtml(String(lesson.lessonNumber || '').padStart(2, '0'))}</div>
+      <div>
+        <h3>${escapeHtml(lesson.title)}</h3>
+        <p>${escapeHtml(progress.status === 'APPROVED' ? 'Modulo aprovado.' : 'Aguardando conclusao ou avaliacao.')}</p>
+      </div>
+      <strong class="student-score-value">${escapeHtml(score)}</strong>
+      <span class="status-pill ${statusClass(progress.status)}">${escapeHtml(statusLabel(progress.status))}</span>
     </article>
   `;
 }
