@@ -3325,8 +3325,26 @@ function renderStudentsV2() {
       <span>de ${state.students.length} estudantes visiveis</span>
     </div>
 
-    <div class="student-admin-grid">
-      ${visibleStudents.length ? visibleStudents.map(studentCardTemplate).join('') : `
+    <div class="student-admin-list">
+      ${visibleStudents.length ? `
+        <table class="student-list-table">
+          <thead>
+            <tr>
+              <th scope="col">Estudante</th>
+              <th scope="col">Estado</th>
+              <th class="student-col-organization" scope="col">Organizacao</th>
+              <th class="student-col-country" scope="col">Pais</th>
+              <th scope="col">Curso</th>
+              <th scope="col">Progresso</th>
+              <th scope="col">Ultimo acesso</th>
+              <th class="student-list-actions-heading" scope="col">Acoes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${visibleStudents.map(studentCardTemplate).join('')}
+          </tbody>
+        </table>
+      ` : `
         <div class="student-empty-state">
           Nenhum estudante corresponde aos filtros atuais.
         </div>
@@ -3361,6 +3379,19 @@ function renderStudentsV2() {
     button.addEventListener('click', () => showStudentDetailsV2(button.dataset.viewStudent));
   });
 
+  root.querySelectorAll('[data-student-row]').forEach((row) => {
+    const openDetails = () => showStudentDetailsV2(row.dataset.studentRow);
+    row.addEventListener('click', (event) => {
+      if (event.target.closest('button, a, input, select, textarea')) return;
+      openDetails();
+    });
+    row.addEventListener('keydown', (event) => {
+      if (event.target !== row || !['Enter', ' '].includes(event.key)) return;
+      event.preventDefault();
+      openDetails();
+    });
+  });
+
   root.querySelectorAll('[data-copy-email]').forEach((button) => {
     button.addEventListener('click', () => copyText(button.dataset.copyEmail, 'Email copiado.'));
   });
@@ -3385,58 +3416,54 @@ function studentCardTemplate({ student, enrollments }) {
   const lastLogin = student.lastLoginAt ? formatDate(student.lastLoginAt) : 'Sem acesso registado';
   const organization = student.organization || 'Sem organizacao';
   const country = student.country || 'Sem pais';
+  const course = primary?.courseTitle || primary?.courseCode || primary?.courseId || 'Sem inscricao';
 
   return `
-    <article class="student-admin-card">
-      <div class="student-card-header">
-        <span class="student-avatar">${escapeHtml(studentInitials(student.fullName))}</span>
-        <div>
-          <span class="status-pill ${statusClass(student.status)}">
-            ${statusLabel(student.status)}
+    <tr class="student-list-row" data-student-row="${escapeHtml(student.studentId)}"
+      tabindex="0" aria-label="Abrir detalhes de ${escapeHtml(student.fullName)}">
+      <td data-label="Estudante">
+        <div class="student-list-identity">
+          <span class="student-avatar">${escapeHtml(studentInitials(student.fullName))}</span>
+          <span class="student-list-primary">
+            <strong>${escapeHtml(student.fullName)}</strong>
+            <small>${escapeHtml(student.publicStudentId || student.studentId)}</small>
+            <small>${escapeHtml(student.email)}</small>
           </span>
-          <h3>${escapeHtml(student.fullName)}</h3>
-          <p>${escapeHtml(student.publicStudentId || student.studentId)} · ${escapeHtml(student.email)}</p>
         </div>
-      </div>
-
-      <dl class="student-meta-grid">
-        <div>
-          <dt>Organizacao</dt>
-          <dd>${escapeHtml(organization)}</dd>
+      </td>
+      <td data-label="Estado">
+        <span class="status-pill ${statusClass(student.status)}">
+          ${statusLabel(student.status)}
+        </span>
+      </td>
+      <td class="student-col-organization" data-label="Organizacao">
+        <span class="student-list-value">${escapeHtml(organization)}</span>
+      </td>
+      <td class="student-col-country" data-label="Pais">
+        <span class="student-list-value">${escapeHtml(country)}</span>
+      </td>
+      <td data-label="Curso">
+        <span class="student-list-value">${escapeHtml(course)}</span>
+      </td>
+      <td data-label="Progresso">
+        <div class="student-list-progress">
+          <strong>${progress}%</strong>
+          <span class="student-progress-track" aria-hidden="true">
+            <span style="width:${progress}%"></span>
+          </span>
         </div>
-        <div>
-          <dt>Pais</dt>
-          <dd>${escapeHtml(country)}</dd>
-        </div>
-        <div>
-          <dt>Ultimo acesso</dt>
-          <dd>${escapeHtml(lastLogin)}</dd>
-        </div>
-        <div>
-          <dt>Curso</dt>
-          <dd>${escapeHtml(primary?.courseId || 'Sem inscricao')}</dd>
-        </div>
-      </dl>
-
-      <div class="student-progress-line">
-        <span>Progresso</span>
-        <strong>${progress}%</strong>
-      </div>
-      <div class="student-progress-track">
-        <span style="width:${progress}%"></span>
-      </div>
-
-      <div class="student-admin-actions">
-        <button type="button" data-view-student="${escapeHtml(student.studentId)}">Detalhes</button>
-        <button type="button" data-copy-email="${escapeHtml(student.email)}">Copiar email</button>
-        <button type="button" data-reset-access="${escapeHtml(student.studentId)}">Nova senha</button>
-        <button type="button"
-          data-toggle-student="${escapeHtml(student.studentId)}"
-          data-current-status="${escapeHtml(student.status)}">
-          ${student.status === 'ACTIVE' ? 'Bloquear' : 'Ativar'}
+      </td>
+      <td data-label="Ultimo acesso">
+        <span class="student-list-value">${escapeHtml(lastLogin)}</span>
+      </td>
+      <td class="student-list-actions" data-label="Acoes">
+        <button class="button button-secondary button-small student-list-action" type="button"
+          data-view-student="${escapeHtml(student.studentId)}">
+          <img src="${iconUrl('eye', blueIcon)}" alt="">
+          Ver detalhes
         </button>
-      </div>
-    </article>
+      </td>
+    </tr>
   `;
 }
 
