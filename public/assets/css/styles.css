@@ -6404,3 +6404,442 @@ canvas {
     max-height: none;
   }
 }
+
+/* Supabase-inspired workspace layer */
+:root {
+  --workspace-bg: #0b0d0e;
+  --workspace-panel: #111414;
+  --workspace-panel-soft: #151919;
+  --workspace-elevated: #181c1c;
+  --workspace-text: #f4f7f6;
+  --workspace-muted: #9ca6a3;
+  --workspace-line: rgba(255, 255, 255, .09);
+  --workspace-line-strong: rgba(255, 255, 255, .16);
+  --workspace-accent: #3ecf8e;
+  --workspace-accent-dark: #2aa66f;
+  --workspace-warning: #d6a84f;
+  --workspace-danger: #ef6f6c;
+  --workspace-radius: 8px;
+  --admin-sidebar-width: 236px;
+  --student-sidebar-width: 236px;
+}
+
+body:has(.student-app-shell),
+body:has(.admin-layout),
+body:has(.lesson-layout),
+body:has(.certifications-shell) {
+  background: var(--workspace-bg);
+  color: var(--workspace-text);
+  font-size: 14px;
+}
+
+body:has(.student-app-shell) .site-header,
+body:has(.admin-layout) .site-header,
+body:has(.lesson-layout) .site-header,
+body:has(.certifications-shell) .site-header {
+  min-height: 48px;
+  padding-inline: 14px;
+  border-bottom: 1px solid var(--workspace-line);
+  background: rgba(11, 13, 14, .94);
+  color: var(--workspace-text);
+  backdrop-filter: blur(18px);
+}
+
+body:has(.student-app-shell) .site-brand-symbol,
+body:has(.admin-layout) .site-brand-symbol,
+body:has(.lesson-layout) .site-brand-symbol,
+body:has(.certifications-shell) .site-brand-symbol {
+  width: 30px;
+  height: 30px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: var(--workspace-accent);
+  color: #05110c;
+  box-shadow: none;
+}
+
+body:has(.student-app-shell) .site-brand-copy strong,
+body:has(.admin-layout) .site-brand-copy strong,
+body:has(.lesson-layout) .site-brand-copy strong,
+body:has(.certifications-shell) .site-brand-copy strong {
+  color: var(--workspace-text);
+  font-size: 13px;
+}
+
+body:has(.student-app-shell) .site-brand-copy small,
+body:has(.admin-layout) .site-brand-copy small,
+body:has(.lesson-layout) .site-brand-copy small,
+body:has(.certifications-shell) .site-brand-copy small {
+  color: var(--workspace-muted);
+  font-size: 11px;
+}
+
+.student-app-shell,
+.admin-layout {
+  min-height: calc(100vh - 48px);
+  background: var(--workspace-bg);
+}
+
+.student-main-frame,
+.admin-main {
+  background: var(--workspace-bg);
+  color: var(--workspace-text);
+}
+
+.student-sidebar,
+.admin-sidebar {
+  top: 48px;
+  height: calc(100vh - 48px);
+  padding: 12px 8px;
+  border-color: var(--workspace-line);
+  background: #0f1111;
+  color: var(--workspace-text);
+}
+
+.student-sidebar-heading,
+.admin-sidebar-heading {
+  gap: 10px;
+  padding: 4px 8px 12px;
+  border-bottom: 1px solid var(--workspace-line);
+}
+
+.student-sidebar-symbol,
+.admin-sidebar-symbol {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--workspace-accent);
+  color: #05110c;
+  box-shadow: none;
+}
+
+.student-sidebar-heading strong,
+.student-sidebar-profile strong,
+.admin-sidebar h2 {
+  color: var(--workspace-text);
+  font-size: 13px;
+}
+
+.student-sidebar-heading small,
+.student-sidebar-profile small {
+  color: var(--workspace-muted);
+  font-size: 11px;
+}
+
+.student-nav p {
+  margin: 8px 10px 4px;
+  color: var(--workspace-muted);
+  font-size: 10px;
+  letter-spacing: .08em;
+}
+
+.student-nav a,
+.admin-nav {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--workspace-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.student-nav img,
+.admin-nav img {
+  width: 16px;
+  height: 16px;
+  opacity: .84;
+}
+
+.student-nav a:hover,
+.student-nav a.is-active,
+.admin-nav:hover,
+.admin-nav.is-active {
+  background: rgba(255, 255, 255, .075);
+  color: var(--workspace-text);
+}
+
+.student-nav a.is-active::before,
+.admin-nav.is-active::before {
+  background: var(--workspace-accent);
+}
+
+.student-sidebar-profile {
+  padding: 9px;
+  border-color: var(--workspace-line);
+  background: var(--workspace-panel);
+}
+
+.student-topbar {
+  top: 48px;
+  min-height: 52px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--workspace-line);
+  background: rgba(11, 13, 14, .88);
+  color: var(--workspace-text);
+}
+
+.student-topbar h1,
+.admin-page-heading h1,
+.student-page-heading h2,
+.section-heading h2,
+.course-section-heading h2,
+.certifications-header h1 {
+  color: var(--workspace-text);
+  font-size: clamp(19px, 1.35vw, 24px);
+  line-height: 1.18;
+}
+
+.breadcrumb-line,
+.student-page-heading p:not(.eyebrow),
+.admin-page-heading p:not(.eyebrow),
+.section-heading p:not(.eyebrow),
+.course-section-heading p:not(.eyebrow),
+.certifications-header p,
+.video-panel-copy p:not(.eyebrow),
+.student-course-card p,
+.student-status-row p {
+  color: var(--workspace-muted);
+}
+
+.student-page-heading,
+.admin-page-heading {
+  padding-top: 24px;
+  padding-bottom: 14px;
+  border-color: var(--workspace-line);
+}
+
+.student-content-area,
+.admin-main {
+  padding-inline: clamp(20px, 2.6vw, 48px);
+  padding-bottom: 44px;
+}
+
+.dashboard-hero,
+.progress-summary,
+.insight-card,
+.student-course-card,
+.student-status-row,
+.video-panel,
+.information-panel,
+.admin-content-panel,
+.course-management-panel,
+.certificate-requests-panel,
+.certificate-register-panel,
+.survey-admin-panel,
+.profile-card,
+.profile-header-card,
+.certifications-page,
+.certification-list-item,
+.survey-admin-row,
+.survey-response-card,
+.dialog-card {
+  border: 1px solid var(--workspace-line);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-panel);
+  color: var(--workspace-text);
+  box-shadow: none;
+}
+
+.dashboard-hero {
+  min-height: 210px;
+  border-color: var(--workspace-line-strong);
+  background:
+    linear-gradient(145deg, rgba(62, 207, 142, .08), transparent 34%),
+    var(--workspace-panel);
+}
+
+.hero-greeting {
+  max-width: 800px;
+  color: var(--workspace-text);
+  font-size: clamp(23px, 1.8vw, 30px);
+}
+
+.hero-meta span,
+.status-pill,
+.submission-status-pill,
+.certificate-generation-pill {
+  border-color: var(--workspace-line);
+  border-radius: 6px;
+  background: var(--workspace-panel-soft);
+  color: var(--workspace-muted);
+  font-size: 11px;
+}
+
+.progress-track {
+  background: var(--workspace-elevated);
+}
+
+.progress-track span {
+  background: var(--workspace-accent);
+}
+
+.progress-summary > strong,
+.student-score-value,
+.student-course-card dd,
+.insight-card strong,
+.admin-summary-card strong,
+.admin-stat-card strong {
+  color: var(--workspace-text);
+}
+
+.button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 6px;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.button-primary {
+  border: 1px solid rgba(62, 207, 142, .35);
+  background: #087443;
+  color: #ffffff;
+}
+
+.button-primary:hover:not(:disabled) {
+  background: #0a8f55;
+}
+
+.button-secondary,
+.button-light {
+  border: 1px solid var(--workspace-line-strong);
+  background: var(--workspace-panel-soft);
+  color: var(--workspace-text);
+}
+
+.button-secondary:hover:not(:disabled),
+.button-light:hover:not(:disabled) {
+  background: var(--workspace-elevated);
+}
+
+.button-danger {
+  border: 1px solid rgba(239, 111, 108, .32);
+  background: rgba(239, 111, 108, .14);
+  color: #ffb8b6;
+}
+
+input,
+textarea,
+select,
+.global-search input {
+  min-height: 34px;
+  border-color: var(--workspace-line-strong);
+  border-radius: 6px;
+  background: #0d1010;
+  color: var(--workspace-text);
+  font-size: 13px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #6f7875;
+}
+
+.global-search input {
+  width: clamp(220px, 22vw, 340px);
+}
+
+.icon-button,
+.theme-toggle,
+.header-user,
+.admin-identity {
+  border-color: var(--workspace-line);
+  border-radius: 999px;
+  background: var(--workspace-panel);
+  color: var(--workspace-text);
+  box-shadow: none;
+}
+
+.admin-filter-bar,
+.student-admin-toolbar,
+.certificate-admin-toolbar {
+  border: 1px solid var(--workspace-line);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-panel);
+}
+
+.admin-table-wrap,
+.credential-table-wrap,
+.certificate-record-table {
+  border-color: var(--workspace-line);
+  background: var(--workspace-panel);
+}
+
+.admin-table th {
+  height: 36px;
+  background: var(--workspace-panel-soft);
+  color: var(--workspace-muted);
+  font-size: 11px;
+}
+
+.admin-table td {
+  height: 46px;
+  border-color: var(--workspace-line);
+  color: var(--workspace-text);
+  font-size: 12px;
+}
+
+.admin-table tbody tr:hover,
+.certificate-record-row:hover {
+  background: rgba(62, 207, 142, .055);
+}
+
+.dialog-overlay {
+  background: rgba(0, 0, 0, .76);
+}
+
+.dialog-close {
+  border-color: var(--workspace-line);
+  background: var(--workspace-panel-soft);
+  color: var(--workspace-muted);
+}
+
+.mobile-menu {
+  border-color: var(--workspace-line);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-panel);
+}
+
+.mobile-menu button {
+  color: var(--workspace-text);
+}
+
+.mobile-menu button:hover {
+  background: rgba(62, 207, 142, .08);
+}
+
+@media (max-width: 1120px) {
+  .student-sidebar,
+  .admin-sidebar {
+    top: auto;
+    height: auto;
+  }
+
+  .student-topbar {
+    top: 48px;
+  }
+}
+
+@media (max-width: 720px) {
+  body:has(.student-app-shell) .site-header,
+  body:has(.admin-layout) .site-header,
+  body:has(.lesson-layout) .site-header,
+  body:has(.certifications-shell) .site-header {
+    min-height: 52px;
+  }
+
+  .student-content-area,
+  .admin-main {
+    padding-inline: 14px;
+  }
+
+  .student-topbar {
+    padding: 12px 14px;
+  }
+
+  .global-search input {
+    width: 100%;
+  }
+}
