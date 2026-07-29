@@ -14,8 +14,7 @@
   <script>
     (() => {
       const saved = localStorage.getItem('lssTheme');
-      const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-      document.documentElement.dataset.theme = saved || (prefersDark ? 'dark' : 'light');
+      document.documentElement.dataset.theme = saved || 'light';
     })();
   </script>
   <link rel="stylesheet" href="./assets/css/styles.css">
@@ -49,13 +48,13 @@
     <div class="site-header-actions">
       <button class="header-user" id="headerUser" type="button" hidden></button>
       <button class="theme-toggle" id="themeToggle" type="button" aria-label="Alternar modo claro e escuro">
-        <span class="theme-toggle-icon" aria-hidden="true">C</span>
+        <span class="theme-toggle-icon" aria-hidden="true">
+          <img src="https://api.iconify.design/lucide/sun.svg?color=%2300365B" alt="">
+        </span>
       </button>
       <button class="text-button" id="logoutButton" type="button" hidden>Sair</button>
       <button class="mobile-menu-button" id="mobileMenuButton" type="button" aria-label="Abrir menu" aria-expanded="false" hidden>
-        <span></span>
-        <span></span>
-        <span></span>
+        <img src="https://api.iconify.design/lucide/menu.svg?color=%2300365B" alt="">
       </button>
     </div>
 

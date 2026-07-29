@@ -25,7 +25,38 @@ const mobileMenu = document.querySelector('#mobileMenu');
 const mobileThemeButton = document.querySelector('#mobileThemeButton');
 const platformName = config.appName || 'LMTWEBNAIRS Summer School 2026';
 const platformYear = 'Summer School 2026';
-const icons8Base = 'https://img.icons8.com/ios-filled/50';
+const lucideIconsBase = 'https://api.iconify.design/lucide';
+const lucideIconAliases = Object.freeze({
+  'admin-settings-male': 'settings',
+  'bar-chart': 'chart-no-axes-combined',
+  'book-shelf': 'book-open',
+  'cancel': 'circle-x',
+  'certificate': 'award',
+  'checked-checkbox': 'check-square',
+  'classroom': 'layout-dashboard',
+  'combo-chart': 'chart-no-axes-combined',
+  'conference-call': 'user-round-check',
+  'diploma': 'award',
+  'documents': 'file-text',
+  'graduation-cap': 'graduation-cap',
+  'help': 'circle-help',
+  'inbox': 'clipboard-list',
+  'inspection': 'clipboard-check',
+  'key': 'key-round',
+  'lock': 'lock-keyhole',
+  'ok': 'circle-check',
+  'open-book': 'book-open',
+  'picture': 'image',
+  'reading': 'play-circle',
+  'student-male': 'users',
+  'survey': 'clipboard-list',
+  'task-completed': 'clipboard-check',
+  'time': 'clock-3',
+  'time-machine': 'history',
+  'upload-to-cloud': 'upload',
+  'user-male-circle': 'circle-user-round',
+  'video-playlist': 'video'
+});
 const blueIcon = '00365b';
 const goldIcon = 'c9a55b';
 
@@ -67,6 +98,18 @@ async function initialize() {
   headerUser.addEventListener('click', openProfileFromHeader);
   document.addEventListener('error', handleProfilePhotoError, true);
   initializeMobileMenu();
+  document.body.classList.toggle('sidebar-collapsed', localStorage.getItem('lssSidebarCollapsed') === 'true');
+  root.addEventListener('click', (event) => {
+    const toggle = event.target.closest('[data-sidebar-toggle]');
+    if (!toggle) return;
+    const collapsed = document.body.classList.toggle('sidebar-collapsed');
+    localStorage.setItem('lssSidebarCollapsed', String(collapsed));
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.setAttribute('aria-label', collapsed ? 'Expandir menu lateral' : 'Recolher menu lateral');
+    toggle.title = collapsed ? 'Expandir menu lateral' : 'Recolher menu lateral';
+    const label = toggle.querySelector('span');
+    if (label) label.textContent = collapsed ? 'Expandir menu' : 'Recolher menu';
+  });
   logoutButton.addEventListener('click', logout);
   window.addEventListener('hashchange', route);
   window.addEventListener('message', (event) => {
@@ -259,7 +302,7 @@ async function login(event) {
   const errorBox = document.querySelector('#loginError');
 
   errorBox.hidden = true;
-  setBusy(button, true, 'A autenticara€¦');
+  setBusy(button, true, 'A autenticar...');
 
   try {
     await api.login(data.get('email'), data.get('accessCode'));
@@ -420,6 +463,7 @@ function studentAppShell(activeView, content, page = {}) {
   const topbarTitle = page.topbarTitle || 'Area do estudante';
   const eyebrow = page.eyebrow || 'Area do estudante';
   const description = page.description || currentCourse?.title || 'Acompanhe cursos, atividades, progresso e certificados.';
+  const sidebarCollapsed = document.body.classList.contains('sidebar-collapsed');
   return `
     <div class="student-app-shell student-view-${escapeHtml(activeView)}">
       <aside class="student-sidebar" aria-label="Navegacao do estudante">
@@ -441,6 +485,13 @@ function studentAppShell(activeView, content, page = {}) {
             </a>
           `).join('')}
         </nav>
+        <button class="sidebar-collapse-button" type="button" data-sidebar-toggle
+          aria-label="${sidebarCollapsed ? 'Expandir' : 'Recolher'} menu lateral"
+          aria-expanded="${String(!sidebarCollapsed)}"
+          title="${sidebarCollapsed ? 'Expandir' : 'Recolher'} menu lateral">
+          <img src="${iconUrl('panel-left-close', goldIcon)}" alt="">
+          <span>${sidebarCollapsed ? 'Expandir' : 'Recolher'} menu</span>
+        </button>
         <a class="student-sidebar-profile" href="#/profile">
           ${profileAvatarTemplate(student, 'student-sidebar-avatar')}
           <span>
@@ -516,7 +567,7 @@ function normalizeStudentDashboard(home = {}) {
 
 async function renderDashboard(view = 'overview') {
   clearTimers();
-  root.innerHTML = loadingTemplate('A carregar o cursoa€¦');
+  root.innerHTML = loadingTemplate('A carregar o curso...');
 
   const home = await api.studentHome(state.selectedCourseId);
   state.myCourses = Array.isArray(home.courses) ? home.courses : [];
@@ -541,6 +592,16 @@ async function renderDashboard(view = 'overview') {
   const activeLessons = dashboard.lessons.filter((item) => ['AVAILABLE', 'IN_PROGRESS', 'UNDER_REVIEW'].includes(item.progress.status)).length;
   const videos = videoGallery();
   const totalHoursLabel = dashboard.course.totalHours ? `${dashboard.course.totalHours} horas` : 'Carga horaria por definir';
+  const nextLessonItem = dashboard.lessons.find((item) => ['IN_PROGRESS', 'CORRECTION_REQUIRED', 'AVAILABLE'].includes(item.progress.status))
+    || dashboard.lessons.find((item) => item.progress.status !== 'LOCKED')
+    || null;
+  const pendingActivities = dashboard.lessons.filter((item) => !['APPROVED', 'LOCKED'].includes(item.progress.status)).length;
+  const latestFeedbackItem = dashboard.lessons
+    .filter((item) => item.activeAttempt?.reviewComments)
+    .sort((left, right) => new Date(right.activeAttempt?.reviewedAt || 0) - new Date(left.activeAttempt?.reviewedAt || 0))[0] || null;
+  const selectedCourseEntry = state.myCourses.find((item) => item.course?.courseId === state.selectedCourseId);
+  const nextDeadlineValue = nextLessonItem?.activeAttempt?.deadlineAt || selectedCourseEntry?.group?.endDate || '';
+  const nextDeadlineLabel = nextDeadlineValue ? formatDate(nextDeadlineValue) : 'Sem prazo definido';
 
   const certificateButton = dashboard.enrollment.status === 'COMPLETED'
     ? '<a class="button button-secondary" href="#/certifications">Minhas certificacoes</a>'
@@ -722,8 +783,13 @@ async function renderDashboard(view = 'overview') {
           <span>${escapeHtml(totalHoursLabel)}</span>
         </div>
         <div class="hero-actions">
-          <a class="button button-light" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">Pagina do evento</a>
-          ${certificateButton}
+          ${nextLessonItem ? `
+            <button class="button button-primary" type="button"
+              data-open-lesson="${escapeHtml(nextLessonItem.lesson?.lessonId || '')}">
+              Continuar a estudar
+            </button>
+          ` : ''}
+          <a class="button button-secondary" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">Pagina do evento</a>
         </div>
       </div>
       <div class="progress-summary">
@@ -735,18 +801,28 @@ async function renderDashboard(view = 'overview') {
         ${certificateButton}
       </div>
     </section>
-    <section class="dashboard-insights" aria-label="Resumo do percurso">
-      <article class="insight-card">
-        <img src="${iconUrl('checked-checkbox', goldIcon)}" alt="">
-        <div><span>Aulas aprovadas</span><strong>${approvedLessons}/${totalLessons}</strong></div>
+    <section class="dashboard-insights student-priority-grid" aria-label="Proximos passos do percurso">
+      <article class="insight-card priority-card">
+        <img src="${iconUrl('play-circle', goldIcon)}" alt="">
+        <div>
+          <span>Proxima aula</span>
+          <strong>${escapeHtml(nextLessonItem?.lesson?.title || 'Percurso concluido')}</strong>
+        </div>
       </article>
-      <article class="insight-card">
-        <img src="${iconUrl('classroom', goldIcon)}" alt="">
-        <div><span>Aulas disponiveis</span><strong>${activeLessons}</strong></div>
+      <article class="insight-card priority-card">
+        <img src="${iconUrl('calendar-days', goldIcon)}" alt="">
+        <div><span>Proximo prazo</span><strong>${escapeHtml(nextDeadlineLabel)}</strong></div>
       </article>
-      <article class="insight-card">
-        <img src="${iconUrl('time', goldIcon)}" alt="">
-        <div><span>Carga horaria</span><strong>${dashboard.course.totalHours || 0}h</strong></div>
+      <article class="insight-card priority-card">
+        <img src="${iconUrl('clipboard-list', goldIcon)}" alt="">
+        <div><span>Atividades pendentes</span><strong>${pendingActivities}</strong></div>
+      </article>
+      <article class="insight-card priority-card">
+        <img src="${iconUrl('message-square', goldIcon)}" alt="">
+        <div>
+          <span>Ultimo feedback</span>
+          <strong>${escapeHtml(latestFeedbackItem?.activeAttempt?.reviewComments || 'Sem feedback novo')}</strong>
+        </div>
       </article>
     </section>
     <section class="information-panel">
@@ -1299,7 +1375,7 @@ function lessonCardTemplate(item) {
 
 async function openLesson(lessonId) {
   clearTimers();
-  root.innerHTML = loadingTemplate('A carregar a aulaa€¦');
+  root.innerHTML = loadingTemplate('A carregar a aula...');
 
   const lessonData = await api.getLesson(lessonId);
   state.lesson = lessonData;
@@ -1320,7 +1396,10 @@ async function openLesson(lessonId) {
   root.innerHTML = `
     <div class="lesson-layout">
       <aside class="lesson-sidebar">
-        <button class="text-button" id="backDashboard">a† Voltar ao curso</button>
+        <button class="text-button lesson-back-button" id="backDashboard">
+          <img src="${iconUrl('arrow-left', blueIcon)}" alt="">
+          Voltar ao curso
+        </button>
         <p class="eyebrow">Aula ${lessonData.lesson.lessonNumber}</p>
         <h2>${escapeHtml(lessonData.lesson.title)}</h2>
         <div class="lesson-time-summary">
@@ -1382,7 +1461,7 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
   if (lessonData.progress.status === 'APPROVED') {
     return `
       <div class="completion-card">
-        <div class="completion-icon">aœ“</div>
+        <div class="completion-icon"><img src="${iconUrl('circle-check', goldIcon)}" alt=""></div>
         <h2>Aula aprovada</h2>
         <p>Obteve ${lessonData.progress.score}% e pode rever todo o conteudo.</p>
         <button class="button button-secondary" id="backApproved">Voltar ao curso</button>
@@ -1446,7 +1525,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
         <label class="upload-dropzone" for="exerciseFiles">
           <input id="exerciseFiles" type="file" multiple
             accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,.xls,.xlsx">
-          <span class="upload-icon">a†‘</span>
+          <span class="upload-icon"><img src="${iconUrl('upload', blueIcon)}" alt=""></span>
           <strong>Selecionar ficheiros</strong>
           <small>JPG, PNG, WebP, PDF, Word ou Excel</small>
         </label>
@@ -1497,7 +1576,7 @@ function questionTemplate(question, answer = null) {
     field = `
       <textarea rows="${question.questionType === 'LONG_TEXT' ? 6 : 3}"
         data-answer-text="${escapeHtml(question.questionId)}"
-        placeholder="Escreva a sua respostaa€¦">${escapeHtml(answer?.answerText || '')}</textarea>
+        placeholder="Escreva a sua resposta...">${escapeHtml(answer?.answerText || '')}</textarea>
     `;
   }
 
@@ -1618,7 +1697,7 @@ function bindAssessmentEvents() {
 
 async function startAttempt(event) {
   const button = event.currentTarget;
-  setBusy(button, true, 'A iniciara€¦');
+  setBusy(button, true, 'A iniciar...');
 
   try {
     const result = await api.startAttempt(state.lesson.lesson.lessonId);
@@ -1649,7 +1728,7 @@ async function saveTextAnswer(field) {
     `[data-save-indicator="${CSS.escape(questionId)}"]`
   );
 
-  indicator.textContent = 'A guardara€¦';
+  indicator.textContent = 'A guardar...';
 
   try {
     await api.saveAnswer(state.attempt.attemptId, questionId, {
@@ -1670,7 +1749,7 @@ async function saveOptionAnswer(input) {
   const value = inputs[0]?.type === 'checkbox' ? selected : (selected[0] || '');
   const indicator = card.querySelector('[data-save-indicator]');
 
-  indicator.textContent = 'A guardara€¦';
+  indicator.textContent = 'A guardar...';
 
   try {
     await api.saveAnswer(state.attempt.attemptId, questionId, {
@@ -1817,7 +1896,7 @@ function bindDeleteFileEvents() {
     button.addEventListener('click', async () => {
       if (!window.confirm('Eliminar este ficheiro da tentativa?')) return;
 
-      setBusy(button, true, 'a€¦');
+      setBusy(button, true, '...');
       try {
         await api.deleteUploadedFile(button.dataset.deleteFile);
         await refreshAttemptData();
@@ -1841,7 +1920,7 @@ async function submitAttempt(event) {
   if (!window.confirm('Confirmar a submissao final da atividade?')) return;
 
   const button = event.currentTarget;
-  setBusy(button, true, 'A submetera€¦');
+  setBusy(button, true, 'A submeter...');
 
   try {
     const result = await api.submitAttempt(state.attempt.attemptId);
@@ -2092,7 +2171,7 @@ function vimeoEmbedUrl(id, autoplay, muted) {
 
 async function renderCertificate() {
   clearTimers();
-  root.innerHTML = loadingTemplate('A carregar o certificadoa€¦');
+  root.innerHTML = loadingTemplate('A carregar o certificado...');
 
   const result = await api.certificate(state.selectedCourseId);
 
@@ -2170,7 +2249,9 @@ async function renderCertifications() {
   root.innerHTML = studentAppShell('certifications', `
     <section class="certifications-shell certifications-page">
       <div class="certifications-header">
-        <div class="certifications-header-icon" aria-hidden="true">a—Z</div>
+        <div class="certifications-header-icon" aria-hidden="true">
+          <img src="${iconUrl('award', goldIcon)}" alt="">
+        </div>
         <div>
           <p class="eyebrow">Minhas certificacoes</p>
           <h1>Certificacoes</h1>
@@ -2709,8 +2790,11 @@ function initializeThemeToggle() {
   const applyTheme = (theme) => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('lssTheme', theme);
-    const icon = themeToggle.querySelector('.theme-toggle-icon');
-    if (icon) icon.textContent = theme === 'dark' ? 'N' : 'C';
+    const icon = themeToggle.querySelector('.theme-toggle-icon img');
+    if (icon) {
+      icon.dataset.iconColor = blueIcon;
+      icon.src = iconUrl(theme === 'dark' ? 'sun' : 'moon', blueIcon);
+    }
     updateThemeIcons(theme);
     themeToggle.title = theme === 'dark' ? 'Usar modo claro' : 'Usar modo noturno';
     themeToggle.setAttribute('aria-label', themeToggle.title);
@@ -2735,7 +2819,8 @@ function studentGreeting(fullName) {
 
 function iconUrl(name, color) {
   const resolvedColor = document.documentElement.dataset.theme === 'dark' ? 'ffffff' : color;
-  return `${icons8Base}/${resolvedColor}/${name}.png`;
+  const iconName = lucideIconAliases[name] || name;
+  return `${lucideIconsBase}/${encodeURIComponent(iconName)}.svg?color=%23${resolvedColor}&width=20&height=20`;
 }
 
 function brandSymbolTemplate(className) {
@@ -2831,15 +2916,12 @@ function imageDisplayUrl(rawUrl) {
 }
 
 function updateThemeIcons(theme) {
-  document.querySelectorAll('img[src^="https://img.icons8.com/ios-filled/50/"]').forEach((image) => {
+  document.querySelectorAll(`img[src^="${lucideIconsBase}/"]`).forEach((image) => {
     const url = new URL(image.src);
-    const parts = url.pathname.split('/');
-    if (parts.length < 4) return;
-    const currentColor = parts[3];
+    const currentColor = (url.searchParams.get('color') || '').replace('#', '').toLowerCase();
     const originalColor = image.dataset.iconColor || (currentColor === 'ffffff' ? goldIcon : currentColor);
     image.dataset.iconColor = originalColor;
-    parts[3] = theme === 'dark' ? 'ffffff' : originalColor;
-    url.pathname = parts.join('/');
+    url.searchParams.set('color', `#${theme === 'dark' ? 'ffffff' : originalColor}`);
     image.src = url.toString();
   });
 }

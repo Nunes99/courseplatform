@@ -16,7 +16,39 @@ const root = document.querySelector('#adminApp');
 const adminIdentity = document.querySelector('#adminIdentity');
 const logoutButton = document.querySelector('#adminLogoutButton');
 const themeToggle = document.querySelector('#themeToggle');
-const icons8Base = 'https://img.icons8.com/ios-filled/50';
+const adminMobileMenuButton = document.querySelector('#adminMobileMenuButton');
+const lucideIconsBase = 'https://api.iconify.design/lucide';
+const lucideIconAliases = Object.freeze({
+  'admin-settings-male': 'settings',
+  'bar-chart': 'chart-no-axes-combined',
+  'book-shelf': 'book-open',
+  'cancel': 'circle-x',
+  'certificate': 'award',
+  'checked-checkbox': 'check-square',
+  'classroom': 'layout-dashboard',
+  'combo-chart': 'chart-no-axes-combined',
+  'conference-call': 'user-round-check',
+  'diploma': 'award',
+  'documents': 'file-text',
+  'graduation-cap': 'graduation-cap',
+  'help': 'circle-help',
+  'inbox': 'clipboard-list',
+  'inspection': 'clipboard-check',
+  'key': 'key-round',
+  'lock': 'lock-keyhole',
+  'ok': 'circle-check',
+  'open-book': 'book-open',
+  'picture': 'image',
+  'reading': 'play-circle',
+  'student-male': 'users',
+  'survey': 'clipboard-list',
+  'task-completed': 'clipboard-check',
+  'time': 'clock-3',
+  'time-machine': 'history',
+  'upload-to-cloud': 'upload',
+  'user-male-circle': 'circle-user-round',
+  'video-playlist': 'video'
+});
 const blueIcon = '00365b';
 const goldIcon = 'c9a55b';
 
@@ -89,6 +121,42 @@ async function initialize() {
   applyBrandLogo();
 
   logoutButton.addEventListener('click', logout);
+  document.body.classList.toggle('sidebar-collapsed', localStorage.getItem('lssAdminSidebarCollapsed') === 'true');
+  root.addEventListener('click', (event) => {
+    const toggle = event.target.closest('[data-sidebar-toggle]');
+    if (!toggle) return;
+    const collapsed = document.body.classList.toggle('sidebar-collapsed');
+    localStorage.setItem('lssAdminSidebarCollapsed', String(collapsed));
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.setAttribute('aria-label', collapsed ? 'Expandir menu lateral' : 'Recolher menu lateral');
+    toggle.title = collapsed ? 'Expandir menu lateral' : 'Recolher menu lateral';
+    const label = toggle.querySelector('span');
+    if (label) label.textContent = collapsed ? 'Expandir menu' : 'Recolher menu';
+  });
+  adminMobileMenuButton?.addEventListener('click', () => {
+    const isOpen = document.body.classList.toggle('admin-menu-open');
+    adminMobileMenuButton.setAttribute('aria-expanded', String(isOpen));
+    adminMobileMenuButton.setAttribute('aria-label', isOpen ? 'Fechar menu' : 'Abrir menu');
+  });
+  document.addEventListener('click', (event) => {
+    if (
+      !document.body.classList.contains('admin-menu-open')
+      || root.querySelector('.admin-sidebar')?.contains(event.target)
+      || adminMobileMenuButton?.contains(event.target)
+    ) {
+      return;
+    }
+    document.body.classList.remove('admin-menu-open');
+    adminMobileMenuButton?.setAttribute('aria-expanded', 'false');
+    adminMobileMenuButton?.setAttribute('aria-label', 'Abrir menu');
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !document.body.classList.contains('admin-menu-open')) return;
+    document.body.classList.remove('admin-menu-open');
+    adminMobileMenuButton?.setAttribute('aria-expanded', 'false');
+    adminMobileMenuButton?.setAttribute('aria-label', 'Abrir menu');
+    adminMobileMenuButton?.focus();
+  });
   adminIdentity.addEventListener('click', () => {
     if (!api?.hasAdminSession()) return;
     setActiveAdminView('profile');
@@ -113,6 +181,8 @@ async function initialize() {
 
 function renderAdminLogin() {
   logoutButton.hidden = true;
+  if (adminMobileMenuButton) adminMobileMenuButton.hidden = true;
+  document.body.classList.remove('admin-menu-open');
   adminIdentity.textContent = '';
   adminIdentity.hidden = true;
 
@@ -320,7 +390,9 @@ function warmAdminCache() {
 
 function renderAdminShell() {
   logoutButton.hidden = false;
+  if (adminMobileMenuButton) adminMobileMenuButton.hidden = false;
   adminIdentity.hidden = false;
+  const sidebarCollapsed = document.body.classList.contains('sidebar-collapsed');
   if (state.admin) {
     adminIdentity.textContent = `${state.admin.fullName} - ${state.admin.role}`;
   }
@@ -376,6 +448,13 @@ function renderAdminShell() {
           <img src="${iconUrl('user-male-circle', blueIcon)}" alt="">
           <span>Perfil</span>
         </button>
+        <button class="sidebar-collapse-button" type="button" data-sidebar-toggle
+          aria-label="${sidebarCollapsed ? 'Expandir' : 'Recolher'} menu lateral"
+          aria-expanded="${String(!sidebarCollapsed)}"
+          title="${sidebarCollapsed ? 'Expandir' : 'Recolher'} menu lateral">
+          <img src="${iconUrl('panel-left-close', goldIcon)}" alt="">
+          <span>${sidebarCollapsed ? 'Expandir' : 'Recolher'} menu</span>
+        </button>
       </aside>
 
       <main class="admin-main" id="adminMain"></main>
@@ -384,6 +463,8 @@ function renderAdminShell() {
 
   root.querySelectorAll('[data-admin-view]').forEach((button) => {
     button.addEventListener('click', () => {
+      document.body.classList.remove('admin-menu-open');
+      adminMobileMenuButton?.setAttribute('aria-expanded', 'false');
       setActiveAdminView(button.dataset.adminView);
 
       if (button.dataset.adminView === 'students') {
@@ -5387,8 +5468,11 @@ function initializeThemeToggle() {
   const applyTheme = (theme) => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('lssTheme', theme);
-    const icon = themeToggle.querySelector('.theme-toggle-icon');
-    if (icon) icon.textContent = theme === 'dark' ? 'N' : 'C';
+    const icon = themeToggle.querySelector('.theme-toggle-icon img');
+    if (icon) {
+      icon.dataset.iconColor = blueIcon;
+      icon.src = iconUrl(theme === 'dark' ? 'sun' : 'moon', blueIcon);
+    }
     updateThemeIcons(theme);
     themeToggle.title = theme === 'dark' ? 'Usar modo claro' : 'Usar modo noturno';
     themeToggle.setAttribute('aria-label', themeToggle.title);
@@ -5404,19 +5488,17 @@ function initializeThemeToggle() {
 
 function iconUrl(name, color) {
   const resolvedColor = document.documentElement.dataset.theme === 'dark' ? 'ffffff' : color;
-  return `${icons8Base}/${resolvedColor}/${name}.png`;
+  const iconName = lucideIconAliases[name] || name;
+  return `${lucideIconsBase}/${encodeURIComponent(iconName)}.svg?color=%23${resolvedColor}&width=20&height=20`;
 }
 
 function updateThemeIcons(theme) {
-  document.querySelectorAll('img[src^="https://img.icons8.com/ios-filled/50/"]').forEach((image) => {
+  document.querySelectorAll(`img[src^="${lucideIconsBase}/"]`).forEach((image) => {
     const url = new URL(image.src);
-    const parts = url.pathname.split('/');
-    if (parts.length < 4) return;
-    const currentColor = parts[3];
+    const currentColor = (url.searchParams.get('color') || '').replace('#', '').toLowerCase();
     const originalColor = image.dataset.iconColor || (currentColor === 'ffffff' ? goldIcon : currentColor);
     image.dataset.iconColor = originalColor;
-    parts[3] = theme === 'dark' ? 'ffffff' : originalColor;
-    url.pathname = parts.join('/');
+    url.searchParams.set('color', `#${theme === 'dark' ? 'ffffff' : originalColor}`);
     image.src = url.toString();
   });
 }
