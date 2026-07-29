@@ -7031,3 +7031,78 @@ textarea::placeholder {
     margin-left: 0;
   }
 }
+
+/* Supabase-like fixed chrome */
+@media (min-width: 721px) {
+  body:has(.student-app-shell),
+  body:has(.admin-layout) {
+    overflow-x: hidden;
+  }
+
+  body:has(.student-app-shell) .site-header,
+  body:has(.admin-layout) .site-header {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 120;
+    min-height: 48px;
+    height: 48px;
+  }
+
+  body:has(.student-app-shell) .page-shell,
+  body:has(.admin-layout) .page-shell,
+  #app:has(.student-app-shell),
+  #adminApp:has(.admin-layout) {
+    width: 100%;
+    max-width: none;
+    min-height: 100vh;
+    margin: 0;
+    padding: 48px 0 0;
+  }
+
+  .student-app-shell,
+  .admin-layout {
+    display: block;
+    min-height: 100vh;
+    border: 0;
+    border-radius: 0;
+    overflow: visible;
+    box-shadow: none;
+  }
+
+  .student-sidebar,
+  .admin-sidebar {
+    position: fixed;
+    inset: 48px auto 0 0;
+    z-index: 110;
+    height: calc(100vh - 48px);
+    max-height: none;
+  }
+
+  .student-main-frame,
+  .admin-main {
+    width: calc(100% - 48px);
+    min-height: calc(100vh - 48px);
+    margin-left: 48px;
+  }
+
+  .student-topbar {
+    position: fixed;
+    inset: 48px 0 auto 48px;
+    z-index: 100;
+    min-height: 52px;
+    height: 52px;
+  }
+
+  .student-page-heading,
+  .student-content-area {
+    padding-inline: clamp(20px, 2.2vw, 32px);
+  }
+
+  .student-main-frame {
+    padding-top: 52px;
+  }
+
+  .admin-main {
+    padding-top: clamp(18px, 2vw, 32px);
+  }
+}
