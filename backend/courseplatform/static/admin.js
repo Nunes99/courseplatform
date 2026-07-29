@@ -1090,6 +1090,7 @@ function renderCertifications() {
   const pendingCount = requests.filter((item) => ['REQUESTED', 'PAYMENT_SUBMITTED'].includes(item.status)).length;
   const approvedCount = requests.filter((item) => item.status === 'APPROVED').length;
   const blockedCount = certificates.filter((item) => item.status === 'BLOCKED').length;
+  const deletedCount = certificates.filter((item) => item.status === 'DELETED').length;
   const rejectedCount = requests.filter((item) => item.status === 'REJECTED').length;
 
   main.innerHTML = `
@@ -1097,6 +1098,15 @@ function renderCertifications() {
       <div>
         <p class="eyebrow">Certificacoes</p>
         <h1>Certificados e pedidos profissionais</h1>
+      </div>
+      <div class="certificate-admin-toolbar">
+        <label class="certificate-global-search">
+          <span class="sr-only">Pesquisar certificados</span>
+          <input id="certificateSearch" type="search" value="${escapeHtml(state.certificateFilters.query)}"
+            placeholder="Nome, email, ID, curso ou certificado">
+        </label>
+        <button class="button button-secondary" id="refreshCertificateData" type="button">Atualizar dados</button>
+        <button class="button button-primary" id="refreshCertificateFormat" type="button">Atualizar formato</button>
       </div>
     </div>
 
@@ -1115,15 +1125,78 @@ function renderCertifications() {
       </article>
       <article class="insight-card">
         <img src="${iconUrl('cancel', goldIcon)}" alt="">
-        <div><span>Rejeitados</span><strong>${rejectedCount}</strong></div>
+        <div><span>Rejeitados/apagados</span><strong>${rejectedCount + deletedCount}</strong></div>
       </article>
     </section>
 
-    <section class="certificate-admin-grid">
+    <section class="admin-content-panel certificate-register-panel">
+      <div class="course-section-heading">
+        <div>
+          <p class="eyebrow">Conquistas verificaveis</p>
+          <h2>Certificados</h2>
+        </div>
+        <span>${certificates.length} registos</span>
+      </div>
+      <section class="admin-filter-bar certificate-filter-bar">
+        <label>
+          <span>Acesso</span>
+          <select id="certificateAccessStatusFilter">
+            ${studentFilterOption('ACTIVE', 'Ativos', state.certificateFilters.certificateStatus)}
+            ${studentFilterOption('ISSUED', 'Liberados', state.certificateFilters.certificateStatus)}
+            ${studentFilterOption('BLOCKED', 'Bloqueados', state.certificateFilters.certificateStatus)}
+            ${studentFilterOption('DELETED', 'Apagados', state.certificateFilters.certificateStatus)}
+            ${studentFilterOption('ALL', 'Todos', state.certificateFilters.certificateStatus)}
+          </select>
+        </label>
+      </section>
+      <div class="certificate-record-table">
+        <div class="certificate-record-row certificate-record-head">
+          <span>Codigo</span>
+          <span>Formando</span>
+          <span>Curso</span>
+          <span>Resultado</span>
+          <span>Emissao</span>
+          <span>Geracoes PDF</span>
+          <span>Acoes</span>
+        </div>
+        ${certificates.length ? certificates.map(adminCertificateRowTemplate).join('') : `
+          <div class="student-empty-state">Sem certificados para os filtros atuais.</div>
+        `}
+      </div>
+    </section>
+
+    <section class="admin-content-panel certificate-requests-panel">
+      <div class="course-section-heading">
+        <div>
+          <p class="eyebrow">Pagamentos e liberacoes</p>
+          <h2>Solicitacoes de certificado profissional</h2>
+        </div>
+        <span>${requests.length} solicitacoes</span>
+      </div>
+      <section class="admin-filter-bar certificate-filter-bar">
+        <label>
+          <span>Estado do pedido</span>
+          <select id="certificateStatusFilter">
+            ${studentFilterOption('ALL', 'Todos', state.certificateFilters.status)}
+            ${studentFilterOption('REQUESTED', 'Solicitados', state.certificateFilters.status)}
+            ${studentFilterOption('PAYMENT_SUBMITTED', 'Com comprovativo', state.certificateFilters.status)}
+            ${studentFilterOption('APPROVED', 'Aprovados', state.certificateFilters.status)}
+            ${studentFilterOption('REJECTED', 'Rejeitados', state.certificateFilters.status)}
+          </select>
+        </label>
+      </section>
+      <div class="certificate-request-list">
+        ${requests.length ? requests.map(certificateRequestCardTemplate).join('') : `
+          <div class="student-empty-state">Sem pedidos para os filtros atuais.</div>
+        `}
+      </div>
+    </section>
+
+    <section class="certificate-admin-grid certificate-model-grid">
       <article class="admin-content-panel">
         <div class="course-section-heading">
           <div>
-            <p class="eyebrow">Mensagem e pagamento</p>
+            <p class="eyebrow">Modelo e identidade</p>
             <h2>Configuracao do curso</h2>
           </div>
         </div>
@@ -1164,56 +1237,26 @@ function renderCertifications() {
         </form>
       </article>
 
-      <article class="admin-content-panel">
+      <article class="admin-content-panel certificate-model-preview-panel">
         <div class="course-section-heading">
           <div>
-            <p class="eyebrow">Certificados emitidos</p>
-            <h2>Gestao de acesso</h2>
+            <p class="eyebrow">Dois modelos disponiveis</p>
+            <h2>Pre-visualizacao do certificado profissional</h2>
           </div>
         </div>
-        <section class="admin-filter-bar certificate-filter-bar">
-          <label>
-            <span>Acesso</span>
-            <select id="certificateAccessStatusFilter">
-              ${studentFilterOption('ACTIVE', 'Ativos', state.certificateFilters.certificateStatus)}
-              ${studentFilterOption('ISSUED', 'Liberados', state.certificateFilters.certificateStatus)}
-              ${studentFilterOption('BLOCKED', 'Bloqueados', state.certificateFilters.certificateStatus)}
-              ${studentFilterOption('ALL', 'Todos', state.certificateFilters.certificateStatus)}
-            </select>
-          </label>
-          <label>
-            <span>Pesquisar</span>
-            <input id="certificateSearch" type="search" value="${escapeHtml(state.certificateFilters.query)}"
-              placeholder="Nome, email, curso ou codigo">
-          </label>
-        </section>
-        <div class="certificate-request-list certificate-issued-list">
-          ${certificates.length ? certificates.map(adminCertificateCardTemplate).join('') : `
-            <div class="student-empty-state">Sem certificados para os filtros atuais.</div>
-          `}
+        <div class="certificate-preview-sheet is-professional certificate-admin-mini-preview">
+          ${adminCertificatePreviewTemplate({
+            certificateType: 'PROFESSIONAL',
+            certificateNumber: 'LSS-2026-F5B649DE76',
+            verificationCode: 'LSS2026F5B649DE76',
+            studentName: 'Nome do Formando',
+            courseTitle: (state.courses || []).find(({ course }) => course.courseId === state.selectedCourseId)?.course?.title || 'Curso profissional',
+            contentSummary: settings.contentSummary || '',
+            issueDate: new Date().toISOString(),
+            finalScore: 100
+          })}
         </div>
-
-        <div class="student-detail-section-heading certificate-request-heading">
-          <h3>Pedidos profissionais</h3>
-          <span>${requests.length} registos</span>
-        </div>
-        <section class="admin-filter-bar certificate-filter-bar">
-          <label>
-            <span>Estado do pedido</span>
-            <select id="certificateStatusFilter">
-              ${studentFilterOption('ALL', 'Todos', state.certificateFilters.status)}
-              ${studentFilterOption('REQUESTED', 'Solicitados', state.certificateFilters.status)}
-              ${studentFilterOption('PAYMENT_SUBMITTED', 'Com comprovativo', state.certificateFilters.status)}
-              ${studentFilterOption('APPROVED', 'Aprovados', state.certificateFilters.status)}
-              ${studentFilterOption('REJECTED', 'Rejeitados', state.certificateFilters.status)}
-            </select>
-          </label>
-        </section>
-        <div class="certificate-request-list">
-          ${requests.length ? requests.map(certificateRequestCardTemplate).join('') : `
-            <div class="student-empty-state">Sem pedidos para os filtros atuais.</div>
-          `}
-        </div>
+        <p class="empty-note">A pre-visualizacao acompanha o modelo atual. Use "Atualizar formato" para reprocessar certificados emitidos quando alterar a identidade ou os conteudos.</p>
       </article>
     </section>
   `;
@@ -1237,6 +1280,8 @@ function renderCertifications() {
     state.certificateFilters.query = event.currentTarget.value;
     loadCertifications({ silent: true }).then(renderCertifications);
   });
+  document.querySelector('#refreshCertificateData').addEventListener('click', () => loadCertifications({ force: true }));
+  document.querySelector('#refreshCertificateFormat').addEventListener('click', refreshCertificateFormatAll);
   root.querySelectorAll('[data-review-certificate-request]').forEach((button) => {
     button.addEventListener('click', () => reviewCertificateRequest(
       button.dataset.reviewCertificateRequest,
@@ -1252,6 +1297,9 @@ function renderCertifications() {
   root.querySelectorAll('[data-set-certificate-status]').forEach((button) => {
     button.addEventListener('click', () => setCertificateStatusFromButton(button));
   });
+  root.querySelectorAll('[data-refresh-certificate-format]').forEach((button) => {
+    button.addEventListener('click', () => refreshCertificateFormatFromButton(button));
+  });
   root.querySelectorAll('[data-delete-certificate]').forEach((button) => {
     button.addEventListener('click', () => deleteCertificateFromButton(button));
   });
@@ -1265,6 +1313,49 @@ function certificateCourseOptions() {
       ${escapeHtml(course.title || course.courseCode || course.courseId)}
     </option>
   `).join('');
+}
+
+function adminCertificateRowTemplate(certificate) {
+  const deleted = certificate.status === 'DELETED';
+  const blocked = certificate.status === 'BLOCKED';
+  const accessLabel = deleted ? 'Atribuir novamente' : (blocked ? 'Liberar acesso' : 'Remover acesso');
+  const nextStatus = blocked || deleted ? 'ISSUED' : 'BLOCKED';
+  const dataset = adminCertificateActionDataset(certificate);
+  const certificateType = certificate.certificateType === 'PROFESSIONAL' ? 'Profissional' : 'Participacao';
+  const downloads = Number(certificate.downloadCount || 0);
+  const maxDownloads = certificate.maxDownloads || (certificate.certificateType === 'PROFESSIONAL' ? 5 : 'Livre');
+  return `
+    <div class="certificate-record-row ${deleted ? 'is-deleted' : ''} ${blocked ? 'is-blocked' : ''}">
+      <div>
+        <code>${escapeHtml(adminCertificateDisplayNumber(certificate) || certificate.certificateId)}</code>
+        <span class="status-pill ${statusClass(certificate.status)}">${statusLabel(certificate.status)}</span>
+        <small>${escapeHtml(certificateType)}</small>
+      </div>
+      <div>
+        <strong>${escapeHtml(certificate.studentName || certificate.studentId || 'Estudante')}</strong>
+        <small>${escapeHtml(certificate.studentId || '')}</small>
+      </div>
+      <div>${escapeHtml(certificate.courseTitle || certificate.courseId || 'Curso')}</div>
+      <div>${certificate.finalScore == null || certificate.finalScore === '' ? '-' : `${escapeHtml(certificate.finalScore)}%`}</div>
+      <div>${escapeHtml(formatDate(certificate.issueDate))}</div>
+      <div><span class="certificate-generation-pill">${escapeHtml(downloads)} / ${escapeHtml(maxDownloads)}</span></div>
+      <div class="certificate-record-actions">
+        ${deleted ? '' : `
+          <button class="button button-small button-secondary" type="button" data-open-admin-certificate ${dataset}>Visualizar</button>
+          <button class="button button-small button-secondary" type="button" data-download-admin-certificate ${dataset}>Baixar</button>
+          <button class="button button-small button-secondary" type="button" data-refresh-certificate-format ${dataset}>Atualizar</button>
+        `}
+        <button class="button button-small ${blocked || deleted ? 'button-primary' : 'button-secondary'}" type="button"
+          data-set-certificate-status="${escapeHtml(nextStatus)}" ${dataset}>
+          ${accessLabel}
+        </button>
+        ${deleted ? '' : `
+          <button class="button button-small button-danger" type="button" data-delete-certificate ${dataset}>Apagar</button>
+        `}
+      </div>
+      ${certificate.statusNote ? `<p class="certificate-policy-note">${escapeHtml(certificate.statusNote)}</p>` : ''}
+    </div>
+  `;
 }
 
 function adminCertificateCardTemplate(certificate) {
@@ -1541,6 +1632,60 @@ function adminCertificatePreviewTemplate(certificate) {
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, 6);
+  if (isProfessional) {
+    return `
+      <div class="certificate-preview-inner certificate-document certificate-document-professional">
+        <div class="certificate-professional-layout">
+          <section class="certificate-professional-left">
+            <div class="certificate-logo-mark">LMT</div>
+            <p class="certificate-institution">${escapeHtml(config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
+            <h1>Certificado de Qualificacao</h1>
+            <p>sobre o aumento da qualificacao profissional</p>
+            <strong>${escapeHtml(adminCertificateDisplayNumber(certificate) || certificate.certificateId)}</strong>
+            <span>Documento de qualificacao</span>
+            <small>Numero de registo</small>
+            <strong>${escapeHtml(certificate.verificationCode || '')}</strong>
+            <div class="certificate-place-date">
+              <b>Cidade de Maputo, Mocambique</b>
+              <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
+            </div>
+            <div class="certificate-signature-block">
+              <span></span>
+              <b>Diretor Academico</b>
+              <small>LMTWEBNAIRS</small>
+            </div>
+          </section>
+          <section class="certificate-professional-right">
+            <p class="certificate-preview-lead">O presente documento certifica que</p>
+            <h2>${escapeHtml(certificate.studentName || 'Nome do Formando')}</h2>
+            <p>concluiu com sucesso o programa de aumento de qualificacao profissional na LMTWEBNAIRS Summer School</p>
+            <span>curso/programa</span>
+            <h3>${escapeHtml(certificate.courseTitle || 'Curso profissional')}</h3>
+            <p>demonstrando aproveitamento satisfatorio em atividades academicas, estudos de caso, discussoes tecnicas e avaliacao final.</p>
+            ${summary.length ? `
+              <div class="certificate-content-summary">
+                <strong>O programa abordou:</strong>
+                <ul>${summary.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+              </div>
+            ` : ''}
+            <div class="certificate-professional-footer">
+              <strong>Carga horaria: 30 horas</strong>
+              <div class="certificate-signature-block">
+                <span></span>
+                <b>Coordenador do Programa</b>
+                <small>LMTWEBNAIRS</small>
+              </div>
+              <div class="certificate-preview-seal">L</div>
+            </div>
+          </section>
+        </div>
+        <div class="certificate-preview-meta">
+          <span>Codigo: ${escapeHtml(certificate.verificationCode || '')}</span>
+          <span>Nota final: ${certificate.finalScore ? `${escapeHtml(certificate.finalScore)}/100` : '--/100'}</span>
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="certificate-preview-inner certificate-document ${isProfessional ? 'certificate-document-professional' : 'certificate-document-participation'}">
       <span class="certificate-corner certificate-corner-tl"></span>
@@ -1608,13 +1753,44 @@ async function setCertificateStatusFromButton(button) {
   const certificate = certificateFromDataset(button.dataset);
   const status = button.dataset.setCertificateStatus;
   if (!certificate.certificateId || !status) return;
-  const label = status === 'ISSUED' ? 'liberar novamente' : 'remover o acesso de';
+  const label = status === 'ISSUED' ? 'liberar/atribuir novamente' : 'remover o acesso de';
   if (!confirmAdminAction(`Deseja ${label} este certificado?`)) return;
   const statusNote = window.prompt('Motivo/observacao administrativa (opcional):', '') || '';
   setBusy(button, true, 'A guardar...');
   try {
     await api.adminSetCertificateStatus(certificate.certificateId, status, statusNote);
     showToast('Acesso do certificado atualizado.', 'success');
+    await loadCertifications({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function refreshCertificateFormatFromButton(button) {
+  const certificate = certificateFromDataset(button.dataset);
+  if (!certificate.certificateId) return;
+  if (!confirmAdminAction('Deseja atualizar o formato e os conteudos deste certificado?')) return;
+  setBusy(button, true, 'A atualizar...');
+  try {
+    await api.adminRefreshCertificateFormat({ certificateId: certificate.certificateId });
+    showToast('Formato do certificado atualizado.', 'success');
+    await loadCertifications({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function refreshCertificateFormatAll(event) {
+  const button = event?.currentTarget || document.querySelector('#refreshCertificateFormat');
+  if (!confirmAdminAction('Deseja atualizar o formato dos certificados ativos deste curso?')) return;
+  setBusy(button, true, 'A atualizar...');
+  try {
+    const result = await api.adminRefreshCertificateFormat({ courseId: state.selectedCourseId });
+    showToast(`${result.updated || 0} certificado(s) atualizados.`, 'success');
     await loadCertifications({ force: true });
   } catch (error) {
     handleAdminError(error);

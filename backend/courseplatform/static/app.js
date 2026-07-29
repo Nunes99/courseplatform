@@ -2157,6 +2157,60 @@ function certificatePreviewTemplate(certificate) {
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, 6);
+  if (isProfessional) {
+    return `
+      <div class="certificate-preview-inner certificate-document certificate-document-professional">
+        <div class="certificate-professional-layout">
+          <section class="certificate-professional-left">
+            <div class="certificate-logo-mark">LMT</div>
+            <p class="certificate-institution">${escapeHtml(config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
+            <h1>Certificado de Qualificacao</h1>
+            <p>sobre o aumento da qualificacao profissional</p>
+            <strong>${escapeHtml(certificateDisplayNumber(certificate) || '')}</strong>
+            <span>Documento de qualificacao</span>
+            <small>Numero de registo</small>
+            <strong>${escapeHtml(certificate.verificationCode || '')}</strong>
+            <div class="certificate-place-date">
+              <b>Cidade de Maputo, Mocambique</b>
+              <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
+            </div>
+            <div class="certificate-signature-block">
+              <span></span>
+              <b>Diretor Academico</b>
+              <small>LMTWEBNAIRS</small>
+            </div>
+          </section>
+          <section class="certificate-professional-right">
+            <p class="certificate-preview-lead">O presente documento certifica que</p>
+            <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
+            <p>concluiu com sucesso o programa de aumento de qualificacao profissional na LMTWEBNAIRS Summer School</p>
+            <span>curso/programa</span>
+            <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
+            <p>demonstrando aproveitamento satisfatorio em atividades academicas, estudos de caso, discussoes tecnicas e avaliacao final.</p>
+            ${summary.length ? `
+              <div class="certificate-content-summary">
+                <strong>O programa abordou:</strong>
+                <ul>${summary.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+              </div>
+            ` : ''}
+            <div class="certificate-professional-footer">
+              <strong>Carga horaria: 30 horas</strong>
+              <div class="certificate-signature-block">
+                <span></span>
+                <b>Coordenador do Programa</b>
+                <small>LMTWEBNAIRS</small>
+              </div>
+              <div class="certificate-preview-seal">L</div>
+            </div>
+          </section>
+        </div>
+        <div class="certificate-preview-meta">
+          <span>Codigo: ${escapeHtml(certificate.verificationCode || '')}</span>
+          <span>Nota final: ${certificate.finalScore == null ? '--/100' : `${escapeHtml(certificate.finalScore)}/100`}</span>
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="certificate-preview-inner certificate-document ${isProfessional ? 'certificate-document-professional' : 'certificate-document-participation'}">
       <span class="certificate-corner certificate-corner-tl"></span>

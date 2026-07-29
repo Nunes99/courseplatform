@@ -3146,7 +3146,7 @@ def admin_set_certificate_status(payload: dict[str, Any]):
                 status_note = %s,
                 status_updated_by = %s,
                 status_updated_at = now()
-            where certificate_id = %s and coalesce(status, 'ISSUED') <> 'DELETED'
+            where certificate_id = %s
             returning *
             """,
             (status, str_value(payload.get("statusNote")), admin["admin_id"], payload["certificateId"]),
@@ -3156,6 +3156,63 @@ def admin_set_certificate_status(payload: dict[str, Any]):
         audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_STATUS_CHANGED", "CERTIFICATE", certificate["certificate_id"], {"status": status})
         conn.commit()
     return success({"certificate": public_certificate(certificate)})
+
+
+def admin_refresh_certificate_format(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    certificate_id = str_value(payload.get("certificateId"))
+    course_id = str_value(payload.get("courseId"))
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        if certificate_id:
+            rows = conn.execute(
+                """
+                select certificate_id, course_id
+                from courseplatform.certificates
+                where certificate_id = %s
+                """,
+                (certificate_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                select certificate_id, course_id
+                from courseplatform.certificates
+                where coalesce(status, 'ISSUED') <> 'DELETED'
+                  and (%s = '' or course_id = %s)
+                order by issue_date desc nulls last
+                limit 500
+                """,
+                (course_id, course_id),
+            ).fetchall()
+        if not rows:
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+
+        refreshed = []
+        for row in rows:
+            summary = certificate_content_summary(conn, row["course_id"])
+            certificate = conn.execute(
+                """
+                update courseplatform.certificates
+                set content_summary = %s,
+                    status_note = %s,
+                    status_updated_by = %s,
+                    status_updated_at = now()
+                where certificate_id = %s
+                returning *
+                """,
+                (
+                    summary,
+                    "Formato e conteudo do certificado atualizados pelo administrador.",
+                    admin["admin_id"],
+                    row["certificate_id"],
+                ),
+            ).fetchone()
+            if certificate:
+                refreshed.append(certificate)
+                audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_FORMAT_REFRESHED", "CERTIFICATE", certificate["certificate_id"], {})
+        conn.commit()
+    return success({"updated": len(refreshed), "certificates": [public_certificate(row) for row in refreshed]})
 
 
 def admin_delete_certificate(payload: dict[str, Any]):
@@ -3377,6 +3434,7 @@ ACTIONS = {
     "adminListCertificateRequests": admin_list_certificate_requests,
     "adminListCertificates": admin_list_certificates,
     "adminSetCertificateStatus": admin_set_certificate_status,
+    "adminRefreshCertificateFormat": admin_refresh_certificate_format,
     "adminDeleteCertificate": admin_delete_certificate,
     "adminReviewCertificateRequest": admin_review_certificate_request,
     "adminGetCertificateSettings": admin_get_certificate_settings,

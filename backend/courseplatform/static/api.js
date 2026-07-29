@@ -516,6 +516,10 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminSetCertificateStatus', { certificateId, status, statusNote });
   }
 
+  adminRefreshCertificateFormat(payload = {}) {
+    return this.mutateAdmin('adminRefreshCertificateFormat', payload);
+  }
+
   adminDeleteCertificate(certificateId, statusNote = '') {
     return this.mutateAdmin('adminDeleteCertificate', { certificateId, statusNote });
   }

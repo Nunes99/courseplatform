@@ -65,31 +65,39 @@ def draw_participation_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> 
 def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> None:
     draw_background(pdf, colors.white)
     draw_double_frame(pdf, GOLD, NAVY)
-    draw_corner_marks(pdf, GOLD)
-    draw_corner_marks(pdf, NAVY, inset=18)
+    draw_corner_marks(pdf, NAVY)
+    draw_corner_marks(pdf, GOLD, inset=18)
 
-    left = 62
-    right = PAGE_WIDTH - 62
-    centered(pdf, issuer(data), PAGE_HEIGHT - 52, 17, "Helvetica-Bold", BLUE)
-    centered(pdf, "CERTIFICADO", PAGE_HEIGHT - 100, 31, "Helvetica-Bold", GOLD)
-    centered(pdf, "PROFISSIONAL DE CONCLUSAO", PAGE_HEIGHT - 126, 18, "Helvetica-Bold", GOLD)
-    centered(pdf, "certifica que", PAGE_HEIGHT - 172, 12, "Helvetica", MUTED)
-    centered(pdf, student_name(data), PAGE_HEIGHT - 212, 26, "Helvetica-Bold", NAVY)
-    centered(pdf, "concluiu com exito o programa profissional", PAGE_HEIGHT - 244, 12, "Helvetica", MUTED)
-    centered(pdf, course_title(data), PAGE_HEIGHT - 274, 16, "Helvetica-Bold", BLUE)
+    left_x = 62
+    left_w = 270
+    right_x = 382
+    right_w = PAGE_WIDTH - right_x - 62
+    top_y = PAGE_HEIGHT - 68
 
-    pdf.setStrokeColor(colors.HexColor("#D7B66B"))
-    pdf.line(left + 35, PAGE_HEIGHT - 300, right - 35, PAGE_HEIGHT - 300)
-    pdf.line(left + 35, 172, right - 35, 172)
+    draw_seal(pdf, left_x + left_w / 2, top_y - 4, "LMT", silver=False)
+    centered_in(pdf, issuer(data), left_x, left_x + left_w, top_y - 72, 13, "Helvetica-Bold", LIGHT_GOLD)
+    centered_in(pdf, "CERTIFICADO DE", left_x, left_x + left_w, top_y - 112, 19, "Helvetica-Bold", GOLD)
+    centered_in(pdf, "QUALIFICACAO", left_x, left_x + left_w, top_y - 136, 19, "Helvetica-Bold", GOLD)
+    centered_in(pdf, "sobre o aumento da qualificacao profissional", left_x, left_x + left_w, top_y - 162, 10, "Helvetica", BLUE)
+    centered_in(pdf, data.get("certificate_number") or "", left_x, left_x + left_w, top_y - 184, 10, "Helvetica-Bold", GOLD)
+    centered_in(pdf, "Documento de qualificacao", left_x, left_x + left_w, top_y - 214, 9, "Helvetica", BLUE)
+    centered_in(pdf, "Numero de registo", left_x, left_x + left_w, top_y - 258, 9, "Helvetica", BLUE)
+    centered_in(pdf, data.get("verification_code") or "", left_x, left_x + left_w, top_y - 286, 10, "Helvetica-Bold", GOLD)
+    centered_in(pdf, "Cidade de Maputo, Mocambique", left_x, left_x + left_w, 142, 11, "Helvetica-Bold", BLUE)
+    centered_in(pdf, issue_date(data), left_x, left_x + left_w, 118, 11, "Helvetica", BLUE)
+    draw_signature(pdf, left_x + 44, 62, data.get("director_name") or "Diretor Academico", "LMTWEBNAIRS")
 
-    draw_program_topics(pdf, data, left + 44, PAGE_HEIGHT - 328)
-    draw_metric(pdf, left + 44, 128, "Carga horaria", data.get("workload") or "30 HORAS")
-    draw_metric(pdf, PAGE_WIDTH / 2 - 52, 128, "Data de emissao", issue_date(data))
-    draw_metric(pdf, right - 174, 128, "Nota final", final_score(data))
-    draw_seal(pdf, PAGE_WIDTH / 2, 82, "LMT", silver=False)
-    draw_signature(pdf, 88, 56, data.get("director_name") or "Diretor Academico", "Direcao academica")
-    draw_signature(pdf, PAGE_WIDTH - 358, 56, data.get("coordinator_name") or "Coordenador do Programa", "Coordenacao do programa")
-    draw_qr(pdf, right - 72, 60, data.get("verification_url") or "")
+    centered_in(pdf, "O presente documento certifica que", right_x, right_x + right_w, top_y - 18, 10, "Helvetica", GOLD)
+    centered_in(pdf, student_name(data).upper(), right_x, right_x + right_w, top_y - 52, 14, "Helvetica-Bold", BLUE)
+    draw_wrapped_center(pdf, "concluiu com sucesso o programa de aumento de qualificacao profissional na LMTWEBNAIRS Summer School", right_x + 36, right_x + right_w - 36, top_y - 82, 9, "Helvetica", BLUE, 2)
+    centered_in(pdf, "curso/programa", right_x, right_x + right_w, top_y - 132, 9, "Helvetica", GOLD)
+    centered_in(pdf, course_title(data), right_x, right_x + right_w, top_y - 160, 13, "Helvetica-Bold", BLUE)
+    draw_wrapped_center(pdf, "demonstrando aproveitamento satisfatorio em atividades academicas, estudos de caso, discussoes tecnicas e avaliacao final.", right_x + 34, right_x + right_w - 34, top_y - 190, 9, "Helvetica", BLUE, 3)
+    draw_program_topics(pdf, data, right_x + 52, top_y - 260)
+    centered_in(pdf, f"Carga horaria: {data.get('workload') or '30 horas'}", right_x, right_x + right_w, 146, 12, "Helvetica-Bold", BLUE)
+    draw_signature(pdf, right_x + 120, 72, data.get("coordinator_name") or "Coordenador do Programa", "LMTWEBNAIRS")
+    draw_seal(pdf, right_x + right_w - 70, 86, "L", silver=False)
+    draw_qr(pdf, right_x + 42, 42, data.get("verification_url") or "")
     draw_certificate_footer(pdf, data, show_date=False)
     pdf.showPage()
 
@@ -142,7 +150,7 @@ def draw_seal(pdf: canvas.Canvas, x: float, y: float, label: str, silver: bool =
     lines = str(label).split("\n")
     start_y = y + (len(lines) - 1) * 6
     for index, line in enumerate(lines):
-        centered(pdf, line, start_y - index * 12, 7.5, "Helvetica-Bold", NAVY)
+        centered_in(pdf, line, x - 25, x + 25, start_y - index * 12, 7.5, "Helvetica-Bold", NAVY)
 
 
 def draw_signature(pdf: canvas.Canvas, x: float, y: float, name: str, title: str) -> None:
@@ -207,6 +215,23 @@ def centered_in(pdf: canvas.Canvas, text: str, x1: float, x2: float, y: float, s
     pdf.setFont(font, size)
     width = stringWidth(text, font, size)
     pdf.drawString(x1 + ((x2 - x1 - width) / 2), y, text)
+
+
+def draw_wrapped_center(
+    pdf: canvas.Canvas,
+    text: str,
+    x1: float,
+    x2: float,
+    y: float,
+    size: float,
+    font: str,
+    color: colors.Color,
+    max_lines: int,
+) -> None:
+    length = max(18, int((x2 - x1) / max(size * 0.72, 1)))
+    lines = wrap_text(text, length, max_lines)
+    for index, line in enumerate(lines):
+        centered_in(pdf, line, x1, x2, y - index * (size + 4), size, font, color)
 
 
 def wrap_text(value: str, length: int, max_lines: int) -> list[str]:
