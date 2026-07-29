@@ -78,7 +78,7 @@ async function initialize() {
   } catch (error) {
     root.innerHTML = `
       <div class="configuration-error">
-        <h1>Configuração incompleta</h1>
+        <h1>Configuracao incompleta</h1>
         <p>${escapeHtml(error.message)}</p>
       </div>
     `;
@@ -121,7 +121,7 @@ function renderAdminLogin() {
       <div class="auth-card auth-card-modern">
         <div class="auth-card-accent">
           <img src="${iconUrl('admin-settings-male', goldIcon)}" alt="">
-          <span>Área reservada</span>
+          <span>Area reservada</span>
         </div>
 
         <div class="auth-brand-row">
@@ -133,7 +133,7 @@ function renderAdminLogin() {
         </div>
 
         <p class="auth-description">
-          Organize submissões, acompanhe participantes e registe avaliações com clareza.
+          Organize submissoes, acompanhe participantes e registe avaliacoes com clareza.
         </p>
 
         <form id="adminLoginForm" class="form-stack">
@@ -330,11 +330,11 @@ function renderAdminShell() {
       <aside class="admin-sidebar">
         <div class="admin-sidebar-heading">
           ${brandSymbolTemplate('admin-sidebar-symbol')}
-          <h2>Gestão da Summer School</h2>
+          <h2>Gestao da Summer School</h2>
         </div>
         <button class="admin-nav is-active" data-admin-view="pending">
           <img src="${iconUrl('inbox', blueIcon)}" alt="">
-          <span>Submissões</span>
+          <span>Submissoes</span>
         </button>
         <button class="admin-nav" data-admin-view="students">
           <img src="${iconUrl('student-male', blueIcon)}" alt="">
@@ -346,7 +346,7 @@ function renderAdminShell() {
         </button>
         <button class="admin-nav" data-admin-view="videos">
           <img src="${iconUrl('video-playlist', blueIcon)}" alt="">
-          <span>Vídeos</span>
+          <span>Videos</span>
         </button>
         <button class="admin-nav" data-admin-view="brand">
           <img src="${iconUrl('picture', blueIcon)}" alt="">
@@ -2234,17 +2234,17 @@ function renderPending() {
   main.innerHTML = `
     <div class="admin-page-heading">
       <div>
-        <p class="eyebrow">Avaliação</p>
-        <h1>Submissões pendentes</h1>
+        <p class="eyebrow">Avaliacao</p>
+        <h1>Submissoes pendentes</h1>
       </div>
       <button class="button button-secondary" id="refreshPending">Atualizar</button>
     </div>
 
-    <section class="admin-summary-grid" aria-label="Resumo de avaliação">
+    <section class="admin-summary-grid" aria-label="Resumo de avaliacao">
       <article class="insight-card">
         <img src="${iconUrl('inbox', goldIcon)}" alt="">
         <div>
-          <span>Submissões</span>
+          <span>Submissoes</span>
           <strong>${state.pending.length}</strong>
         </div>
       </article>
@@ -2297,7 +2297,7 @@ function renderPending() {
                 </td>
               </tr>
             `).join('')
-            : '<tr><td colspan="5" class="empty-table">Não existem submissões pendentes.</td></tr>'}
+            : '<tr><td colspan="5" class="empty-table">Nao existem submissoes pendentes.</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -2700,7 +2700,7 @@ async function applyLessonAccess(event) {
 
 async function openSubmission(attemptId) {
   const main = document.querySelector('#adminMain');
-  main.innerHTML = loadingTemplate('A abrir a submissão…');
+  main.innerHTML = loadingTemplate('A abrir a submissao…');
 
   try {
     state.selectedSubmission = await api.adminSubmission(attemptId);
@@ -2723,7 +2723,7 @@ function renderSubmission() {
 
   const answers = data.answers.map(({ question, answer }) => `
     <article class="admin-answer">
-      <p class="eyebrow">Questão ${question?.questionOrder || ''}</p>
+      <p class="eyebrow">Questao ${question?.questionOrder || ''}</p>
       <h3>${escapeHtml(question?.prompt || answer.questionId)}</h3>
       <div class="answer-value">
         ${answer.answerText
@@ -2767,7 +2767,7 @@ function renderSubmission() {
 
       <aside>
         <div class="review-form-card">
-          <h2>Avaliação</h2>
+          <h2>Avaliacao</h2>
           ${latestReview ? `
             <p class="review-history-note">
               Ultima decisao: ${escapeHtml(statusLabel(latestReview.decision))}
@@ -2777,32 +2777,32 @@ function renderSubmission() {
 
           <form id="reviewForm" class="form-stack">
             <label>
-              <span>Decisão</span>
+              <span>Decisao</span>
               <select name="decision" required>
                 <option value="APPROVED">Aprovado</option>
-                <option value="APPROVED_WITH_NOTES">Aprovado com observações</option>
-                <option value="CORRECTION_REQUIRED">Correção necessária</option>
-                <option value="FAILED">Não aprovado</option>
+                <option value="APPROVED_WITH_NOTES">Aprovado com observacoes</option>
+                <option value="CORRECTION_REQUIRED">Correcao necessaria</option>
+                <option value="FAILED">Nao aprovado</option>
               </select>
             </label>
 
             <label>
-              <span>Classificação</span>
+              <span>Classificacao</span>
               <input type="number" name="score" min="0" max="100" required>
             </label>
 
             <label>
-              <span>Comentários</span>
+              <span>Comentarios</span>
               <textarea name="comments" rows="7" required></textarea>
             </label>
 
             <label>
-              <span>Prazo para correção — opcional</span>
+              <span>Prazo para correcao — opcional</span>
               <input type="datetime-local" name="correctionDeadline">
             </label>
 
             <button class="button button-primary button-block" type="submit">
-              Guardar avaliação
+              Guardar avaliacao
             </button>
           </form>
         </div>
@@ -3005,7 +3005,7 @@ async function submitReview(event) {
       correctionDeadline: values.get('correctionDeadline') || ''
     });
 
-    showToast('Avaliação guardada.', 'success');
+    showToast('Avaliacao guardada.', 'success');
     await loadPending();
   } catch (error) {
     handleAdminError(error);
@@ -3079,7 +3079,7 @@ function renderStudents() {
       <article class="insight-card">
         <img src="${iconUrl('combo-chart', goldIcon)}" alt="">
         <div>
-          <span>Progresso médio</span>
+          <span>Progresso medio</span>
           <strong>${avgProgress}%</strong>
         </div>
       </article>
@@ -3103,7 +3103,7 @@ function renderStudents() {
 
           <div class="student-admin-actions">
             <button type="button" data-reset-access="${escapeHtml(student.studentId)}">
-              Novo código
+              Novo codigo
             </button>
             <button type="button"
               data-toggle-student="${escapeHtml(student.studentId)}"
@@ -4983,7 +4983,7 @@ function showLessonDialog(lessonId = '') {
 
 async function renderVideos(options = {}) {
   const main = document.querySelector('#adminMain');
-  main.innerHTML = loadingTemplate('A carregar vídeos…');
+  main.innerHTML = loadingTemplate('A carregar videos…');
   await loadAdminMediaConfig(options);
   await ensureStudentsForMedia(options);
   const videos = videoGallery();
@@ -4992,14 +4992,14 @@ async function renderVideos(options = {}) {
     <div class="admin-page-heading">
       <div>
         <p class="eyebrow">Galeria</p>
-        <h1>Vídeos</h1>
+        <h1>Videos</h1>
       </div>
     </div>
 
     <section class="admin-video-panel">
       <form id="adminVideoForm" class="admin-video-form">
         <label>
-          <span>Título</span>
+          <span>Titulo</span>
           <input name="title" required placeholder="Ex.: Aula inaugural">
         </label>
         <label>
@@ -5007,7 +5007,7 @@ async function renderVideos(options = {}) {
           <input type="url" name="url" required placeholder="https://www.youtube.com/watch?v=...">
         </label>
         <label class="admin-video-description">
-          <span>Descrição opcional</span>
+          <span>Descricao opcional</span>
           <textarea name="description" rows="3" placeholder="Breve contexto para os estudantes"></textarea>
         </label>
         <label>
@@ -5024,7 +5024,7 @@ async function renderVideos(options = {}) {
             ${studentVideoCheckboxes()}
           </div>
         </fieldset>
-        <button class="button button-primary" type="submit">Publicar vídeo</button>
+        <button class="button button-primary" type="submit">Publicar video</button>
       </form>
     </section>
 
@@ -5034,14 +5034,14 @@ async function renderVideos(options = {}) {
           <article class="admin-video-card">
             <div>
               <h3>${escapeHtml(video.title)}</h3>
-              <p>${escapeHtml(video.description || 'Sem descrição.')}</p>
+              <p>${escapeHtml(video.description || 'Sem descricao.')}</p>
               <small>${escapeHtml(videoAccessLabel(video))}</small>
               <a href="${escapeHtml(video.url)}" target="_blank" rel="noopener">Abrir link original</a>
             </div>
             <button type="button" data-delete-video="${escapeHtml(video.id)}">Remover</button>
           </article>
         `).join('')
-        : '<div class="video-empty">Nenhum vídeo publicado.</div>'}
+        : '<div class="video-empty">Nenhum video publicado.</div>'}
     </section>
   `;
 
@@ -5079,7 +5079,7 @@ async function renderBrandSettings() {
         </div>
         <div>
           <h2>Logotipo da plataforma</h2>
-          <p>Este logotipo substitui o texto LSS no cabeçalho, nos cartões de login e no painel administrativo.</p>
+          <p>Este logotipo substitui o texto LSS no cabecalho, nos cartoes de login e no painel administrativo.</p>
         </div>
       </div>
 
@@ -5111,7 +5111,7 @@ async function saveBrandLogo(event) {
   const rawUrl = String(new FormData(form).get('logoUrl') || '').trim();
 
   if (!imageDisplayUrl(rawUrl)) {
-    showToast('Adicione um link válido para a imagem do logotipo.', 'warning');
+    showToast('Adicione um link valido para a imagem do logotipo.', 'warning');
     form.elements.logoUrl.focus();
     return;
   }
@@ -5190,7 +5190,7 @@ async function saveVideo(event) {
     : [];
 
   if (!videoEmbedUrl(url)) {
-    showToast('Adicione um link válido do YouTube ou Vimeo.', 'warning');
+    showToast('Adicione um link valido do YouTube ou Vimeo.', 'warning');
     form.elements.url.focus();
     return;
   }
@@ -5216,7 +5216,7 @@ async function saveVideo(event) {
   try {
     state.media.videos = videos;
     await saveMediaConfig();
-    showToast('Vídeo publicado na galeria.', 'success');
+    showToast('Video publicado na galeria.', 'success');
     await renderVideos();
   } catch (error) {
     handleAdminError(error);
@@ -5226,12 +5226,12 @@ async function saveVideo(event) {
 }
 
 async function deleteVideo(videoId) {
-  if (!window.confirm('Remover este vídeo da galeria?')) return;
+  if (!window.confirm('Remover este video da galeria?')) return;
 
   try {
     state.media.videos = videoGallery().filter((video) => video.id !== videoId);
     await saveMediaConfig();
-    showToast('Vídeo removido.', 'success');
+    showToast('Video removido.', 'success');
     await renderVideos();
   } catch (error) {
     handleAdminError(error);
@@ -5245,10 +5245,10 @@ function videoGallery() {
 function videoAccessLabel(video) {
   if (video.visibility === 'SELECTED') {
     const count = normalizeEmailList(video.allowedEmails).length;
-    return `Visível para ${count} estudante${count === 1 ? '' : 's'}`;
+    return `Visivel para ${count} estudante${count === 1 ? '' : 's'}`;
   }
 
-  return 'Visível para todos os estudantes';
+  return 'Visivel para todos os estudantes';
 }
 
 function videoEmbedUrl(rawUrl) {
@@ -5289,7 +5289,7 @@ function showStudentDialog() {
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `
     <div class="dialog-card">
-      <button class="dialog-close" type="button">×</button>
+      <button class="dialog-close" type="button">x</button>
       <h2>Adicionar estudante</h2>
 
       <form id="newStudentForm" class="form-stack">
@@ -5302,11 +5302,11 @@ function showStudentDialog() {
           <input type="email" name="email" required>
         </label>
         <label>
-          <span>País</span>
-          <input name="country" value="Moçambique">
+          <span>Pais</span>
+          <input name="country" value="Mocambique">
         </label>
         <label>
-          <span>Organização</span>
+          <span>Organizacao</span>
           <input name="organization">
         </label>
         <button class="button button-primary button-block" type="submit">
@@ -5347,7 +5347,7 @@ function showStudentDialog() {
 }
 
 async function resetAccess(studentId) {
-  if (!window.confirm('Gerar um novo código e encerrar as sessões atuais?')) return;
+  if (!window.confirm('Gerar um novo codigo e encerrar as sessoes atuais?')) return;
 
   try {
     const result = await api.adminResetAccess(studentId);
@@ -5388,7 +5388,7 @@ function initializeThemeToggle() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('lssTheme', theme);
     const icon = themeToggle.querySelector('.theme-toggle-icon');
-    if (icon) icon.textContent = theme === 'dark' ? '☾' : '☀';
+    if (icon) icon.textContent = theme === 'dark' ? 'N' : 'C';
     updateThemeIcons(theme);
     themeToggle.title = theme === 'dark' ? 'Usar modo claro' : 'Usar modo noturno';
     themeToggle.setAttribute('aria-label', themeToggle.title);

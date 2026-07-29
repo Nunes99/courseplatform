@@ -139,19 +139,19 @@ function renderLogin() {
       <div class="auth-card auth-card-modern">
         <div class="auth-card-accent">
           <img src="${iconUrl('graduation-cap', goldIcon)}" alt="">
-          <span>Portal acadÃ©mico</span>
+          <span>Portal academico</span>
         </div>
 
         <div class="auth-brand-row">
           ${brandSymbolTemplate('brand-mark')}
           <div>
             <p class="eyebrow">LMTWEBNAIRS Summer School</p>
-            <h1>Ãrea do estudante</h1>
+            <h1>Area do estudante</h1>
           </div>
         </div>
 
         <p class="auth-description">
-          Entre na Ã¡rea do participante para acompanhar aulas, exercÃ­cios e avaliaÃ§Ãµes num ambiente simples e bem organizado.
+          Entre na area do participante para acompanhar aulas, exercicios e avaliacoes num ambiente simples e bem organizado.
         </p>
 
         <div class="auth-feature-list" aria-label="Recursos da plataforma">
@@ -259,7 +259,7 @@ async function login(event) {
   const errorBox = document.querySelector('#loginError');
 
   errorBox.hidden = true;
-  setBusy(button, true, 'A autenticarâ€¦');
+  setBusy(button, true, 'A autenticara€¦');
 
   try {
     await api.login(data.get('email'), data.get('accessCode'));
@@ -515,7 +515,7 @@ function normalizeStudentDashboard(home = {}) {
 
 async function renderDashboard(view = 'overview') {
   clearTimers();
-  root.innerHTML = loadingTemplate('A carregar o cursoâ€¦');
+  root.innerHTML = loadingTemplate('A carregar o cursoa€¦');
 
   const home = await api.studentHome(state.selectedCourseId);
   state.myCourses = Array.isArray(home.courses) ? home.courses : [];
@@ -579,7 +579,7 @@ async function renderDashboard(view = 'overview') {
         <p class="eyebrow">${escapeHtml(platformYear)}</p>
         <h1 class="hero-greeting">${escapeHtml(greeting)}</h1>
         <p>
-          Ambiente digital para acompanhar conteÃºdos, exercÃ­cios e avaliaÃ§Ãµes do programa.
+          Ambiente digital para acompanhar conteudos, exercicios e avaliacoes do programa.
         </p>
         <div class="hero-meta">
           <span>Programa: ${escapeHtml(dashboard.course.title)}</span>
@@ -588,7 +588,7 @@ async function renderDashboard(view = 'overview') {
         </div>
         <div class="hero-actions">
           <a class="button button-light" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">
-            PÃ¡gina do evento
+            Pagina do evento
           </a>
           <a class="button button-secondary" href="#/certifications">
             Minhas certificacoes
@@ -631,14 +631,14 @@ async function renderDashboard(view = 'overview') {
       <article class="insight-card">
         <img src="${iconUrl('classroom', goldIcon)}" alt="">
         <div>
-          <span>Aulas disponÃ­veis</span>
+          <span>Aulas disponiveis</span>
           <strong>${activeLessons}</strong>
         </div>
       </article>
       <article class="insight-card">
         <img src="${iconUrl('time', goldIcon)}" alt="">
         <div>
-          <span>Carga horÃ¡ria</span>
+          <span>Carga horaria</span>
           <strong>${dashboard.course.totalHours}h</strong>
         </div>
       </article>
@@ -672,17 +672,17 @@ async function renderDashboard(view = 'overview') {
       </div>
     </section>
 
-    <section class="video-panel" aria-label="Galeria de vÃ­deos">
+    <section class="video-panel" aria-label="Galeria de videos">
       <div class="video-panel-copy">
         <p class="eyebrow">Galeria</p>
-        <h2>VÃ­deos da Summer School</h2>
-        <p>Assista aos vÃ­deos de apoio adicionados pela administraÃ§Ã£o.</p>
+        <h2>Videos da Summer School</h2>
+        <p>Assista aos videos de apoio adicionados pela administracao.</p>
       </div>
 
       <div class="video-gallery ${videos.length ? '' : 'is-empty'}">
         ${videos.length
           ? videos.map(videoCardTemplate).join('')
-          : '<div class="video-empty">Ainda nÃ£o existem vÃ­deos publicados.</div>'}
+          : '<div class="video-empty">Ainda nao existem videos publicados.</div>'}
       </div>
     </section>
 
@@ -702,9 +702,9 @@ async function renderDashboard(view = 'overview') {
       <h3>Como funciona a plataforma</h3>
       <div class="information-grid">
         <div><strong>1.</strong><span>Consulte os materiais da aula.</span></div>
-        <div><strong>2.</strong><span>Inicie a atividade prÃ¡tica.</span></div>
-        <div><strong>3.</strong><span>Responda e carregue evidÃªncias.</span></div>
-        <div><strong>4.</strong><span>Acompanhe a avaliaÃ§Ã£o.</span></div>
+        <div><strong>2.</strong><span>Inicie a atividade pratica.</span></div>
+        <div><strong>3.</strong><span>Responda e carregue evidencias.</span></div>
+        <div><strong>4.</strong><span>Acompanhe a avaliacao.</span></div>
       </div>
     </section>
   `, pageMeta[view] || pageMeta.overview);
@@ -973,7 +973,7 @@ async function renderProfile() {
           <div>
             <p class="eyebrow">Perfil pessoal</p>
             <h1>${escapeHtml(student.fullName || 'Estudante')}</h1>
-            <p>${escapeHtml(student.publicStudentId || '')} Â· ${escapeHtml(student.email || '')}</p>
+            <p>${escapeHtml(student.publicStudentId || '')}  -  ${escapeHtml(student.email || '')}</p>
           </div>
         </div>
         <div class="profile-status-grid" aria-label="Resumo do perfil">
@@ -1257,7 +1257,7 @@ function lessonCardTemplate(item) {
     action = `
       <button class="button button-secondary" type="button"
         data-check-attempt="${escapeHtml(activeAttempt.attemptId)}">
-        Consultar avaliaÃ§Ã£o
+        Consultar avaliacao
       </button>
     `;
   } else if (!locked) {
@@ -1285,10 +1285,10 @@ function lessonCardTemplate(item) {
         <p>${escapeHtml(lesson.summary)}</p>
         <div class="lesson-meta">
           <span>Teoria: ${lesson.theoryMinutes} min</span>
-          <span>PrÃ¡tica: ${lesson.exerciseMinutes + lesson.individualMinutes} min</span>
+          <span>Pratica: ${lesson.exerciseMinutes + lesson.individualMinutes} min</span>
         </div>
         ${progress.score !== null
-          ? `<p class="score-line">ClassificaÃ§Ã£o: <strong>${progress.score}%</strong></p>`
+          ? `<p class="score-line">Classificacao: <strong>${progress.score}%</strong></p>`
           : ''}
         <div class="lesson-card-actions">${action}</div>
       </div>
@@ -1298,7 +1298,7 @@ function lessonCardTemplate(item) {
 
 async function openLesson(lessonId) {
   clearTimers();
-  root.innerHTML = loadingTemplate('A carregar a aulaâ€¦');
+  root.innerHTML = loadingTemplate('A carregar a aulaa€¦');
 
   const lessonData = await api.getLesson(lessonId);
   state.lesson = lessonData;
@@ -1319,12 +1319,12 @@ async function openLesson(lessonId) {
   root.innerHTML = `
     <div class="lesson-layout">
       <aside class="lesson-sidebar">
-        <button class="text-button" id="backDashboard">â† Voltar ao curso</button>
+        <button class="text-button" id="backDashboard">a† Voltar ao curso</button>
         <p class="eyebrow">Aula ${lessonData.lesson.lessonNumber}</p>
         <h2>${escapeHtml(lessonData.lesson.title)}</h2>
         <div class="lesson-time-summary">
           <span>Teoria<strong>${lessonData.lesson.theoryMinutes} min</strong></span>
-          <span>ExercÃ­cios<strong>${lessonData.lesson.exerciseMinutes} min</strong></span>
+          <span>Exercicios<strong>${lessonData.lesson.exerciseMinutes} min</strong></span>
           <span>Individual<strong>${lessonData.lesson.individualMinutes} min</strong></span>
         </div>
         <nav id="lessonNavigation" class="lesson-navigation"></nav>
@@ -1381,9 +1381,9 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
   if (lessonData.progress.status === 'APPROVED') {
     return `
       <div class="completion-card">
-        <div class="completion-icon">âœ“</div>
+        <div class="completion-icon">aœ“</div>
         <h2>Aula aprovada</h2>
-        <p>Obteve ${lessonData.progress.score}% e pode rever todo o conteÃºdo.</p>
+        <p>Obteve ${lessonData.progress.score}% e pode rever todo o conteudo.</p>
         <button class="button button-secondary" id="backApproved">Voltar ao curso</button>
       </div>
     `;
@@ -1397,13 +1397,13 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
     const minutes = lessonData.lesson.exerciseMinutes + lessonData.lesson.individualMinutes;
     return `
       <div class="start-assessment-card">
-        <p class="eyebrow">AvaliaÃ§Ã£o prÃ¡tica</p>
+        <p class="eyebrow">Avaliacao pratica</p>
         <h2>Preparado para iniciar?</h2>
         <p>
-          Ao iniciar, o temporizador de ${minutes} minutos comeÃ§arÃ¡ no servidor
-          e continuarÃ¡ mesmo que feche a pÃ¡gina.
+          Ao iniciar, o temporizador de ${minutes} minutos comecara no servidor
+          e continuara mesmo que feche a pagina.
         </p>
-        <button class="button button-primary" id="startAttempt">Iniciar exercÃ­cios</button>
+        <button class="button button-primary" id="startAttempt">Iniciar exercicios</button>
       </div>
     `;
   }
@@ -1420,7 +1420,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
     <div class="attempt-header">
       <div>
         <p class="eyebrow">Tentativa ${attempt.attemptNumber}</p>
-        <h2>Respostas e submissÃ£o</h2>
+        <h2>Respostas e submissao</h2>
       </div>
       <div class="timer-card">
         <span>Tempo restante</span>
@@ -1436,16 +1436,16 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
 
     <section class="upload-panel">
       <div>
-        <p class="eyebrow">Documentos obrigatÃ³rios</p>
+        <p class="eyebrow">Documentos obrigatorios</p>
         <h3>Carregue fotografias ou ficheiros</h3>
-        <p>As imagens serÃ£o otimizadas antes do envio. Confirme que todos os cÃ¡lculos estÃ£o legÃ­veis.</p>
+        <p>As imagens serao otimizadas antes do envio. Confirme que todos os calculos estao legiveis.</p>
       </div>
 
       <div class="upload-methods">
         <label class="upload-dropzone" for="exerciseFiles">
           <input id="exerciseFiles" type="file" multiple
             accept=".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,.xls,.xlsx">
-          <span class="upload-icon">â†‘</span>
+          <span class="upload-icon">a†‘</span>
           <strong>Selecionar ficheiros</strong>
           <small>JPG, PNG, WebP, PDF, Word ou Excel</small>
         </label>
@@ -1458,7 +1458,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
           </label>
           <button class="button button-secondary" type="submit">Carregar imagem</button>
           <p class="field-hint">
-            Use um link pÃºblico para uma imagem. A plataforma lÃª a imagem e envia-a pela mesma submissÃ£o.
+            Use um link publico para uma imagem. A plataforma le a imagem e envia-a pela mesma submissao.
           </p>
         </form>
       </div>
@@ -1474,11 +1474,11 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
     <div class="submission-box">
       <label class="authorship-check">
         <input type="checkbox" id="authorshipConfirmation">
-        <span>Confirmo que resolvi pessoalmente os exercÃ­cios apresentados.</span>
+        <span>Confirmo que resolvi pessoalmente os exercicios apresentados.</span>
       </label>
       <button class="button button-primary" id="submitAttempt">Submeter atividade</button>
       <p class="submission-warning">
-        Depois da submissÃ£o, as respostas e os ficheiros deixam de poder ser alterados.
+        Depois da submissao, as respostas e os ficheiros deixam de poder ser alterados.
       </p>
     </div>
   `;
@@ -1496,15 +1496,15 @@ function questionTemplate(question, answer = null) {
     field = `
       <textarea rows="${question.questionType === 'LONG_TEXT' ? 6 : 3}"
         data-answer-text="${escapeHtml(question.questionId)}"
-        placeholder="Escreva a sua respostaâ€¦">${escapeHtml(answer?.answerText || '')}</textarea>
+        placeholder="Escreva a sua respostaa€¦">${escapeHtml(answer?.answerText || '')}</textarea>
     `;
   }
 
   return `
     <article class="question-card" data-question="${escapeHtml(question.questionId)}">
-      <div class="question-number">QuestÃ£o ${question.questionOrder}</div>
+      <div class="question-number">Questao ${question.questionOrder}</div>
       <h3>${escapeHtml(question.prompt)}</h3>
-      <p class="question-points">${question.points} pontos ${question.isRequired ? 'Â· obrigatÃ³ria' : ''}</p>
+      <p class="question-points">${question.points} pontos ${question.isRequired ? ' -  obrigatoria' : ''}</p>
       ${field}
       <div class="save-indicator" data-save-indicator="${escapeHtml(question.questionId)}"></div>
     </article>
@@ -1563,11 +1563,11 @@ function reviewStateTemplate(attempt, review) {
       <span class="status-pill ${statusClass(attempt.status)}">
         ${escapeHtml(statusLabel(attempt.status))}
       </span>
-      <h2>${attempt.status === 'UNDER_REVIEW' ? 'Atividade em avaliaÃ§Ã£o' : 'Resultado da avaliaÃ§Ã£o'}</h2>
+      <h2>${attempt.status === 'UNDER_REVIEW' ? 'Atividade em avaliacao' : 'Resultado da avaliacao'}</h2>
       ${attempt.score !== null ? `<p class="review-score">${attempt.score}%</p>` : ''}
       <p>${escapeHtml(review?.comments || attempt.reviewComments || reviewStatusMessage(attempt.status))}</p>
       ${review?.correctionDeadline
-        ? `<p>Prazo para correÃ§Ã£o: <strong>${formatDate(review.correctionDeadline)}</strong></p>`
+        ? `<p>Prazo para correcao: <strong>${formatDate(review.correctionDeadline)}</strong></p>`
         : ''}
       ${retry}
       <button class="button button-secondary" id="backReview">Voltar ao curso</button>
@@ -1577,10 +1577,10 @@ function reviewStateTemplate(attempt, review) {
 
 function reviewStatusMessage(status) {
   const messages = {
-    UNDER_REVIEW: 'A submissÃ£o foi recebida e aguarda anÃ¡lise do avaliador.',
-    CORRECTION_REQUIRED: 'Leia os comentÃ¡rios e aguarde ou use a autorizaÃ§Ã£o de nova tentativa.',
-    FAILED: 'A atividade nÃ£o atingiu os critÃ©rios de aprovaÃ§Ã£o.',
-    TIME_EXCEEDED: 'O prazo da tentativa terminou antes da submissÃ£o.'
+    UNDER_REVIEW: 'A submissao foi recebida e aguarda analise do avaliador.',
+    CORRECTION_REQUIRED: 'Leia os comentarios e aguarde ou use a autorizacao de nova tentativa.',
+    FAILED: 'A atividade nao atingiu os criterios de aprovacao.',
+    TIME_EXCEEDED: 'O prazo da tentativa terminou antes da submissao.'
   };
   return messages[status] || 'Consulte o estado da atividade.';
 }
@@ -1617,7 +1617,7 @@ function bindAssessmentEvents() {
 
 async function startAttempt(event) {
   const button = event.currentTarget;
-  setBusy(button, true, 'A iniciarâ€¦');
+  setBusy(button, true, 'A iniciara€¦');
 
   try {
     const result = await api.startAttempt(state.lesson.lesson.lessonId);
@@ -1633,7 +1633,7 @@ async function startAttempt(event) {
     bindAssessmentEvents();
     startTimer(state.attempt.deadlineAt);
     startStatusPoll(state.attempt.attemptId);
-    showToast('Tentativa iniciada. O temporizador estÃ¡ em curso.', 'success');
+    showToast('Tentativa iniciada. O temporizador esta em curso.', 'success');
     reportHeight();
   } catch (error) {
     handleError(error);
@@ -1648,7 +1648,7 @@ async function saveTextAnswer(field) {
     `[data-save-indicator="${CSS.escape(questionId)}"]`
   );
 
-  indicator.textContent = 'A guardarâ€¦';
+  indicator.textContent = 'A guardara€¦';
 
   try {
     await api.saveAnswer(state.attempt.attemptId, questionId, {
@@ -1669,7 +1669,7 @@ async function saveOptionAnswer(input) {
   const value = inputs[0]?.type === 'checkbox' ? selected : (selected[0] || '');
   const indicator = card.querySelector('[data-save-indicator]');
 
-  indicator.textContent = 'A guardarâ€¦';
+  indicator.textContent = 'A guardara€¦';
 
   try {
     await api.saveAnswer(state.attempt.attemptId, questionId, {
@@ -1749,17 +1749,17 @@ async function fileFromDriveImageUrl(rawUrl) {
       cache: 'no-store'
     });
   } catch {
-    throw new Error('NÃ£o foi possÃ­vel ler o link. Confirme que a imagem do Google Drive estÃ¡ pÃºblica.');
+    throw new Error('Nao foi possivel ler o link. Confirme que a imagem do Google Drive esta publica.');
   }
 
   if (!response.ok) {
-    throw new Error('NÃ£o foi possÃ­vel descarregar a imagem do Google Drive.');
+    throw new Error('Nao foi possivel descarregar a imagem do Google Drive.');
   }
 
   const blob = await response.blob();
 
   if (!blob.type.startsWith('image/')) {
-    throw new Error('O link indicado precisa apontar para uma imagem pÃºblica do Google Drive.');
+    throw new Error('O link indicado precisa apontar para uma imagem publica do Google Drive.');
   }
 
   return new File([blob], driveImageFileName(rawUrl, blob.type), { type: blob.type });
@@ -1816,7 +1816,7 @@ function bindDeleteFileEvents() {
     button.addEventListener('click', async () => {
       if (!window.confirm('Eliminar este ficheiro da tentativa?')) return;
 
-      setBusy(button, true, 'â€¦');
+      setBusy(button, true, 'a€¦');
       try {
         await api.deleteUploadedFile(button.dataset.deleteFile);
         await refreshAttemptData();
@@ -1832,15 +1832,15 @@ async function submitAttempt(event) {
   const checkbox = document.querySelector('#authorshipConfirmation');
 
   if (!checkbox.checked) {
-    showToast('Confirme a declaraÃ§Ã£o de autoria antes de submeter.', 'warning');
+    showToast('Confirme a declaracao de autoria antes de submeter.', 'warning');
     checkbox.focus();
     return;
   }
 
-  if (!window.confirm('Confirmar a submissÃ£o final da atividade?')) return;
+  if (!window.confirm('Confirmar a submissao final da atividade?')) return;
 
   const button = event.currentTarget;
-  setBusy(button, true, 'A submeterâ€¦');
+  setBusy(button, true, 'A submetera€¦');
 
   try {
     const result = await api.submitAttempt(state.attempt.attemptId);
@@ -1908,7 +1908,7 @@ function startStatusPoll(attemptId) {
         reportHeight();
       }
     } catch {
-      // NÃ£o interromper o trabalho em caso de falha transitÃ³ria do polling.
+      // Nao interromper o trabalho em caso de falha transitoria do polling.
     }
   }, config.pollIntervalMs || 60000);
 }
@@ -1975,13 +1975,13 @@ function videoCardTemplate(video) {
     <article class="video-card" data-video-url="${escapeHtml(video.url)}">
       <div class="video-frame">
         <iframe src="${escapeHtml(videoEmbedUrl(video.url, { autoplay: true, muted: true }))}"
-          title="${escapeHtml(video.title || 'VÃ­deo da Summer School')}"
+          title="${escapeHtml(video.title || 'Video da Summer School')}"
           allow="autoplay; encrypted-media; picture-in-picture"
           allowfullscreen></iframe>
       </div>
       <div class="video-card-body">
         <div>
-          <h3>${escapeHtml(video.title || 'VÃ­deo da Summer School')}</h3>
+          <h3>${escapeHtml(video.title || 'Video da Summer School')}</h3>
           ${video.description ? `<p>${escapeHtml(video.description)}</p>` : ''}
         </div>
         <button class="video-sound-button" type="button" data-toggle-video-sound
@@ -2091,15 +2091,15 @@ function vimeoEmbedUrl(id, autoplay, muted) {
 
 async function renderCertificate() {
   clearTimers();
-  root.innerHTML = loadingTemplate('A carregar o certificadoâ€¦');
+  root.innerHTML = loadingTemplate('A carregar o certificadoa€¦');
 
   const result = await api.certificate(state.selectedCourseId);
 
   if (!result.certificate) {
     root.innerHTML = `
       <div class="completion-card standalone-card">
-        <h1>Certificado ainda indisponÃ­vel</h1>
-        <p>O certificado serÃ¡ disponibilizado depois da aprovaÃ§Ã£o de todas as aulas.</p>
+        <h1>Certificado ainda indisponivel</h1>
+        <p>O certificado sera disponibilizado depois da aprovacao de todas as aulas.</p>
         <a class="button button-secondary" href="#/">Voltar ao curso</a>
       </div>
     `;
@@ -2111,15 +2111,15 @@ async function renderCertificate() {
   root.innerHTML = `
     <section class="certificate-card">
       <p class="eyebrow">${escapeHtml(config.organizationName)}</p>
-      <h1>Certificado de conclusÃ£o</h1>
-      <p class="certificate-lead">Este registo confirma a conclusÃ£o do curso</p>
+      <h1>Certificado de conclusao</h1>
+      <p class="certificate-lead">Este registo confirma a conclusao do curso</p>
       <h2>${escapeHtml(config.appName)}</h2>
 
       <div class="certificate-data">
-        <div><span>NÃºmero</span><strong>${escapeHtml(certificate.certificateNumber)}</strong></div>
+        <div><span>Numero</span><strong>${escapeHtml(certificate.certificateNumber)}</strong></div>
         <div><span>Data</span><strong>${formatDate(certificate.issueDate)}</strong></div>
-        <div><span>ClassificaÃ§Ã£o</span><strong>${certificate.finalScore}%</strong></div>
-        <div><span>VerificaÃ§Ã£o</span><strong>${escapeHtml(certificate.verificationCode)}</strong></div>
+        <div><span>Classificacao</span><strong>${certificate.finalScore}%</strong></div>
+        <div><span>Verificacao</span><strong>${escapeHtml(certificate.verificationCode)}</strong></div>
       </div>
 
       ${certificate.driveUrl
@@ -2169,7 +2169,7 @@ async function renderCertifications() {
   root.innerHTML = studentAppShell('certifications', `
     <section class="certifications-shell certifications-page">
       <div class="certifications-header">
-        <div class="certifications-header-icon" aria-hidden="true">â—Ž</div>
+        <div class="certifications-header-icon" aria-hidden="true">a—Z</div>
         <div>
           <p class="eyebrow">Minhas certificacoes</p>
           <h1>Certificacoes</h1>
@@ -2682,7 +2682,7 @@ function showReviewDialog(attemptData) {
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `
     <div class="dialog-card">
-      <button class="dialog-close" type="button" aria-label="Fechar">Ã—</button>
+      <button class="dialog-close" type="button" aria-label="Fechar">A—</button>
       ${reviewStateTemplate(attemptData.attempt, attemptData.latestReview)}
     </div>
   `;
@@ -2709,7 +2709,7 @@ function initializeThemeToggle() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('lssTheme', theme);
     const icon = themeToggle.querySelector('.theme-toggle-icon');
-    if (icon) icon.textContent = theme === 'dark' ? 'â˜¾' : 'â˜€';
+    if (icon) icon.textContent = theme === 'dark' ? 'N' : 'C';
     updateThemeIcons(theme);
     themeToggle.title = theme === 'dark' ? 'Usar modo claro' : 'Usar modo noturno';
     themeToggle.setAttribute('aria-label', themeToggle.title);
@@ -2846,7 +2846,7 @@ function updateThemeIcons(theme) {
 function renderConfigurationError(error) {
   root.innerHTML = `
     <div class="configuration-error">
-      <h1>ConfiguraÃ§Ã£o incompleta</h1>
+      <h1>Configuracao incompleta</h1>
       <p>${escapeHtml(error.message)}</p>
       <code>public/config.js</code>
     </div>

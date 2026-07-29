@@ -29,9 +29,9 @@ async function verify(event) {
     if (!result.valid) {
       root.innerHTML = `
         <div class="verification-card verification-invalid">
-          <span>Não confirmado</span>
-          <h2>Certificado não encontrado</h2>
-          <p>Confirme o número ou o código de verificação e tente novamente.</p>
+          <span>Nao confirmado</span>
+          <h2>Certificado nao encontrado</h2>
+          <p>Confirme o numero ou o codigo de verificacao e tente novamente.</p>
         </div>
       `;
       return;
@@ -41,12 +41,12 @@ async function verify(event) {
 
     root.innerHTML = `
       <div class="verification-card verification-valid">
-        <span>Certificado válido</span>
+        <span>Certificado valido</span>
         <h2>${escapeHtml(certificate.studentName)}</h2>
         <p>${escapeHtml(certificate.courseTitle)}</p>
         <dl>
           <div>
-            <dt>Número</dt>
+            <dt>Numero</dt>
             <dd>${escapeHtml(certificate.certificateNumber)}</dd>
           </div>
           <div>
@@ -54,7 +54,7 @@ async function verify(event) {
             <dd>${formatDate(certificate.issueDate)}</dd>
           </div>
           <div>
-            <dt>Classificação</dt>
+            <dt>Classificacao</dt>
             <dd>${certificate.finalScore}%</dd>
           </div>
         </dl>
@@ -64,7 +64,7 @@ async function verify(event) {
     root.innerHTML = `
       <div class="verification-card verification-invalid">
         <span>Erro</span>
-        <h2>Não foi possível verificar</h2>
+        <h2>Nao foi possivel verificar</h2>
         <p>${escapeHtml(error.message)}</p>
       </div>
     `;

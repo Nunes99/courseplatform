@@ -346,7 +346,7 @@ export class CoursePlatformApi {
   studentToken() {
     const token = localStorage.getItem('courseSessionToken');
     if (!token) {
-      throw new ApiError('Inicie sessão para continuar.', 'SESSION_REQUIRED');
+      throw new ApiError('Inicie sessao para continuar.', 'SESSION_REQUIRED');
     }
     return token;
   }
@@ -625,7 +625,7 @@ export class CoursePlatformApi {
   adminToken() {
     const token = sessionStorage.getItem('courseAdminToken');
     if (!token) {
-      throw new ApiError('Inicie sessão como administrador.', 'ADMIN_SESSION_REQUIRED');
+      throw new ApiError('Inicie sessao como administrador.', 'ADMIN_SESSION_REQUIRED');
     }
     return token;
   }
@@ -706,7 +706,7 @@ function optimizeImage(file, maxDimension, quality) {
           (blob) => {
             URL.revokeObjectURL(objectUrl);
             if (!blob) {
-              reject(new Error('Não foi possível otimizar a imagem.'));
+              reject(new Error('Nao foi possivel otimizar a imagem.'));
               return;
             }
             resolve(blob);
@@ -722,7 +722,7 @@ function optimizeImage(file, maxDimension, quality) {
 
     image.onerror = () => {
       URL.revokeObjectURL(objectUrl);
-      reject(new Error('A imagem selecionada não pôde ser lida.'));
+      reject(new Error('A imagem selecionada nao pode ser lida.'));
     };
 
     image.src = objectUrl;

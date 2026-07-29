@@ -6142,3 +6142,265 @@ canvas {
     align-items: start;
   }
 }
+
+/* Platform-wide UX cleanup */
+#adminApp.page-shell,
+#app.page-shell {
+  max-width: none;
+}
+
+#adminApp.page-shell {
+  width: 100%;
+  padding: 0;
+}
+
+.auth-shell {
+  min-height: calc(100vh - 68px);
+  padding: clamp(24px, 5vw, 56px) 16px;
+}
+
+.auth-card-modern {
+  width: min(100%, 560px);
+}
+
+.auth-card h1,
+.admin-login-title {
+  font-size: clamp(28px, 2.5vw, 40px);
+  line-height: 1.12;
+}
+
+.auth-description {
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.site-header {
+  padding-inline: clamp(14px, 2vw, 28px);
+}
+
+.theme-toggle-icon {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.admin-layout {
+  min-height: calc(100vh - 68px);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.admin-sidebar {
+  top: 68px;
+  height: calc(100vh - 68px);
+  max-height: none;
+  border-right: 1px solid rgba(234, 199, 139, .18);
+}
+
+.admin-main {
+  min-width: 0;
+  padding: clamp(18px, 2vw, 32px);
+  overflow: clip visible;
+}
+
+.admin-page-heading {
+  margin: 0 0 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-page-heading h1,
+.section-heading h2,
+.course-section-heading h2 {
+  font-size: clamp(22px, 1.8vw, 30px);
+  line-height: 1.16;
+}
+
+.admin-page-heading p:not(.eyebrow),
+.section-heading p:not(.eyebrow),
+.course-section-heading p:not(.eyebrow) {
+  max-width: 820px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.admin-content-panel,
+.certificate-requests-panel,
+.certificate-register-panel,
+.course-management-panel,
+.survey-admin-panel,
+.profile-card,
+.certifications-page,
+.video-panel,
+.information-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.admin-content-panel + .admin-content-panel,
+.certificate-requests-panel + .certificate-register-panel,
+.survey-admin-panel + .survey-admin-panel {
+  margin-top: 16px;
+}
+
+.admin-summary-grid,
+.dashboard-insights {
+  margin-top: 0;
+}
+
+.button,
+.text-button,
+.admin-nav,
+.student-nav a,
+.mobile-menu button {
+  letter-spacing: 0;
+}
+
+.button {
+  min-height: 40px;
+}
+
+.button-small {
+  min-height: 34px;
+}
+
+.admin-table-wrap,
+.credential-table-wrap,
+.certificate-record-table {
+  max-height: min(68vh, 760px);
+}
+
+.admin-table th,
+.admin-table td {
+  white-space: nowrap;
+}
+
+.admin-table td:nth-child(2),
+.admin-table td:nth-child(3),
+.admin-table td:nth-child(4) {
+  white-space: normal;
+}
+
+.dialog-overlay {
+  padding: 16px;
+}
+
+.dialog-card {
+  width: min(100%, 760px);
+  max-height: calc(100vh - 32px);
+}
+
+.student-detail-dialog-wide,
+.course-lesson-dialog,
+.survey-editor-dialog,
+.certificate-preview-dialog {
+  width: min(100%, 1180px);
+}
+
+.certificate-preview-dialog {
+  overflow: auto;
+}
+
+.certificate-preview-sheet {
+  margin-inline: auto;
+}
+
+.certification-list-item,
+.survey-admin-row,
+.survey-response-card,
+.student-status-row {
+  box-shadow: none;
+}
+
+.certification-list-actions,
+.admin-row-actions,
+.dialog-actions {
+  align-items: center;
+}
+
+@media (max-width: 1120px) {
+  .admin-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar {
+    position: static;
+    display: flex;
+    height: auto;
+    min-height: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid rgba(234, 199, 139, .18);
+  }
+
+  .admin-sidebar-heading {
+    flex: 0 0 230px;
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .admin-nav {
+    flex: 0 0 auto;
+    min-width: 150px;
+  }
+
+  .admin-main {
+    padding: 18px;
+  }
+}
+
+@media (max-width: 720px) {
+  .site-brand-copy small {
+    display: none;
+  }
+
+  .admin-sidebar {
+    padding: 10px;
+  }
+
+  .admin-sidebar-heading {
+    flex-basis: 190px;
+  }
+
+  .admin-nav {
+    min-width: 132px;
+  }
+
+  .admin-main {
+    padding: 14px;
+  }
+
+  .admin-page-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-page-heading h1,
+  .student-page-heading h2,
+  .certifications-header h1 {
+    font-size: 24px;
+  }
+
+  .admin-content-panel,
+  .certificate-requests-panel,
+  .certificate-register-panel,
+  .course-management-panel,
+  .survey-admin-panel,
+  .profile-card,
+  .certifications-page,
+  .video-panel,
+  .information-panel {
+    padding: 14px;
+  }
+
+  .admin-table-wrap,
+  .credential-table-wrap,
+  .certificate-record-table {
+    max-height: none;
+  }
+}

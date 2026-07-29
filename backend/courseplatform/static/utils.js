@@ -1,14 +1,14 @@
 export const STATUS_LABELS = Object.freeze({
   LOCKED: 'Bloqueada',
-  AVAILABLE: 'Disponível',
+  AVAILABLE: 'Disponivel',
   IN_PROGRESS: 'Em curso',
-  UNDER_REVIEW: 'Em avaliação',
-  CORRECTION_REQUIRED: 'Correção solicitada',
+  UNDER_REVIEW: 'Em avaliacao',
+  CORRECTION_REQUIRED: 'Correcao solicitada',
   APPROVED: 'Aprovada',
   APPROVED_WITH_NOTES: 'Aprovada com observacoes',
-  FAILED: 'Não aprovada',
+  FAILED: 'Nao aprovada',
   TIME_EXCEEDED: 'Tempo excedido',
-  COMPLETED: 'Concluído',
+  COMPLETED: 'Concluido',
   REQUESTED: 'Solicitado',
   PAYMENT_SUBMITTED: 'Comprovativo submetido',
   REJECTED: 'Rejeitado',
@@ -30,9 +30,9 @@ export function statusClass(status) {
 }
 
 export function formatDate(value) {
-  if (!value) return '—';
+  if (!value) return '-';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
+  if (Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('pt-PT', {
     dateStyle: 'medium',
     timeStyle: 'short'
