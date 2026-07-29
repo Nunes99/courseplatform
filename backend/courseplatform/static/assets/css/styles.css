@@ -9502,6 +9502,14 @@ body:has(.admin-layout) .student-list-action {
   white-space: nowrap;
 }
 
+.submission-status-pill {
+  width: 132px;
+  min-width: 132px;
+  max-width: 132px;
+  justify-content: center;
+  text-align: center;
+}
+
 button.text-button,
 .student-admin-actions button:not(.button),
 .file-actions button {
