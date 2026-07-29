@@ -46,8 +46,10 @@ const state = {
   },
   selectedSubmission: null,
   certificateRequests: [],
+  certificates: [],
   certificateFilters: {
     status: 'ALL',
+    certificateStatus: 'ACTIVE',
     query: ''
   },
   certificateSettings: null,
@@ -1050,15 +1052,21 @@ async function loadCertifications(options = {}) {
   }
 
   try {
-    const [requestsResult, coursesResult] = await Promise.all([
+    const [requestsResult, certificatesResult, coursesResult] = await Promise.all([
       api.adminCertificateRequests({
         status: state.certificateFilters.status,
+        query: state.certificateFilters.query,
+        limit: 300
+      }, options),
+      api.adminCertificates({
+        status: state.certificateFilters.certificateStatus,
         query: state.certificateFilters.query,
         limit: 300
       }, options),
       api.adminCourses({ limit: 500 }, options)
     ]);
     state.certificateRequests = requestsResult.requests || [];
+    state.certificates = certificatesResult.certificates || [];
     state.courses = coursesResult.courses || state.courses || [];
     const firstCourse = state.courses.find((item) => item.course?.status !== 'DELETED')?.course;
     state.selectedCourseId = state.selectedCourseId || firstCourse?.courseId || config.courseId;
@@ -1078,8 +1086,10 @@ function renderCertifications() {
   const main = document.querySelector('#adminMain');
   const settings = state.certificateSettings || {};
   const requests = state.certificateRequests || [];
+  const certificates = state.certificates || [];
   const pendingCount = requests.filter((item) => ['REQUESTED', 'PAYMENT_SUBMITTED'].includes(item.status)).length;
   const approvedCount = requests.filter((item) => item.status === 'APPROVED').length;
+  const blockedCount = certificates.filter((item) => item.status === 'BLOCKED').length;
   const rejectedCount = requests.filter((item) => item.status === 'REJECTED').length;
 
   main.innerHTML = `
@@ -1097,7 +1107,11 @@ function renderCertifications() {
       </article>
       <article class="insight-card">
         <img src="${iconUrl('ok', goldIcon)}" alt="">
-        <div><span>Aprovados</span><strong>${approvedCount}</strong></div>
+        <div><span>Emitidos</span><strong>${certificates.length || approvedCount}</strong></div>
+      </article>
+      <article class="insight-card">
+        <img src="${iconUrl('lock', goldIcon)}" alt="">
+        <div><span>Bloqueados</span><strong>${blockedCount}</strong></div>
       </article>
       <article class="insight-card">
         <img src="${iconUrl('cancel', goldIcon)}" alt="">
@@ -1153,13 +1167,39 @@ function renderCertifications() {
       <article class="admin-content-panel">
         <div class="course-section-heading">
           <div>
-            <p class="eyebrow">Revisao</p>
-            <h2>Pedidos profissionais</h2>
+            <p class="eyebrow">Certificados emitidos</p>
+            <h2>Gestao de acesso</h2>
           </div>
         </div>
         <section class="admin-filter-bar certificate-filter-bar">
           <label>
-            <span>Estado</span>
+            <span>Acesso</span>
+            <select id="certificateAccessStatusFilter">
+              ${studentFilterOption('ACTIVE', 'Ativos', state.certificateFilters.certificateStatus)}
+              ${studentFilterOption('ISSUED', 'Liberados', state.certificateFilters.certificateStatus)}
+              ${studentFilterOption('BLOCKED', 'Bloqueados', state.certificateFilters.certificateStatus)}
+              ${studentFilterOption('ALL', 'Todos', state.certificateFilters.certificateStatus)}
+            </select>
+          </label>
+          <label>
+            <span>Pesquisar</span>
+            <input id="certificateSearch" type="search" value="${escapeHtml(state.certificateFilters.query)}"
+              placeholder="Nome, email, curso ou codigo">
+          </label>
+        </section>
+        <div class="certificate-request-list certificate-issued-list">
+          ${certificates.length ? certificates.map(adminCertificateCardTemplate).join('') : `
+            <div class="student-empty-state">Sem certificados para os filtros atuais.</div>
+          `}
+        </div>
+
+        <div class="student-detail-section-heading certificate-request-heading">
+          <h3>Pedidos profissionais</h3>
+          <span>${requests.length} registos</span>
+        </div>
+        <section class="admin-filter-bar certificate-filter-bar">
+          <label>
+            <span>Estado do pedido</span>
             <select id="certificateStatusFilter">
               ${studentFilterOption('ALL', 'Todos', state.certificateFilters.status)}
               ${studentFilterOption('REQUESTED', 'Solicitados', state.certificateFilters.status)}
@@ -1167,11 +1207,6 @@ function renderCertifications() {
               ${studentFilterOption('APPROVED', 'Aprovados', state.certificateFilters.status)}
               ${studentFilterOption('REJECTED', 'Rejeitados', state.certificateFilters.status)}
             </select>
-          </label>
-          <label>
-            <span>Pesquisar</span>
-            <input id="certificateSearch" type="search" value="${escapeHtml(state.certificateFilters.query)}"
-              placeholder="Nome, email, curso ou pedido">
           </label>
         </section>
         <div class="certificate-request-list">
@@ -1194,6 +1229,10 @@ function renderCertifications() {
     state.certificateFilters.status = event.currentTarget.value;
     loadCertifications();
   });
+  document.querySelector('#certificateAccessStatusFilter').addEventListener('change', (event) => {
+    state.certificateFilters.certificateStatus = event.currentTarget.value;
+    loadCertifications();
+  });
   document.querySelector('#certificateSearch').addEventListener('input', (event) => {
     state.certificateFilters.query = event.currentTarget.value;
     loadCertifications({ silent: true }).then(renderCertifications);
@@ -1210,6 +1249,12 @@ function renderCertifications() {
   root.querySelectorAll('[data-download-admin-certificate]').forEach((button) => {
     button.addEventListener('click', () => downloadAdminCertificate(certificateFromDataset(button.dataset)));
   });
+  root.querySelectorAll('[data-set-certificate-status]').forEach((button) => {
+    button.addEventListener('click', () => setCertificateStatusFromButton(button));
+  });
+  root.querySelectorAll('[data-delete-certificate]').forEach((button) => {
+    button.addEventListener('click', () => deleteCertificateFromButton(button));
+  });
   reportHeight();
 }
 
@@ -1220,6 +1265,53 @@ function certificateCourseOptions() {
       ${escapeHtml(course.title || course.courseCode || course.courseId)}
     </option>
   `).join('');
+}
+
+function adminCertificateCardTemplate(certificate) {
+  const blocked = certificate.status === 'BLOCKED';
+  const accessLabel = blocked ? 'Liberar acesso' : 'Remover acesso';
+  const nextStatus = blocked ? 'ISSUED' : 'BLOCKED';
+  const dataset = adminCertificateActionDataset(certificate);
+  return `
+    <article class="certificate-request-card certificate-issued-card ${blocked ? 'is-blocked' : ''}">
+      <div class="certificate-issued-main">
+        <span class="certificate-seal" aria-hidden="true">LMT</span>
+        <div>
+          <span class="status-pill ${statusClass(certificate.status)}">${statusLabel(certificate.status)}</span>
+          <p class="eyebrow">${certificate.certificateType === 'PROFESSIONAL' ? 'Certificado profissional' : 'Certificado de Participacao'}</p>
+          <h3>${escapeHtml(certificate.courseTitle || certificate.courseId || 'Curso')}</h3>
+          <p>${escapeHtml(certificate.studentName || certificate.studentId || 'Estudante')} &middot; ${escapeHtml(formatDate(certificate.issueDate))}</p>
+          <code>${escapeHtml(adminCertificateDisplayNumber(certificate) || certificate.certificateId)}</code>
+        </div>
+      </div>
+      ${certificate.statusNote ? `<p class="certificate-policy-note">${escapeHtml(certificate.statusNote)}</p>` : ''}
+      <div class="admin-row-actions">
+        <button class="button button-small button-secondary" type="button" data-open-admin-certificate ${dataset}>Ver</button>
+        <button class="button button-small button-primary" type="button" data-download-admin-certificate ${dataset}>Baixar</button>
+        <button class="button button-small ${blocked ? 'button-primary' : 'button-secondary'}" type="button"
+          data-set-certificate-status="${escapeHtml(nextStatus)}" ${dataset}>
+          ${accessLabel}
+        </button>
+        <button class="button button-small button-danger" type="button" data-delete-certificate ${dataset}>
+          Apagar
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function adminCertificateActionDataset(certificate) {
+  return `
+    data-certificate-id="${escapeHtml(certificate.certificateId)}"
+    data-certificate-number="${escapeHtml(certificate.certificateNumber || '')}"
+    data-certificate-type="${escapeHtml(certificate.certificateType || '')}"
+    data-student-name="${escapeHtml(certificate.studentName || '')}"
+    data-course-title="${escapeHtml(certificate.courseTitle || '')}"
+    data-issue-date="${escapeHtml(certificate.issueDate || '')}"
+    data-final-score="${escapeHtml(certificate.finalScore == null ? '' : certificate.finalScore)}"
+    data-verification-code="${escapeHtml(certificate.verificationCode || '')}"
+    data-content-summary="${escapeHtml(certificate.contentSummary || '')}"
+  `;
 }
 
 function certificateRequestCardTemplate(request) {
@@ -1509,6 +1601,42 @@ async function downloadAdminCertificate(certificate, overlay = null) {
     overlay?.remove();
   } catch (error) {
     handleAdminError(error);
+  }
+}
+
+async function setCertificateStatusFromButton(button) {
+  const certificate = certificateFromDataset(button.dataset);
+  const status = button.dataset.setCertificateStatus;
+  if (!certificate.certificateId || !status) return;
+  const label = status === 'ISSUED' ? 'liberar novamente' : 'remover o acesso de';
+  if (!confirmAdminAction(`Deseja ${label} este certificado?`)) return;
+  const statusNote = window.prompt('Motivo/observacao administrativa (opcional):', '') || '';
+  setBusy(button, true, 'A guardar...');
+  try {
+    await api.adminSetCertificateStatus(certificate.certificateId, status, statusNote);
+    showToast('Acesso do certificado atualizado.', 'success');
+    await loadCertifications({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function deleteCertificateFromButton(button) {
+  const certificate = certificateFromDataset(button.dataset);
+  if (!certificate.certificateId) return;
+  if (!confirmAdminAction('Deseja apagar este certificado? Esta acao remove o certificado das areas do estudante.')) return;
+  const statusNote = window.prompt('Motivo/observacao administrativa (opcional):', 'Apagado pelo administrador.') || '';
+  setBusy(button, true, 'A apagar...');
+  try {
+    await api.adminDeleteCertificate(certificate.certificateId, statusNote);
+    showToast('Certificado apagado.', 'success');
+    await loadCertifications({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
   }
 }
 
@@ -2893,6 +3021,12 @@ function renderStudentDetailsOverlay(overlay, details) {
   overlay.querySelectorAll('[data-download-admin-certificate]').forEach((button) => {
     button.addEventListener('click', () => downloadAdminCertificate(certificateFromDataset(button.dataset)));
   });
+  overlay.querySelectorAll('[data-set-certificate-status]').forEach((button) => {
+    button.addEventListener('click', () => setCertificateStatusFromButton(button));
+  });
+  overlay.querySelectorAll('[data-delete-certificate]').forEach((button) => {
+    button.addEventListener('click', () => deleteCertificateFromButton(button));
+  });
   reportHeight();
 }
 
@@ -2962,30 +3096,26 @@ function studentGroupTemplate(item) {
 }
 
 function adminStudentCertificateTemplate(certificate) {
+  const blocked = certificate.status === 'BLOCKED';
+  const nextStatus = blocked ? 'ISSUED' : 'BLOCKED';
+  const dataset = adminCertificateActionDataset(certificate);
   return `
     <article class="student-mini-record">
       <strong>${escapeHtml(certificate.certificateNumber || certificate.certificateId)}</strong>
       <span>${escapeHtml(certificate.courseTitle || certificate.courseId)} &middot; ${escapeHtml(certificate.certificateType || 'SIMPLE')} &middot; ${escapeHtml(statusLabel(certificate.status))}</span>
       <div class="admin-row-actions">
-        <button class="button button-small button-secondary" type="button"
-          data-open-admin-certificate
-          data-certificate-id="${escapeHtml(certificate.certificateId)}"
-          data-certificate-number="${escapeHtml(certificate.certificateNumber || '')}"
-          data-certificate-type="${escapeHtml(certificate.certificateType || '')}"
-          data-student-name="${escapeHtml(certificate.studentName || '')}"
-          data-course-title="${escapeHtml(certificate.courseTitle || '')}"
-          data-issue-date="${escapeHtml(certificate.issueDate || '')}"
-          data-final-score="${escapeHtml(certificate.finalScore == null ? '' : certificate.finalScore)}"
-          data-verification-code="${escapeHtml(certificate.verificationCode || '')}"
-          data-content-summary="${escapeHtml(certificate.contentSummary || '')}">
+        <button class="button button-small button-secondary" type="button" data-open-admin-certificate ${dataset}>
           Ver
         </button>
-        <button class="button button-small button-primary" type="button"
-          data-download-admin-certificate
-          data-certificate-id="${escapeHtml(certificate.certificateId)}"
-          data-certificate-number="${escapeHtml(certificate.certificateNumber || '')}"
-          data-certificate-type="${escapeHtml(certificate.certificateType || '')}">
+        <button class="button button-small button-primary" type="button" data-download-admin-certificate ${dataset}>
           Baixar
+        </button>
+        <button class="button button-small button-secondary" type="button"
+          data-set-certificate-status="${escapeHtml(nextStatus)}" ${dataset}>
+          ${blocked ? 'Liberar' : 'Bloquear'}
+        </button>
+        <button class="button button-small button-danger" type="button" data-delete-certificate ${dataset}>
+          Apagar
         </button>
       </div>
     </article>

@@ -1806,8 +1806,9 @@ async function renderCertifications() {
   const certificates = result.certificates || [];
   const requests = result.requests || [];
   const simpleCertificate = result.simpleCertificate;
-  const professionalCertificate = certificates.find((item) => item.certificateType === 'PROFESSIONAL');
-  const activeRequest = requests.find((item) => ['REQUESTED', 'PAYMENT_SUBMITTED', 'APPROVED'].includes(item.status));
+  const professionalCertificate = certificates.find((item) => item.certificateType === 'PROFESSIONAL' && item.status === 'ISSUED');
+  const blockedProfessionalCertificate = certificates.find((item) => item.certificateType === 'PROFESSIONAL' && item.status === 'BLOCKED');
+  const activeRequest = requests.find((item) => ['REQUESTED', 'PAYMENT_SUBMITTED'].includes(item.status));
   state.certifications = { ...result, settings, certificates, requests, activeRequest };
 
   if (!result.completed) {
@@ -1846,7 +1847,7 @@ async function renderCertifications() {
       <section class="certificate-upgrade-panel">
         ${professionalCertificate
           ? professionalReadyTemplate(professionalCertificate)
-          : professionalRequestFlowTemplate(settings, activeRequest)}
+          : professionalRequestFlowTemplate(settings, activeRequest, blockedProfessionalCertificate)}
       </section>
     </section>
   `;
@@ -1865,23 +1866,24 @@ async function renderCertifications() {
 
 function certificationListItemTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
+  const isAvailable = certificate.status === 'ISSUED';
   const label = isProfessional ? 'CERTIFICADO PROFISSIONAL' : 'CERTIFICADO DE PARTICIPACAO';
   const title = isProfessional ? 'Certificado profissional personalizado' : 'Certificado de Participacao';
   const emittedAt = certificate.issueDate ? `Emitido em ${formatDate(certificate.issueDate)}` : 'Em emissao';
   return `
-    <article class="certification-list-item ${isProfessional ? 'is-professional' : ''}">
+    <article class="certification-list-item ${isProfessional ? 'is-professional' : ''} ${isAvailable ? '' : 'is-blocked'}">
       <div class="certification-seal" aria-hidden="true">
         <span>LMT</span>
       </div>
       <div class="certification-list-copy">
         <p class="eyebrow">${label}</p>
         <h2>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || title)}</h2>
-        <p>100% &middot; ${escapeHtml(emittedAt)}</p>
+        <p>100% &middot; ${escapeHtml(isAvailable ? emittedAt : 'Acesso temporariamente removido pela administracao')}</p>
         <div class="certification-list-actions">
           <code>${escapeHtml(certificateDisplayNumber(certificate) || certificate.certificateId || '')}</code>
           <button class="button button-secondary button-small" type="button"
-            data-preview-certificate="${escapeHtml(certificate.certificateId)}">
-            Ver certificado
+            data-preview-certificate="${escapeHtml(certificate.certificateId)}" ${isAvailable ? '' : 'disabled'}>
+            ${isAvailable ? 'Ver certificado' : 'Indisponivel'}
           </button>
         </div>
       </div>
@@ -1895,7 +1897,7 @@ function certificateDisplayNumber(certificate = {}) {
     .replace(/PARTICIPATION/gi, 'PART');
 }
 
-function professionalRequestFlowTemplate(settings, request) {
+function professionalRequestFlowTemplate(settings, request, blockedCertificate = null) {
   if (request?.status === 'PAYMENT_SUBMITTED') {
     return `
       <article class="certificate-upgrade-card">
@@ -1924,8 +1926,10 @@ function professionalRequestFlowTemplate(settings, request) {
     <article class="certificate-upgrade-card">
       <div>
         <p class="eyebrow">Opcional</p>
-        <h2>Certificado profissional personalizado</h2>
-        <p>Um modelo institucional com descricao dos conteudos aprendidos, verificacao oficial, campos de assinatura e acabamento profissional.</p>
+        <h2>${blockedCertificate ? 'Solicitar nova liberacao' : 'Certificado profissional personalizado'}</h2>
+        <p>${blockedCertificate
+          ? 'O acesso ao certificado profissional anterior foi removido. Pode iniciar uma nova solicitacao para revisao administrativa.'
+          : 'Um modelo institucional com descricao dos conteudos aprendidos, verificacao oficial, campos de assinatura e acabamento profissional.'}</p>
       </div>
       <div class="professional-certificate-mock">
         <strong>${escapeHtml(config.organizationName || 'Instituicao emissora')}</strong>

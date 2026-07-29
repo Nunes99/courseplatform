@@ -417,6 +417,9 @@ alter table courseplatform.certificates add column if not exists max_downloads i
 alter table courseplatform.certificates add column if not exists payment_status text not null default 'NOT_REQUIRED';
 alter table courseplatform.certificates add column if not exists approved_by text;
 alter table courseplatform.certificates add column if not exists approved_at timestamptz;
+alter table courseplatform.certificates add column if not exists status_note text;
+alter table courseplatform.certificates add column if not exists status_updated_by text;
+alter table courseplatform.certificates add column if not exists status_updated_at timestamptz;
 
 create table if not exists courseplatform.certificate_settings (
   course_id text primary key references courseplatform.courses(course_id) on delete cascade,
@@ -481,6 +484,8 @@ def public_certificate(row: dict[str, Any] | None):
         "downloadCount": int(row.get("download_count") or 0),
         "maxDownloads": None if row.get("max_downloads") is None else int(row["max_downloads"]),
         "paymentStatus": row.get("payment_status") or "NOT_REQUIRED",
+        "statusNote": row.get("status_note"),
+        "statusUpdatedAt": iso(row.get("status_updated_at")),
         "courseTitle": row.get("course_title") or row.get("title"),
         "studentName": row.get("student_name") or row.get("full_name"),
     }
@@ -587,8 +592,19 @@ def certificate_settings_payload(row: dict[str, Any] | None, course: dict[str, A
     }
 
 
-def certificate_number(prefix: str) -> str:
-    return f"{prefix}-{utc_now().year}-{generate_access_code(8).upper()}"
+def certificate_token(length: int = 10) -> str:
+    import secrets
+
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def certificate_number(prefix: str = "LSS") -> str:
+    return f"{prefix}-{utc_now().year}-{certificate_token(10)}"
+
+
+def certificate_verification_code() -> str:
+    return f"LSS{utc_now().year}{certificate_token(10)}"
 
 
 def certificate_content_summary(conn, course_id: str) -> str:
@@ -674,6 +690,7 @@ def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
         join courseplatform.students s on s.student_id = cert.student_id
         where cert.student_id = %s and cert.course_id = %s
           and coalesce(cert.certificate_type, 'SIMPLE') = 'SIMPLE'
+          and coalesce(cert.status, 'ISSUED') <> 'DELETED'
         order by cert.issue_date desc nulls last
         limit 1
         """,
@@ -695,8 +712,8 @@ def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
             generate_id("CERT"),
             student["student_id"],
             course_id,
-            certificate_number("CERT-PART"),
-            generate_access_code(12).upper(),
+            certificate_number(),
+            certificate_verification_code(),
             (enrollment or {}).get("final_score"),
             certificate_content_summary(conn, course_id),
         ),
@@ -1752,6 +1769,7 @@ def my_certifications(payload: dict[str, Any]):
             join courseplatform.courses c on c.course_id = cert.course_id
             join courseplatform.students s on s.student_id = cert.student_id
             where cert.student_id = %s and cert.course_id = %s
+              and coalesce(cert.status, 'ISSUED') <> 'DELETED'
             order by cert.issue_date desc nulls last
             """,
             (student["student_id"], course_id),
@@ -1790,11 +1808,13 @@ def request_professional_certificate(payload: dict[str, Any]):
             raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado profissional.")
         existing = conn.execute(
             """
-            select *
-            from courseplatform.certificate_requests
-            where student_id = %s and course_id = %s
-              and request_type = 'PROFESSIONAL'
-              and status in ('REQUESTED', 'PAYMENT_SUBMITTED', 'APPROVED')
+            select cr.*
+            from courseplatform.certificate_requests cr
+            left join courseplatform.certificates cert on cert.certificate_id = cr.certificate_id
+            where cr.student_id = %s and cr.course_id = %s
+              and cr.request_type = 'PROFESSIONAL'
+              and cr.status in ('REQUESTED', 'PAYMENT_SUBMITTED', 'APPROVED')
+              and not (cr.status = 'APPROVED' and coalesce(cert.status, 'ISSUED') in ('BLOCKED', 'DELETED'))
             order by created_at desc
             limit 1
             """,
@@ -1872,6 +1892,8 @@ def record_certificate_download(payload: dict[str, Any]):
         ).fetchone()
         if not cert:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+        if cert.get("status") != "ISSUED":
+            raise ApiError("CERTIFICATE_ACCESS_BLOCKED", "O acesso a este certificado nao esta disponivel.")
         max_downloads = cert.get("max_downloads")
         download_count = int(cert.get("download_count") or 0)
         if max_downloads is not None and download_count >= int(max_downloads):
@@ -1910,6 +1932,8 @@ def certificate_pdf_payload(payload: dict[str, Any]):
         ).fetchone()
         if not cert:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+        if cert.get("status") != "ISSUED":
+            raise ApiError("CERTIFICATE_ACCESS_BLOCKED", "O acesso a este certificado nao esta disponivel.")
         max_downloads = cert.get("max_downloads")
         download_count = int(cert.get("download_count") or 0)
         if max_downloads is not None and download_count >= int(max_downloads):
@@ -1965,6 +1989,8 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
         ).fetchone()
         conn.commit()
     if not cert:
+        raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+    if cert.get("status") == "DELETED":
         raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
     cert = {
         **cert,
@@ -3072,6 +3098,90 @@ def admin_list_certificate_requests(payload: dict[str, Any]):
     return success({"requests": [public_certificate_request(row) for row in rows]})
 
 
+def admin_list_certificates(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    status = (payload.get("status") or "ACTIVE").upper()
+    query = str_value(payload.get("query")).lower()
+    limit = min(int(payload.get("limit") or 200), 500)
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        rows = conn.execute(
+            """
+            select cert.*, s.full_name as student_name, s.email, c.title as course_title
+            from courseplatform.certificates cert
+            join courseplatform.students s on s.student_id = cert.student_id
+            join courseplatform.courses c on c.course_id = cert.course_id
+            where (
+                %s = 'ALL'
+                or (%s = 'ACTIVE' and coalesce(cert.status, 'ISSUED') <> 'DELETED')
+                or cert.status = %s
+              )
+              and (
+                %s = ''
+                or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
+                  coalesce(c.title, '') || ' ' || coalesce(cert.certificate_number, '') || ' ' ||
+                  coalesce(cert.verification_code, '')) like %s
+              )
+            order by cert.issue_date desc nulls last
+            limit %s
+            """,
+            (status, status, status, query, f"%{query}%", limit),
+        ).fetchall()
+        conn.commit()
+    return success({"certificates": [public_certificate(row) for row in rows]})
+
+
+def admin_set_certificate_status(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["certificateId", "status"])
+    status = str_value(payload.get("status")).upper()
+    if status not in {"ISSUED", "BLOCKED"}:
+        raise ApiError("INVALID_CERTIFICATE_STATUS", "Estado de certificado invalido.")
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        certificate = conn.execute(
+            """
+            update courseplatform.certificates
+            set status = %s,
+                status_note = %s,
+                status_updated_by = %s,
+                status_updated_at = now()
+            where certificate_id = %s and coalesce(status, 'ISSUED') <> 'DELETED'
+            returning *
+            """,
+            (status, str_value(payload.get("statusNote")), admin["admin_id"], payload["certificateId"]),
+        ).fetchone()
+        if not certificate:
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_STATUS_CHANGED", "CERTIFICATE", certificate["certificate_id"], {"status": status})
+        conn.commit()
+    return success({"certificate": public_certificate(certificate)})
+
+
+def admin_delete_certificate(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["certificateId"])
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        certificate = conn.execute(
+            """
+            update courseplatform.certificates
+            set status = 'DELETED',
+                status_note = %s,
+                status_updated_by = %s,
+                status_updated_at = now()
+            where certificate_id = %s and coalesce(status, 'ISSUED') <> 'DELETED'
+            returning *
+            """,
+            (str_value(payload.get("statusNote")) or "Apagado pelo administrador.", admin["admin_id"], payload["certificateId"]),
+        ).fetchone()
+        if not certificate:
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_DELETED", "CERTIFICATE", certificate["certificate_id"], {})
+        conn.commit()
+    return success({"certificate": public_certificate(certificate)})
+
+
 def admin_review_certificate_request(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["requestId", "decision"])
@@ -3107,8 +3217,8 @@ def admin_review_certificate_request(payload: dict[str, Any]):
                     generate_id("CERT"),
                     request["student_id"],
                     request["course_id"],
-                    certificate_number("CERT-PRO"),
-                    generate_access_code(12).upper(),
+                    certificate_number(),
+                    certificate_verification_code(),
                     request["student_id"],
                     request["course_id"],
                     certificate_content_summary(conn, request["course_id"]),
@@ -3265,6 +3375,9 @@ ACTIONS = {
     "adminReviewSubmission": admin_review_submission,
     "adminAuthorizeRetry": admin_authorize_retry,
     "adminListCertificateRequests": admin_list_certificate_requests,
+    "adminListCertificates": admin_list_certificates,
+    "adminSetCertificateStatus": admin_set_certificate_status,
+    "adminDeleteCertificate": admin_delete_certificate,
     "adminReviewCertificateRequest": admin_review_certificate_request,
     "adminGetCertificateSettings": admin_get_certificate_settings,
     "adminSaveCertificateSettings": admin_save_certificate_settings,

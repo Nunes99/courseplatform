@@ -41,18 +41,18 @@ def draw_participation_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> 
     draw_double_frame(pdf, NAVY, GOLD)
     draw_corner_marks(pdf, NAVY)
 
-    centered(pdf, issuer(data), PAGE_HEIGHT - 55, 22, "Helvetica-Bold", BLUE)
-    centered(pdf, "CERTIFICADO", PAGE_HEIGHT - 108, 38, "Helvetica-Bold", NAVY)
-    centered(pdf, "DE PARTICIPACAO", PAGE_HEIGHT - 140, 26, "Helvetica", NAVY)
-    centered(pdf, "certifica que", PAGE_HEIGHT - 186, 13, "Helvetica", MUTED)
-    centered(pdf, student_name(data), PAGE_HEIGHT - 224, 28, "Helvetica-Bold", NAVY)
-    centered(pdf, "participou com sucesso do curso", PAGE_HEIGHT - 258, 13, "Helvetica", MUTED)
-    centered(pdf, course_title(data), PAGE_HEIGHT - 292, 20, "Helvetica-Bold", BLUE)
+    centered(pdf, issuer(data), PAGE_HEIGHT - 58, 20, "Helvetica-Bold", BLUE)
+    centered(pdf, "CERTIFICADO", PAGE_HEIGHT - 112, 34, "Helvetica-Bold", NAVY)
+    centered(pdf, "DE PARTICIPACAO", PAGE_HEIGHT - 142, 23, "Helvetica", NAVY)
+    centered(pdf, "certifica que", PAGE_HEIGHT - 188, 12, "Helvetica", MUTED)
+    centered(pdf, student_name(data), PAGE_HEIGHT - 224, 25, "Helvetica-Bold", NAVY)
+    centered(pdf, "participou com sucesso do curso", PAGE_HEIGHT - 258, 12, "Helvetica", MUTED)
+    centered(pdf, course_title(data), PAGE_HEIGHT - 292, 18, "Helvetica-Bold", BLUE)
 
     summary_lines = wrap_text(data.get("content_summary") or "", 82, 3)
     y = PAGE_HEIGHT - 322
     for line in summary_lines:
-        centered(pdf, line, y, 10.5, "Helvetica", MUTED)
+        centered(pdf, line, y, 9.5, "Helvetica", MUTED)
         y -= 14
 
     draw_seal(pdf, PAGE_WIDTH / 2, 128, "LMT\nSUMMER\nSCHOOL", silver=True)
@@ -70,13 +70,13 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
 
     left = 62
     right = PAGE_WIDTH - 62
-    centered(pdf, issuer(data), PAGE_HEIGHT - 50, 18, "Helvetica-Bold", BLUE)
-    centered(pdf, "CERTIFICADO", PAGE_HEIGHT - 98, 34, "Helvetica-Bold", GOLD)
-    centered(pdf, "PROFISSIONAL DE CONCLUSAO", PAGE_HEIGHT - 126, 20, "Helvetica-Bold", GOLD)
+    centered(pdf, issuer(data), PAGE_HEIGHT - 52, 17, "Helvetica-Bold", BLUE)
+    centered(pdf, "CERTIFICADO", PAGE_HEIGHT - 100, 31, "Helvetica-Bold", GOLD)
+    centered(pdf, "PROFISSIONAL DE CONCLUSAO", PAGE_HEIGHT - 126, 18, "Helvetica-Bold", GOLD)
     centered(pdf, "certifica que", PAGE_HEIGHT - 172, 12, "Helvetica", MUTED)
-    centered(pdf, student_name(data), PAGE_HEIGHT - 212, 29, "Helvetica-Bold", NAVY)
+    centered(pdf, student_name(data), PAGE_HEIGHT - 212, 26, "Helvetica-Bold", NAVY)
     centered(pdf, "concluiu com exito o programa profissional", PAGE_HEIGHT - 244, 12, "Helvetica", MUTED)
-    centered(pdf, course_title(data), PAGE_HEIGHT - 274, 17, "Helvetica-Bold", BLUE)
+    centered(pdf, course_title(data), PAGE_HEIGHT - 274, 16, "Helvetica-Bold", BLUE)
 
     pdf.setStrokeColor(colors.HexColor("#D7B66B"))
     pdf.line(left + 35, PAGE_HEIGHT - 300, right - 35, PAGE_HEIGHT - 300)

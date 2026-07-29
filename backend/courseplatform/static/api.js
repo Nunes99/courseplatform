@@ -508,6 +508,18 @@ export class CoursePlatformApi {
     return this.cachedAdminRequest('adminListCertificateRequests', filters, options);
   }
 
+  adminCertificates(filters = {}, options = {}) {
+    return this.cachedAdminRequest('adminListCertificates', filters, options);
+  }
+
+  adminSetCertificateStatus(certificateId, status, statusNote = '') {
+    return this.mutateAdmin('adminSetCertificateStatus', { certificateId, status, statusNote });
+  }
+
+  adminDeleteCertificate(certificateId, statusNote = '') {
+    return this.mutateAdmin('adminDeleteCertificate', { certificateId, statusNote });
+  }
+
   adminReviewCertificateRequest(payload) {
     return this.mutateAdmin('adminReviewCertificateRequest', payload);
   }
