@@ -1121,10 +1121,13 @@ function renderCertifications() {
             <span>Mensagem de parabens</span>
             <textarea name="congratulationsMessage" rows="4">${escapeHtml(settings.congratulationsMessage || '')}</textarea>
           </label>
-          <label>
-            <span>Perguntas do inquerito (uma por linha)</span>
-            <textarea name="surveyQuestions" rows="5">${escapeHtml((settings.surveyQuestions || []).join('\n'))}</textarea>
-          </label>
+          <div class="certificate-survey-builder">
+            <div class="student-detail-section-heading">
+              <h3>Inquerito de multiplas escolhas</h3>
+              <span>10 perguntas</span>
+            </div>
+            ${adminSurveyQuestionFields(settings.surveyQuestions || [])}
+          </div>
           <label>
             <span>Valor do certificado profissional</span>
             <input name="professionalPrice" value="${escapeHtml(settings.professionalPrice || '')}" placeholder="Ex.: 25 EUR">
@@ -1257,6 +1260,70 @@ function surveyAnswersTemplate(value = {}) {
   `).join('');
 }
 
+function adminSurveyQuestionFields(questions = []) {
+  const normalized = normalizeAdminSurveyQuestions(questions);
+  return normalized.map((question, index) => `
+    <article class="admin-survey-question-card" data-admin-survey-question="${index}">
+      <label>
+        <span>Pergunta ${index + 1}</span>
+        <input name="surveyPrompt-${index}" value="${escapeHtml(question.prompt)}" required>
+      </label>
+      <label>
+        <span>Opcoes (uma por linha)</span>
+        <textarea name="surveyOptions-${index}" rows="4" required>${escapeHtml(question.options.join('\n'))}</textarea>
+      </label>
+    </article>
+  `).join('');
+}
+
+function normalizeAdminSurveyQuestions(questions = []) {
+  const fallback = [
+    'Como avalia a qualidade geral do curso?',
+    'A metodologia facilitou a sua aprendizagem?',
+    'Os conteudos foram relevantes para os seus objetivos?',
+    'Como avalia os materiais disponibilizados?',
+    'As atividades praticas ajudaram a consolidar o conhecimento?',
+    'Como classifica o nivel de dificuldade do curso?',
+    'Como avalia o apoio recebido durante o curso?',
+    'Como foi a experiencia de uso da plataforma?',
+    'Pretende aplicar os conhecimentos aprendidos?',
+    'Recomendaria este curso a outra pessoa?'
+  ];
+  const defaultOptions = ['Excelente', 'Bom', 'Regular', 'Precisa melhorar'];
+  const source = Array.isArray(questions) && questions.length ? questions : fallback;
+  return Array.from({ length: 10 }, (_, index) => {
+    const item = source[index] || fallback[index] || '';
+    if (typeof item === 'string') {
+      return {
+        id: `q${index + 1}`,
+        prompt: item,
+        options: defaultOptions
+      };
+    }
+    return {
+      id: item.id || `q${index + 1}`,
+      prompt: item.prompt || item.question || fallback[index] || '',
+      options: Array.isArray(item.options) && item.options.length ? item.options : defaultOptions
+    };
+  });
+}
+
+function surveyQuestionsFromSettingsForm(form) {
+  return Array.from({ length: 10 }, (_, index) => {
+    const prompt = form.querySelector(`[name="surveyPrompt-${index}"]`)?.value.trim() || '';
+    const options = String(form.querySelector(`[name="surveyOptions-${index}"]`)?.value || '')
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return {
+      id: `q${index + 1}`,
+      prompt,
+      options,
+      required: true
+    };
+  }).filter((item) => item.prompt && item.options.length);
+}
+
 async function saveCertificateSettings(event) {
   event.preventDefault();
   if (!confirmAdminAction('Deseja guardar a configuracao de certificacoes deste curso?')) return;
@@ -1268,7 +1335,7 @@ async function saveCertificateSettings(event) {
     const result = await api.adminSaveCertificateSettings({
       courseId: values.get('courseId'),
       congratulationsMessage: values.get('congratulationsMessage'),
-      surveyQuestions: String(values.get('surveyQuestions') || '').split('\n'),
+      surveyQuestions: surveyQuestionsFromSettingsForm(form),
       professionalPrice: values.get('professionalPrice'),
       paymentInstructions: values.get('paymentInstructions'),
       professionalPreviewUrl: values.get('professionalPreviewUrl')

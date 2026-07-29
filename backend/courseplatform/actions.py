@@ -520,14 +520,51 @@ def default_certificate_settings(course: dict[str, Any] | None = None):
             "A sua participacao foi registada com sucesso."
         ),
         "surveyQuestions": [
-            "Como avalia a qualidade geral do curso?",
-            "Que conteudos foram mais relevantes para si?",
-            "Como pretende aplicar o que aprendeu?"
+            {"id": "quality", "prompt": "Como avalia a qualidade geral do curso?", "options": ["Excelente", "Muito boa", "Boa", "Precisa melhorar"], "required": True},
+            {"id": "methodology", "prompt": "A metodologia facilitou a sua aprendizagem?", "options": ["Sim, totalmente", "Sim, em parte", "Pouco", "Nao"], "required": True},
+            {"id": "content_relevance", "prompt": "Os conteudos foram relevantes para os seus objetivos?", "options": ["Muito relevantes", "Relevantes", "Pouco relevantes", "Nao relevantes"], "required": True},
+            {"id": "materials", "prompt": "Como avalia os materiais disponibilizados?", "options": ["Muito organizados", "Organizados", "Suficientes", "Insuficientes"], "required": True},
+            {"id": "practical_activities", "prompt": "As atividades praticas ajudaram a consolidar o conhecimento?", "options": ["Ajudaram muito", "Ajudaram", "Ajudaram pouco", "Nao ajudaram"], "required": True},
+            {"id": "difficulty", "prompt": "Como classifica o nivel de dificuldade do curso?", "options": ["Adequado", "Facil", "Exigente, mas positivo", "Muito dificil"], "required": True},
+            {"id": "support", "prompt": "Como avalia o apoio recebido durante o curso?", "options": ["Excelente", "Bom", "Regular", "Insuficiente"], "required": True},
+            {"id": "platform_experience", "prompt": "Como foi a experiencia de uso da plataforma?", "options": ["Muito intuitiva", "Intuitiva", "Aceitavel", "Confusa"], "required": True},
+            {"id": "application", "prompt": "Pretende aplicar os conhecimentos aprendidos?", "options": ["Sim, imediatamente", "Sim, futuramente", "Talvez", "Nao"], "required": True},
+            {"id": "recommendation", "prompt": "Recomendaria este curso a outra pessoa?", "options": ["Sim, com certeza", "Sim", "Talvez", "Nao"], "required": True},
         ],
         "professionalPrice": "",
         "paymentInstructions": "Adicione aqui as instrucoes de pagamento do certificado profissional.",
         "professionalPreviewUrl": "",
     }
+
+
+def normalize_survey_questions(value: Any) -> list[dict[str, Any]]:
+    source = value if isinstance(value, list) else []
+    normalized: list[dict[str, Any]] = []
+    fallback_options = ["Excelente", "Bom", "Regular", "Precisa melhorar"]
+    for index, item in enumerate(source[:10], start=1):
+        if isinstance(item, dict):
+            prompt = str_value(item.get("prompt") or item.get("question") or item.get("text"))
+            options = item.get("options") if isinstance(item.get("options"), list) else []
+            clean_options = [str_value(option) for option in options if str_value(option)]
+            question_id = str_value(item.get("id")) or f"q{index}"
+            required = True if item.get("required") is None else as_bool(item.get("required"))
+        else:
+            prompt = str_value(item)
+            clean_options = fallback_options
+            question_id = f"q{index}"
+            required = True
+        if not prompt:
+            continue
+        normalized.append({
+            "id": question_id,
+            "prompt": prompt,
+            "options": clean_options[:6] or fallback_options,
+            "required": required,
+        })
+    defaults = default_certificate_settings().get("surveyQuestions", [])
+    while len(normalized) < 10 and len(normalized) < len(defaults):
+        normalized.append(defaults[len(normalized)])
+    return normalized[:10]
 
 
 def certificate_settings_payload(row: dict[str, Any] | None, course: dict[str, Any] | None = None):
@@ -537,7 +574,7 @@ def certificate_settings_payload(row: dict[str, Any] | None, course: dict[str, A
     survey_questions = row.get("survey_questions_json") or defaults["surveyQuestions"]
     return {
         "congratulationsMessage": row.get("congratulations_message") or defaults["congratulationsMessage"],
-        "surveyQuestions": survey_questions if isinstance(survey_questions, list) else defaults["surveyQuestions"],
+        "surveyQuestions": normalize_survey_questions(survey_questions),
         "professionalPrice": row.get("professional_price") or "",
         "paymentInstructions": row.get("payment_instructions") or defaults["paymentInstructions"],
         "professionalPreviewUrl": row.get("professional_preview_url") or "",
@@ -652,7 +689,7 @@ def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
             generate_id("CERT"),
             student["student_id"],
             course_id,
-            certificate_number("CERT-SIMPLE"),
+            certificate_number("CERT-PART"),
             generate_access_code(12).upper(),
             (enrollment or {}).get("final_score"),
             certificate_content_summary(conn, course_id),
@@ -3013,6 +3050,7 @@ def admin_save_certificate_settings(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     course_id = payload.get("courseId") or get_settings().default_course_id
     survey_questions = payload.get("surveyQuestions") if isinstance(payload.get("surveyQuestions"), list) else []
+    survey_questions = normalize_survey_questions(survey_questions)
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         row = conn.execute(
@@ -3035,7 +3073,7 @@ def admin_save_certificate_settings(payload: dict[str, Any]):
             (
                 course_id,
                 str_value(payload.get("congratulationsMessage")),
-                json.dumps([str_value(item) for item in survey_questions if str_value(item)]),
+                json.dumps(survey_questions),
                 str_value(payload.get("professionalPrice")),
                 str_value(payload.get("paymentInstructions")),
                 str_value(payload.get("professionalPreviewUrl")),

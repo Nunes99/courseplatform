@@ -41,6 +41,7 @@ const state = {
     logoUrl: '',
     videos: []
   },
+  certifications: null,
   timerId: null,
   pollId: null
 };
@@ -1807,6 +1808,7 @@ async function renderCertifications() {
   const simpleCertificate = result.simpleCertificate;
   const professionalCertificate = certificates.find((item) => item.certificateType === 'PROFESSIONAL');
   const activeRequest = requests.find((item) => ['REQUESTED', 'PAYMENT_SUBMITTED', 'APPROVED'].includes(item.status));
+  state.certifications = { ...result, settings, certificates, requests, activeRequest };
 
   if (!result.completed) {
     root.innerHTML = `
@@ -1820,182 +1822,227 @@ async function renderCertifications() {
     return;
   }
 
+  const certificateList = certificates.length
+    ? certificates
+    : [simpleCertificate].filter(Boolean);
+
   root.innerHTML = `
-    <section class="certifications-shell">
-      <div class="admin-page-heading">
+    <section class="certifications-shell certifications-page">
+      <div class="certifications-header">
+        <div class="certifications-header-icon" aria-hidden="true">◎</div>
         <div>
           <p class="eyebrow">Minhas certificacoes</p>
-          <h1>Certificados do curso</h1>
-          <p>${escapeHtml(settings.congratulationsMessage || 'Parabens pela conclusao do curso.')}</p>
+          <h1>Certificacoes</h1>
+          <p>Certificados emitidos apos a conclusao dos cursos elegiveis.</p>
         </div>
-        <a class="button button-secondary" href="#/">Voltar ao curso</a>
       </div>
 
-      <section class="certificate-student-grid">
-        ${simpleCertificate ? certificateStudentCard(simpleCertificate, 'Certificado simples de participacao') : `
-          <article class="certificate-card certificate-student-card">
-            <h2>Certificado simples em preparacao</h2>
-            <p>Estamos a preparar o seu certificado de participacao.</p>
-          </article>
+      <div class="certification-list">
+        ${certificateList.length ? certificateList.map(certificationListItemTemplate).join('') : `
+          <div class="video-empty">Ainda nao existem certificados emitidos.</div>
         `}
+      </div>
 
-        <article class="certificate-card certificate-student-card certificate-professional-preview">
-          <p class="eyebrow">Opcional</p>
-          <h2>Certificado profissional personalizado</h2>
-          <p>Inclui resumo dos conteudos aprendidos, nivel de reconhecimento diferenciado, logotipos e campos de assinatura.</p>
-          ${settings.professionalPreviewUrl ? `
-            <a class="button button-secondary" href="${escapeHtml(settings.professionalPreviewUrl)}" target="_blank" rel="noopener">
-              Ver modelo
-            </a>
-          ` : `
-            <div class="professional-certificate-mock">
-              <strong>${escapeHtml(config.organizationName || 'LMTWEBNAIRS')}</strong>
-              <span>Certificado profissional personalizado</span>
-              <small>Conteudos, assinatura e verificacao oficial</small>
-            </div>
-          `}
-        </article>
-      </section>
-
-      <section class="certificate-flow-panel">
+      <section class="certificate-upgrade-panel">
         ${professionalCertificate
-          ? professionalCertificateTemplate(professionalCertificate)
+          ? professionalReadyTemplate(professionalCertificate)
           : professionalRequestFlowTemplate(settings, activeRequest)}
-      </section>
-
-      <section class="certificate-history-panel">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Historico</p>
-            <h2>Todos os certificados</h2>
-          </div>
-        </div>
-        <div class="certificate-history-list">
-          ${certificates.length ? certificates.map((certificate) => certificateStudentCard(certificate, certificate.certificateType === 'PROFESSIONAL' ? 'Certificado profissional' : 'Certificado simples')).join('') : `
-            <div class="video-empty">Ainda nao existem certificados emitidos.</div>
-          `}
-        </div>
       </section>
     </section>
   `;
 
-  root.querySelectorAll('[data-download-certificate]').forEach((button) => {
-    button.addEventListener('click', () => downloadCertificate(button.dataset.downloadCertificate));
+  root.querySelectorAll('[data-preview-certificate]').forEach((button) => {
+    button.addEventListener('click', () => showCertificatePreview(button.dataset.previewCertificate));
   });
-  document.querySelector('#professionalCertificateForm')?.addEventListener('submit', submitProfessionalCertificateRequest);
-  document.querySelector('#professionalPaymentForm')?.addEventListener('submit', submitProfessionalCertificatePayment);
+  root.querySelectorAll('[data-open-professional-survey]').forEach((button) => {
+    button.addEventListener('click', () => showProfessionalSurveyDialog());
+  });
+  root.querySelectorAll('[data-open-payment-dialog]').forEach((button) => {
+    button.addEventListener('click', () => showPaymentDialog(button.dataset.openPaymentDialog));
+  });
   reportHeight();
 }
 
-function certificateStudentCard(certificate, title) {
-  const remaining = certificate.maxDownloads == null
-    ? 'Sem limite'
-    : `${Math.max(0, Number(certificate.maxDownloads || 0) - Number(certificate.downloadCount || 0))} de ${certificate.maxDownloads}`;
+function certificationListItemTemplate(certificate) {
+  const isProfessional = certificate.certificateType === 'PROFESSIONAL';
+  const label = isProfessional ? 'CERTIFICADO PROFISSIONAL' : 'CERTIFICADO DE PARTICIPACAO';
+  const title = isProfessional ? 'Certificado profissional personalizado' : 'Certificado de Participacao';
+  const emittedAt = certificate.issueDate ? `Emitido em ${formatDate(certificate.issueDate)}` : 'Em emissao';
   return `
-    <article class="certificate-card certificate-student-card">
-      <p class="eyebrow">${escapeHtml(certificate.certificateType || 'SIMPLE')}</p>
-      <h2>${escapeHtml(title)}</h2>
-      <div class="certificate-data">
-        <div><span>Numero</span><strong>${escapeHtml(certificate.certificateNumber || '-')}</strong></div>
-        <div><span>Data</span><strong>${formatDate(certificate.issueDate)}</strong></div>
-        <div><span>Verificacao</span><strong>${escapeHtml(certificate.verificationCode || '-')}</strong></div>
-        <div><span>Downloads</span><strong>${escapeHtml(remaining)}</strong></div>
+    <article class="certification-list-item ${isProfessional ? 'is-professional' : ''}">
+      <div class="certification-seal" aria-hidden="true">
+        <span>★</span>
       </div>
-      <div class="hero-actions">
-        <button class="button button-primary" type="button"
-          data-download-certificate="${escapeHtml(certificate.certificateId)}">
-          Baixar certificado
-        </button>
-        ${certificate.driveUrl ? `
-          <a class="button button-secondary" href="${escapeHtml(certificate.driveUrl)}" target="_blank" rel="noopener">
-            Abrir ficheiro
-          </a>
-        ` : ''}
+      <div class="certification-list-copy">
+        <p class="eyebrow">${label}</p>
+        <h2>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || title)}</h2>
+        <p>100% &middot; ${escapeHtml(emittedAt)}</p>
+        <div class="certification-list-actions">
+          <code>${escapeHtml(certificateDisplayNumber(certificate) || certificate.certificateId || '')}</code>
+          <button class="button button-secondary button-small" type="button"
+            data-preview-certificate="${escapeHtml(certificate.certificateId)}">
+            Ver certificado
+          </button>
+        </div>
       </div>
     </article>
   `;
 }
 
+function certificateDisplayNumber(certificate = {}) {
+  return String(certificate.certificateNumber || '')
+    .replace(/SIMPLE/gi, 'PART')
+    .replace(/PARTICIPATION/gi, 'PART');
+}
+
 function professionalRequestFlowTemplate(settings, request) {
   if (request?.status === 'PAYMENT_SUBMITTED') {
     return `
-      <div class="completion-card">
+      <article class="certificate-upgrade-card">
+        <p class="eyebrow">Certificado profissional</p>
         <h2>Comprovativo recebido</h2>
         <p>A administracao vai rever o pagamento e liberar o certificado profissional se estiver tudo correto.</p>
-      </div>
+      </article>
     `;
   }
 
   if (request?.status === 'REQUESTED') {
-    return paymentUploadTemplate(settings, request);
+    return `
+      <article class="certificate-upgrade-card">
+        <p class="eyebrow">Certificado profissional</p>
+        <h2>Pagamento pendente</h2>
+        <p>${escapeHtml(settings.paymentInstructions || 'Envie o comprovativo para a administracao concluir a revisao.')}</p>
+        <button class="button button-primary" type="button"
+          data-open-payment-dialog="${escapeHtml(request.requestId)}">
+          Enviar comprovativo
+        </button>
+      </article>
+    `;
   }
 
   return `
-    <form id="professionalCertificateForm" class="profile-card form-stack">
-      <div class="profile-section-heading">
-        <div>
-          <p class="eyebrow">Inquerito</p>
-          <h2>Antes do certificado profissional</h2>
-        </div>
+    <article class="certificate-upgrade-card">
+      <div>
+        <p class="eyebrow">Opcional</p>
+        <h2>Certificado profissional personalizado</h2>
+        <p>Um modelo institucional com descricao dos conteudos aprendidos, verificacao oficial, campos de assinatura e acabamento profissional.</p>
       </div>
-      <p class="profile-security-note">As suas respostas ajudam-nos a melhorar o curso e a preparar melhor o certificado profissional.</p>
-      ${(settings.surveyQuestions || []).map((question, index) => `
-        <label>
-          <span>${escapeHtml(question)}</span>
-          <textarea name="survey-${index}" data-survey-question="${escapeHtml(question)}" rows="4" required></textarea>
-        </label>
-      `).join('')}
-      <button class="button button-primary" type="submit">Quero certificado profissional</button>
-    </form>
+      <div class="professional-certificate-mock">
+        <strong>${escapeHtml(config.organizationName || 'Instituicao emissora')}</strong>
+        <span>Certificado profissional</span>
+        <small>Conteudos, reconhecimento diferenciado e assinaturas</small>
+      </div>
+      <button class="button button-primary" type="button" data-open-professional-survey>
+        Quero certificado profissional
+      </button>
+    </article>
   `;
 }
 
-function paymentUploadTemplate(settings, request) {
+function professionalReadyTemplate(certificate) {
   return `
-    <form id="professionalPaymentForm" class="profile-card form-stack">
-      <div class="profile-section-heading">
-        <div>
-          <p class="eyebrow">Pagamento</p>
-          <h2>Enviar comprovativo</h2>
-        </div>
-      </div>
-      <div class="certificate-payment-box">
-        <strong>${escapeHtml(settings.professionalPrice || 'Valor a confirmar')}</strong>
-        <p>${escapeHtml(settings.paymentInstructions || 'Siga as instrucoes de pagamento informadas pela administracao.')}</p>
-      </div>
-      <input type="hidden" name="requestId" value="${escapeHtml(request.requestId)}">
-      <label class="file-control">
-        <input name="paymentReceipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" required>
-        <span class="button button-secondary profile-photo-button">Selecionar comprovativo</span>
-      </label>
-      <button class="button button-primary" type="submit">Enviar comprovativo</button>
-    </form>
-  `;
-}
-
-function professionalCertificateTemplate(certificate) {
-  return `
-    <div class="completion-card">
+    <article class="certificate-upgrade-card">
+      <p class="eyebrow">Certificado profissional</p>
       <h2>Certificado profissional liberado</h2>
       <p>O seu certificado profissional esta pronto. Pode baixar ate atingir o limite definido.</p>
-      ${certificateStudentCard(certificate, 'Certificado profissional personalizado')}
-    </div>
+      <button class="button button-primary" type="button"
+        data-preview-certificate="${escapeHtml(certificate.certificateId)}">
+        Ver certificado profissional
+      </button>
+    </article>
   `;
 }
 
-async function submitProfessionalCertificateRequest(event) {
+function showProfessionalSurveyDialog() {
+  const settings = state.certifications?.settings || {};
+  const questions = normalizedSurveyQuestions(settings.surveyQuestions);
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card certificate-survey-dialog">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <form id="professionalCertificateForm" class="form-stack">
+        <div class="profile-section-heading">
+          <div>
+            <p class="eyebrow">Inquerito do curso</p>
+            <h2>Antes do certificado profissional</h2>
+          </div>
+        </div>
+        <p class="profile-security-note">Responda as perguntas abaixo para continuar para o pagamento.</p>
+        <div class="survey-question-list">
+          ${questions.map(surveyQuestionTemplate).join('')}
+        </div>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Continuar</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-close-dialog]').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.querySelector('#professionalCertificateForm').addEventListener('submit', (event) => submitProfessionalCertificateRequest(event, overlay));
+  reportHeight();
+}
+
+function normalizedSurveyQuestions(value = []) {
+  return Array.isArray(value) ? value.map((item, index) => {
+    if (typeof item === 'string') {
+      return {
+        id: `q${index + 1}`,
+        prompt: item,
+        options: ['Excelente', 'Bom', 'Regular', 'Precisa melhorar'],
+        required: true
+      };
+    }
+    return {
+      id: item.id || `q${index + 1}`,
+      prompt: item.prompt || item.question || '',
+      options: Array.isArray(item.options) && item.options.length ? item.options : ['Excelente', 'Bom', 'Regular', 'Precisa melhorar'],
+      required: item.required !== false
+    };
+  }).filter((item) => item.prompt).slice(0, 10) : [];
+}
+
+function surveyQuestionTemplate(question, index) {
+  return `
+    <fieldset class="survey-question-card">
+      <legend>${index + 1}. ${escapeHtml(question.prompt)}</legend>
+      <div class="survey-option-grid">
+        ${question.options.map((option, optionIndex) => `
+          <label>
+            <input type="radio" name="survey-${escapeHtml(question.id)}"
+              value="${escapeHtml(option)}" ${question.required ? 'required' : ''}
+              ${optionIndex === 0 ? 'checked' : ''}>
+            <span>${escapeHtml(option)}</span>
+          </label>
+        `).join('')}
+      </div>
+    </fieldset>
+  `;
+}
+
+async function submitProfessionalCertificateRequest(event, overlay = null) {
   event.preventDefault();
   const form = event.currentTarget;
   const button = form.querySelector('button[type="submit"]');
   const surveyAnswers = {};
-  form.querySelectorAll('[data-survey-question]').forEach((field) => {
-    surveyAnswers[field.dataset.surveyQuestion] = field.value.trim();
+  normalizedSurveyQuestions(state.certifications?.settings?.surveyQuestions || []).forEach((question) => {
+    const selected = form.querySelector(`[name="survey-${CSS.escape(question.id)}"]:checked`);
+    surveyAnswers[question.prompt] = selected?.value || '';
   });
   setBusy(button, true, 'A enviar...');
   try {
-    await api.requestProfessionalCertificate(state.selectedCourseId, surveyAnswers);
+    const result = await api.requestProfessionalCertificate(state.selectedCourseId, surveyAnswers);
     showToast('Pedido criado. Envie o comprovativo de pagamento.', 'success');
+    overlay?.remove();
     await renderCertifications();
+    showPaymentDialog(result.request?.requestId);
   } catch (error) {
     handleError(error);
   } finally {
@@ -2003,7 +2050,48 @@ async function submitProfessionalCertificateRequest(event) {
   }
 }
 
-async function submitProfessionalCertificatePayment(event) {
+function showPaymentDialog(requestId) {
+  if (!requestId) return;
+  const settings = state.certifications?.settings || {};
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card certificate-payment-dialog">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <form id="professionalPaymentForm" class="form-stack">
+        <div class="profile-section-heading">
+          <div>
+            <p class="eyebrow">Pagamento</p>
+            <h2>Enviar comprovativo</h2>
+          </div>
+        </div>
+        <div class="certificate-payment-box">
+          <strong>${escapeHtml(settings.professionalPrice || 'Valor a confirmar')}</strong>
+          <p>${escapeHtml(settings.paymentInstructions || 'Siga as instrucoes de pagamento informadas pela administracao.')}</p>
+        </div>
+        <input type="hidden" name="requestId" value="${escapeHtml(requestId)}">
+        <label class="file-control">
+          <input name="paymentReceipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" required>
+          <span class="button button-secondary profile-photo-button">Selecionar comprovativo</span>
+        </label>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Enviar comprovativo</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-close-dialog]').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.querySelector('#professionalPaymentForm').addEventListener('submit', (event) => submitProfessionalCertificatePayment(event, overlay));
+  reportHeight();
+}
+
+async function submitProfessionalCertificatePayment(event, overlay = null) {
   event.preventDefault();
   const form = event.currentTarget;
   const button = form.querySelector('button[type="submit"]');
@@ -2017,6 +2105,7 @@ async function submitProfessionalCertificatePayment(event) {
   try {
     await api.submitProfessionalCertificatePayment(requestId, file);
     showToast('Comprovativo enviado para revisao.', 'success');
+    overlay?.remove();
     await renderCertifications();
   } catch (error) {
     handleError(error);
@@ -2025,59 +2114,184 @@ async function submitProfessionalCertificatePayment(event) {
   }
 }
 
-async function downloadCertificate(certificateId) {
+function showCertificatePreview(certificateId) {
+  const certificate = (state.certifications?.certificates || [])
+    .find((item) => item.certificateId === certificateId);
+  if (!certificate) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card certificate-preview-dialog">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <div class="certificate-preview-sheet ${certificate.certificateType === 'PROFESSIONAL' ? 'is-professional' : ''}">
+        ${certificatePreviewTemplate(certificate)}
+      </div>
+      <div class="dialog-actions">
+        <button class="button button-secondary" type="button" data-close-dialog>Fechar</button>
+        <button class="button button-primary" type="button"
+          data-download-certificate="${escapeHtml(certificate.certificateId)}">
+          Baixar PDF
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-close-dialog]').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-download-certificate]').addEventListener('click', () => downloadCertificate(certificate.certificateId, overlay));
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  reportHeight();
+}
+
+function certificatePreviewTemplate(certificate) {
+  const isProfessional = certificate.certificateType === 'PROFESSIONAL';
+  const title = isProfessional ? 'Certificado Profissional' : 'Certificado de Participacao';
+  return `
+    <div class="certificate-preview-inner">
+      <p class="certificate-institution">${escapeHtml(config.organizationName || 'Instituicao emissora')}</p>
+      <h1>${escapeHtml(title)}</h1>
+      <p class="certificate-preview-lead">Certificamos que</p>
+      <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
+      <p>concluiu com sucesso o curso</p>
+      <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
+      ${isProfessional && certificate.contentSummary ? `
+        <div class="certificate-content-summary">${escapeHtml(certificate.contentSummary)}</div>
+      ` : ''}
+      <div class="certificate-preview-meta">
+        <span>${escapeHtml(certificateDisplayNumber(certificate) || '')}</span>
+        <span>${formatDate(certificate.issueDate)}</span>
+        <span>${escapeHtml(certificate.verificationCode || '')}</span>
+      </div>
+      ${isProfessional ? `
+        <div class="certificate-signature-row">
+          <span>Direcao academica</span>
+          <span>Coordenacao do curso</span>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+async function downloadCertificate(certificateId, overlay = null) {
   try {
     const result = await api.recordCertificateDownload(certificateId);
     const certificate = result.certificate;
-    const html = certificateDownloadHtml(certificate);
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const blob = createCertificatePdf(certificate);
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${certificate.certificateNumber || certificate.certificateId}.html`;
+    link.download = `${certificateDisplayNumber(certificate) || certificate.certificateId}.pdf`;
     link.click();
     URL.revokeObjectURL(url);
     showToast('Certificado baixado.', 'success');
+    overlay?.remove();
     await renderCertifications();
   } catch (error) {
     handleError(error);
   }
 }
 
-function certificateDownloadHtml(certificate) {
-  const title = certificate.certificateType === 'PROFESSIONAL'
-    ? 'Certificado profissional personalizado'
-    : 'Certificado de participacao';
-  return `<!doctype html>
-<html lang="pt">
-<head>
-  <meta charset="utf-8">
-  <title>${escapeHtml(title)}</title>
-  <style>
-    body{font-family:Arial,sans-serif;margin:0;padding:48px;color:#102a43;background:#f8fafc}
-    .certificate{max-width:980px;margin:auto;padding:56px;border:10px solid #c9a55b;background:white;text-align:center}
-    h1{font-size:38px;margin:20px 0} h2{font-size:30px;margin:18px 0;color:#00365b}
-    .meta{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:30px 0;text-align:left}
-    .meta div{padding:14px;border:1px solid #d9e2ec}.summary{white-space:pre-line;text-align:left;margin-top:24px}
-  </style>
-</head>
-<body>
-  <main class="certificate">
-    <p>${escapeHtml(config.organizationName || 'LMTWEBNAIRS')}</p>
-    <h1>${escapeHtml(title)}</h1>
-    <p>Certificamos a conclusao oficial do curso.</p>
-    <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
-    <p>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</p>
-    <section class="meta">
-      <div><strong>Numero:</strong> ${escapeHtml(certificate.certificateNumber || '')}</div>
-      <div><strong>Data:</strong> ${formatDate(certificate.issueDate)}</div>
-      <div><strong>Verificacao:</strong> ${escapeHtml(certificate.verificationCode || '')}</div>
-      <div><strong>Nivel:</strong> ${escapeHtml(certificate.recognitionLevel || '')}</div>
-    </section>
-    ${certificate.contentSummary ? `<section class="summary"><strong>Conteudos:</strong><br>${escapeHtml(certificate.contentSummary)}</section>` : ''}
-  </main>
-</body>
-</html>`;
+function createCertificatePdf(certificate) {
+  const isProfessional = certificate.certificateType === 'PROFESSIONAL';
+  const title = isProfessional ? 'Certificado Profissional' : 'Certificado de Participacao';
+  const page = { width: 842, height: 595 };
+  const commands = [];
+  const text = (value, x, y, size = 12, font = 'F1') => {
+    commands.push(`BT /${font} ${size} Tf ${x} ${y} Td (${pdfText(value)}) Tj ET`);
+  };
+  const rect = (x, y, w, h, stroke = true, fill = false) => {
+    commands.push(`${x} ${y} ${w} ${h} re ${fill ? (stroke ? 'B' : 'f') : 'S'}`);
+  };
+  const line = (x1, y1, x2, y2) => {
+    commands.push(`${x1} ${y1} m ${x2} ${y2} l S`);
+  };
+
+  commands.push(isProfessional ? '0.985 0.972 0.925 rg' : '0.996 0.992 0.965 rg');
+  rect(0, 0, page.width, page.height, false, true);
+  commands.push('0.78 0.62 0.28 RG');
+  rect(36, 36, page.width - 72, page.height - 72);
+  if (isProfessional) {
+    rect(50, 50, page.width - 100, page.height - 100);
+    commands.push('0.0 0.21 0.36 RG');
+    line(120, 438, 722, 438);
+    line(120, 154, 722, 154);
+  }
+  commands.push('0.0 0.16 0.28 rg');
+
+  text(config.organizationName || 'Instituicao emissora', 306, isProfessional ? 500 : 490, 15, 'F2');
+  text(title, isProfessional ? 258 : 270, isProfessional ? 455 : 442, isProfessional ? 34 : 31, 'F2');
+  text('Certificamos que', 350, isProfessional ? 400 : 390, 13);
+  text(certificate.studentName || state.dashboard?.student?.fullName || '', 255, isProfessional ? 360 : 350, 25, 'F2');
+  text('concluiu com sucesso o curso', 327, isProfessional ? 325 : 318, 13);
+  text(certificate.courseTitle || state.dashboard?.course?.title || '', 245, isProfessional ? 292 : 286, 20, 'F2');
+
+  if (isProfessional) {
+    const summary = wrapPdfText(certificate.contentSummary || 'Conteudos detalhados do curso.', 74);
+    text('Conteudos abordados', 118, 246, 13, 'F2');
+    summary.slice(0, 5).forEach((lineText, index) => text(lineText, 118, 226 - (index * 16), 10));
+    line(130, 100, 310, 100);
+    line(532, 100, 712, 100);
+    text('Direcao academica', 168, 82, 11);
+    text('Coordenacao do curso', 566, 82, 11);
+  }
+
+  text(`Numero: ${certificateDisplayNumber(certificate) || ''}`, 80, 56, 10);
+  text(`Data: ${formatDate(certificate.issueDate)}`, 330, 56, 10);
+  text(`Verificacao: ${certificate.verificationCode || ''}`, 580, 56, 10);
+  return buildPdf(page.width, page.height, commands.join('\n'));
+}
+
+function buildPdf(width, height, content) {
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new Blob([pdf], { type: 'application/pdf' });
+}
+
+function pdfText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)');
+}
+
+function wrapPdfText(value, length) {
+  const words = pdfText(value).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  words.forEach((word) => {
+    const next = `${line} ${word}`.trim();
+    if (next.length > length && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  });
+  if (line) lines.push(line);
+  return lines;
 }
 
 function showReviewDialog(attemptData) {
