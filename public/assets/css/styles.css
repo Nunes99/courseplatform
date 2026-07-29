@@ -6007,3 +6007,138 @@ canvas {
     padding: 18px;
   }
 }
+
+/* Student workspace final layout pass */
+#app:has(.student-app-shell) {
+  width: 100%;
+  padding: 0;
+}
+
+.student-app-shell {
+  min-height: calc(100vh - 68px);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.student-sidebar {
+  top: 68px;
+  height: calc(100vh - 68px);
+  min-height: 0;
+  border-right: 1px solid rgba(234, 199, 139, .18);
+}
+
+.student-main-frame {
+  background: linear-gradient(180deg, rgba(255, 248, 228, .48), var(--surface) 220px);
+}
+
+.student-topbar {
+  top: 68px;
+  min-height: 62px;
+  background: rgba(255, 255, 255, .92);
+}
+
+.student-topbar h1 {
+  font-size: clamp(18px, 1.25vw, 22px);
+  letter-spacing: 0;
+}
+
+.student-content-area {
+  display: grid;
+  gap: 16px;
+}
+
+.dashboard-hero {
+  min-height: 200px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+}
+
+.hero-greeting {
+  font-size: clamp(24px, 1.8vw, 30px);
+}
+
+.icon-button img {
+  width: 19px;
+  height: 19px;
+  object-fit: contain;
+}
+
+.student-course-list {
+  align-items: stretch;
+}
+
+.student-course-card,
+.student-status-row,
+.insight-card,
+.video-panel,
+.information-panel {
+  border-radius: var(--radius);
+}
+
+.student-status-row {
+  min-height: 76px;
+}
+
+.student-status-row .button {
+  min-width: 132px;
+}
+
+.student-view-overview .student-page-heading {
+  display: none;
+}
+
+@media (max-width: 1120px) {
+  .student-sidebar {
+    top: auto;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid rgba(234, 199, 139, .18);
+  }
+
+  .student-topbar {
+    top: 68px;
+  }
+}
+
+@media (max-width: 720px) {
+  #app:has(.student-app-shell) {
+    width: 100%;
+    padding: 0;
+  }
+
+  .student-app-shell {
+    min-height: calc(100vh - 62px);
+  }
+
+  .student-sidebar {
+    display: none;
+  }
+
+  .student-sidebar-heading,
+  .student-sidebar-profile {
+    min-width: 180px;
+  }
+
+  .student-topbar {
+    padding: 14px;
+  }
+
+  .student-page-heading,
+  .student-content-area {
+    padding-inline: 14px;
+  }
+
+  .dashboard-hero {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .hero-greeting {
+    font-size: 23px;
+  }
+
+  .student-status-row {
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: start;
+  }
+}
