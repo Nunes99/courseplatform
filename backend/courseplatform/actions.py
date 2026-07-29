@@ -425,7 +425,6 @@ alter table courseplatform.certificates add column if not exists status_note tex
 alter table courseplatform.certificates add column if not exists status_updated_by text;
 alter table courseplatform.certificates add column if not exists status_updated_at timestamptz;
 alter table courseplatform.certificates add column if not exists template_snapshot_json jsonb not null default '{}'::jsonb;
-
 create table if not exists courseplatform.certificate_settings (
   course_id text primary key references courseplatform.courses(course_id) on delete cascade,
   congratulations_message text,
@@ -437,6 +436,7 @@ create table if not exists courseplatform.certificate_settings (
   updated_by text,
   updated_at timestamptz
 );
+alter table courseplatform.certificate_settings add column if not exists certificate_profile_json jsonb not null default '{}'::jsonb;
 
 create table if not exists courseplatform.certificate_requests (
   request_id text primary key,

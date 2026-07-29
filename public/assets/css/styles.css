@@ -2236,6 +2236,7 @@ input:focus, textarea:focus, select:focus {
 
 .certificate-preview-sheet {
   width: 100%;
+  overflow-x: auto;
   padding: clamp(10px, 1.4vw, 18px);
   border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
   border-radius: var(--radius);
@@ -2256,7 +2257,7 @@ input:focus, textarea:focus, select:focus {
   min-height: 0;
   overflow: hidden;
   place-items: center stretch;
-  padding: clamp(22px, 3vw, 46px);
+  padding: clamp(18px, 2.6vw, 40px);
   border: 8px double var(--primary);
   border-radius: var(--radius);
   background:
@@ -2266,6 +2267,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .certificate-document-professional {
+  min-width: 760px;
   border-color: var(--accent);
   background:
     linear-gradient(90deg, rgba(201, 153, 61, .04), transparent 42%, rgba(18, 62, 105, .03)),
@@ -2274,8 +2276,8 @@ input:focus, textarea:focus, select:focus {
 
 .certificate-professional-layout {
   display: grid;
-  grid-template-columns: minmax(210px, .78fr) minmax(0, 1.22fr);
-  gap: clamp(22px, 3vw, 46px);
+  grid-template-columns: minmax(230px, .78fr) minmax(360px, 1.22fr);
+  gap: clamp(18px, 2.5vw, 34px);
   align-items: stretch;
   width: 100%;
   height: 100%;
@@ -2391,6 +2393,8 @@ input:focus, textarea:focus, select:focus {
   gap: clamp(6px, .9vw, 12px);
   place-items: center;
   min-width: 0;
+  max-width: min(100%, 760px);
+  justify-self: center;
 }
 
 .certificate-corner {
@@ -2443,8 +2447,8 @@ input:focus, textarea:focus, select:focus {
 .certificate-preview-inner h1 {
   margin: 0;
   color: var(--primary);
-  font-size: clamp(27px, 4.2vw, 54px);
-  line-height: .95;
+  font-size: clamp(24px, 3vw, 42px);
+  line-height: 1;
   text-transform: uppercase;
 }
 
@@ -2462,15 +2466,16 @@ input:focus, textarea:focus, select:focus {
 .certificate-preview-inner h2 {
   margin: 0;
   color: var(--primary);
-  font-size: clamp(25px, 3.4vw, 48px);
+  font-size: clamp(22px, 2.6vw, 38px);
   line-height: 1;
 }
 
 .certificate-preview-inner h3 {
   margin: 0;
   color: var(--primary);
-  font-size: clamp(18px, 2.3vw, 32px);
-  line-height: 1.08;
+  max-width: 82%;
+  font-size: clamp(16px, 1.8vw, 25px);
+  line-height: 1.12;
 }
 
 .certificate-preview-lead {
@@ -2540,8 +2545,8 @@ input:focus, textarea:focus, select:focus {
 
 .certificate-preview-seal {
   display: grid;
-  width: 76px;
-  height: 76px;
+  width: 64px;
+  height: 64px;
   place-items: center;
   align-self: center;
   justify-self: center;
@@ -2549,7 +2554,7 @@ input:focus, textarea:focus, select:focus {
   border-radius: 50%;
   background: #ffffff;
   color: var(--primary);
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 900;
   line-height: 1.3;
 }

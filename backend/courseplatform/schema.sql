@@ -274,6 +274,7 @@ create table if not exists courseplatform.certificate_settings (
   updated_by text,
   updated_at timestamptz
 );
+alter table courseplatform.certificate_settings add column if not exists certificate_profile_json jsonb not null default '{}'::jsonb;
 
 create table if not exists courseplatform.certificate_requests (
   request_id text primary key,
