@@ -116,67 +116,71 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
     draw_corner_marks(pdf, NAVY)
     draw_corner_marks(pdf, GOLD, inset=18)
 
-    left_x = 44
-    split_x = 322
+    left_x = 48
+    split_x = 360
     left_w = split_x - left_x
-    right_x = split_x + 18
-    right_w = PAGE_WIDTH - right_x - 44
+    right_x = split_x + 16
+    right_w = PAGE_WIDTH - right_x - 48
     pdf.setStrokeColor(HAIRLINE)
     pdf.setLineWidth(0.7)
-    pdf.line(split_x, 52, split_x, PAGE_HEIGHT - 52)
+    pdf.line(split_x, 45, split_x, PAGE_HEIGHT - 45)
 
-    if not draw_image_fit(pdf, assets.get("logoUrl"), left_x + 69, 456, 140, 74):
-        draw_seal(pdf, left_x + left_w / 2, 493, "LSS", silver=False, radius=31)
-    centered_in(pdf, issuer(data), left_x + 20, split_x - 20, 443, 11.5, FONT_BOLD, GOLD)
+    if not draw_image_fit(pdf, assets.get("logoUrl"), left_x + 60, 468, left_w - 120, 58):
+        draw_seal(pdf, left_x + left_w / 2, 495, "LSS", silver=False, radius=29)
+    centered_in(pdf, issuer(data), left_x + 22, split_x - 22, 448, 10.5, FONT_BOLD, GOLD)
+    centered_in(pdf, "FORMAÇÃO TÉCNICA APLICADA", left_x + 22, split_x - 22, 433, 7, FONT_REGULAR, BLUE)
+    pdf.setStrokeColor(colors.HexColor("#DEC993"))
+    pdf.setLineWidth(0.6)
+    pdf.line(left_x + 26, 417, split_x - 26, 417)
     draw_fitted_center_block(
         pdf,
         clean_text(profile.get("certificateTitle") or "Certificado de Qualificação").upper(),
         left_x + 22,
         split_x - 22,
-        397,
-        17,
+        389,
+        16,
         11.5,
         FONT_BOLD,
         GOLD,
-        3,
+        2,
     )
     draw_fitted_center_block(
         pdf,
         profile.get("qualificationType") or "sobre o aumento da qualificação profissional",
         left_x + 24,
         split_x - 24,
-        334,
-        9.5,
+        342,
+        9.8,
         8.2,
         FONT_REGULAR,
         BLUE,
         2,
     )
-    centered_in(pdf, data.get("certificate_number") or "", left_x + 22, split_x - 22, 290, 10, FONT_BOLD, GOLD)
-    centered_in(pdf, "Documento de qualificação", left_x + 20, split_x - 20, 254, 9, FONT_REGULAR, BLUE)
-    centered_in(pdf, "Número de registo", left_x + 24, split_x - 24, 216, 8.5, FONT_REGULAR, BLUE)
-    centered_in(pdf, data.get("verification_code") or "", left_x + 24, split_x - 24, 190, 10, FONT_BOLD, GOLD)
+    centered_in(pdf, data.get("certificate_number") or "", left_x + 22, split_x - 22, 299, 10, FONT_BOLD, GOLD)
+    centered_in(pdf, "Documento de qualificação", left_x + 20, split_x - 20, 260, 9.2, FONT_REGULAR, BLUE)
+    centered_in(pdf, "Número de registo", left_x + 24, split_x - 24, 222, 8.6, FONT_REGULAR, BLUE)
+    centered_in(pdf, data.get("verification_code") or "", left_x + 24, split_x - 24, 197, 10, FONT_BOLD, GOLD)
     centered_in(pdf, profile.get("issueLocation") or "Cidade de Maputo, Moçambique", left_x + 20, split_x - 20, 151, 10, FONT_BOLD, BLUE)
-    centered_in(pdf, issue_date(data), left_x + 20, split_x - 20, 130, 10, FONT_REGULAR, BLUE)
+    centered_in(pdf, issue_date_long(data), left_x + 20, split_x - 20, 128, 9.2, FONT_REGULAR, BLUE)
     draw_signature(
         pdf,
-        left_x + 47,
-        58,
+        left_x + 45,
+        54,
         profile.get("directorName") or data.get("director_name") or "Diretor Académico",
         profile.get("directorTitle") or "Direção académica",
         assets.get("directorSignatureUrl"),
-        width=174,
+        width=176,
     )
-    draw_image_fit(pdf, assets.get("academicStampUrl"), left_x + 178, 60, 64, 64)
+    draw_image_fit(pdf, assets.get("academicStampUrl"), left_x + 188, 58, 60, 60)
 
-    centered_in(pdf, "O presente documento certifica que", right_x + 20, right_x + right_w - 20, 510, 9.5, FONT_REGULAR, GOLD)
+    centered_in(pdf, "O presente documento certifica que", right_x + 22, right_x + right_w - 22, 501, 9.5, FONT_REGULAR, GOLD)
     draw_fitted_center_block(
         pdf,
         student_name(data).upper(),
-        right_x + 28,
-        right_x + right_w - 28,
-        476,
-        16,
+        right_x + 24,
+        right_x + right_w - 24,
+        471,
+        15.5,
         10.5,
         FONT_BOLD,
         BLUE,
@@ -185,23 +189,22 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
     draw_wrapped_center(
         pdf,
         f"concluiu com sucesso o programa de aumento de qualificação profissional na {issuer(data)}",
-        right_x + 34,
-        right_x + right_w - 34,
-        432,
+        right_x + 26,
+        right_x + right_w - 26,
+        425,
         9,
         FONT_REGULAR,
         BLUE,
         2,
     )
-    centered_in(pdf, f"Emitido em {issue_date(data)}", right_x + 30, right_x + right_w - 30, 397, 9, FONT_REGULAR, GOLD)
-    centered_in(pdf, "CURSO / PROGRAMA", right_x + 30, right_x + right_w - 30, 366, 8, FONT_BOLD, BLUE)
+    centered_in(pdf, "CURSO / PROGRAMA", right_x + 26, right_x + right_w - 26, 386, 8, FONT_BOLD, BLUE)
     draw_fitted_center_block(
         pdf,
         course_title(data),
-        right_x + 28,
-        right_x + right_w - 28,
-        340,
-        15,
+        right_x + 24,
+        right_x + right_w - 24,
+        359,
+        14,
         8.5,
         FONT_BOLD,
         BLUE,
@@ -210,37 +213,70 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
     draw_wrapped_center(
         pdf,
         "demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.",
-        right_x + 34,
-        right_x + right_w - 34,
-        298,
-        8.5,
+        right_x + 26,
+        right_x + right_w - 26,
+        307,
+        8.8,
         FONT_REGULAR,
         BLUE,
         2,
     )
-    draw_program_topics(pdf, data, right_x + 30, 263, right_w - 60)
+    draw_program_topics(pdf, data, right_x + 26, 270, right_w - 52)
+    metrics_midpoint = right_x + right_w / 2
     centered_in(
         pdf,
         f"Carga horária: {data.get('workload') or '30 horas'}",
-        right_x + 20,
-        right_x + right_w - 20,
-        137,
-        10.5,
+        right_x + 22,
+        metrics_midpoint - 8,
+        139,
+        9.8,
+        FONT_BOLD,
+        BLUE,
+    )
+    centered_in(
+        pdf,
+        f"Resultado final: {score_percent(data)}",
+        metrics_midpoint + 8,
+        right_x + right_w - 22,
+        139,
+        9.8,
         FONT_BOLD,
         BLUE,
     )
     draw_signature(
         pdf,
-        right_x + 180,
-        58,
+        right_x + 122,
+        49,
         profile.get("coordinatorName") or data.get("coordinator_name") or "Coordenador do Programa",
         profile.get("coordinatorTitle") or "Coordenação do programa",
         assets.get("coordinatorSignatureUrl"),
-        width=168,
+        width=148,
     )
-    if not draw_image_fit(pdf, assets.get("institutionalSealUrl"), right_x + right_w - 93, 58, 66, 66):
-        draw_seal(pdf, right_x + right_w - 60, 91, "L", silver=False, radius=31)
-    draw_verification_block(pdf, data, right_x + 30, 35, qr_size=46, text_width=110)
+    seal_x = right_x + right_w - 144
+    if not draw_image_fit(pdf, assets.get("institutionalSealUrl"), seal_x, 57, 60, 60):
+        draw_seal(pdf, seal_x + 30, 87, "L", silver=False, radius=28)
+    qr_x = right_x + 18
+    draw_qr(pdf, qr_x, 45, data.get("verification_url") or "", size=44)
+    centered_in(
+        pdf,
+        "VERIFICAR",
+        qr_x + 49,
+        qr_x + 102,
+        72,
+        5.4,
+        FONT_BOLD,
+        MUTED,
+    )
+    centered_in(
+        pdf,
+        "CERTIFICADO",
+        qr_x + 49,
+        qr_x + 102,
+        59,
+        5.8,
+        FONT_BOLD,
+        NAVY,
+    )
     draw_product_credit(pdf, profile, assets)
     pdf.showPage()
 
@@ -530,8 +566,19 @@ def draw_program_topics(
             pdf.drawString(columns[col] + 8, item_y - line_index * (size + 1.6), line)
 
 
-def draw_product_credit(pdf: canvas.Canvas, _profile: dict[str, Any], assets: dict[str, Any]) -> None:
-    draw_image_fit(pdf, assets.get("productLogoUrl"), 134, 414, 70, 16)
+def draw_product_credit(pdf: canvas.Canvas, profile: dict[str, Any], assets: dict[str, Any]) -> None:
+    right = PAGE_WIDTH - 48
+    left = right - 78
+    has_logo = draw_image_fit(pdf, assets.get("productLogoUrl"), left, 78, 78, 20)
+    credit = clean_text(profile.get("productCredit"))
+    if not credit:
+        return
+    size, lines = fit_text_lines(credit, FONT_REGULAR, 5.6, 4.8, 78, 3)
+    pdf.setFillColor(MUTED)
+    pdf.setFont(FONT_REGULAR, size)
+    start_y = 67 if has_logo else 80
+    for index, line in enumerate(lines):
+        pdf.drawRightString(right, start_y - index * (size + 1.5), line)
 
 
 def draw_metric(pdf: canvas.Canvas, x: float, y: float, label: str, value: str) -> None:

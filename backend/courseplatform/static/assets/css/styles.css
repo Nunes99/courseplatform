@@ -9791,3 +9791,486 @@ body:has(.admin-layout) .admin-identity {
     gap: var(--grid-gap);
   }
 }
+
+/* PetroSimLab certificate proportions and authoritative responsive navigation */
+.mobile-menu-button {
+  display: none !important;
+}
+
+.certificate-document-professional {
+  display: block;
+  padding: clamp(18px, 2.2vw, 30px);
+  border: 10px double var(--accent);
+  background: #fffdf8;
+}
+
+.certificate-document-professional .certificate-professional-layout {
+  grid-template-columns: minmax(0, 42%) minmax(0, 58%);
+  gap: 0;
+}
+
+.certificate-document-professional .certificate-professional-left,
+.certificate-document-professional .certificate-professional-right {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.certificate-document-professional .certificate-professional-left {
+  gap: clamp(5px, .65vw, 9px);
+  padding: clamp(18px, 2vw, 28px) clamp(22px, 2.5vw, 36px) 12px;
+  border-right: 1px solid #dce3e8;
+}
+
+.certificate-document-professional .certificate-professional-right {
+  gap: clamp(5px, .58vw, 8px);
+  padding: clamp(28px, 2.8vw, 40px) clamp(22px, 2.4vw, 34px) 12px;
+}
+
+.certificate-document-professional .certificate-logo-image {
+  width: min(100%, 190px);
+  max-width: 190px;
+  height: clamp(54px, 6vw, 78px);
+  max-height: 78px;
+  object-fit: contain;
+}
+
+.certificate-brand-subtitle {
+  color: var(--primary) !important;
+  font-size: clamp(7px, .68vw, 9px) !important;
+  font-weight: 600;
+  letter-spacing: .12em;
+}
+
+.certificate-column-divider {
+  display: block;
+  width: 100%;
+  height: 1px;
+  margin: clamp(4px, .5vw, 8px) 0 clamp(8px, .8vw, 12px);
+  background: color-mix(in srgb, var(--accent) 48%, transparent);
+}
+
+.certificate-document-professional .certificate-professional-left h1 {
+  max-width: 100%;
+  font-size: clamp(18px, 1.75vw, 25px);
+  line-height: 1.08;
+}
+
+.certificate-document-professional .certificate-professional-right h2 {
+  max-width: 100%;
+  font-size: clamp(18px, 1.8vw, 27px);
+  line-height: 1.06;
+}
+
+.certificate-document-professional .certificate-professional-right h3 {
+  max-width: 100%;
+  font-size: clamp(14px, 1.3vw, 19px);
+  line-height: 1.14;
+}
+
+.certificate-course-label {
+  margin-top: clamp(5px, .6vw, 9px) !important;
+  font-size: clamp(7px, .72vw, 9px) !important;
+  font-weight: 700;
+  letter-spacing: .06em;
+}
+
+.certificate-document-professional .certificate-content-summary {
+  width: 100%;
+  margin: clamp(3px, .4vw, 6px) 0 0;
+  padding: clamp(5px, .55vw, 8px) 0 0;
+  border-top: 0;
+}
+
+.certificate-document-professional .certificate-content-summary strong {
+  margin-bottom: 6px;
+  text-align: center;
+}
+
+.certificate-document-professional .certificate-content-summary ul {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 18px;
+  padding-left: 16px;
+  font-size: clamp(7px, .72vw, 9.5px);
+  line-height: 1.28;
+}
+
+.certificate-professional-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-top: auto;
+  padding-top: 8px;
+  color: var(--primary);
+  font-size: clamp(8px, .84vw, 11px);
+}
+
+.certificate-professional-footer {
+  display: grid;
+  grid-template-columns: minmax(110px, .85fr) minmax(130px, 1fr) auto minmax(76px, .62fr);
+  gap: clamp(5px, .7vw, 10px);
+  align-items: end;
+  width: 100%;
+  min-height: 74px;
+  margin-top: 7px;
+}
+
+.certificate-professional-footer .certificate-signature-block {
+  min-width: 0;
+}
+
+.certificate-verification-compact {
+  display: flex;
+  min-width: 0;
+  align-items: end;
+  gap: 6px;
+  text-align: left;
+}
+
+.certificate-qr-placeholder {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border: 1px solid #9aabb8;
+  background:
+    linear-gradient(45deg, var(--primary) 25%, transparent 25% 75%, var(--primary) 75%),
+    linear-gradient(-45deg, var(--primary) 25%, transparent 25% 75%, var(--primary) 75%);
+  background-size: 8px 8px;
+  color: transparent;
+}
+
+.certificate-verification-compact small,
+.certificate-product-credit small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: clamp(5.5px, .52vw, 7px);
+  line-height: 1.22;
+}
+
+.certificate-verification-compact b {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--primary);
+}
+
+.certificate-product-credit {
+  display: grid;
+  min-width: 0;
+  justify-items: end;
+  gap: 3px;
+  text-align: right;
+}
+
+.certificate-product-credit img {
+  width: 72px;
+  max-height: 20px;
+  object-fit: contain;
+}
+
+.certificate-product-credit small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.certificate-document-professional .certificate-place-date {
+  margin-top: clamp(5px, .55vw, 8px);
+}
+
+.certificate-document-professional .certificate-professional-left .certificate-signature-block {
+  margin-top: auto;
+}
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+img,
+video,
+canvas,
+svg,
+iframe {
+  max-width: 100%;
+}
+
+.tabs,
+.lesson-tabs,
+.course-tabs,
+.admin-tabs,
+.certificate-tabs {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+@media (min-width: 1025px) {
+  .mobile-menu:not([hidden]) {
+    display: none !important;
+  }
+
+  body.admin-menu-open::before {
+    display: none !important;
+  }
+
+  .admin-sidebar {
+    transform: none !important;
+  }
+}
+
+@media (max-width: 1024px) {
+  body:has(.student-app-shell),
+  body:has(.admin-layout) {
+    --workspace-sidebar-current: 0px;
+  }
+
+  .mobile-menu-button:not([hidden]) {
+    display: inline-grid !important;
+  }
+
+  .site-header,
+  body:has(.student-app-shell) .site-header,
+  body:has(.admin-layout) .site-header,
+  body:has(.lesson-layout) .site-header,
+  body:has(.certifications-shell) .site-header {
+    padding-inline: 16px;
+  }
+
+  .site-header .text-button {
+    display: none !important;
+  }
+
+  .student-sidebar {
+    display: none !important;
+  }
+
+  .admin-sidebar {
+    position: fixed !important;
+    z-index: 132;
+    inset: var(--app-header-height) auto 0 0;
+    display: flex !important;
+    width: min(304px, 88vw) !important;
+    height: calc(100vh - var(--app-header-height));
+    padding: 14px 12px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    transform: translateX(-102%) !important;
+  }
+
+  body.admin-menu-open .admin-sidebar {
+    transform: translateX(0) !important;
+    box-shadow: 18px 0 42px rgba(0, 30, 50, .32);
+  }
+
+  body.admin-menu-open::before,
+  body:has(.mobile-menu:not([hidden]))::before {
+    position: fixed;
+    z-index: 125;
+    inset: var(--app-header-height) 0 0;
+    background: rgba(0, 35, 59, .52);
+    content: "";
+  }
+
+  .admin-sidebar-heading h2,
+  .admin-nav > span,
+  .student-sidebar-profile > span {
+    display: block !important;
+  }
+
+  .admin-sidebar-heading,
+  .admin-nav {
+    justify-content: flex-start !important;
+    padding-inline: 11px !important;
+  }
+
+  .admin-sidebar .sidebar-collapse-button {
+    display: none !important;
+  }
+
+  .sidebar-mobile-logout {
+    display: flex !important;
+    margin-top: auto;
+  }
+
+  .mobile-menu {
+    position: fixed;
+    z-index: 132;
+    inset: var(--app-header-height) auto 0 0;
+    display: grid;
+    width: min(304px, 88vw);
+    min-width: 0;
+    align-content: start;
+    gap: 4px;
+    padding: 16px 12px;
+    overflow-y: auto;
+    border: 0;
+    border-right: 1px solid rgba(234, 199, 139, .20);
+    border-radius: 0;
+    background: #00365b;
+    box-shadow: 18px 0 42px rgba(0, 30, 50, .28);
+  }
+
+  .mobile-menu button {
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: 6px;
+    color: #fff8e4;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+  }
+
+  .student-main-frame,
+  .admin-main {
+    width: 100% !important;
+    max-width: 100%;
+    margin-left: 0 !important;
+  }
+
+  .student-page-heading,
+  .student-content-area,
+  .admin-main {
+    padding-inline: 20px;
+  }
+
+  .admin-main {
+    padding-top: 28px;
+    padding-bottom: 44px;
+  }
+
+  .dashboard-insights,
+  .admin-summary-grid,
+  .student-priority-grid,
+  .information-grid,
+  .profile-status-grid,
+  .student-course-list,
+  .lesson-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-table-wrap,
+  .credential-table-wrap,
+  .certificate-record-table,
+  .student-list-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  .dialog-card,
+  .certificate-dialog-card {
+    width: min(94vw, 980px);
+    max-height: calc(100vh - 32px);
+  }
+}
+
+@media (max-width: 760px) {
+  .site-header,
+  body:has(.student-app-shell) .site-header,
+  body:has(.admin-layout) .site-header {
+    padding-inline: 12px;
+  }
+
+  .site-brand-copy small {
+    display: none;
+  }
+
+  .admin-identity {
+    max-width: 112px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .student-page-heading,
+  .student-content-area,
+  .admin-main {
+    padding-inline: 14px;
+  }
+
+  .dashboard-insights,
+  .admin-summary-grid,
+  .student-priority-grid,
+  .information-grid,
+  .profile-status-grid,
+  .student-course-list,
+  .lesson-grid,
+  .profile-form-grid,
+  .course-form-grid,
+  .certificate-template-form-grid,
+  .admin-filter-bar,
+  .student-admin-toolbar,
+  .certificate-admin-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-heading-actions,
+  .hero-actions,
+  .dialog-actions,
+  .student-admin-actions {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-heading-actions .button,
+  .hero-actions .button,
+  .dialog-actions .button,
+  .student-admin-actions .button {
+    width: 100%;
+  }
+
+  .certificate-preview-sheet {
+    padding: 8px;
+  }
+
+  .dialog-card,
+  .certificate-dialog-card {
+    width: calc(100vw - 20px);
+    padding: 18px 14px;
+  }
+}
+
+@media (max-width: 480px) {
+  .site-brand-copy strong {
+    max-width: 28vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .site-header-actions {
+    gap: 5px;
+  }
+
+  .header-user,
+  .theme-toggle,
+  .mobile-menu-button,
+  .admin-identity {
+    flex: 0 0 auto;
+  }
+
+  .student-topbar {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .student-topbar h1 {
+    font-size: 18px;
+  }
+
+  .status-pill,
+  .submission-status-pill {
+    width: 124px;
+    min-width: 124px;
+    max-width: 124px;
+  }
+}

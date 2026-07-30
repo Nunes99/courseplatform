@@ -254,6 +254,7 @@ async function openProfileFromHeader() {
 
 function initializeMobileMenu() {
   if (!mobileMenuButton || !mobileMenu) return;
+  const compactNavigation = window.matchMedia('(max-width: 1024px)');
 
   mobileMenuButton.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -286,6 +287,10 @@ function initializeMobileMenu() {
     }
 
     closeMobileMenu();
+  });
+
+  compactNavigation.addEventListener('change', (event) => {
+    if (!event.matches) closeMobileMenu();
   });
 }
 
@@ -2642,6 +2647,8 @@ function certificatePreviewTemplate(certificate) {
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, 6);
+  const professionalHours = Number(certificate.templateSnapshot?.courseHours || 30);
+  const finalScoreLabel = certificate.finalScore == null ? '--' : `${certificate.finalScore}%`;
   if (isProfessional) {
     return `
       <div class="certificate-preview-inner certificate-document certificate-document-professional">
@@ -2649,6 +2656,8 @@ function certificatePreviewTemplate(certificate) {
           <section class="certificate-professional-left">
             ${logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(logoUrl)}" alt="Logotipo institucional">` : '<div class="certificate-logo-mark">LSS</div>'}
             <p class="certificate-institution">${escapeHtml(profile.issuerName || config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
+            <p class="certificate-brand-subtitle">FORMAÇÃO TÉCNICA APLICADA</p>
+            <span class="certificate-column-divider" aria-hidden="true"></span>
             <h1>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificação')}</h1>
             <p>${escapeHtml(profile.qualificationType || 'sobre o aumento da qualificação profissional')}</p>
             <strong>${escapeHtml(certificateDisplayNumber(certificate) || '')}</strong>
@@ -2671,7 +2680,7 @@ function certificatePreviewTemplate(certificate) {
             <p class="certificate-preview-lead">O presente documento certifica que</p>
             <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
             <p>concluiu com sucesso o programa de aumento de qualificação profissional na ${escapeHtml(profile.issuerName || config.organizationName || 'Summer School')}</p>
-            <span>curso/programa</span>
+            <span class="certificate-course-label">CURSO / PROGRAMA</span>
             <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
             <p>demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.</p>
             ${summary.length ? `
@@ -2680,8 +2689,15 @@ function certificatePreviewTemplate(certificate) {
                 <ul>${summary.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
               </div>
             ` : ''}
+            <div class="certificate-professional-metrics">
+              <strong>Carga horária: ${escapeHtml(professionalHours)} horas</strong>
+              <strong>Resultado final: ${escapeHtml(finalScoreLabel)}</strong>
+            </div>
             <div class="certificate-professional-footer">
-              <strong>Carga horária: 30 horas</strong>
+              <div class="certificate-verification-compact">
+                <span class="certificate-qr-placeholder" aria-hidden="true">QR</span>
+                <small>Verifique o certificado<b>${escapeHtml(certificate.verificationCode || '')}</b></small>
+              </div>
               <div class="certificate-signature-block">
                 ${assets.coordinatorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.coordinatorSignatureUrl)}" alt="">` : ''}
                 <span></span>
@@ -2689,12 +2705,12 @@ function certificatePreviewTemplate(certificate) {
                 <small>${escapeHtml(profile.coordinatorTitle || 'LMTWEBNAIRS')}</small>
               </div>
               ${assets.institutionalSealUrl ? `<img class="certificate-seal-image" src="${escapeHtml(assets.institutionalSealUrl)}" alt="">` : '<div class="certificate-preview-seal">L</div>'}
+              <div class="certificate-product-credit">
+                ${assets.productLogoUrl ? `<img src="${escapeHtml(assets.productLogoUrl)}" alt="Marca do produto">` : ''}
+                <small>${escapeHtml(profile.productCredit || '')}</small>
+              </div>
             </div>
           </section>
-        </div>
-        <div class="certificate-preview-meta">
-          <span>Código: ${escapeHtml(certificate.verificationCode || '')}</span>
-          <span>Nota final: ${certificate.finalScore == null ? '--/100' : `${escapeHtml(certificate.finalScore)}/100`}</span>
         </div>
       </div>
     `;
