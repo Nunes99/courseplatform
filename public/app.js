@@ -521,7 +521,6 @@ function studentAppShell(activeView, content, page = {}) {
             <a class="icon-button" href="#/certifications" aria-label="Certificados">
               <img src="${iconUrl('diploma', blueIcon)}" alt="">
             </a>
-            <a class="icon-button" href="#/profile" aria-label="Perfil">${profileAvatarTemplate(student, 'topbar-avatar')}</a>
           </div>
         </div>
         <div class="student-page-heading" ${page.compactHeading ? 'hidden' : ''}>
@@ -2654,7 +2653,7 @@ function certificatePreviewTemplate(certificate) {
       <div class="certificate-preview-inner certificate-document certificate-document-professional">
         <div class="certificate-professional-layout">
           <section class="certificate-professional-left">
-            ${logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(logoUrl)}" alt="Logotipo institucional">` : '<div class="certificate-logo-mark">LSS</div>'}
+            ${logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(logoUrl)}" alt="Logótipo institucional">` : '<div class="certificate-logo-placeholder">Logótipo institucional</div>'}
             <p class="certificate-institution">${escapeHtml(profile.issuerName || config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
             <p class="certificate-brand-subtitle">FORMAÇÃO TÉCNICA APLICADA</p>
             <span class="certificate-column-divider" aria-hidden="true"></span>

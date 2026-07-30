@@ -1352,6 +1352,7 @@ function renderCertifications() {
   root.querySelectorAll('[data-certificate-asset]').forEach((input) => {
     input.addEventListener('change', uploadCertificateAsset);
   });
+  root.querySelector('[data-use-standard-certificate-logo]')?.addEventListener('click', useStandardCertificateLogo);
   document.querySelector('#certificateStatusFilter').addEventListener('change', (event) => {
     state.certificateFilters.status = event.currentTarget.value;
     loadCertifications();
@@ -1404,6 +1405,7 @@ function certificateCourseOptions() {
 
 function certificateProfileFormFields(profile = {}) {
   const assets = profile.assets || {};
+  const standardLogoUrl = brandLogoUrl();
   return `
     <div class="certificate-template-form-grid">
       <label>
@@ -1423,11 +1425,11 @@ function certificateProfileFormFields(profile = {}) {
         <input name="issueLocation" value="${escapeHtml(profile.issueLocation || 'Cidade de Maputo, Moçambique')}">
       </label>
       <label>
-        <span>Nome do responsavel académico</span>
+        <span>Nome do responsável académico</span>
         <input name="directorName" value="${escapeHtml(profile.directorName || 'Direção Académica')}">
       </label>
       <label>
-        <span>Cargo do responsavel académico</span>
+        <span>Cargo do responsável académico</span>
         <input name="directorTitle" value="${escapeHtml(profile.directorTitle || 'Diretor Académico')}">
       </label>
       <label>
@@ -1457,7 +1459,7 @@ function certificateProfileFormFields(profile = {}) {
         <span>Acesso à impressão</span>
           <select name="printAccess">
             ${studentFilterOption('free', 'Impressão livre', profile.printAccess || 'paid')}
-            ${studentFilterOption('paid', 'Pagamento obrigatorio', profile.printAccess || 'paid')}
+            ${studentFilterOption('paid', 'Pagamento obrigatório', profile.printAccess || 'paid')}
             ${studentFilterOption('blocked', 'Bloqueado por padrão', profile.printAccess || 'paid')}
           </select>
         </label>
@@ -1469,7 +1471,7 @@ function certificateProfileFormFields(profile = {}) {
           <span>Moeda</span>
           <select name="printCurrency">
             ${studentFilterOption('MZN', 'MZN - Metical', profile.printCurrency || 'MZN')}
-            ${studentFilterOption('USD', 'USD - Dolar', profile.printCurrency || 'MZN')}
+            ${studentFilterOption('USD', 'USD - Dólar', profile.printCurrency || 'MZN')}
             ${studentFilterOption('EUR', 'EUR - Euro', profile.printCurrency || 'MZN')}
           </select>
         </label>
@@ -1478,7 +1480,7 @@ function certificateProfileFormFields(profile = {}) {
           <input name="paymentAccountName" value="${escapeHtml(profile.paymentAccountName || '')}">
         </label>
         <label class="form-span-2">
-          <span>Número da conta ou carteira movel</span>
+          <span>Número da conta ou carteira móvel</span>
           <input name="paymentAccountNumber" value="${escapeHtml(profile.paymentAccountNumber || '')}">
         </label>
         <label class="form-span-2">
@@ -1488,12 +1490,24 @@ function certificateProfileFormFields(profile = {}) {
       </div>
     </div>
     <div class="certificate-assets-heading">
-      <strong>Elementos graficos opcionais</strong>
+      <strong>Elementos gráficos opcionais</strong>
       <small>PNG, JPEG ou WebP, até 3 MB por ficheiro. O upload passa pelo backend administrativo.</small>
     </div>
+    <div class="certificate-standard-logo">
+      ${standardLogoUrl
+        ? `<img src="${escapeHtml(standardLogoUrl)}" alt="Logótipo padrão da instituição">`
+        : '<span class="certificate-standard-logo-placeholder">Marca não definida</span>'}
+      <span class="certificate-standard-logo-copy">
+        <strong>Logótipo padrão da instituição</strong>
+        <small>A marca definida na área “Marca” é aplicada automaticamente. O ficheiro específico abaixo substitui-a apenas nos certificados deste curso.</small>
+      </span>
+      <button class="button button-small button-secondary" type="button" data-use-standard-certificate-logo>
+        Usar logótipo padrão
+      </button>
+    </div>
     <div class="certificate-asset-grid">
-      ${certificateAssetField('logoUrl', 'Logotipo principal', assets.logoUrl)}
-      ${certificateAssetField('productLogoUrl', 'Logotipo do produto', assets.productLogoUrl)}
+      ${certificateAssetField('logoUrl', 'Logótipo específico do certificado', assets.logoUrl)}
+      ${certificateAssetField('productLogoUrl', 'Logótipo do produto', assets.productLogoUrl)}
       ${certificateAssetField('directorSignatureUrl', 'Assinatura académica', assets.directorSignatureUrl)}
       ${certificateAssetField('academicStampUrl', 'Carimbo académico', assets.academicStampUrl)}
       ${certificateAssetField('coordinatorSignatureUrl', 'Assinatura da coordenação', assets.coordinatorSignatureUrl)}
@@ -1525,7 +1539,7 @@ function adminCertificateThumbnailTemplate(certificate) {
   return `
     <div class="certificate-thumbnail">
       <div class="certificate-thumbnail-left">
-        ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logotipo institucional">` : '<span>LSS</span>'}
+        ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logótipo institucional">` : '<span>Marca institucional</span>'}
         <strong>${escapeHtml(profile.issuerName || config.organizationName || 'Summer School')}</strong>
         <h3>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificação')}</h3>
         <small>${escapeHtml(certificate.certificateNumber || '')}</small>
@@ -2039,6 +2053,22 @@ async function uploadCertificateAsset(event) {
   }
 }
 
+function useStandardCertificateLogo() {
+  const form = document.querySelector('#certificateSettingsForm');
+  const input = form?.querySelector('[data-certificate-asset="logoUrl"]');
+  const card = input?.closest('.asset-upload-card');
+  const preview = card?.querySelector('img');
+  const hidden = card?.querySelector('input[type="hidden"][name="logoUrl"]');
+  if (!input || !hidden) return;
+  input.value = '';
+  hidden.value = '';
+  if (preview) {
+    preview.src = '';
+    preview.hidden = true;
+  }
+  showToast('O logótipo padrão será aplicado depois de guardar as alterações.', 'success');
+}
+
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2139,7 +2169,7 @@ function adminCertificatePreviewTemplate(certificate) {
       <div class="certificate-preview-inner certificate-document certificate-document-professional">
         <div class="certificate-professional-layout">
           <section class="certificate-professional-left">
-            ${logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(logoUrl)}" alt="Logotipo institucional">` : '<div class="certificate-logo-mark">LSS</div>'}
+            ${logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(logoUrl)}" alt="Logótipo institucional">` : '<div class="certificate-logo-placeholder">Logótipo institucional</div>'}
             <p class="certificate-institution">${escapeHtml(profile.issuerName || config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
             <p class="certificate-brand-subtitle">FORMAÇÃO TÉCNICA APLICADA</p>
             <span class="certificate-column-divider" aria-hidden="true"></span>

@@ -117,16 +117,25 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
     draw_corner_marks(pdf, GOLD, inset=18)
 
     left_x = 48
-    split_x = 360
+    split_x = PAGE_WIDTH / 2
     left_w = split_x - left_x
-    right_x = split_x + 16
+    right_x = split_x
     right_w = PAGE_WIDTH - right_x - 48
     pdf.setStrokeColor(HAIRLINE)
     pdf.setLineWidth(0.7)
     pdf.line(split_x, 45, split_x, PAGE_HEIGHT - 45)
 
-    if not draw_image_fit(pdf, assets.get("logoUrl"), left_x + 60, 468, left_w - 120, 58):
-        draw_seal(pdf, left_x + left_w / 2, 495, "LSS", silver=False, radius=29)
+    if not draw_image_fit(pdf, assets.get("logoUrl"), left_x + 72, 468, left_w - 144, 58):
+        centered_in(
+            pdf,
+            "LOGÓTIPO INSTITUCIONAL",
+            left_x + 72,
+            split_x - 72,
+            493,
+            8.2,
+            FONT_BOLD,
+            MUTED,
+        )
     centered_in(pdf, issuer(data), left_x + 22, split_x - 22, 448, 10.5, FONT_BOLD, GOLD)
     centered_in(pdf, "FORMAÇÃO TÉCNICA APLICADA", left_x + 22, split_x - 22, 433, 7, FONT_REGULAR, BLUE)
     pdf.setStrokeColor(colors.HexColor("#DEC993"))
@@ -245,23 +254,23 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
     )
     draw_signature(
         pdf,
-        right_x + 122,
+        right_x + 114,
         49,
         profile.get("coordinatorName") or data.get("coordinator_name") or "Coordenador do Programa",
         profile.get("coordinatorTitle") or "Coordenação do programa",
         assets.get("coordinatorSignatureUrl"),
-        width=148,
+        width=120,
     )
-    seal_x = right_x + right_w - 144
-    if not draw_image_fit(pdf, assets.get("institutionalSealUrl"), seal_x, 57, 60, 60):
-        draw_seal(pdf, seal_x + 30, 87, "L", silver=False, radius=28)
-    qr_x = right_x + 18
-    draw_qr(pdf, qr_x, 45, data.get("verification_url") or "", size=44)
+    seal_x = right_x + right_w - 134
+    if not draw_image_fit(pdf, assets.get("institutionalSealUrl"), seal_x, 62, 50, 50):
+        draw_seal(pdf, seal_x + 25, 87, "L", silver=False, radius=24)
+    qr_x = right_x + 14
+    draw_qr(pdf, qr_x, 47, data.get("verification_url") or "", size=40)
     centered_in(
         pdf,
         "VERIFICAR",
-        qr_x + 49,
-        qr_x + 102,
+        qr_x + 47,
+        qr_x + 98,
         72,
         5.4,
         FONT_BOLD,
@@ -270,8 +279,8 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
     centered_in(
         pdf,
         "CERTIFICADO",
-        qr_x + 49,
-        qr_x + 102,
+        qr_x + 47,
+        qr_x + 98,
         59,
         5.8,
         FONT_BOLD,
