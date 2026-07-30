@@ -1,4 +1,4 @@
-﻿import { CoursePlatformApi, ApiError } from './api.js';
+import { CoursePlatformApi, ApiError } from './api.js';
 import {
   debounce,
   escapeHtml,
@@ -23,6 +23,7 @@ const themeToggle = document.querySelector('#themeToggle');
 const mobileMenuButton = document.querySelector('#mobileMenuButton');
 const mobileMenu = document.querySelector('#mobileMenu');
 const mobileThemeButton = document.querySelector('#mobileThemeButton');
+const mobileLogoutButton = document.querySelector('#mobileLogoutButton');
 const platformName = config.appName || 'LMTWEBNAIRS Summer School 2026';
 const platformYear = 'Summer School 2026';
 const lucideIconsBase = 'https://api.iconify.design/lucide';
@@ -111,6 +112,7 @@ async function initialize() {
     if (label) label.textContent = collapsed ? 'Expandir menu' : 'Recolher menu';
   });
   logoutButton.addEventListener('click', logout);
+  mobileLogoutButton?.addEventListener('click', logout);
   window.addEventListener('hashchange', route);
   window.addEventListener('message', (event) => {
     if (event.data?.source === 'tilda-parent' && event.data?.type === 'request-resize') {
@@ -182,19 +184,19 @@ function renderLogin() {
       <div class="auth-card auth-card-modern">
         <div class="auth-card-accent">
           <img src="${iconUrl('graduation-cap', goldIcon)}" alt="">
-          <span>Portal academico</span>
+          <span>Portal académico</span>
         </div>
 
         <div class="auth-brand-row">
           ${brandSymbolTemplate('brand-mark')}
           <div>
             <p class="eyebrow">LMTWEBNAIRS Summer School</p>
-            <h1>Area do estudante</h1>
+            <h1>Área do estudante</h1>
           </div>
         </div>
 
         <p class="auth-description">
-          Entre na area do participante para acompanhar aulas, exercicios e avaliacoes num ambiente simples e bem organizado.
+          Entre na área do participante para acompanhar aulas, exercícios e avaliações num ambiente simples e bem organizado.
         </p>
 
         <div class="auth-feature-list" aria-label="Recursos da plataforma">
@@ -210,15 +212,15 @@ function renderLogin() {
               placeholder="estudante@email.com">
           </label>
           <label>
-            <span>Senha de acesso</span>
+            <span>Palavra-passe de acesso</span>
             <input type="password" name="accessCode" autocomplete="current-password"
-              required placeholder="Senha fornecida pelo administrador">
+              required placeholder="Palavra-passe fornecida pelo administrador">
           </label>
           <button class="button button-primary button-block" type="submit">
             Entrar na plataforma
           </button>
           <button class="text-button login-recovery-link" type="button" id="recoverAccessButton">
-            Esqueci a senha de acesso
+            Esqueci a palavra-passe de acesso
           </button>
         </form>
 
@@ -313,7 +315,7 @@ async function login(event) {
       errorBox.innerHTML = `
         <span>${escapeHtml(error.message)}</span>
         <button class="text-button" type="button" id="recoverAfterLoginError">
-          Recuperar senha
+          Recuperar palavra-passe
         </button>
       `;
       errorBox.querySelector('#recoverAfterLoginError').addEventListener('click', () => {
@@ -335,9 +337,9 @@ function showStudentRecoveryDialog(prefilledEmail = '') {
   overlay.innerHTML = `
     <div class="dialog-card recovery-dialog">
       <button class="dialog-close" type="button" aria-label="Fechar">x</button>
-      <h2>Recuperar senha de acesso</h2>
+      <h2>Recuperar palavra-passe de acesso</h2>
       <p class="recovery-note">
-        Informe o email e o ID publico do estudante para gerar uma nova senha temporaria.
+        Informe o email e o ID público do estudante para gerar uma nova palavra-passe temporária.
       </p>
 
       <form id="studentRecoveryForm" class="form-stack">
@@ -356,7 +358,7 @@ function showStudentRecoveryDialog(prefilledEmail = '') {
 
         <div class="dialog-actions">
           <button class="button button-secondary" type="button" data-cancel-recovery>Cancelar</button>
-          <button class="button button-primary" type="submit">Gerar senha temporaria</button>
+          <button class="button button-primary" type="submit">Gerar palavra-passe temporária</button>
         </div>
       </form>
     </div>
@@ -382,7 +384,7 @@ function showStudentRecoveryDialog(prefilledEmail = '') {
       const resultBox = overlay.querySelector('#studentRecoveryResult');
       resultBox.hidden = false;
       resultBox.classList.add('is-error');
-      resultBox.textContent = error.message || 'Nao foi possivel recuperar o acesso.';
+      resultBox.textContent = error.message || 'Não foi possível recuperar o acesso.';
     } finally {
       setBusy(button, false);
       reportHeight();
@@ -397,11 +399,11 @@ function renderStudentRecoveryResult(overlay, result, email) {
   resultBox.hidden = false;
   resultBox.classList.remove('is-error');
   resultBox.innerHTML = `
-    <span>Senha temporaria criada para ${escapeHtml(result.email || email)}</span>
+    <span>Palavra-passe temporária criada para ${escapeHtml(result.email || email)}</span>
     <strong>${escapeHtml(result.temporaryPassword || '')}</strong>
     <div class="recovery-result-actions">
       <button class="button button-secondary button-small" type="button" data-copy-temporary-password>
-        Copiar senha
+        Copiar palavra-passe
       </button>
       <button class="button button-primary button-small" type="button" data-use-temporary-password>
         Usar no login
@@ -409,7 +411,7 @@ function renderStudentRecoveryResult(overlay, result, email) {
     </div>
   `;
   resultBox.querySelector('[data-copy-temporary-password]').addEventListener('click', () => {
-    copyText(result.temporaryPassword || '', 'Senha temporaria copiada.');
+    copyText(result.temporaryPassword || '', 'Palavra-passe temporária copiada.');
   });
   resultBox.querySelector('[data-use-temporary-password]').addEventListener('click', () => {
     const loginForm = document.querySelector('#loginForm');
@@ -418,7 +420,7 @@ function renderStudentRecoveryResult(overlay, result, email) {
       loginForm.elements.accessCode.value = result.temporaryPassword || '';
     }
     overlay.remove();
-    showToast('Senha temporaria preenchida no login.', 'success');
+    showToast('Palavra-passe temporária preenchida no início de sessão.', 'success');
   });
 }
 
@@ -450,28 +452,28 @@ function studentAppShell(activeView, content, page = {}) {
   const course = state.dashboard?.course || {};
   const currentCourse = state.myCourses.find((item) => item.course?.courseId === state.selectedCourseId)?.course || course;
   const navItems = [
-    { id: 'overview', label: 'Visao geral', href: '#/', icon: 'classroom' },
+    { id: 'overview', label: 'Visão geral', href: '#/', icon: 'classroom' },
     { id: 'courses', label: 'Meus cursos', href: '#/courses', icon: 'book-shelf' },
-    { id: 'lessons', label: 'Aulas e modulos', href: '#/lessons', icon: 'reading' },
-    { id: 'submissions', label: 'Submissoes', href: '#/submissions', icon: 'upload-to-cloud' },
+    { id: 'lessons', label: 'Aulas e módulos', href: '#/lessons', icon: 'reading' },
+    { id: 'submissions', label: 'Submissões', href: '#/submissions', icon: 'upload-to-cloud' },
     { id: 'grades', label: 'Notas e feedback', href: '#/grades', icon: 'checked-checkbox' },
     { id: 'certifications', label: 'Certificados', href: '#/certifications', icon: 'diploma' },
     { id: 'support', label: 'Suporte', href: config.institutionalUrl || '#/', icon: 'help' },
     { id: 'profile', label: 'Perfil', href: '#/profile', icon: 'user-male-circle' }
   ];
   const title = page.title || 'Painel do estudante';
-  const topbarTitle = page.topbarTitle || 'Area do estudante';
-  const eyebrow = page.eyebrow || 'Area do estudante';
+  const topbarTitle = page.topbarTitle || 'Área do estudante';
+  const eyebrow = page.eyebrow || 'Área do estudante';
   const description = page.description || currentCourse?.title || 'Acompanhe cursos, atividades, progresso e certificados.';
   const sidebarCollapsed = document.body.classList.contains('sidebar-collapsed');
   return `
     <div class="student-app-shell student-view-${escapeHtml(activeView)}">
-      <aside class="student-sidebar" aria-label="Navegacao do estudante">
+      <aside class="student-sidebar" aria-label="Navegação do estudante">
         <div class="student-sidebar-heading">
           ${brandSymbolTemplate('student-sidebar-symbol')}
           <div>
             <strong>LMTWEBNAIRS</strong>
-            <small>Area do estudante</small>
+            <small>Área do estudante</small>
           </div>
         </div>
         <nav class="student-nav">
@@ -503,7 +505,7 @@ function studentAppShell(activeView, content, page = {}) {
       <section class="student-main-frame">
         <div class="student-topbar">
           <div>
-            <p class="breadcrumb-line">LMTWEBNAIRS / ${escapeHtml(eyebrow)}</p>
+            <p class="breadcrumb-line">${escapeHtml(config.organizationName || 'Summer School')} / ${escapeHtml(eyebrow)}</p>
             <h1>${escapeHtml(topbarTitle)}</h1>
           </div>
           <div class="student-topbar-actions">
@@ -585,13 +587,13 @@ async function renderDashboard(view = 'overview') {
   headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
   headerUser.hidden = false;
   if (mobileMenuButton) mobileMenuButton.hidden = false;
-  logoutButton.hidden = true;
+  logoutButton.hidden = false;
 
   const totalLessons = dashboard.lessons.length;
   const approvedLessons = dashboard.lessons.filter((item) => item.progress.status === 'APPROVED').length;
   const activeLessons = dashboard.lessons.filter((item) => ['AVAILABLE', 'IN_PROGRESS', 'UNDER_REVIEW'].includes(item.progress.status)).length;
   const videos = videoGallery();
-  const totalHoursLabel = dashboard.course.totalHours ? `${dashboard.course.totalHours} horas` : 'Carga horaria por definir';
+  const totalHoursLabel = dashboard.course.totalHours ? `${dashboard.course.totalHours} horas` : 'Carga horária por definir';
   const nextLessonItem = dashboard.lessons.find((item) => ['IN_PROGRESS', 'CORRECTION_REQUIRED', 'AVAILABLE'].includes(item.progress.status))
     || dashboard.lessons.find((item) => item.progress.status !== 'LOCKED')
     || null;
@@ -604,34 +606,34 @@ async function renderDashboard(view = 'overview') {
   const nextDeadlineLabel = nextDeadlineValue ? formatDate(nextDeadlineValue) : 'Sem prazo definido';
 
   const certificateButton = dashboard.enrollment.status === 'COMPLETED'
-    ? '<a class="button button-secondary" href="#/certifications">Minhas certificacoes</a>'
+    ? '<a class="button button-secondary" href="#/certifications">Minhas certificações</a>'
     : '';
   const pageMeta = {
     overview: {
-      eyebrow: 'Visao geral',
+      eyebrow: 'Visão geral',
       title: 'Painel do estudante',
-      description: dashboard.course?.title || 'Acompanhe o seu percurso academico.',
+      description: dashboard.course?.title || 'Acompanhe o seu percurso académico.',
       compactHeading: true
     },
     courses: {
       eyebrow: 'Meus cursos',
-      title: 'Cursos disponiveis',
+      title: 'Cursos disponíveis',
       description: 'Consulte os cursos associados ao seu perfil e escolha o percurso que pretende abrir.'
     },
     lessons: {
-      eyebrow: 'Aulas e modulos',
-      title: 'Conteudos do curso',
-      description: 'Acompanhe aulas, videos, materiais e o estado de cada modulo.'
+      eyebrow: 'Aulas e módulos',
+      title: 'Conteúdos do curso',
+      description: 'Acompanhe aulas, vídeos, materiais e o estado de cada módulo.'
     },
     submissions: {
-      eyebrow: 'Submissoes',
+      eyebrow: 'Submissões',
       title: 'Trabalhos e atividades',
-      description: 'Veja o estado das atividades, submissoes e revisoes pendentes.'
+      description: 'Veja o estado das atividades, submissões e revisões pendentes.'
     },
     grades: {
       eyebrow: 'Notas e feedback',
-      title: 'Desempenho academico',
-      description: 'Acompanhe pontuacoes, aprovacoes e feedback das atividades.'
+      title: 'Desempenho académico',
+      description: 'Acompanhe pontuações, aprovações e feedback das atividades.'
     }
   };
 
@@ -641,7 +643,7 @@ async function renderDashboard(view = 'overview') {
         <p class="eyebrow">${escapeHtml(platformYear)}</p>
         <h1 class="hero-greeting">${escapeHtml(greeting)}</h1>
         <p>
-          Ambiente digital para acompanhar conteudos, exercicios e avaliacoes do programa.
+          Ambiente digital para acompanhar conteúdos, exercícios e avaliações do programa.
         </p>
         <div class="hero-meta">
           <span>Programa: ${escapeHtml(dashboard.course.title)}</span>
@@ -650,10 +652,10 @@ async function renderDashboard(view = 'overview') {
         </div>
         <div class="hero-actions">
           <a class="button button-light" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">
-            Pagina do evento
+            Página do evento
           </a>
           <a class="button button-secondary" href="#/certifications">
-            Minhas certificacoes
+            Minhas certificações
           </a>
         </div>
       </div>
@@ -668,16 +670,16 @@ async function renderDashboard(view = 'overview') {
       </div>
     </section>
 
-    <section class="student-courses-panel" aria-label="Cursos disponiveis">
+    <section class="student-courses-panel" aria-label="Cursos disponíveis">
       <div class="section-heading">
         <div>
           <p class="eyebrow">Meus cursos</p>
-          <h2>Cursos disponiveis para si</h2>
+          <h2>Cursos disponíveis para si</h2>
         </div>
       </div>
       <div class="student-course-list">
         ${state.myCourses.length ? state.myCourses.map(studentCourseCardTemplate).join('') : `
-          <div class="video-empty">Ainda nao existem cursos associados ao seu perfil.</div>
+          <div class="video-empty">Ainda não existem cursos associados ao seu perfil.</div>
         `}
       </div>
     </section>
@@ -693,29 +695,29 @@ async function renderDashboard(view = 'overview') {
       <article class="insight-card">
         <img src="${iconUrl('classroom', goldIcon)}" alt="">
         <div>
-          <span>Aulas disponiveis</span>
+          <span>Aulas disponíveis</span>
           <strong>${activeLessons}</strong>
         </div>
       </article>
       <article class="insight-card">
         <img src="${iconUrl('time', goldIcon)}" alt="">
         <div>
-          <span>Carga horaria</span>
+          <span>Carga horária</span>
           <strong>${dashboard.course.totalHours}h</strong>
         </div>
       </article>
     </section>
 
-    <section class="student-submission-panel" aria-label="Submissoes do estudante">
+    <section class="student-submission-panel" aria-label="Submissões do estudante">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Submissoes</p>
+          <p class="eyebrow">Submissões</p>
           <h2>Trabalhos e atividades</h2>
         </div>
       </div>
       <div class="student-status-list">
         ${dashboard.lessons.length ? dashboard.lessons.map(studentSubmissionRowTemplate).join('') : `
-          <div class="video-empty">Ainda nao existem atividades associadas ao curso.</div>
+          <div class="video-empty">Ainda não existem atividades associadas ao curso.</div>
         `}
       </div>
     </section>
@@ -724,27 +726,27 @@ async function renderDashboard(view = 'overview') {
       <div class="section-heading">
         <div>
           <p class="eyebrow">Notas e feedback</p>
-          <h2>Desempenho por modulo</h2>
+          <h2>Desempenho por módulo</h2>
         </div>
       </div>
       <div class="student-status-list">
         ${dashboard.lessons.length ? dashboard.lessons.map(studentGradeRowTemplate).join('') : `
-          <div class="video-empty">Ainda nao existem notas para apresentar.</div>
+          <div class="video-empty">Ainda não existem notas para apresentar.</div>
         `}
       </div>
     </section>
 
-    <section class="video-panel" aria-label="Galeria de videos">
+    <section class="video-panel" aria-label="Galeria de vídeos">
       <div class="video-panel-copy">
         <p class="eyebrow">Galeria</p>
-        <h2>Videos da Summer School</h2>
-        <p>Assista aos videos de apoio adicionados pela administracao.</p>
+        <h2>Vídeos da Summer School</h2>
+        <p>Assista aos vídeos de apoio adicionados pela administração.</p>
       </div>
 
       <div class="video-gallery ${videos.length ? '' : 'is-empty'}">
         ${videos.length
           ? videos.map(videoCardTemplate).join('')
-          : '<div class="video-empty">Ainda nao existem videos publicados.</div>'}
+          : '<div class="video-empty">Ainda não existem vídeos publicados.</div>'}
       </div>
     </section>
 
@@ -764,9 +766,9 @@ async function renderDashboard(view = 'overview') {
       <h3>Como funciona a plataforma</h3>
       <div class="information-grid">
         <div><strong>1.</strong><span>Consulte os materiais da aula.</span></div>
-        <div><strong>2.</strong><span>Inicie a atividade pratica.</span></div>
+        <div><strong>2.</strong><span>Inicie a atividade prática.</span></div>
         <div><strong>3.</strong><span>Responda e carregue evidencias.</span></div>
-        <div><strong>4.</strong><span>Acompanhe a avaliacao.</span></div>
+        <div><strong>4.</strong><span>Acompanhe a avaliação.</span></div>
       </div>
     </section>
   `, pageMeta[view] || pageMeta.overview);
@@ -776,7 +778,7 @@ async function renderDashboard(view = 'overview') {
       <div class="hero-copy">
         <p class="eyebrow">${escapeHtml(platformYear)}</p>
         <h1 class="hero-greeting">${escapeHtml(greeting)}</h1>
-        <p>Ambiente digital para acompanhar conteudos, exercicios e avaliacoes do programa.</p>
+        <p>Ambiente digital para acompanhar conteúdos, exercícios e avaliações do programa.</p>
         <div class="hero-meta">
           <span>Programa: ${escapeHtml(dashboard.course.title)}</span>
           <span>${escapeHtml(dashboard.course.courseCode)}</span>
@@ -789,7 +791,7 @@ async function renderDashboard(view = 'overview') {
               Continuar a estudar
             </button>
           ` : ''}
-          <a class="button button-secondary" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">Pagina do evento</a>
+          <a class="button button-secondary" href="${escapeHtml(config.institutionalUrl)}" target="_blank" rel="noopener">Página do evento</a>
         </div>
       </div>
       <div class="progress-summary">
@@ -801,17 +803,17 @@ async function renderDashboard(view = 'overview') {
         ${certificateButton}
       </div>
     </section>
-    <section class="dashboard-insights student-priority-grid" aria-label="Proximos passos do percurso">
+    <section class="dashboard-insights student-priority-grid" aria-label="Próximos passos do percurso">
       <article class="insight-card priority-card">
         <img src="${iconUrl('play-circle', goldIcon)}" alt="">
         <div>
-          <span>Proxima aula</span>
+          <span>Próxima aula</span>
           <strong>${escapeHtml(nextLessonItem?.lesson?.title || 'Percurso concluido')}</strong>
         </div>
       </article>
       <article class="insight-card priority-card">
         <img src="${iconUrl('calendar-days', goldIcon)}" alt="">
-        <div><span>Proximo prazo</span><strong>${escapeHtml(nextDeadlineLabel)}</strong></div>
+        <div><span>Próximo prazo</span><strong>${escapeHtml(nextDeadlineLabel)}</strong></div>
       </article>
       <article class="insight-card priority-card">
         <img src="${iconUrl('clipboard-list', goldIcon)}" alt="">
@@ -820,36 +822,36 @@ async function renderDashboard(view = 'overview') {
       <article class="insight-card priority-card">
         <img src="${iconUrl('message-square', goldIcon)}" alt="">
         <div>
-          <span>Ultimo feedback</span>
+          <span>Último feedback</span>
           <strong>${escapeHtml(latestFeedbackItem?.activeAttempt?.reviewComments || 'Sem feedback novo')}</strong>
         </div>
       </article>
     </section>
-    <section class="video-panel" aria-label="Galeria de videos">
+    <section class="video-panel" aria-label="Galeria de vídeos">
       <div class="video-panel-copy">
         <p class="eyebrow">Galeria</p>
-        <h2>Videos da Summer School</h2>
-        <p>Assista aos videos de apoio adicionados pela administracao.</p>
+        <h2>Vídeos da Summer School</h2>
+        <p>Assista aos vídeos de apoio adicionados pela administração.</p>
       </div>
       <div class="video-gallery ${videos.length ? '' : 'is-empty'}">
-        ${videos.length ? videos.map(videoCardTemplate).join('') : '<div class="video-empty">Ainda nao existem videos publicados.</div>'}
+        ${videos.length ? videos.map(videoCardTemplate).join('') : '<div class="video-empty">Ainda não existem vídeos publicados.</div>'}
       </div>
     </section>
     <section class="information-panel">
       <h3>Como funciona a plataforma</h3>
       <div class="information-grid">
         <div><strong>1.</strong><span>Consulte os materiais da aula.</span></div>
-        <div><strong>2.</strong><span>Inicie a atividade pratica.</span></div>
+        <div><strong>2.</strong><span>Inicie a atividade prática.</span></div>
         <div><strong>3.</strong><span>Responda e carregue evidencias.</span></div>
-        <div><strong>4.</strong><span>Acompanhe a avaliacao.</span></div>
+        <div><strong>4.</strong><span>Acompanhe a avaliação.</span></div>
       </div>
     </section>
   `;
   const coursesContent = `
-    <section class="student-courses-panel" aria-label="Cursos disponiveis">
+    <section class="student-courses-panel" aria-label="Cursos disponíveis">
       <div class="student-course-list">
         ${state.myCourses.length ? state.myCourses.map(studentCourseCardTemplate).join('') : `
-          <div class="video-empty">Ainda nao existem cursos associados ao seu perfil.</div>
+          <div class="video-empty">Ainda não existem cursos associados ao seu perfil.</div>
         `}
       </div>
     </section>
@@ -863,14 +865,14 @@ async function renderDashboard(view = 'overview') {
       <span class="course-hours">${escapeHtml(totalHoursLabel)}</span>
     </section>
     <div class="lesson-grid">
-      ${dashboard.lessons.length ? dashboard.lessons.map(lessonCardTemplate).join('') : '<div class="video-empty">Ainda nao existem modulos publicados para este curso.</div>'}
+      ${dashboard.lessons.length ? dashboard.lessons.map(lessonCardTemplate).join('') : '<div class="video-empty">Ainda não existem módulos publicados para este curso.</div>'}
     </div>
   `;
   const submissionsContent = `
-    <section class="student-submission-panel" aria-label="Submissoes do estudante">
+    <section class="student-submission-panel" aria-label="Submissões do estudante">
       <div class="student-status-list">
         ${dashboard.lessons.length ? dashboard.lessons.map(studentSubmissionRowTemplate).join('') : `
-          <div class="video-empty">Ainda nao existem atividades associadas ao curso.</div>
+          <div class="video-empty">Ainda não existem atividades associadas ao curso.</div>
         `}
       </div>
     </section>
@@ -889,7 +891,7 @@ async function renderDashboard(view = 'overview') {
     <section class="student-grade-panel" aria-label="Notas e feedback">
       <div class="student-status-list">
         ${dashboard.lessons.length ? dashboard.lessons.map(studentGradeRowTemplate).join('') : `
-          <div class="video-empty">Ainda nao existem notas para apresentar.</div>
+          <div class="video-empty">Ainda não existem notas para apresentar.</div>
         `}
       </div>
     </section>
@@ -954,7 +956,7 @@ function studentCourseCardTemplate(item) {
       </div>
       <dl>
         <div><dt>Progresso</dt><dd>${Number(enrollment.progressPercent || 0)}%</dd></div>
-        <div><dt>Modulos</dt><dd>${item.lessonCount || 0}</dd></div>
+        <div><dt>Módulos</dt><dd>${item.lessonCount || 0}</dd></div>
         <div><dt>Dias restantes</dt><dd>${escapeHtml(remainingDays)}</dd></div>
       </dl>
       <button class="button ${active ? 'button-disabled' : 'button-secondary'}" type="button"
@@ -974,14 +976,14 @@ function studentSubmissionRowTemplate(item) {
   const locked = progress.status === 'LOCKED';
   const lessonId = lesson.lessonId || '';
   const action = reviewable
-    ? `<button class="button button-secondary button-small" type="button" data-check-attempt="${escapeHtml(activeAttempt.attemptId)}">Abrir revisao</button>`
+    ? `<button class="button button-secondary button-small" type="button" data-check-attempt="${escapeHtml(activeAttempt.attemptId)}">Abrir revisão</button>`
     : `<button class="button ${locked || !lessonId ? 'button-disabled' : 'button-primary'} button-small" type="button" ${locked || !lessonId ? 'disabled' : `data-open-lesson="${escapeHtml(lessonId)}"`}>${locked ? 'Bloqueada' : 'Abrir atividade'}</button>`;
   return `
     <article class="student-status-row">
       <div class="student-status-index">${escapeHtml(String(lesson.lessonNumber || '').padStart(2, '0'))}</div>
       <div>
-        <h3>${escapeHtml(lesson.title || 'Modulo')}</h3>
-        <p>${escapeHtml(lesson.summary || 'Atividade associada ao modulo.')}</p>
+        <h3>${escapeHtml(lesson.title || 'Módulo')}</h3>
+        <p>${escapeHtml(lesson.summary || 'Atividade associada ao módulo.')}</p>
       </div>
       <span class="status-pill ${statusClass(progress.status)}">${escapeHtml(statusLabel(progress.status))}</span>
       <div class="student-status-actions">${action}</div>
@@ -997,8 +999,8 @@ function studentGradeRowTemplate(item) {
     <article class="student-status-row student-grade-row">
       <div class="student-status-index">${escapeHtml(String(lesson.lessonNumber || '').padStart(2, '0'))}</div>
       <div>
-        <h3>${escapeHtml(lesson.title || 'Modulo')}</h3>
-        <p>${escapeHtml(progress.status === 'APPROVED' ? 'Modulo aprovado.' : 'Aguardando conclusao ou avaliacao.')}</p>
+        <h3>${escapeHtml(lesson.title || 'Módulo')}</h3>
+        <p>${escapeHtml(progress.status === 'APPROVED' ? 'Módulo aprovado.' : 'A aguardar conclusão ou avaliação.')}</p>
       </div>
       <strong class="student-score-value">${escapeHtml(score)}</strong>
       <span class="status-pill ${statusClass(progress.status)}">${escapeHtml(statusLabel(progress.status))}</span>
@@ -1038,7 +1040,7 @@ async function renderProfile() {
   headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
   headerUser.hidden = false;
   if (mobileMenuButton) mobileMenuButton.hidden = false;
-  logoutButton.hidden = true;
+  logoutButton.hidden = false;
 
   root.innerHTML = studentAppShell('profile', `
     <section class="profile-shell profile-shell-modern">
@@ -1055,7 +1057,7 @@ async function renderProfile() {
         </div>
         <div class="profile-status-grid" aria-label="Resumo do perfil">
           <div>
-            <span>ID publico</span>
+            <span>ID público</span>
             <strong>${escapeHtml(student.publicStudentId || '-')}</strong>
           </div>
           <div>
@@ -1074,7 +1076,7 @@ async function renderProfile() {
           <div class="profile-section-heading">
             <div>
               <p class="eyebrow">Dados gerais</p>
-              <h2>Informacoes pessoais</h2>
+              <h2>Informações pessoais</h2>
             </div>
           </div>
 
@@ -1107,7 +1109,7 @@ async function renderProfile() {
               <input value="${escapeHtml(student.email || '')}" disabled>
             </label>
             <label>
-              <span>Pais</span>
+              <span>País</span>
               <input name="country" value="${escapeHtml(student.country || '')}">
             </label>
             <label>
@@ -1115,17 +1117,17 @@ async function renderProfile() {
               <input name="phone" value="${escapeHtml(student.phone || '')}">
             </label>
             <label>
-              <span>Organizacao</span>
+              <span>Organização</span>
               <input name="organization" value="${escapeHtml(student.organization || '')}">
             </label>
             <label>
-              <span>Funcao profissional</span>
+              <span>Função profissional</span>
               <input name="jobTitle" value="${escapeHtml(student.jobTitle || '')}">
             </label>
           </div>
 
           <label>
-            <span>Interesses academicos ou profissionais</span>
+            <span>Interesses académicos ou profissionais</span>
             <textarea name="interests" rows="5">${escapeHtml(student.interests || '')}</textarea>
           </label>
 
@@ -1138,34 +1140,34 @@ async function renderProfile() {
         <form id="passwordForm" class="profile-card profile-security form-stack">
           <div class="profile-section-heading">
             <div>
-              <p class="eyebrow">Seguranca</p>
-              <h2>Alterar senha de acesso</h2>
+              <p class="eyebrow">Segurança</p>
+              <h2>Alterar palavra-passe de acesso</h2>
             </div>
           </div>
           <label>
-            <span>Senha atual</span>
+            <span>Palavra-passe atual</span>
             <input type="password" name="currentAccessCode" autocomplete="current-password" required>
           </label>
           <label>
-            <span>Nova senha</span>
+            <span>Nova palavra-passe</span>
             <input type="password" name="newAccessCode" autocomplete="new-password" minlength="8" required>
           </label>
           <label>
-            <span>Confirmar nova senha</span>
+            <span>Confirmar a nova palavra-passe</span>
             <input type="password" name="confirmAccessCode" autocomplete="new-password" minlength="8" required>
           </label>
           <div class="profile-security-note">
-            Ao alterar a senha, sera necessario iniciar sessao novamente.
+            Ao alterar a palavra-passe, será necessário iniciar sessão novamente.
           </div>
           <div class="profile-actions">
-            <button class="button button-primary" type="submit">Alterar senha</button>
+            <button class="button button-primary" type="submit">Alterar palavra-passe</button>
           </div>
         </form>
 
         <section class="profile-card profile-exit">
           <div class="profile-section-heading">
             <div>
-              <p class="eyebrow">Sessao</p>
+              <p class="eyebrow">Sessão</p>
               <h2>Terminar acesso</h2>
             </div>
           </div>
@@ -1175,9 +1177,9 @@ async function renderProfile() {
       </div>
     </section>
   `, {
-    eyebrow: 'Perfil e configuracoes',
+    eyebrow: 'Perfil e configurações',
     title: 'Perfil pessoal',
-    description: 'Atualize os seus dados, fotografia e senha de acesso.'
+    description: 'Atualize os seus dados, fotografia e palavra-passe de acesso.'
   });
 
   document.querySelector('#profileForm').addEventListener('submit', saveProfile);
@@ -1223,7 +1225,7 @@ async function changePassword(event) {
   const confirmAccessCode = String(formData.get('confirmAccessCode') || '');
 
   if (newAccessCode !== confirmAccessCode) {
-    showToast('A confirmacao da nova senha nao corresponde.', 'error');
+    showToast('A confirmação da nova palavra-passe não corresponde.', 'error');
     return;
   }
 
@@ -1234,7 +1236,7 @@ async function changePassword(event) {
     state.dashboard = null;
     state.myCourses = [];
     location.hash = '';
-    showToast('Senha alterada. Inicie sessao novamente.', 'success');
+    showToast('Palavra-passe alterada. Inicie sessão novamente.', 'success');
     renderLogin();
   } catch (error) {
     handleError(error);
@@ -1258,7 +1260,7 @@ function bindProfilePhotoPreview(student) {
     }
 
     if (!file.type.startsWith('image/')) {
-      showToast('Selecione uma imagem valida.', 'error');
+      showToast('Selecione uma imagem válida.', 'error');
       input.value = '';
       if (fileName) fileName.textContent = 'Nenhum ficheiro selecionado.';
       preview.innerHTML = profilePhotoTemplate(student);
@@ -1334,7 +1336,7 @@ function lessonCardTemplate(item) {
     action = `
       <button class="button button-secondary" type="button"
         data-check-attempt="${escapeHtml(activeAttempt.attemptId)}">
-        Consultar avaliacao
+        Consultar avaliação
       </button>
     `;
   } else if (!locked) {
@@ -1362,10 +1364,10 @@ function lessonCardTemplate(item) {
         <p>${escapeHtml(lesson.summary)}</p>
         <div class="lesson-meta">
           <span>Teoria: ${lesson.theoryMinutes} min</span>
-          <span>Pratica: ${lesson.exerciseMinutes + lesson.individualMinutes} min</span>
+          <span>Prática: ${lesson.exerciseMinutes + lesson.individualMinutes} min</span>
         </div>
         ${progress.score !== null
-          ? `<p class="score-line">Classificacao: <strong>${progress.score}%</strong></p>`
+          ? `<p class="score-line">Classificação: <strong>${progress.score}%</strong></p>`
           : ''}
         <div class="lesson-card-actions">${action}</div>
       </div>
@@ -1463,7 +1465,7 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
       <div class="completion-card">
         <div class="completion-icon"><img src="${iconUrl('circle-check', goldIcon)}" alt=""></div>
         <h2>Aula aprovada</h2>
-        <p>Obteve ${lessonData.progress.score}% e pode rever todo o conteudo.</p>
+        <p>Obteve ${lessonData.progress.score}% e pode rever todo o conteúdo.</p>
         <button class="button button-secondary" id="backApproved">Voltar ao curso</button>
       </div>
     `;
@@ -1477,11 +1479,11 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
     const minutes = lessonData.lesson.exerciseMinutes + lessonData.lesson.individualMinutes;
     return `
       <div class="start-assessment-card">
-        <p class="eyebrow">Avaliacao pratica</p>
+        <p class="eyebrow">Avaliação prática</p>
         <h2>Preparado para iniciar?</h2>
         <p>
           Ao iniciar, o temporizador de ${minutes} minutos comecara no servidor
-          e continuara mesmo que feche a pagina.
+          e continuará mesmo que feche a página.
         </p>
         <button class="button button-primary" id="startAttempt">Iniciar exercicios</button>
       </div>
@@ -1500,7 +1502,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
     <div class="attempt-header">
       <div>
         <p class="eyebrow">Tentativa ${attempt.attemptNumber}</p>
-        <h2>Respostas e submissao</h2>
+        <h2>Respostas e submissão</h2>
       </div>
       <div class="timer-card">
         <span>Tempo restante</span>
@@ -1518,7 +1520,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
       <div>
         <p class="eyebrow">Documentos obrigatorios</p>
         <h3>Carregue fotografias ou ficheiros</h3>
-        <p>As imagens serao otimizadas antes do envio. Confirme que todos os calculos estao legiveis.</p>
+        <p>As imagens serão otimizadas antes do envio. Confirme que todos os cálculos estão legíveis.</p>
       </div>
 
       <div class="upload-methods">
@@ -1538,7 +1540,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
           </label>
           <button class="button button-secondary" type="submit">Carregar imagem</button>
           <p class="field-hint">
-            Use um link publico para uma imagem. A plataforma le a imagem e envia-a pela mesma submissao.
+            Use um link público para uma imagem. A plataforma lê a imagem e envia-a pela mesma submissão.
           </p>
         </form>
       </div>
@@ -1558,7 +1560,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
       </label>
       <button class="button button-primary" id="submitAttempt">Submeter atividade</button>
       <p class="submission-warning">
-        Depois da submissao, as respostas e os ficheiros deixam de poder ser alterados.
+        Depois da submissão, as respostas e os ficheiros deixam de poder ser alterados.
       </p>
     </div>
   `;
@@ -1582,7 +1584,7 @@ function questionTemplate(question, answer = null) {
 
   return `
     <article class="question-card" data-question="${escapeHtml(question.questionId)}">
-      <div class="question-number">Questao ${question.questionOrder}</div>
+      <div class="question-number">Questão ${question.questionOrder}</div>
       <h3>${escapeHtml(question.prompt)}</h3>
       <p class="question-points">${question.points} pontos ${question.isRequired ? ' -  obrigatoria' : ''}</p>
       ${field}
@@ -1643,11 +1645,11 @@ function reviewStateTemplate(attempt, review) {
       <span class="status-pill ${statusClass(attempt.status)}">
         ${escapeHtml(statusLabel(attempt.status))}
       </span>
-      <h2>${attempt.status === 'UNDER_REVIEW' ? 'Atividade em avaliacao' : 'Resultado da avaliacao'}</h2>
+      <h2>${attempt.status === 'UNDER_REVIEW' ? 'Atividade em avaliação' : 'Resultado da avaliação'}</h2>
       ${attempt.score !== null ? `<p class="review-score">${attempt.score}%</p>` : ''}
       <p>${escapeHtml(review?.comments || attempt.reviewComments || reviewStatusMessage(attempt.status))}</p>
       ${review?.correctionDeadline
-        ? `<p>Prazo para correcao: <strong>${formatDate(review.correctionDeadline)}</strong></p>`
+        ? `<p>Prazo para correção: <strong>${formatDate(review.correctionDeadline)}</strong></p>`
         : ''}
       ${retry}
       <button class="button button-secondary" id="backReview">Voltar ao curso</button>
@@ -1657,10 +1659,10 @@ function reviewStateTemplate(attempt, review) {
 
 function reviewStatusMessage(status) {
   const messages = {
-    UNDER_REVIEW: 'A submissao foi recebida e aguarda analise do avaliador.',
-    CORRECTION_REQUIRED: 'Leia os comentarios e aguarde ou use a autorizacao de nova tentativa.',
-    FAILED: 'A atividade nao atingiu os criterios de aprovacao.',
-    TIME_EXCEEDED: 'O prazo da tentativa terminou antes da submissao.'
+    UNDER_REVIEW: 'A submissão foi recebida e aguarda análise do avaliador.',
+    CORRECTION_REQUIRED: 'Leia os comentários e aguarde ou use a autorização de nova tentativa.',
+    FAILED: 'A atividade não atingiu os critérios de aprovação.',
+    TIME_EXCEEDED: 'O prazo da tentativa terminou antes da submissão.'
   };
   return messages[status] || 'Consulte o estado da atividade.';
 }
@@ -1713,7 +1715,7 @@ async function startAttempt(event) {
     bindAssessmentEvents();
     startTimer(state.attempt.deadlineAt);
     startStatusPoll(state.attempt.attemptId);
-    showToast('Tentativa iniciada. O temporizador esta em curso.', 'success');
+    showToast('Tentativa iniciada. O temporizador está em curso.', 'success');
     reportHeight();
   } catch (error) {
     handleError(error);
@@ -1829,17 +1831,17 @@ async function fileFromDriveImageUrl(rawUrl) {
       cache: 'no-store'
     });
   } catch {
-    throw new Error('Nao foi possivel ler o link. Confirme que a imagem do Google Drive esta publica.');
+    throw new Error('Não foi possível ler o link. Confirme que a imagem do Google Drive está pública.');
   }
 
   if (!response.ok) {
-    throw new Error('Nao foi possivel descarregar a imagem do Google Drive.');
+    throw new Error('Não foi possível descarregar a imagem do Google Drive.');
   }
 
   const blob = await response.blob();
 
   if (!blob.type.startsWith('image/')) {
-    throw new Error('O link indicado precisa apontar para uma imagem publica do Google Drive.');
+    throw new Error('O link indicado precisa apontar para uma imagem pública do Google Drive.');
   }
 
   return new File([blob], driveImageFileName(rawUrl, blob.type), { type: blob.type });
@@ -1912,12 +1914,12 @@ async function submitAttempt(event) {
   const checkbox = document.querySelector('#authorshipConfirmation');
 
   if (!checkbox.checked) {
-    showToast('Confirme a declaracao de autoria antes de submeter.', 'warning');
+    showToast('Confirme a declaração de autoria antes de submeter.', 'warning');
     checkbox.focus();
     return;
   }
 
-  if (!window.confirm('Confirmar a submissao final da atividade?')) return;
+  if (!window.confirm('Confirmar a submissão final da atividade?')) return;
 
   const button = event.currentTarget;
   setBusy(button, true, 'A submeter...');
@@ -1988,7 +1990,7 @@ function startStatusPoll(attemptId) {
         reportHeight();
       }
     } catch {
-      // Nao interromper o trabalho em caso de falha transitoria do polling.
+      // Não interromper o trabalho em caso de falha transitória do polling.
     }
   }, config.pollIntervalMs || 60000);
 }
@@ -2178,8 +2180,8 @@ async function renderCertificate() {
   if (!result.certificate) {
     root.innerHTML = `
       <div class="completion-card standalone-card">
-        <h1>Certificado ainda indisponivel</h1>
-        <p>O certificado sera disponibilizado depois da aprovacao de todas as aulas.</p>
+        <h1>Certificado ainda indisponível</h1>
+        <p>O certificado será disponibilizado depois da aprovação de todas as aulas.</p>
         <a class="button button-secondary" href="#/">Voltar ao curso</a>
       </div>
     `;
@@ -2191,15 +2193,15 @@ async function renderCertificate() {
   root.innerHTML = `
     <section class="certificate-card">
       <p class="eyebrow">${escapeHtml(config.organizationName)}</p>
-      <h1>Certificado de conclusao</h1>
-      <p class="certificate-lead">Este registo confirma a conclusao do curso</p>
+      <h1>Certificado de conclusão</h1>
+      <p class="certificate-lead">Este registo confirma a conclusão do curso</p>
       <h2>${escapeHtml(config.appName)}</h2>
 
       <div class="certificate-data">
-        <div><span>Numero</span><strong>${escapeHtml(certificate.certificateNumber)}</strong></div>
+        <div><span>Número</span><strong>${escapeHtml(certificate.certificateNumber)}</strong></div>
         <div><span>Data</span><strong>${formatDate(certificate.issueDate)}</strong></div>
-        <div><span>Classificacao</span><strong>${certificate.finalScore}%</strong></div>
-        <div><span>Verificacao</span><strong>${escapeHtml(certificate.verificationCode)}</strong></div>
+        <div><span>Classificação</span><strong>${certificate.finalScore}%</strong></div>
+        <div><span>Verificação</span><strong>${escapeHtml(certificate.verificationCode)}</strong></div>
       </div>
 
       ${certificate.driveUrl
@@ -2214,7 +2216,7 @@ async function renderCertificate() {
 
 async function renderCertifications() {
   clearTimers();
-  root.innerHTML = loadingTemplate('A carregar as certificacoes...');
+  root.innerHTML = loadingTemplate('A carregar as certificações...');
 
   const result = await api.certifications(state.selectedCourseId);
   const settings = result.settings || {};
@@ -2229,14 +2231,14 @@ async function renderCertifications() {
   if (!result.completed) {
     root.innerHTML = studentAppShell('certifications', `
       <div class="completion-card standalone-card">
-        <h1>Certificacoes ainda indisponiveis</h1>
-        <p>Conclua e tenha aprovados todos os modulos do curso para liberar os certificados.</p>
+        <h1>Certificações ainda indisponíveis</h1>
+        <p>Conclua e obtenha aprovação em todos os módulos do curso para libertar os certificados.</p>
         <a class="button button-secondary" href="#/">Voltar ao curso</a>
       </div>
     `, {
       eyebrow: 'Certificados',
-      title: 'Minhas certificacoes',
-      description: 'Os certificados ficam disponiveis depois da conclusao do curso.'
+      title: 'Minhas certificações',
+      description: 'Os certificados ficam disponíveis depois da conclusão do curso.'
     });
     reportHeight();
     return;
@@ -2253,15 +2255,15 @@ async function renderCertifications() {
           <img src="${iconUrl('award', goldIcon)}" alt="">
         </div>
         <div>
-          <p class="eyebrow">Minhas certificacoes</p>
-          <h1>Certificacoes</h1>
-          <p>Certificados emitidos apos a conclusao dos cursos elegiveis.</p>
+          <p class="eyebrow">Minhas certificações</p>
+          <h1>Certificações</h1>
+          <p>Certificados emitidos após a conclusão dos cursos elegíveis.</p>
         </div>
       </div>
 
       <div class="certification-list">
         ${certificateList.length ? certificateList.map(certificationListItemTemplate).join('') : `
-          <div class="video-empty">Ainda nao existem certificados emitidos.</div>
+          <div class="video-empty">Ainda não existem certificados emitidos.</div>
         `}
       </div>
 
@@ -2273,7 +2275,7 @@ async function renderCertifications() {
     </section>
   `, {
     eyebrow: 'Certificados',
-    title: 'Minhas certificacoes',
+    title: 'Minhas certificações',
     description: 'Visualize, baixe e acompanhe os seus certificados oficiais.'
   });
 
@@ -2292,23 +2294,24 @@ async function renderCertifications() {
 function certificationListItemTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
   const isAvailable = certificate.status === 'ISSUED';
-  const label = isProfessional ? 'CERTIFICADO PROFISSIONAL' : 'CERTIFICADO DE PARTICIPACAO';
-  const title = isProfessional ? 'Certificado profissional personalizado' : 'Certificado de Participacao';
-  const emittedAt = certificate.issueDate ? `Emitido em ${formatDate(certificate.issueDate)}` : 'Em emissao';
+  const label = isProfessional ? 'CERTIFICADO PROFISSIONAL' : 'CERTIFICADO DE PARTICIPAÇÃO';
+  const title = isProfessional ? 'Certificado profissional personalizado' : 'Certificado de Participação';
+  const emittedAt = certificate.issueDate ? `Emitido em ${formatDate(certificate.issueDate)}` : 'Em emissão';
+  const logoUrl = brandLogoUrl();
   return `
     <article class="certification-list-item ${isProfessional ? 'is-professional' : ''} ${isAvailable ? '' : 'is-blocked'}">
-      <div class="certification-seal" aria-hidden="true">
-        <span>LMT</span>
+      <div class="certification-seal${logoUrl ? ' has-brand-logo' : ''}" aria-hidden="true">
+        ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="">` : '<span>LSS</span>'}
       </div>
       <div class="certification-list-copy">
         <p class="eyebrow">${label}</p>
         <h2>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || title)}</h2>
-        <p>100% &middot; ${escapeHtml(isAvailable ? emittedAt : 'Acesso temporariamente removido pela administracao')}</p>
+        <p>100% &middot; ${escapeHtml(isAvailable ? emittedAt : 'Acesso temporariamente removido pela administração')}</p>
         <div class="certification-list-actions">
           <code>${escapeHtml(certificateDisplayNumber(certificate) || certificate.certificateId || '')}</code>
           <button class="button button-secondary button-small" type="button"
             data-preview-certificate="${escapeHtml(certificate.certificateId)}" ${isAvailable ? '' : 'disabled'}>
-            ${isAvailable ? 'Ver certificado' : 'Indisponivel'}
+            ${isAvailable ? 'Ver certificado' : 'Indisponível'}
           </button>
         </div>
       </div>
@@ -2328,8 +2331,8 @@ function professionalRequestFlowTemplate(settings, request, blockedCertificate =
     return `
       <article class="certificate-upgrade-card">
         <p class="eyebrow">Certificado profissional</p>
-        <h2>Emissao temporariamente indisponivel</h2>
-        <p>A administracao ainda nao liberou novas solicitacoes para este certificado. Quando estiver disponivel, as condicoes de emissao vao aparecer aqui.</p>
+        <h2>Emissão temporariamente indisponível</h2>
+        <p>A administração ainda não libertou novos pedidos para este certificado. Quando estiver disponível, as condições de emissão aparecerão aqui.</p>
       </article>
     `;
   }
@@ -2339,7 +2342,7 @@ function professionalRequestFlowTemplate(settings, request, blockedCertificate =
       <article class="certificate-upgrade-card">
         <p class="eyebrow">Certificado profissional</p>
         <h2>${payment.requiresPayment ? 'Comprovativo recebido' : 'Pedido recebido'}</h2>
-        <p>A administracao vai rever a solicitacao e liberar o certificado profissional se estiver tudo correto.</p>
+        <p>A administração irá rever o pedido e libertar o certificado profissional se estiver tudo correto.</p>
       </article>
     `;
   }
@@ -2350,7 +2353,7 @@ function professionalRequestFlowTemplate(settings, request, blockedCertificate =
         <article class="certificate-upgrade-card">
           <p class="eyebrow">Certificado profissional</p>
           <h2>Pedido recebido</h2>
-          <p>A administracao vai rever a solicitacao e liberar o certificado profissional se estiver tudo correto.</p>
+          <p>A administração irá rever o pedido e libertar o certificado profissional se estiver tudo correto.</p>
         </article>
       `;
     }
@@ -2371,13 +2374,13 @@ function professionalRequestFlowTemplate(settings, request, blockedCertificate =
     <article class="certificate-upgrade-card">
       <div>
         <p class="eyebrow">Opcional</p>
-        <h2>${blockedCertificate ? 'Solicitar nova liberacao' : 'Certificado profissional personalizado'}</h2>
+        <h2>${blockedCertificate ? 'Solicitar nova libertação' : 'Certificado profissional personalizado'}</h2>
         <p>${blockedCertificate
-          ? 'O acesso ao certificado profissional anterior foi removido. Pode iniciar uma nova solicitacao para revisao administrativa.'
-          : 'Um modelo institucional com descricao dos conteudos aprendidos, verificacao oficial, campos de assinatura e acabamento profissional.'}</p>
+          ? 'O acesso ao certificado profissional anterior foi removido. Pode iniciar um novo pedido para revisão administrativa.'
+          : 'Um modelo institucional com descrição dos conteúdos aprendidos, verificação oficial, campos de assinatura e acabamento profissional.'}</p>
       </div>
       <div class="professional-certificate-mock">
-        <strong>${escapeHtml(payment.issuerName || config.organizationName || 'Instituicao emissora')}</strong>
+        <strong>${escapeHtml(payment.issuerName || config.organizationName || 'Instituição emissora')}</strong>
         <span>Certificado profissional</span>
         <small>${payment.requiresPayment ? `Pagamento: ${escapeHtml(payment.amountLabel)}` : 'Sem pagamento obrigatorio'}</small>
       </div>
@@ -2403,14 +2406,14 @@ function certificatePaymentPolicy(settings = {}) {
     amountLabel: amount ? `${amount} ${currency}` : 'Valor a confirmar',
     accountName: profile.paymentAccountName || '',
     accountNumber: profile.paymentAccountNumber || '',
-    instructions: profile.paymentInstructions || settings.paymentInstructions || 'Siga as instrucoes de pagamento informadas pela administracao.'
+    instructions: profile.paymentInstructions || settings.paymentInstructions || 'Siga as instruções de pagamento fornecidas pela administração.'
   };
 }
 
 function paymentConditionsTemplate(payment) {
   return `
     <div class="certificate-payment-conditions">
-      <div><span>Condicao</span><strong>${payment.requiresPayment ? 'Pagamento obrigatorio' : 'Sem pagamento obrigatorio'}</strong></div>
+      <div><span>Condição</span><strong>${payment.requiresPayment ? 'Pagamento obrigatório' : 'Sem pagamento obrigatório'}</strong></div>
       ${payment.requiresPayment ? `
         <div><span>Valor</span><strong>${escapeHtml(payment.amountLabel)}</strong></div>
         ${payment.accountName ? `<div><span>Titular</span><strong>${escapeHtml(payment.accountName)}</strong></div>` : ''}
@@ -2425,8 +2428,8 @@ function professionalReadyTemplate(certificate) {
   return `
     <article class="certificate-upgrade-card">
       <p class="eyebrow">Certificado profissional</p>
-      <h2>Certificado profissional liberado</h2>
-      <p>O seu certificado profissional esta pronto. Pode baixar ate atingir o limite definido.</p>
+      <h2>Certificado profissional disponibilizado</h2>
+      <p>O seu certificado profissional está pronto. Pode descarregá-lo até atingir o limite definido.</p>
       <button class="button button-primary" type="button"
         data-preview-certificate="${escapeHtml(certificate.certificateId)}">
         Ver certificado profissional
@@ -2446,7 +2449,7 @@ function showProfessionalSurveyDialog() {
       <form id="professionalCertificateForm" class="form-stack">
         <div class="profile-section-heading">
           <div>
-            <p class="eyebrow">Inquerito do curso</p>
+            <p class="eyebrow">Inquérito do curso</p>
             <h2>Antes do certificado profissional</h2>
           </div>
         </div>
@@ -2522,7 +2525,7 @@ async function submitProfessionalCertificateRequest(event, overlay = null) {
   try {
     const result = await api.requestProfessionalCertificate(state.selectedCourseId, surveyAnswers);
     const payment = certificatePaymentPolicy(state.certifications?.settings || {});
-    showToast(payment.requiresPayment ? 'Pedido criado. Envie o comprovativo de pagamento.' : 'Pedido criado para revisao administrativa.', 'success');
+    showToast(payment.requiresPayment ? 'Pedido criado. Envie o comprovativo de pagamento.' : 'Pedido criado para revisão administrativa.', 'success');
     overlay?.remove();
     await renderCertifications();
     if (payment.requiresPayment) showPaymentDialog(result.request?.requestId);
@@ -2587,7 +2590,7 @@ async function submitProfessionalCertificatePayment(event, overlay = null) {
   setBusy(button, true, 'A enviar...');
   try {
     await api.submitProfessionalCertificatePayment(requestId, file);
-    showToast('Comprovativo enviado para revisao.', 'success');
+    showToast('Comprovativo enviado para revisão.', 'success');
     overlay?.remove();
     await renderCertifications();
   } catch (error) {
@@ -2630,9 +2633,10 @@ function showCertificatePreview(certificateId) {
 
 function certificatePreviewTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
-  const title = isProfessional ? 'CERTIFICADO PROFISSIONAL DE CONCLUSAO' : 'CERTIFICADO DE PARTICIPACAO';
+  const title = isProfessional ? 'CERTIFICADO PROFISSIONAL DE CONCLUSÃO' : 'CERTIFICADO DE PARTICIPAÇÃO';
   const profile = certificate.templateSnapshot?.profile || {};
   const assets = profile.assets || {};
+  const logoUrl = assets.logoUrl || brandLogoUrl();
   const summary = String(certificate.contentSummary || '')
     .split(/\n+/)
     .map((line) => line.trim())
@@ -2643,33 +2647,33 @@ function certificatePreviewTemplate(certificate) {
       <div class="certificate-preview-inner certificate-document certificate-document-professional">
         <div class="certificate-professional-layout">
           <section class="certificate-professional-left">
-            ${assets.logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(assets.logoUrl)}" alt="">` : '<div class="certificate-logo-mark">LMT</div>'}
+            ${logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(logoUrl)}" alt="Logotipo institucional">` : '<div class="certificate-logo-mark">LSS</div>'}
             <p class="certificate-institution">${escapeHtml(profile.issuerName || config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
-            <h1>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificacao')}</h1>
-            <p>${escapeHtml(profile.qualificationType || 'sobre o aumento da qualificacao profissional')}</p>
+            <h1>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificação')}</h1>
+            <p>${escapeHtml(profile.qualificationType || 'sobre o aumento da qualificação profissional')}</p>
             <strong>${escapeHtml(certificateDisplayNumber(certificate) || '')}</strong>
-            <span>Documento de qualificacao</span>
-            <small>Numero de registo</small>
+            <span>Documento de qualificação</span>
+            <small>Número de registo</small>
             <strong>${escapeHtml(certificate.verificationCode || '')}</strong>
             <div class="certificate-place-date">
-              <b>${escapeHtml(profile.issueLocation || 'Cidade de Maputo, Mocambique')}</b>
+              <b>${escapeHtml(profile.issueLocation || 'Cidade de Maputo, Moçambique')}</b>
               <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
             </div>
             <div class="certificate-signature-block">
               ${assets.academicStampUrl ? `<img class="certificate-stamp-image" src="${escapeHtml(assets.academicStampUrl)}" alt="">` : ''}
               ${assets.directorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.directorSignatureUrl)}" alt="">` : ''}
               <span></span>
-              <b>${escapeHtml(profile.directorName || 'Diretor Academico')}</b>
+              <b>${escapeHtml(profile.directorName || 'Diretor Académico')}</b>
               <small>${escapeHtml(profile.directorTitle || 'LMTWEBNAIRS')}</small>
             </div>
           </section>
           <section class="certificate-professional-right">
             <p class="certificate-preview-lead">O presente documento certifica que</p>
             <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
-            <p>concluiu com sucesso o programa de aumento de qualificacao profissional na ${escapeHtml(profile.issuerName || 'LMTWEBNAIRS Summer School')}</p>
+            <p>concluiu com sucesso o programa de aumento de qualificação profissional na ${escapeHtml(profile.issuerName || config.organizationName || 'Summer School')}</p>
             <span>curso/programa</span>
             <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
-            <p>demonstrando aproveitamento satisfatorio em atividades academicas, estudos de caso, discussoes tecnicas e avaliacao final.</p>
+            <p>demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.</p>
             ${summary.length ? `
               <div class="certificate-content-summary">
                 <strong>O programa abordou:</strong>
@@ -2677,7 +2681,7 @@ function certificatePreviewTemplate(certificate) {
               </div>
             ` : ''}
             <div class="certificate-professional-footer">
-              <strong>Carga horaria: 30 horas</strong>
+              <strong>Carga horária: 30 horas</strong>
               <div class="certificate-signature-block">
                 ${assets.coordinatorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.coordinatorSignatureUrl)}" alt="">` : ''}
                 <span></span>
@@ -2689,7 +2693,7 @@ function certificatePreviewTemplate(certificate) {
           </section>
         </div>
         <div class="certificate-preview-meta">
-          <span>Codigo: ${escapeHtml(certificate.verificationCode || '')}</span>
+          <span>Código: ${escapeHtml(certificate.verificationCode || '')}</span>
           <span>Nota final: ${certificate.finalScore == null ? '--/100' : `${escapeHtml(certificate.finalScore)}/100`}</span>
         </div>
       </div>
@@ -2706,7 +2710,7 @@ function certificatePreviewTemplate(certificate) {
         <h1>${escapeHtml(title)}</h1>
         <p class="certificate-preview-lead">certifica que</p>
         <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
-        <p>${isProfessional ? 'concluiu com exito o programa profissional' : 'participou com sucesso do curso'}</p>
+        <p>${isProfessional ? 'concluiu com êxito o programa profissional' : 'participou com sucesso do curso'}</p>
         <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
         ${isProfessional && summary.length ? `
           <div class="certificate-content-summary">
@@ -2719,22 +2723,22 @@ function certificatePreviewTemplate(certificate) {
       </div>
       ${isProfessional ? `
         <div class="certificate-preview-metrics">
-          <span><small>Carga horaria</small><strong>30 HORAS</strong></span>
-          <span><small>Data de emissao</small><strong>${escapeHtml(formatDate(certificate.issueDate))}</strong></span>
+          <span><small>Carga horária</small><strong>30 HORAS</strong></span>
+          <span><small>Data de emissão</small><strong>${escapeHtml(formatDate(certificate.issueDate))}</strong></span>
           <span><small>Nota final</small><strong>${certificate.finalScore == null ? '--/100' : `${escapeHtml(certificate.finalScore)}/100`}</strong></span>
         </div>
       ` : ''}
-      <div class="certificate-preview-seal">${isProfessional ? 'LMT' : 'LMT<br>SUMMER<br>SCHOOL'}</div>
+      <div class="certificate-preview-seal${logoUrl ? ' has-brand-logo' : ''}">${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logotipo institucional">` : 'LSS'}</div>
       ${isProfessional ? `
         <div class="certificate-signature-row">
-          <span>Direcao academica</span>
-          <span>Coordenacao do programa</span>
+          <span>Direção académica</span>
+          <span>Coordenação do programa</span>
         </div>
       ` : ''}
       <div class="certificate-preview-meta">
         <span>N. do certificado: ${escapeHtml(certificateDisplayNumber(certificate) || '')}</span>
         <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
-        <span>Codigo: ${escapeHtml(certificate.verificationCode || '')}</span>
+        <span>Código: ${escapeHtml(certificate.verificationCode || '')}</span>
       </div>
     </div>
   `;
@@ -2751,7 +2755,7 @@ async function downloadCertificate(certificateId, overlay = null) {
     link.download = `${certificateDisplayNumber(cachedCertificate) || certificateId}.pdf`;
     link.click();
     URL.revokeObjectURL(url);
-    showToast('Certificado baixado.', 'success');
+    showToast('Certificado descarregado.', 'success');
     overlay?.remove();
     await renderCertifications();
   } catch (error) {
@@ -2929,7 +2933,7 @@ function updateThemeIcons(theme) {
 function renderConfigurationError(error) {
   root.innerHTML = `
     <div class="configuration-error">
-      <h1>Configuracao incompleta</h1>
+      <h1>Configuração incompleta</h1>
       <p>${escapeHtml(error.message)}</p>
       <code>public/config.js</code>
     </div>

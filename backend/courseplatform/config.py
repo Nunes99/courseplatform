@@ -117,7 +117,7 @@ def resolve_database_url() -> tuple[str, str, list[str]]:
     if not host and not project_ref:
         issues.append("Defina DATABASE_URL, POSTGRES_URL, POSTGRES_HOST ou SUPABASE_URL")
     if (host or project_ref) and not password:
-        issues.append("Defina POSTGRES_PASSWORD; chaves SUPABASE_* nao sao senha Postgres")
+        issues.append("Defina POSTGRES_PASSWORD; as chaves SUPABASE_* não são palavras-passe do Postgres")
     return "", "", issues
 
 

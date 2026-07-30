@@ -9559,3 +9559,235 @@ body:has(.admin-layout) .admin-identity {
 .student-view-overview .video-panel {
   display: block;
 }
+
+/* Final rhythm, identity and contrast pass */
+:root {
+  --section-gap: 24px;
+  --grid-gap: 16px;
+  --related-gap: 8px;
+}
+
+.student-content-area,
+.admin-main {
+  align-content: start;
+  gap: var(--section-gap);
+}
+
+.admin-main {
+  display: grid;
+}
+
+.student-content-area > *,
+.admin-main > *,
+.admin-main > .admin-page-heading,
+.admin-main > .admin-content-panel,
+.admin-main > .certificate-requests-panel,
+.admin-main > .certificate-register-panel {
+  margin-block: 0;
+}
+
+.section-heading,
+.course-section-heading,
+.profile-section-heading {
+  margin: 0 0 var(--grid-gap);
+}
+
+.dashboard-insights,
+.admin-summary-grid,
+.student-priority-grid,
+.student-course-list,
+.lesson-grid,
+.video-gallery,
+.information-grid,
+.profile-shell,
+.profile-status-grid,
+.profile-form-grid,
+.certification-list,
+.question-list,
+.student-admin-grid,
+.admin-course-list,
+.certificate-admin-grid,
+.certificate-request-list,
+.certificate-record-table {
+  gap: var(--grid-gap);
+}
+
+.assessment-area,
+.submission-box {
+  margin-top: var(--section-gap);
+}
+
+.attempt-header {
+  margin-bottom: var(--section-gap);
+}
+
+.admin-heading-actions,
+.admin-row-actions,
+.student-admin-actions,
+.dialog-actions,
+.certification-list-actions,
+.hero-actions {
+  gap: var(--related-gap);
+}
+
+.sidebar-mobile-logout {
+  display: none;
+}
+
+.certificate-seal.has-brand-logo,
+.certification-seal.has-brand-logo,
+.certificate-preview-seal.has-brand-logo {
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.certificate-seal.has-brand-logo img,
+.certification-seal.has-brand-logo img,
+.certificate-preview-seal.has-brand-logo img {
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+  object-fit: contain;
+}
+
+.status-pill,
+.submission-status-pill {
+  width: 160px;
+  min-width: 160px;
+  max-width: 160px;
+  overflow: hidden;
+  justify-content: center;
+  text-align: center;
+  text-overflow: ellipsis;
+}
+
+:root[data-theme="dark"] {
+  --bg: #061b2a;
+  --surface: #0d2d43;
+  --surface-soft: #143a52;
+  --surface-strong: #1b4963;
+  --text: #fffdf4;
+  --muted: #c7d5dd;
+  --line: rgba(234, 199, 139, .34);
+  --input-bg: #09263a;
+  --danger: #ffaaa5;
+  --success: #83dfad;
+  --warning: #f5d18a;
+}
+
+:root[data-theme="dark"] body,
+:root[data-theme="dark"] label,
+:root[data-theme="dark"] th,
+:root[data-theme="dark"] td {
+  color: var(--text);
+}
+
+:root[data-theme="dark"] .eyebrow,
+:root[data-theme="dark"] .breadcrumb-line,
+:root[data-theme="dark"] .empty-note,
+:root[data-theme="dark"] .admin-table th,
+:root[data-theme="dark"] .student-list-table th,
+:root[data-theme="dark"] .student-list-table td::before,
+:root[data-theme="dark"] .site-brand-copy small {
+  color: var(--muted);
+}
+
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder {
+  color: #aebfc9;
+  opacity: 1;
+}
+
+:root[data-theme="dark"] .button-primary,
+:root[data-theme="dark"] body:has(.student-app-shell) .button-primary,
+:root[data-theme="dark"] body:has(.admin-layout) .button-primary {
+  border-color: #eac78b;
+  background: #eac78b;
+  color: #06233f;
+}
+
+:root[data-theme="dark"] .button-primary:hover:not(:disabled) {
+  border-color: #fff0bf;
+  background: #fff0bf;
+  color: #06233f;
+}
+
+:root[data-theme="dark"] .button-secondary,
+:root[data-theme="dark"] .button-light,
+:root[data-theme="dark"] body:has(.student-app-shell) .button-secondary,
+:root[data-theme="dark"] body:has(.admin-layout) .button-secondary,
+:root[data-theme="dark"] .text-button {
+  border-color: rgba(234, 199, 139, .58);
+  background: #143a52;
+  color: #fffdf4;
+}
+
+:root[data-theme="dark"] .button-secondary:hover:not(:disabled),
+:root[data-theme="dark"] .button-light:hover:not(:disabled),
+:root[data-theme="dark"] .text-button:hover:not(:disabled) {
+  border-color: #eac78b;
+  background: #1b4963;
+  color: #ffffff;
+}
+
+:root[data-theme="dark"] .button-danger {
+  border-color: rgba(255, 170, 165, .72);
+  background: rgba(156, 48, 48, .28);
+  color: #ffd0cc;
+}
+
+:root[data-theme="dark"] :is(button, .button):disabled {
+  border-color: rgba(199, 213, 221, .22);
+  background: rgba(199, 213, 221, .09);
+  color: #aebfc9;
+  opacity: .72;
+}
+
+:root[data-theme="dark"] .status-in-progress,
+:root[data-theme="dark"] .status-under-review,
+:root[data-theme="dark"] .status-requested,
+:root[data-theme="dark"] .status-payment-submitted {
+  border-color: #eac78b;
+  background: rgba(201, 165, 91, .18);
+  color: #ffe1a4;
+}
+
+:root[data-theme="dark"] .status-approved,
+:root[data-theme="dark"] .status-completed,
+:root[data-theme="dark"] .status-issued,
+:root[data-theme="dark"] .status-active,
+:root[data-theme="dark"] .status-available {
+  border-color: #83dfad;
+  background: rgba(46, 139, 87, .22);
+  color: #a8f0c7;
+}
+
+:root[data-theme="dark"] .status-correction-required,
+:root[data-theme="dark"] .status-time-exceeded,
+:root[data-theme="dark"] .status-failed,
+:root[data-theme="dark"] .status-rejected,
+:root[data-theme="dark"] .status-deleted,
+:root[data-theme="dark"] .status-blocked,
+:root[data-theme="dark"] .status-inactive {
+  border-color: #ffaaa5;
+  background: rgba(156, 48, 48, .24);
+  color: #ffd0cc;
+}
+
+@media (max-width: 760px) {
+  .sidebar-mobile-logout {
+    display: flex;
+    margin-top: auto;
+  }
+
+  .mobile-menu-logout {
+    margin-top: 12px;
+    border-top: 1px solid rgba(234, 199, 139, .28);
+    background: rgba(201, 165, 91, .12);
+  }
+
+  .student-content-area,
+  .admin-main {
+    gap: var(--grid-gap);
+  }
+}

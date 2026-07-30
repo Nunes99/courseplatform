@@ -44,7 +44,7 @@ export class CoursePlatformApi {
 
     if (!this.apiUrl || this.apiUrl.includes('CHANGE_ME') || this.apiUrl.includes('YOUR_API_URL')) {
       throw new ApiError(
-        'A URL da API ainda nao foi configurada em config.js.',
+        'A URL da API ainda não foi configurada em config.js.',
         'API_URL_NOT_CONFIGURED'
       );
     }
@@ -96,7 +96,7 @@ export class CoursePlatformApi {
 
   networkError(error) {
     return new ApiError(
-      'Nao foi possivel comunicar com a API. Confirme a URL em config.js e as variaveis do backend.',
+      'Não foi possível comunicar com a API. Confirme a URL em config.js e as variáveis do backend.',
       'NETWORK_ERROR',
       { originalMessage: error.message }
     );
@@ -111,7 +111,7 @@ export class CoursePlatformApi {
         throw new ApiError(`Erro HTTP ${response.status}.`, 'HTTP_ERROR');
       }
       throw new ApiError(
-        'A API nao devolveu JSON valido. Confirme que a URL aponta para /api/index no backend Python.',
+        'A API não devolveu JSON válido. Confirme que a URL aponta para /api/index no backend Python.',
         'INVALID_API_RESPONSE'
       );
     }
@@ -346,7 +346,7 @@ export class CoursePlatformApi {
   studentToken() {
     const token = localStorage.getItem('courseSessionToken');
     if (!token) {
-      throw new ApiError('Inicie sessao para continuar.', 'SESSION_REQUIRED');
+      throw new ApiError('Inicie sessão para continuar.', 'SESSION_REQUIRED');
     }
     return token;
   }
@@ -528,6 +528,10 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminReviewCertificateRequest', payload);
   }
 
+  adminDeleteCertificateRequest(requestId) {
+    return this.mutateAdmin('adminDeleteCertificateRequest', { requestId });
+  }
+
   adminCertificateSettings(courseId = this.courseId, options = {}) {
     return this.cachedAdminRequest('adminGetCertificateSettings', { courseId }, options);
   }
@@ -625,7 +629,7 @@ export class CoursePlatformApi {
   adminToken() {
     const token = sessionStorage.getItem('courseAdminToken');
     if (!token) {
-      throw new ApiError('Inicie sessao como administrador.', 'ADMIN_SESSION_REQUIRED');
+      throw new ApiError('Inicie sessão como administrador.', 'ADMIN_SESSION_REQUIRED');
     }
     return token;
   }
@@ -706,7 +710,7 @@ function optimizeImage(file, maxDimension, quality) {
           (blob) => {
             URL.revokeObjectURL(objectUrl);
             if (!blob) {
-              reject(new Error('Nao foi possivel otimizar a imagem.'));
+              reject(new Error('Não foi possível otimizar a imagem.'));
               return;
             }
             resolve(blob);
@@ -722,7 +726,7 @@ function optimizeImage(file, maxDimension, quality) {
 
     image.onerror = () => {
       URL.revokeObjectURL(objectUrl);
-      reject(new Error('A imagem selecionada nao pode ser lida.'));
+      reject(new Error('A imagem selecionada não pode ser lida.'));
     };
 
     image.src = objectUrl;

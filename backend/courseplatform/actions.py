@@ -54,18 +54,18 @@ def database_api_error(error: Exception) -> ApiError:
     if "undefinedcolumn" in text or "undefinedtable" in text or error_name == "ProgrammingError":
         return ApiError(
             "DATABASE_SCHEMA_ERROR",
-            "A base de dados esta ligada, mas o schema/tabelas da plataforma nao estao completos.",
+            "A base de dados está ligada, mas o esquema e as tabelas da plataforma não estão completos.",
             {"errorType": error_name},
         )
     if "authentication" in text or "password" in text or "ecircuitbreaker" in text:
         return ApiError(
             "DATABASE_AUTH_ERROR",
-            "A API nao conseguiu autenticar no Postgres. Verifique POSTGRES_URL/POSTGRES_PASSWORD no Vercel.",
+            "A API não conseguiu autenticar no Postgres. Verifique POSTGRES_URL/POSTGRES_PASSWORD no Vercel.",
             {"errorType": error_name},
         )
     return ApiError(
         "DATABASE_UNAVAILABLE",
-        "A base de dados nao esta disponivel neste momento.",
+        "A base de dados não está disponível neste momento.",
         {"errorType": error_name},
     )
 
@@ -534,23 +534,23 @@ def default_certificate_settings(course: dict[str, Any] | None = None):
     course_title = (course or {}).get("title") or "o curso"
     return {
         "congratulationsMessage": (
-            f"Parabens pela conclusao de {course_title}. "
-            "A sua participacao foi registada com sucesso."
+            f"Parabens pela conclusão de {course_title}. "
+            "A sua participação foi registada com sucesso."
         ),
         "surveyQuestions": [
             {"id": "quality", "prompt": "Como avalia a qualidade geral do curso?", "options": ["Excelente", "Muito boa", "Boa", "Precisa melhorar"], "required": True},
-            {"id": "methodology", "prompt": "A metodologia facilitou a sua aprendizagem?", "options": ["Sim, totalmente", "Sim, em parte", "Pouco", "Nao"], "required": True},
-            {"id": "content_relevance", "prompt": "Os conteudos foram relevantes para os seus objetivos?", "options": ["Muito relevantes", "Relevantes", "Pouco relevantes", "Nao relevantes"], "required": True},
+            {"id": "methodology", "prompt": "A metodologia facilitou a sua aprendizagem?", "options": ["Sim, totalmente", "Sim, em parte", "Pouco", "Não"], "required": True},
+            {"id": "content_relevance", "prompt": "Os conteúdos foram relevantes para os seus objetivos?", "options": ["Muito relevantes", "Relevantes", "Pouco relevantes", "Não relevantes"], "required": True},
             {"id": "materials", "prompt": "Como avalia os materiais disponibilizados?", "options": ["Muito organizados", "Organizados", "Suficientes", "Insuficientes"], "required": True},
-            {"id": "practical_activities", "prompt": "As atividades praticas ajudaram a consolidar o conhecimento?", "options": ["Ajudaram muito", "Ajudaram", "Ajudaram pouco", "Nao ajudaram"], "required": True},
-            {"id": "difficulty", "prompt": "Como classifica o nivel de dificuldade do curso?", "options": ["Adequado", "Facil", "Exigente, mas positivo", "Muito dificil"], "required": True},
+            {"id": "practical_activities", "prompt": "As atividades práticas ajudaram a consolidar o conhecimento?", "options": ["Ajudaram muito", "Ajudaram", "Ajudaram pouco", "Não ajudaram"], "required": True},
+            {"id": "difficulty", "prompt": "Como classifica o nível de dificuldade do curso?", "options": ["Adequado", "Fácil", "Exigente, mas positivo", "Muito difícil"], "required": True},
             {"id": "support", "prompt": "Como avalia o apoio recebido durante o curso?", "options": ["Excelente", "Bom", "Regular", "Insuficiente"], "required": True},
             {"id": "platform_experience", "prompt": "Como foi a experiencia de uso da plataforma?", "options": ["Muito intuitiva", "Intuitiva", "Aceitavel", "Confusa"], "required": True},
-            {"id": "application", "prompt": "Pretende aplicar os conhecimentos aprendidos?", "options": ["Sim, imediatamente", "Sim, futuramente", "Talvez", "Nao"], "required": True},
-            {"id": "recommendation", "prompt": "Recomendaria este curso a outra pessoa?", "options": ["Sim, com certeza", "Sim", "Talvez", "Nao"], "required": True},
+            {"id": "application", "prompt": "Pretende aplicar os conhecimentos aprendidos?", "options": ["Sim, imediatamente", "Sim, futuramente", "Talvez", "Não"], "required": True},
+            {"id": "recommendation", "prompt": "Recomendaria este curso a outra pessoa?", "options": ["Sim, com certeza", "Sim", "Talvez", "Não"], "required": True},
         ],
         "professionalPrice": "",
-        "paymentInstructions": "Adicione aqui as instrucoes de pagamento do certificado profissional.",
+        "paymentInstructions": "Adicione aqui as instruções de pagamento do certificado profissional.",
         "professionalPreviewUrl": "",
         "certificateProfile": default_certificate_profile(course),
     }
@@ -559,20 +559,20 @@ def default_certificate_settings(course: dict[str, Any] | None = None):
 def default_certificate_profile(course: dict[str, Any] | None = None):
     course_title = (course or {}).get("title") or "Curso profissional"
     contents = "\n".join([
-        "Conteudos essenciais do curso",
-        "Atividades praticas e estudos de caso",
-        "Discussao tecnica e avaliacao final",
+        "Conteúdos essenciais do curso",
+        "Atividades práticas e estudos de caso",
+        "Discussão técnica e avaliação final",
     ])
     return {
         "layoutStyle": "qualification",
         "issuerName": "LMTWEBNAIRS",
-        "certificateTitle": "Certificado de Qualificacao",
-        "qualificationType": "Qualificacao profissional",
-        "issueLocation": "Cidade de Maputo, Mocambique",
+        "certificateTitle": "Certificado de Qualificação",
+        "qualificationType": "Qualificação profissional",
+        "issueLocation": "Cidade de Maputo, Moçambique",
         "verificationBaseUrl": "",
-        "directorName": "Direcao Academica",
-        "directorTitle": "Diretor Academico",
-        "coordinatorName": "Coordenacao do Programa",
+        "directorName": "Direção Académica",
+        "directorTitle": "Diretor Académico",
+        "coordinatorName": "Coordenação do Programa",
         "coordinatorTitle": "Coordenador do Programa",
         "productCredit": "LMTWEBNAIRS Summer School, produto da LMTWEB, desenvolvido pela LEMOTE.",
         "certifiedContents": contents if not course_title else contents.replace("curso", course_title),
@@ -581,7 +581,7 @@ def default_certificate_profile(course: dict[str, Any] | None = None):
         "printCurrency": "MZN",
         "paymentAccountName": "",
         "paymentAccountNumber": "",
-        "paymentInstructions": "Adicione aqui as instrucoes de pagamento do certificado profissional.",
+        "paymentInstructions": "Adicione aqui as instruções de pagamento do certificado profissional.",
         "assets": {
             "logoUrl": "",
             "productLogoUrl": "",
@@ -719,7 +719,7 @@ def certificate_content_summary(conn, course_id: str) -> str:
         (course_id,),
     ).fetchall()
     return "\n".join(
-        f"Modulo {int(row.get('lesson_number') or 0)}: {row.get('title') or ''}".strip()
+        f"Módulo {int(row.get('lesson_number') or 0)}: {row.get('title') or ''}".strip()
         for row in rows
     )
 
@@ -851,14 +851,14 @@ def revoke_sessions(conn, subject_id: str) -> None:
 
 def validate_session(token: str, expected_type: str):
     if not token:
-        raise ApiError("SESSION_REQUIRED", "A sessao nao foi informada.")
+        raise ApiError("SESSION_REQUIRED", "A sessão não foi informada.")
     token_hash = hash_secret(token)
     session = fetch_one(
         "select * from courseplatform.sessions where session_token = %s",
         (token_hash,),
     )
     if not session or not session.get("active"):
-        raise ApiError("INVALID_SESSION", "A sessao e invalida ou foi encerrada.")
+        raise ApiError("INVALID_SESSION", "A sessão e inválida ou foi encerrada.")
     if session["expires_at"] <= utc_now():
         with connection() as conn:
             conn.execute(
@@ -866,44 +866,44 @@ def validate_session(token: str, expected_type: str):
                 (token_hash,),
             )
             conn.commit()
-        raise ApiError("SESSION_EXPIRED", "A sessao expirou. Inicie sessao novamente.")
+        raise ApiError("SESSION_EXPIRED", "A sessão expirou. Inicie sessão novamente.")
     is_admin = str(session["subject_id"]).startswith("ADMIN:")
     if expected_type == "ADMIN" and not is_admin:
-        raise ApiError("ADMIN_SESSION_REQUIRED", "E necessaria uma sessao administrativa.")
+        raise ApiError("ADMIN_SESSION_REQUIRED", "É necessária uma sessão administrativa.")
     if expected_type == "STUDENT" and is_admin:
-        raise ApiError("STUDENT_SESSION_REQUIRED", "E necessaria uma sessao de estudante.")
+        raise ApiError("STUDENT_SESSION_REQUIRED", "É necessária uma sessão de estudante.")
     return session
 
 
 def validate_session_with_conn(conn, token: str, expected_type: str):
     if not token:
-        raise ApiError("SESSION_REQUIRED", "A sessao nao foi informada.")
+        raise ApiError("SESSION_REQUIRED", "A sessão não foi informada.")
     token_hash = hash_secret(token)
     session = conn.execute(
         "select * from courseplatform.sessions where session_token = %s",
         (token_hash,),
     ).fetchone()
     if not session or not session.get("active"):
-        raise ApiError("INVALID_SESSION", "A sessao e invalida ou foi encerrada.")
+        raise ApiError("INVALID_SESSION", "A sessão e inválida ou foi encerrada.")
     if session["expires_at"] <= utc_now():
         conn.execute(
             "update courseplatform.sessions set active = false, revoked_at = now() where session_token = %s",
             (token_hash,),
         )
         conn.commit()
-        raise ApiError("SESSION_EXPIRED", "A sessao expirou. Inicie sessao novamente.")
+        raise ApiError("SESSION_EXPIRED", "A sessão expirou. Inicie sessão novamente.")
     is_admin = str(session["subject_id"]).startswith("ADMIN:")
     if expected_type == "ADMIN" and not is_admin:
-        raise ApiError("ADMIN_SESSION_REQUIRED", "E necessaria uma sessao administrativa.")
+        raise ApiError("ADMIN_SESSION_REQUIRED", "É necessária uma sessão administrativa.")
     if expected_type == "STUDENT" and is_admin:
-        raise ApiError("STUDENT_SESSION_REQUIRED", "E necessaria uma sessao de estudante.")
+        raise ApiError("STUDENT_SESSION_REQUIRED", "É necessária uma sessão de estudante.")
     return session
 
 
 def require_session_token(payload: dict[str, Any], key: str = "sessionToken") -> str:
     token = payload.get(key, "")
     if not token:
-        raise ApiError("SESSION_REQUIRED", "A sessao nao foi informada.")
+        raise ApiError("SESSION_REQUIRED", "A sessão não foi informada.")
     return token
 
 
@@ -914,7 +914,7 @@ def student_context_with_conn(conn, payload: dict[str, Any]):
         (session["subject_id"],),
     ).fetchone()
     if not student or student.get("status") != "ACTIVE":
-        raise ApiError("STUDENT_NOT_ACTIVE", "A conta do estudante nao esta ativa.")
+        raise ApiError("STUDENT_NOT_ACTIVE", "A conta do estudante não está ativa.")
     return session, student
 
 
@@ -927,7 +927,7 @@ def student_context(payload: dict[str, Any]):
 def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None):
     token = payload.get("adminToken", "")
     if not token:
-        raise ApiError("ADMIN_SESSION_REQUIRED", "E necessaria uma sessao administrativa.")
+        raise ApiError("ADMIN_SESSION_REQUIRED", "É necessária uma sessão administrativa.")
     session = validate_session(token, "ADMIN")
     admin_id = str(session["subject_id"]).replace("ADMIN:", "", 1)
     admin = fetch_one(
@@ -935,9 +935,9 @@ def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None
         (admin_id,),
     )
     if not admin or admin.get("status") != "ACTIVE":
-        raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa nao esta ativa.")
+        raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
     if allowed_roles and admin.get("role") not in allowed_roles:
-        raise ApiError("FORBIDDEN", "O seu perfil nao possui permissao para esta operacao.")
+        raise ApiError("FORBIDDEN", "O seu perfil não possui permissão para esta operação.")
     return session, admin
 
 
@@ -984,20 +984,20 @@ def health(_: dict[str, Any]):
             }
         else:
             db_error = "SchemaMissing"
-            db_error_hint = "Conexao Postgres ok, mas o schema courseplatform nao foi encontrado e nao foi possivel cria-lo automaticamente."
+            db_error_hint = "Conexao Postgres ok, mas o schema courseplatform não foi encontrado e não foi possível cria-lo automaticamente."
     except Exception as error:
         db_ok = False
         db_error = error.__class__.__name__
         db_error_message = diagnostic_error_message(error)
         error_text = str(error).lower()
         if "ecircuitbreaker" in error_text:
-            db_error_hint = "Supabase pooler bloqueou novas conexoes por muitas falhas de autenticacao. Aguarde alguns minutos e confirme usuario/senha Postgres."
+            db_error_hint = "O pooler do Supabase bloqueou novas ligações após várias falhas de autenticação. Aguarde alguns minutos e confirme o utilizador e a palavra-passe do Postgres."
         elif "authentication" in error_text or "password" in error_text:
-            db_error_hint = "Falha de autenticacao Postgres. Confira POSTGRES_USER/POSTGRES_PASSWORD ou DATABASE_URL."
+            db_error_hint = "Falha de autenticação no Postgres. Confirme POSTGRES_USER/POSTGRES_PASSWORD ou DATABASE_URL."
         elif "timeout" in error_text or "timed out" in error_text:
-            db_error_hint = "Timeout de conexao. Confira host, porta, rede e se o projeto Supabase esta ativo."
+            db_error_hint = "Tempo limite de ligação excedido. Confirme o host, a porta, a rede e se o projeto Supabase está ativo."
         elif db_error == "ProgrammingError":
-            db_error_hint = "Erro de SQL/configuracao Postgres. Confirme se o schema courseplatform foi criado no mesmo projeto apontado por POSTGRES_URL."
+            db_error_hint = "Erro de SQL/configuração Postgres. Confirme se o schema courseplatform foi criado no mesmo projeto apontado por POSTGRES_URL."
     else:
         db_error_message = ""
     return success({
@@ -1115,12 +1115,12 @@ def login(payload: dict[str, Any]):
         if int(total.get("total") or 0) == 0:
             raise ApiError(
                 "DATABASE_EMPTY",
-                "A base de dados ligada ainda nao tem estudantes. Confirme se o POSTGRES_URL aponta para a base migrada.",
+                "A base de dados ligada ainda não tem estudantes. Confirme se o POSTGRES_URL aponta para a base migrada.",
             )
-        raise ApiError("INVALID_CREDENTIALS", "Email ou codigo de acesso invalido.")
+        raise ApiError("INVALID_CREDENTIALS", "Email ou código de acesso inválido.")
     try:
         if not verify_password(payload["accessCode"], student.get("password_hash")):
-            raise ApiError("INVALID_CREDENTIALS", "Email ou codigo de acesso invalido.")
+            raise ApiError("INVALID_CREDENTIALS", "Email ou código de acesso inválido.")
         with connection() as conn:
             revoke_sessions(conn, student["student_id"])
             session = create_session(conn, student["student_id"], payload.get("userAgent", ""), payload.get("ipHash", ""))
@@ -1162,7 +1162,7 @@ def recover_student_access(payload: dict[str, Any]):
     if not student or student.get("status") != "ACTIVE":
         raise ApiError(
             "RECOVERY_DETAILS_NOT_FOUND",
-            "Nao encontramos uma conta ativa com esse email e ID de estudante.",
+            "Não encontramos uma conta ativa com esse email e ID de estudante.",
         )
 
     access_code = generate_access_code(12)
@@ -1215,7 +1215,7 @@ def admin_login(payload: dict[str, Any]):
         if int(total.get("total") or 0) == 0:
             raise ApiError(
                 "DATABASE_EMPTY",
-                "A base de dados ligada ainda nao tem administradores. Confirme se o POSTGRES_URL aponta para a base migrada.",
+                "A base de dados ligada ainda não tem administradores. Confirme se o POSTGRES_URL aponta para a base migrada.",
             )
         raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
     try:
@@ -1253,10 +1253,10 @@ def recover_admin_access(payload: dict[str, Any]):
     if not configured_admin_recovery_hashes():
         raise ApiError(
             "ADMIN_RECOVERY_NOT_CONFIGURED",
-            "A recuperacao administrativa ainda nao esta configurada. Defina ADMIN_RECOVERY_KEY_HASH na Vercel.",
+            "A recuperação administrativa ainda não está configurada. Defina ADMIN_RECOVERY_KEY_HASH na Vercel.",
         )
     if not verify_admin_recovery_key(payload.get("recoveryKey")):
-        raise ApiError("INVALID_ADMIN_RECOVERY_KEY", "Chave de recuperacao administrativa invalida.")
+        raise ApiError("INVALID_ADMIN_RECOVERY_KEY", "Chave de recuperação administrativa inválida.")
 
     email = normalize_email(payload["email"])
     try:
@@ -1264,7 +1264,7 @@ def recover_admin_access(payload: dict[str, Any]):
     except Exception as error:
         raise database_api_error(error) from error
     if not admin or admin.get("status") != "ACTIVE":
-        raise ApiError("ADMIN_RECOVERY_NOT_FOUND", "Nao encontramos uma conta administrativa ativa com esse email.")
+        raise ApiError("ADMIN_RECOVERY_NOT_FOUND", "Não encontramos uma conta administrativa ativa com esse email.")
 
     admin_password = generate_access_code(14)
     try:
@@ -1479,7 +1479,7 @@ def get_lesson(payload: dict[str, Any]):
     lesson_id = payload["lessonId"]
     lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (lesson_id,))
     if not lesson:
-        raise ApiError("LESSON_NOT_FOUND", "Modulo nao encontrado.")
+        raise ApiError("LESSON_NOT_FOUND", "Módulo não encontrado.")
     progress = fetch_one(
         """
         select *
@@ -1546,7 +1546,7 @@ def attempt_status(payload: dict[str, Any]):
         (payload["attemptId"], student["student_id"]),
     )
     if not attempt:
-        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa nao encontrada.")
+        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
     answers = fetch_all(
         "select * from courseplatform.answers where attempt_id = %s order by saved_at",
         (attempt["attempt_id"],),
@@ -1626,12 +1626,12 @@ def change_my_access_code(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["currentAccessCode", "newAccessCode"])
     if not verify_password(payload["currentAccessCode"], student.get("password_hash")):
-        raise ApiError("INVALID_CURRENT_ACCESS_CODE", "A senha atual nao esta correta.")
+        raise ApiError("INVALID_CURRENT_ACCESS_CODE", "A palavra-passe atual não está correta.")
     new_code = str_value(payload.get("newAccessCode"))
     if not valid_password(new_code):
-        raise ApiError("WEAK_ACCESS_CODE", "A nova senha deve ter pelo menos 8 caracteres.")
+        raise ApiError("WEAK_ACCESS_CODE", "A nova palavra-passe deve ter pelo menos 8 caracteres.")
     if verify_password(new_code, student.get("password_hash")):
-        raise ApiError("ACCESS_CODE_UNCHANGED", "A nova senha deve ser diferente da atual.")
+        raise ApiError("ACCESS_CODE_UNCHANGED", "A nova palavra-passe deve ser diferente da atual.")
     with connection() as conn:
         conn.execute(
             """
@@ -1666,9 +1666,9 @@ def start_attempt(payload: dict[str, Any]):
         (student["student_id"], lesson_id),
     )
     if not progress:
-        raise ApiError("LESSON_LOCKED", "Este modulo ainda nao esta disponivel.")
+        raise ApiError("LESSON_LOCKED", "Este módulo ainda não está disponível.")
     if progress.get("status") not in {"AVAILABLE", "IN_PROGRESS", "CORRECTION_REQUIRED", "FAILED", "TIME_EXCEEDED"}:
-        raise ApiError("ATTEMPT_NOT_AVAILABLE", "Nao e possivel iniciar uma tentativa neste estado.")
+        raise ApiError("ATTEMPT_NOT_AVAILABLE", "Não e possível iniciar uma tentativa neste estado.")
 
     existing = fetch_one(
         """
@@ -1731,7 +1731,7 @@ def save_answer(payload: dict[str, Any]):
         (payload["attemptId"], student["student_id"]),
     )
     if not attempt or attempt.get("status") != "IN_PROGRESS":
-        raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa ja nao pode ser editada.")
+        raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa já não pode ser editada.")
     with connection() as conn:
         answer = conn.execute(
             """
@@ -1767,7 +1767,7 @@ def upload_file(payload: dict[str, Any]):
         (payload["attemptId"], student["student_id"]),
     )
     if not attempt or attempt.get("status") != "IN_PROGRESS":
-        raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa ja nao pode receber ficheiros.")
+        raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa já não pode receber ficheiros.")
     mime_type = str_value(payload.get("mimeType") or "application/octet-stream")
     base64_data = str_value(payload.get("base64Data"))
     drive_url = f"data:{mime_type};base64,{base64_data}" if base64_data else str_value(payload.get("driveUrl"))
@@ -1811,7 +1811,7 @@ def delete_uploaded_file(payload: dict[str, Any]):
         ).fetchone()
         conn.commit()
     if not row:
-        raise ApiError("FILE_NOT_FOUND", "Ficheiro nao encontrado.")
+        raise ApiError("FILE_NOT_FOUND", "Ficheiro não encontrado.")
     return success({"file": public_file(row)})
 
 
@@ -1823,7 +1823,7 @@ def submit_attempt(payload: dict[str, Any]):
         (payload["attemptId"], student["student_id"]),
     )
     if not attempt or attempt.get("status") != "IN_PROGRESS":
-        raise ApiError("ATTEMPT_NOT_SUBMITTABLE", "Esta tentativa nao pode ser submetida.")
+        raise ApiError("ATTEMPT_NOT_SUBMITTABLE", "Esta tentativa não pode ser submetida.")
     now = utc_now()
     status = "TIME_EXCEEDED" if attempt.get("deadline_at") and attempt["deadline_at"] < now else "UNDER_REVIEW"
     with connection() as conn:
@@ -1918,7 +1918,7 @@ def request_professional_certificate(payload: dict[str, Any]):
         ).fetchone()
         profile = certificate_settings_payload(settings_row, course).get("certificateProfile") or {}
         if profile.get("printAccess") == "blocked":
-            raise ApiError("CERTIFICATE_PRINT_BLOCKED", "A emissao deste certificado profissional ainda nao esta disponivel.")
+            raise ApiError("CERTIFICATE_PRINT_BLOCKED", "A emissão deste certificado profissional ainda não está disponível.")
         initial_status = "REQUESTED" if profile.get("printAccess") == "paid" else "PAYMENT_SUBMITTED"
         existing = conn.execute(
             """
@@ -1984,6 +1984,8 @@ def submit_professional_certificate_payment(payload: dict[str, Any]):
                 submitted_at = now(),
                 updated_at = now()
             where request_id = %s and student_id = %s
+              and status in ('REQUESTED', 'PAYMENT_SUBMITTED')
+              and certificate_id is null
             returning *
             """,
             (
@@ -1996,7 +1998,7 @@ def submit_professional_certificate_payment(payload: dict[str, Any]):
         ).fetchone()
         conn.commit()
     if not request:
-        raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado nao encontrado.")
+        raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
     return success({"request": public_certificate_request(request)})
 
 
@@ -2010,9 +2012,9 @@ def record_certificate_download(payload: dict[str, Any]):
             (payload["certificateId"], student["student_id"]),
         ).fetchone()
         if not cert:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
         if cert.get("status") != "ISSUED":
-            raise ApiError("CERTIFICATE_ACCESS_BLOCKED", "O acesso a este certificado nao esta disponivel.")
+            raise ApiError("CERTIFICATE_ACCESS_BLOCKED", "O acesso a este certificado não está disponível.")
         max_downloads = cert.get("max_downloads")
         download_count = int(cert.get("download_count") or 0)
         if max_downloads is not None and download_count >= int(max_downloads):
@@ -2053,14 +2055,15 @@ def certificate_pdf_payload(payload: dict[str, Any]):
             (payload["certificateId"], student["student_id"]),
         ).fetchone()
         if not cert:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
         if cert.get("status") != "ISSUED":
-            raise ApiError("CERTIFICATE_ACCESS_BLOCKED", "O acesso a este certificado nao esta disponivel.")
+            raise ApiError("CERTIFICATE_ACCESS_BLOCKED", "O acesso a este certificado não está disponível.")
         max_downloads = cert.get("max_downloads")
         download_count = int(cert.get("download_count") or 0)
         if max_downloads is not None and download_count >= int(max_downloads):
             raise ApiError("DOWNLOAD_LIMIT_REACHED", "O limite de downloads deste certificado foi atingido.")
         snapshot = cert.get("template_snapshot_json") or certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
+        media = read_media_config_with_conn(conn, cert.get("course_id")) if cert else {"logoUrl": ""}
         conn.commit()
     cert = {
         **cert,
@@ -2074,6 +2077,9 @@ def certificate_pdf_payload(payload: dict[str, Any]):
     separator = "&" if "?" in verification_base_url else "?"
     verification_url = f"{verification_base_url}{separator}code={verification_code}" if verification_code else verification_base_url
     profile = normalize_certificate_profile((snapshot or {}).get("profile"), {"title": certificate.get("courseTitle")})
+    profile["assets"] = {**(profile.get("assets") or {})}
+    if not profile["assets"].get("logoUrl") and media.get("logoUrl"):
+        profile["assets"]["logoUrl"] = media["logoUrl"]
     workload = f"{int((snapshot or {}).get('courseHours') or 30)} horas" if model == "professional" else "10 horas"
     return {
         "certificate": certificate,
@@ -2116,11 +2122,12 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
         snapshot = cert.get("template_snapshot_json") if cert else None
         if cert and not snapshot:
             snapshot = certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
+        media = read_media_config_with_conn(conn, cert.get("course_id")) if cert else {"logoUrl": ""}
         conn.commit()
     if not cert:
-        raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+        raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
     if cert.get("status") == "DELETED":
-        raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+        raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
     cert = {
         **cert,
         "course_title": cert.get("course_title"),
@@ -2133,6 +2140,9 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
     separator = "&" if "?" in verification_base_url else "?"
     verification_url = f"{verification_base_url}{separator}code={verification_code}" if verification_code else verification_base_url
     profile = normalize_certificate_profile((snapshot or {}).get("profile"), {"title": certificate.get("courseTitle")})
+    profile["assets"] = {**(profile.get("assets") or {})}
+    if not profile["assets"].get("logoUrl") and media.get("logoUrl"):
+        profile["assets"]["logoUrl"] = media["logoUrl"]
     workload = f"{int((snapshot or {}).get('courseHours') or 30)} horas" if model == "professional" else "10 horas"
     return {
         "certificate": certificate,
@@ -2191,7 +2201,7 @@ def admin_course_structure(payload: dict[str, Any]):
     course_id = payload.get("courseId") or get_settings().default_course_id
     course = fetch_one("select * from courseplatform.courses where course_id = %s", (course_id,))
     if not course:
-        raise ApiError("COURSE_NOT_FOUND", "Curso nao encontrado.")
+        raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
     lessons = fetch_all("select * from courseplatform.lessons where course_id = %s order by lesson_number", (course_id,))
     lesson_ids = [row["lesson_id"] for row in lessons]
     content_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
@@ -2313,7 +2323,7 @@ def submission_item(row: dict[str, Any]):
         "lesson_id": row.get("attempt_lesson_id") or row.get("lesson_id"),
         "course_id": row.get("course_id"),
         "lesson_number": row.get("lesson_number"),
-        "title": row.get("title") or row.get("attempt_lesson_id") or "Modulo sem titulo",
+        "title": row.get("title") or row.get("attempt_lesson_id") or "Módulo sem título",
         "slug": row.get("slug"),
         "summary": row.get("summary"),
         "theory_minutes": row.get("theory_minutes"),
@@ -2406,7 +2416,7 @@ def admin_get_submission(payload: dict[str, Any]):
     require_fields(payload, ["attemptId"])
     attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
     if not attempt:
-        raise ApiError("ATTEMPT_NOT_FOUND", "Submissao nao encontrada.")
+        raise ApiError("ATTEMPT_NOT_FOUND", "Submissão não encontrada.")
     student = fetch_one("select * from courseplatform.students where student_id = %s", (attempt["student_id"],))
     lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (attempt["lesson_id"],))
     questions = fetch_all(
@@ -2468,13 +2478,13 @@ def admin_review_submission(payload: dict[str, Any]):
     require_fields(payload, ["attemptId", "decision", "score"])
     decision = str_value(payload.get("decision")).upper()
     if decision not in {"APPROVED", "APPROVED_WITH_NOTES", "CORRECTION_REQUIRED", "FAILED"}:
-        raise ApiError("INVALID_DECISION", "Decisao invalida.")
+        raise ApiError("INVALID_DECISION", "Decisão inválida.")
     status = "APPROVED" if decision in {"APPROVED", "APPROVED_WITH_NOTES"} else decision
     score = float_value(payload.get("score"))
     now = utc_now()
     attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
     if not attempt:
-        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa nao encontrada.")
+        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
     with connection() as conn:
         review = conn.execute(
             """
@@ -2534,7 +2544,7 @@ def admin_authorize_retry(payload: dict[str, Any]):
             (payload["attemptId"],),
         ).fetchone()
         if not attempt:
-            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa nao encontrada.")
+            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
         conn.execute(
             "update courseplatform.lesson_progress set status = 'AVAILABLE', updated_at = now() where progress_id = %s",
             (attempt.get("progress_id"),),
@@ -2548,14 +2558,14 @@ def admin_save_media_config(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     media = payload.get("mediaConfig") or {"logoUrl": payload.get("logoUrl"), "videos": payload.get("videos", [])}
     if not isinstance(media, dict):
-        raise ApiError("INVALID_MEDIA_CONFIG", "Configuracao de media invalida.")
+        raise ApiError("INVALID_MEDIA_CONFIG", "Configuração de media inválida.")
     media.setdefault("logoUrl", "")
     media.setdefault("videos", [])
     with connection() as conn:
         conn.execute(
             """
             insert into courseplatform.settings (key, value, value_type, description, updated_at)
-            values ('MEDIA_CONFIG', %s, 'JSON', 'Logotipo e galeria de videos da plataforma.', now())
+            values ('MEDIA_CONFIG', %s, 'JSON', 'Logotipo e galeria de vídeos da plataforma.', now())
             on conflict (key) do update
             set value = excluded.value, value_type = excluded.value_type,
                 description = excluded.description, updated_at = excluded.updated_at
@@ -2580,7 +2590,7 @@ def admin_save_staff(payload: dict[str, Any]):
     if is_new and not admin_password:
         admin_password = generate_access_code(14)
     if admin_password and not valid_password(admin_password):
-        raise ApiError("WEAK_PASSWORD", "A senha deve ter pelo menos 8 caracteres.")
+        raise ApiError("WEAK_PASSWORD", "A palavra-passe deve ter pelo menos 8 caracteres.")
     with connection() as conn:
         row = conn.execute(
             """
@@ -2626,7 +2636,7 @@ def admin_set_staff_status(payload: dict[str, Any]):
             (str_value(payload["status"]).upper(), payload["targetAdminId"]),
         ).fetchone()
         if not row:
-            raise ApiError("ADMIN_NOT_FOUND", "Staff nao encontrado.")
+            raise ApiError("ADMIN_NOT_FOUND", "Staff não encontrado.")
         audit(conn, "ADMIN", admin["admin_id"], "STAFF_STATUS_CHANGED", "ADMIN", payload["targetAdminId"], {"status": payload["status"]})
         conn.commit()
     return success({"admin": public_admin(row)})
@@ -2675,7 +2685,7 @@ def admin_set_student_status(payload: dict[str, Any]):
             (str_value(payload["status"]).upper(), payload["studentId"]),
         ).fetchone()
         if not row:
-            raise ApiError("STUDENT_NOT_FOUND", "Estudante nao encontrado.")
+            raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
         audit(conn, "ADMIN", admin["admin_id"], "STUDENT_STATUS_CHANGED", "STUDENT", payload["studentId"], {"status": payload["status"]})
         conn.commit()
     return success({"student": public_student(row)})
@@ -2698,7 +2708,7 @@ def admin_reset_student_access_code(payload: dict[str, Any]):
             (access_code, payload["studentId"]),
         ).fetchone()
         if not row:
-            raise ApiError("STUDENT_NOT_FOUND", "Estudante nao encontrado.")
+            raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
         conn.execute("update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s", (payload["studentId"],))
         audit(conn, "ADMIN", admin["admin_id"], "STUDENT_ACCESS_RESET", "STUDENT", payload["studentId"])
         conn.commit()
@@ -2732,7 +2742,7 @@ def admin_restore_credentials(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     target_type = str_value(payload.get("targetType") or "STUDENTS").upper()
     if target_type not in {"STUDENTS", "ADMINS", "ALL"}:
-        raise ApiError("INVALID_TARGET", "Tipo de conta invalido para restauracao de credenciais.")
+        raise ApiError("INVALID_TARGET", "Tipo de conta inválido para restauração de credenciais.")
     if target_type in {"ADMINS", "ALL"} and admin.get("role") != "OWNER":
         raise ApiError("FORBIDDEN", "Apenas o owner pode restaurar credenciais de staff.")
 
@@ -3010,7 +3020,7 @@ def admin_set_lesson_access(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     status = str_value(payload.get("status") or "AVAILABLE").upper()
     if status not in {"AVAILABLE", "LOCKED", "IN_PROGRESS", "UNDER_REVIEW", "APPROVED", "TIME_EXCEEDED"}:
-        raise ApiError("INVALID_STATUS", "Estado de acesso invalido.")
+        raise ApiError("INVALID_STATUS", "Estado de acesso inválido.")
     lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
     student_ids = set(payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else [])
     group_ids = payload.get("groupIds") if isinstance(payload.get("groupIds"), list) else []
@@ -3021,7 +3031,7 @@ def admin_set_lesson_access(payload: dict[str, Any]):
         )
         student_ids.update(row["student_id"] for row in rows)
     if not lesson_ids or not student_ids:
-        raise ApiError("EMPTY_ACCESS_TARGET", "Selecione modulos e estudantes.")
+        raise ApiError("EMPTY_ACCESS_TARGET", "Selecione módulos e estudantes.")
     updated = 0
     with connection() as conn:
         for student_id in student_ids:
@@ -3075,7 +3085,7 @@ def admin_student_details(payload: dict[str, Any]):
         ensure_certificate_feature_schema(conn)
         student = conn.execute("select * from courseplatform.students where student_id = %s", (student_id,)).fetchone()
         if not student:
-            raise ApiError("STUDENT_NOT_FOUND", "Estudante nao encontrado.")
+            raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
         enrollment_rows = conn.execute(
             """
             select e.*, c.title as course_title, c.course_code, g.name as group_name
@@ -3268,7 +3278,7 @@ def admin_set_certificate_status(payload: dict[str, Any]):
     require_fields(payload, ["certificateId", "status"])
     status = str_value(payload.get("status")).upper()
     if status not in {"ISSUED", "BLOCKED"}:
-        raise ApiError("INVALID_CERTIFICATE_STATUS", "Estado de certificado invalido.")
+        raise ApiError("INVALID_CERTIFICATE_STATUS", "Estado de certificado inválido.")
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         certificate = conn.execute(
@@ -3284,7 +3294,7 @@ def admin_set_certificate_status(payload: dict[str, Any]):
             (status, str_value(payload.get("statusNote")), admin["admin_id"], payload["certificateId"]),
         ).fetchone()
         if not certificate:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
         audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_STATUS_CHANGED", "CERTIFICATE", certificate["certificate_id"], {"status": status})
         conn.commit()
     return success({"certificate": public_certificate(certificate)})
@@ -3318,7 +3328,7 @@ def admin_refresh_certificate_format(payload: dict[str, Any]):
                 (course_id, course_id),
             ).fetchall()
         if not rows:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
 
         refreshed = []
         for row in rows:
@@ -3338,7 +3348,7 @@ def admin_refresh_certificate_format(payload: dict[str, Any]):
                 (
                     summary,
                     json.dumps(snapshot),
-                    "Formato e conteudo do certificado atualizados pelo administrador.",
+                    "Formato e conteúdo do certificado atualizados pelo administrador.",
                     admin["admin_id"],
                     row["certificate_id"],
                 ),
@@ -3368,7 +3378,7 @@ def admin_delete_certificate(payload: dict[str, Any]):
             (str_value(payload.get("statusNote")) or "Apagado pelo administrador.", admin["admin_id"], payload["certificateId"]),
         ).fetchone()
         if not certificate:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado nao encontrado.")
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
         audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_DELETED", "CERTIFICATE", certificate["certificate_id"], {})
         conn.commit()
     return success({"certificate": public_certificate(certificate)})
@@ -3379,15 +3389,20 @@ def admin_review_certificate_request(payload: dict[str, Any]):
     require_fields(payload, ["requestId", "decision"])
     decision = str_value(payload.get("decision")).upper()
     if decision not in {"APPROVED", "REJECTED"}:
-        raise ApiError("INVALID_DECISION", "Decisao invalida.")
+        raise ApiError("INVALID_DECISION", "Decisão inválida.")
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         request = conn.execute(
-            "select * from courseplatform.certificate_requests where request_id = %s",
+            "select * from courseplatform.certificate_requests where request_id = %s for update",
             (payload["requestId"],),
         ).fetchone()
         if not request:
-            raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado nao encontrado.")
+            raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
+        if request.get("status") != "PAYMENT_SUBMITTED" or request.get("certificate_id"):
+            raise ApiError(
+                "CERTIFICATE_REQUEST_ALREADY_REVIEWED",
+                "Este pedido já foi revisto ou ainda não está pronto para avaliação.",
+            )
         certificate = None
         if decision == "APPROVED":
             student = conn.execute("select * from courseplatform.students where student_id = %s", (request["student_id"],)).fetchone()
@@ -3451,6 +3466,49 @@ def admin_review_certificate_request(payload: dict[str, Any]):
         audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_REQUEST_REVIEWED", "CERTIFICATE_REQUEST", request["request_id"], {"decision": decision})
         conn.commit()
     return success({"request": public_certificate_request(request), "certificate": public_certificate(certificate)})
+
+
+def admin_delete_certificate_request(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["requestId"])
+    with connection() as conn:
+        ensure_certificate_feature_schema(conn)
+        request = conn.execute(
+            "select * from courseplatform.certificate_requests where request_id = %s for update",
+            (payload["requestId"],),
+        ).fetchone()
+        if not request:
+            raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
+        if request.get("certificate_id"):
+            raise ApiError(
+                "CERTIFICATE_REQUEST_PROTECTED",
+                "Este pedido está associado a um certificado e não pode ser apagado.",
+            )
+        if request.get("payment_receipt_url") or request.get("submitted_at"):
+            raise ApiError(
+                "CERTIFICATE_REQUEST_PROTECTED",
+                "Pedidos com comprovativo submetido devem ser preservados para auditoria.",
+            )
+        if request.get("status") not in {"REQUESTED", "REJECTED"}:
+            raise ApiError(
+                "CERTIFICATE_REQUEST_PROTECTED",
+                "Apenas pedidos solicitados ou rejeitados, sem comprovativo, podem ser apagados.",
+            )
+        deleted = conn.execute(
+            "delete from courseplatform.certificate_requests where request_id = %s returning *",
+            (request["request_id"],),
+        ).fetchone()
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "CERTIFICATE_REQUEST_DELETED",
+            "CERTIFICATE_REQUEST",
+            request["request_id"],
+            {"status": request.get("status")},
+        )
+        conn.commit()
+    return success({"request": public_certificate_request(deleted)})
 
 
 def admin_get_certificate_settings(payload: dict[str, Any]):
@@ -3543,7 +3601,7 @@ def admin_save_certificate_survey(payload: dict[str, Any]):
         ensure_certificate_feature_schema(conn)
         course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
         if not course:
-            raise ApiError("COURSE_NOT_FOUND", "Curso nao encontrado.")
+            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
         current = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
         current_payload = certificate_settings_payload(current, course)
         profile = normalize_certificate_profile(current_payload.get("certificateProfile"), course)
@@ -3584,21 +3642,21 @@ def admin_upload_certificate_asset(payload: dict[str, Any]):
     asset_key = str_value(payload.get("assetKey"))
     allowed_keys = set(default_certificate_profile().get("assets", {}).keys())
     if asset_key not in allowed_keys:
-        raise ApiError("INVALID_ASSET_KEY", "Tipo de elemento grafico invalido.")
+        raise ApiError("INVALID_ASSET_KEY", "Tipo de elemento gráfico inválido.")
     mime_type = str_value(payload.get("mimeType"))
     if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
         raise ApiError("INVALID_FILE_TYPE", "Use PNG, JPEG ou WebP.")
     data_url = str_value(payload.get("dataUrl"))
     marker = ";base64,"
     if marker not in data_url:
-        raise ApiError("INVALID_FILE_DATA", "Ficheiro invalido.")
+        raise ApiError("INVALID_FILE_DATA", "Ficheiro inválido.")
     encoded = data_url.split(marker, 1)[1]
     try:
         file_bytes = base64.b64decode(encoded, validate=True)
     except Exception as exc:
-        raise ApiError("INVALID_FILE_DATA", "Ficheiro invalido.") from exc
+        raise ApiError("INVALID_FILE_DATA", "Ficheiro inválido.") from exc
     if len(file_bytes) > 3 * 1024 * 1024:
-        raise ApiError("FILE_TOO_LARGE", "O ficheiro deve ter ate 3 MB.")
+        raise ApiError("FILE_TOO_LARGE", "O ficheiro deve ter até 3 MB.")
 
     settings = get_settings()
     extension = mimetypes.guess_extension(mime_type) or ".png"
@@ -3650,7 +3708,7 @@ def verify_certificate(payload: dict[str, Any]):
 
 
 def not_implemented(action: str):
-    raise ApiError("NOT_IMPLEMENTED", f"A acao {action} ainda nao foi portada para a API Python.")
+    raise ApiError("NOT_IMPLEMENTED", f"A ação {action} ainda não foi portada para a API Python.")
 
 
 ACTIONS = {
@@ -3701,6 +3759,7 @@ ACTIONS = {
     "adminRefreshCertificateFormat": admin_refresh_certificate_format,
     "adminDeleteCertificate": admin_delete_certificate,
     "adminReviewCertificateRequest": admin_review_certificate_request,
+    "adminDeleteCertificateRequest": admin_delete_certificate_request,
     "adminGetCertificateSettings": admin_get_certificate_settings,
     "adminSaveCertificateSettings": admin_save_certificate_settings,
     "adminListCertificateSurveys": admin_list_certificate_surveys,

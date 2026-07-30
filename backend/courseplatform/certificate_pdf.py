@@ -4,12 +4,16 @@ import base64
 import urllib.request
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
+import reportlab
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.graphics.barcode import qr
 from reportlab.graphics.shapes import Drawing
@@ -28,6 +32,13 @@ HAIRLINE = colors.HexColor("#DDE3EA")
 SAFE_LEFT = 48
 SAFE_RIGHT = PAGE_WIDTH - 48
 FOOTER_Y = 47
+FONT_REGULAR = "CertificateSans"
+FONT_BOLD = "CertificateSansBold"
+_FONT_DIR = Path(reportlab.__file__).resolve().parent / "fonts"
+if FONT_REGULAR not in pdfmetrics.getRegisteredFontNames():
+    pdfmetrics.registerFont(TTFont(FONT_REGULAR, str(_FONT_DIR / "Vera.ttf")))
+if FONT_BOLD not in pdfmetrics.getRegisteredFontNames():
+    pdfmetrics.registerFont(TTFont(FONT_BOLD, str(_FONT_DIR / "VeraBd.ttf")))
 
 
 def build_course_certificate_pdf(data: dict[str, Any], model: str = "participation") -> bytes:
@@ -50,8 +61,8 @@ def draw_participation_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> 
     draw_double_frame(pdf, NAVY, GOLD)
 
     draw_classic_brand(pdf, issuer(data), assets.get("logoUrl"))
-    centered(pdf, "CERTIFICADO DE CONCLUSAO", 437, 9.5, "Helvetica-Bold", GOLD)
-    centered(pdf, "Certificamos que", 407, 11, "Helvetica", MUTED)
+    centered(pdf, "CERTIFICADO DE CONCLUSÃO", 437, 10, FONT_BOLD, GOLD)
+    centered(pdf, "Certificamos que", 407, 11, FONT_REGULAR, MUTED)
     draw_fitted_center_block(
         pdf,
         student_name(data),
@@ -60,35 +71,35 @@ def draw_participation_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> 
         365,
         27,
         17,
-        "Helvetica-Bold",
+        FONT_BOLD,
         NAVY,
         2,
     )
-    centered(pdf, "concluiu com aproveitamento o curso", 316, 10.5, "Helvetica", MUTED)
-    draw_fitted_center_block(
+    centered(pdf, "concluiu com aproveitamento o curso", 316, 10.5, FONT_REGULAR, MUTED)
+    course_bottom = draw_fitted_center_block(
         pdf,
         course_title(data),
         90,
         PAGE_WIDTH - 90,
         282,
         19,
-        12,
-        "Helvetica-Bold",
+        10.5,
+        FONT_BOLD,
         GOLD,
-        2,
+        3,
     )
     draw_fitted_center_block(
         pdf,
         summary_text(data.get("content_summary") or ""),
         110,
         PAGE_WIDTH - 110,
-        239,
-        9.5,
-        7.5,
-        "Helvetica",
+        min(239, course_bottom - 24),
+        10.2,
+        8.4,
+        FONT_REGULAR,
         MUTED,
         2,
-        leading=12,
+        leading=11.5,
     )
 
     draw_classic_metrics(pdf, data)
@@ -115,50 +126,50 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
     pdf.line(split_x, 52, split_x, PAGE_HEIGHT - 52)
 
     if not draw_image_fit(pdf, assets.get("logoUrl"), left_x + 69, 456, 140, 74):
-        draw_seal(pdf, left_x + left_w / 2, 493, "LMT", silver=False, radius=31)
-    centered_in(pdf, issuer(data), left_x + 20, split_x - 20, 443, 11.5, "Helvetica-Bold", GOLD)
+        draw_seal(pdf, left_x + left_w / 2, 493, "LSS", silver=False, radius=31)
+    centered_in(pdf, issuer(data), left_x + 20, split_x - 20, 443, 11.5, FONT_BOLD, GOLD)
     draw_fitted_center_block(
         pdf,
-        clean_text(profile.get("certificateTitle") or "Certificado de Qualificacao").upper(),
+        clean_text(profile.get("certificateTitle") or "Certificado de Qualificação").upper(),
         left_x + 22,
         split_x - 22,
         397,
         17,
         11.5,
-        "Helvetica-Bold",
+        FONT_BOLD,
         GOLD,
         3,
     )
     draw_fitted_center_block(
         pdf,
-        profile.get("qualificationType") or "sobre o aumento da qualificacao profissional",
+        profile.get("qualificationType") or "sobre o aumento da qualificação profissional",
         left_x + 24,
         split_x - 24,
         334,
         9.5,
-        7.5,
-        "Helvetica",
+        8.2,
+        FONT_REGULAR,
         BLUE,
         2,
     )
-    centered_in(pdf, data.get("certificate_number") or "", left_x + 22, split_x - 22, 290, 10, "Helvetica-Bold", GOLD)
-    centered_in(pdf, "Documento de qualificacao", left_x + 20, split_x - 20, 254, 8.5, "Helvetica", BLUE)
-    centered_in(pdf, "Numero de registo", left_x + 24, split_x - 24, 216, 8, "Helvetica", BLUE)
-    centered_in(pdf, data.get("verification_code") or "", left_x + 24, split_x - 24, 190, 10, "Helvetica-Bold", GOLD)
-    centered_in(pdf, profile.get("issueLocation") or "Cidade de Maputo, Mocambique", left_x + 20, split_x - 20, 151, 10, "Helvetica-Bold", BLUE)
-    centered_in(pdf, issue_date(data), left_x + 20, split_x - 20, 130, 10, "Helvetica", BLUE)
+    centered_in(pdf, data.get("certificate_number") or "", left_x + 22, split_x - 22, 290, 10, FONT_BOLD, GOLD)
+    centered_in(pdf, "Documento de qualificação", left_x + 20, split_x - 20, 254, 9, FONT_REGULAR, BLUE)
+    centered_in(pdf, "Número de registo", left_x + 24, split_x - 24, 216, 8.5, FONT_REGULAR, BLUE)
+    centered_in(pdf, data.get("verification_code") or "", left_x + 24, split_x - 24, 190, 10, FONT_BOLD, GOLD)
+    centered_in(pdf, profile.get("issueLocation") or "Cidade de Maputo, Moçambique", left_x + 20, split_x - 20, 151, 10, FONT_BOLD, BLUE)
+    centered_in(pdf, issue_date(data), left_x + 20, split_x - 20, 130, 10, FONT_REGULAR, BLUE)
     draw_signature(
         pdf,
         left_x + 47,
         58,
-        profile.get("directorName") or data.get("director_name") or "Diretor Academico",
-        profile.get("directorTitle") or "Direcao academica",
+        profile.get("directorName") or data.get("director_name") or "Diretor Académico",
+        profile.get("directorTitle") or "Direção académica",
         assets.get("directorSignatureUrl"),
         width=174,
     )
     draw_image_fit(pdf, assets.get("academicStampUrl"), left_x + 178, 60, 64, 64)
 
-    centered_in(pdf, "O presente documento certifica que", right_x + 20, right_x + right_w - 20, 510, 9.5, "Helvetica", GOLD)
+    centered_in(pdf, "O presente documento certifica que", right_x + 20, right_x + right_w - 20, 510, 9.5, FONT_REGULAR, GOLD)
     draw_fitted_center_block(
         pdf,
         student_name(data).upper(),
@@ -167,23 +178,23 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
         476,
         16,
         10.5,
-        "Helvetica-Bold",
+        FONT_BOLD,
         BLUE,
         2,
     )
     draw_wrapped_center(
         pdf,
-        f"concluiu com sucesso o programa de aumento de qualificacao profissional na {issuer(data)}",
+        f"concluiu com sucesso o programa de aumento de qualificação profissional na {issuer(data)}",
         right_x + 34,
         right_x + right_w - 34,
         432,
         9,
-        "Helvetica",
+        FONT_REGULAR,
         BLUE,
         2,
     )
-    centered_in(pdf, f"Emitido em {issue_date(data)}", right_x + 30, right_x + right_w - 30, 397, 9, "Helvetica", GOLD)
-    centered_in(pdf, "CURSO / PROGRAMA", right_x + 30, right_x + right_w - 30, 366, 8, "Helvetica-Bold", BLUE)
+    centered_in(pdf, f"Emitido em {issue_date(data)}", right_x + 30, right_x + right_w - 30, 397, 9, FONT_REGULAR, GOLD)
+    centered_in(pdf, "CURSO / PROGRAMA", right_x + 30, right_x + right_w - 30, 366, 8, FONT_BOLD, BLUE)
     draw_fitted_center_block(
         pdf,
         course_title(data),
@@ -191,31 +202,31 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
         right_x + right_w - 28,
         340,
         15,
-        9.5,
-        "Helvetica-Bold",
+        8.5,
+        FONT_BOLD,
         BLUE,
-        2,
+        3,
     )
     draw_wrapped_center(
         pdf,
-        "demonstrando aproveitamento satisfatorio em atividades academicas, estudos de caso, discussoes tecnicas e avaliacao final.",
+        "demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.",
         right_x + 34,
         right_x + right_w - 34,
         298,
         8.5,
-        "Helvetica",
+        FONT_REGULAR,
         BLUE,
         2,
     )
     draw_program_topics(pdf, data, right_x + 30, 263, right_w - 60)
     centered_in(
         pdf,
-        f"Carga horaria: {data.get('workload') or '30 horas'}",
+        f"Carga horária: {data.get('workload') or '30 horas'}",
         right_x + 20,
         right_x + right_w - 20,
         137,
         10.5,
-        "Helvetica-Bold",
+        FONT_BOLD,
         BLUE,
     )
     draw_signature(
@@ -223,7 +234,7 @@ def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> N
         right_x + 180,
         58,
         profile.get("coordinatorName") or data.get("coordinator_name") or "Coordenador do Programa",
-        profile.get("coordinatorTitle") or "Coordenacao do programa",
+        profile.get("coordinatorTitle") or "Coordenação do programa",
         assets.get("coordinatorSignatureUrl"),
         width=168,
     )
@@ -325,7 +336,7 @@ def draw_seal(
             x + radius * 0.68,
             start_y - index * line_height,
             size,
-            "Helvetica-Bold",
+            FONT_BOLD,
             NAVY,
         )
 
@@ -343,8 +354,8 @@ def draw_signature(
     pdf.setStrokeColor(MUTED)
     pdf.setLineWidth(0.7)
     pdf.line(x, y + 20, x + width, y + 20)
-    centered_in(pdf, name, x, x + width, y + 6, 8.5, "Helvetica-Bold", INK)
-    centered_in(pdf, title, x, x + width, y - 7, 7.2, "Helvetica", MUTED)
+    centered_in(pdf, name, x, x + width, y + 6, 8.5, FONT_BOLD, INK)
+    centered_in(pdf, title, x, x + width, y - 7, 7.2, FONT_REGULAR, MUTED)
 
 
 def image_reader(value: str) -> ImageReader | None:
@@ -383,15 +394,15 @@ def draw_classic_brand(pdf: canvas.Canvas, name: str, logo_url: str = "") -> Non
         return
     pdf.setFillColor(LIGHT_GOLD)
     pdf.roundRect(56, 497, 38, 38, 9, stroke=0, fill=1)
-    centered_in(pdf, "LMT", 56, 94, 510, 9, "Helvetica-Bold", NAVY)
-    brand_size = fit_single_line_size(name, "Helvetica-Bold", 12, 8, 190)
-    brand = ellipsize_to_width(name, "Helvetica-Bold", brand_size, 190)
+    centered_in(pdf, "LSS", 56, 94, 510, 9, FONT_BOLD, NAVY)
+    brand_size = fit_single_line_size(name, FONT_BOLD, 12, 8, 190)
+    brand = ellipsize_to_width(name, FONT_BOLD, brand_size, 190)
     pdf.setFillColor(NAVY)
-    pdf.setFont("Helvetica-Bold", brand_size)
+    pdf.setFont(FONT_BOLD, brand_size)
     pdf.drawString(104, 520, brand)
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 6.5)
-    pdf.drawString(104, 507, "FORMACAO PROFISSIONAL")
+    pdf.setFont(FONT_REGULAR, 7.2)
+    pdf.drawString(104, 507, "FORMAÇÃO PROFISSIONAL")
 
 
 def draw_classic_metrics(pdf: canvas.Canvas, data: dict[str, Any]) -> None:
@@ -406,15 +417,15 @@ def draw_classic_metrics(pdf: canvas.Canvas, data: dict[str, Any]) -> None:
     pdf.line(left, bottom, left + available, bottom)
     details = [
         ("RESULTADO FINAL", score_percent(data)),
-        ("DATA DE EMISSAO", issue_date_long(data)),
-        ("CARGA DE REFERENCIA", clean_text(data.get("workload") or "10 horas")),
+        ("DATA DE EMISSÃO", issue_date_long(data)),
+        ("CARGA DE REFERÊNCIA", clean_text(data.get("workload") or "10 horas")),
     ]
     for index, (label, value) in enumerate(details):
         x = left + cell_width * index
         if index:
             pdf.line(x, bottom, x, bottom + height)
-        centered_in(pdf, label, x + 12, x + cell_width - 12, bottom + 39, 7, "Helvetica-Bold", MUTED)
-        centered_in(pdf, value, x + 12, x + cell_width - 12, bottom + 20, 9.5, "Helvetica-Bold", NAVY)
+        centered_in(pdf, label, x + 12, x + cell_width - 12, bottom + 39, 7.5, FONT_BOLD, MUTED)
+        centered_in(pdf, value, x + 12, x + cell_width - 12, bottom + 20, 10, FONT_BOLD, NAVY)
 
 
 def draw_verification_block(
@@ -429,14 +440,14 @@ def draw_verification_block(
     text_x = x + qr_size + 14
     code = clean_text(data.get("verification_code") or data.get("certificate_number") or "")
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica-Bold", 6.2)
-    pdf.drawString(text_x, y + qr_size * 0.55, "CODIGO DE VERIFICACAO")
+    pdf.setFont(FONT_BOLD, 7)
+    pdf.drawString(text_x, y + qr_size * 0.55, "CÓDIGO DE VERIFICAÇÃO")
     pdf.setFillColor(NAVY)
-    pdf.setFont("Helvetica-Bold", 7.5)
+    pdf.setFont(FONT_BOLD, 8.5)
     pdf.drawString(
         text_x,
         y + qr_size * 0.30,
-        ellipsize_to_width(code, "Helvetica-Bold", 7.5, text_width),
+        ellipsize_to_width(code, FONT_BOLD, 8.5, text_width),
     )
 
 
@@ -447,12 +458,12 @@ def draw_classic_product_credit(
 ) -> None:
     right = PAGE_WIDTH - 56
     if not draw_image_fit(pdf, assets.get("productLogoUrl"), right - 92, 73, 92, 24):
-        centered_in(pdf, issuer({"issuer_name": profile.get("issuerName")}), right - 180, right, 79, 8, "Helvetica-Bold", NAVY)
+        centered_in(pdf, issuer({"issuer_name": profile.get("issuerName")}), right - 180, right, 79, 8, FONT_BOLD, NAVY)
     credit = clean_text(profile.get("productCredit"))
     if credit:
-        size, lines = fit_text_lines(credit, "Helvetica", 6.2, 5.3, 210, 2)
+        size, lines = fit_text_lines(credit, FONT_REGULAR, 6.8, 6, 210, 2)
         pdf.setFillColor(MUTED)
-        pdf.setFont("Helvetica", size)
+        pdf.setFont(FONT_REGULAR, size)
         for index, line in enumerate(lines):
             pdf.drawRightString(right, 61 - index * (size + 2), line)
 
@@ -484,7 +495,7 @@ def draw_summary_panel(
         y + height - 22,
         9.5,
         8,
-        "Helvetica",
+        FONT_REGULAR,
         MUTED,
         3,
         leading=12,
@@ -499,7 +510,7 @@ def draw_program_topics(
     width: float,
 ) -> None:
     pdf.setFillColor(NAVY)
-    pdf.setFont("Helvetica", 9.5)
+    pdf.setFont(FONT_REGULAR, 9.5)
     pdf.drawCentredString(x + width / 2, y, "O programa abordou:")
     topics = split_topics(data.get("content_summary") or "")
     gap = 22
@@ -513,8 +524,8 @@ def draw_program_topics(
         item_y = first_y - row * row_height
         pdf.setFillColor(NAVY)
         pdf.circle(columns[col], item_y + 2.4, 1.55, stroke=0, fill=1)
-        size, lines = fit_text_lines(topic, "Helvetica", 7.3, 6.4, column_width - 11, 2)
-        pdf.setFont("Helvetica", size)
+        size, lines = fit_text_lines(topic, FONT_REGULAR, 8.1, 7.2, column_width - 11, 2)
+        pdf.setFont(FONT_REGULAR, size)
         for line_index, line in enumerate(lines):
             pdf.drawString(columns[col] + 8, item_y - line_index * (size + 1.6), line)
 
@@ -527,8 +538,8 @@ def draw_metric(pdf: canvas.Canvas, x: float, y: float, label: str, value: str) 
     pdf.setStrokeColor(LIGHT_GOLD)
     pdf.setFillColor(colors.white)
     pdf.roundRect(x, y, 128, 40, 7, stroke=1, fill=1)
-    centered_in(pdf, label, x, x + 128, y + 23, 7.5, "Helvetica", MUTED)
-    centered_in(pdf, value, x, x + 128, y + 9, 9.5, "Helvetica-Bold", NAVY)
+    centered_in(pdf, label, x, x + 128, y + 23, 7.5, FONT_REGULAR, MUTED)
+    centered_in(pdf, value, x, x + 128, y + 9, 9.5, FONT_BOLD, NAVY)
 
 
 def draw_qr(pdf: canvas.Canvas, x: float, y: float, value: str, size: float = 54) -> None:
@@ -562,22 +573,22 @@ def draw_certificate_footer(pdf: canvas.Canvas, data: dict[str, Any], show_date:
     pdf.setLineWidth(0.55)
     pdf.line(SAFE_LEFT, FOOTER_Y + 13, SAFE_RIGHT, FOOTER_Y + 13)
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 7)
+    pdf.setFont(FONT_REGULAR, 7)
     certificate_text = ellipsize_to_width(
         f"N. do certificado: {data.get('certificate_number') or ''}",
-        "Helvetica",
+        FONT_REGULAR,
         7,
         240,
     )
     code_text = ellipsize_to_width(
-        f"Codigo: {data.get('verification_code') or ''}",
-        "Helvetica",
+        f"Código: {data.get('verification_code') or ''}",
+        FONT_REGULAR,
         7,
         220,
     )
     pdf.drawString(SAFE_LEFT, FOOTER_Y, certificate_text)
     if show_date:
-        centered(pdf, f"Emitido em {issue_date(data)}", FOOTER_Y, 7, "Helvetica", MUTED)
+        centered(pdf, f"Emitido em {issue_date(data)}", FOOTER_Y, 7, FONT_REGULAR, MUTED)
     pdf.drawRightString(SAFE_RIGHT, FOOTER_Y, code_text)
 
 
@@ -607,7 +618,7 @@ def draw_wrapped_center(
     max_lines: int,
 ) -> float:
     fitted_size, lines = fit_text_lines(text, font, size, max(6.5, size * 0.78), x2 - x1, max_lines)
-    leading = fitted_size + 3
+    leading = fitted_size + 2
     for index, line in enumerate(lines):
         centered_in(pdf, line, x1, x2, y - index * leading, fitted_size, font, color)
     return y - max(0, len(lines) - 1) * leading
@@ -627,7 +638,7 @@ def draw_fitted_center_block(
     leading: float | None = None,
 ) -> float:
     size, lines = fit_text_lines(text, font, max_size, min_size, x2 - x1, max_lines)
-    line_height = leading or size * 1.24
+    line_height = leading or size * 1.16
     for index, line in enumerate(lines):
         centered_in(pdf, line, x1, x2, y - index * line_height, size, font, color)
     return y - max(0, len(lines) - 1) * line_height
@@ -731,7 +742,7 @@ def split_topics(value: str) -> list[str]:
         text = line.strip(" -\t")
         if text:
             topics.append(text)
-    return topics or ["Conteudos essenciais do curso", "Atividades praticas", "Avaliacoes e acompanhamento"]
+    return topics or ["Conteúdos essenciais do curso", "Atividades práticas", "Avaliações e acompanhamento"]
 
 
 def summary_text(value: Any) -> str:

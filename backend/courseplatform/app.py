@@ -104,7 +104,7 @@ def static_file_response(raw_path: str):
         if fallback.is_file():
             return FileResponse(fallback, status_code=404)
 
-    return JSONResponse({"success": False, "error": {"code": "NOT_FOUND", "message": "Recurso nao encontrado."}}, status_code=404)
+    return JSONResponse({"success": False, "error": {"code": "NOT_FOUND", "message": "Recurso não encontrado."}}, status_code=404)
 
 
 async def handle_static_file(static_path: str):
