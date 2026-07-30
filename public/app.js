@@ -260,6 +260,7 @@ function initializeMobileMenu() {
     event.stopPropagation();
     const willOpen = mobileMenu.hidden;
     mobileMenu.hidden = !willOpen;
+    document.body.classList.toggle('student-menu-open', willOpen);
     mobileMenuButton.setAttribute('aria-expanded', String(willOpen));
   });
 
@@ -297,6 +298,7 @@ function initializeMobileMenu() {
 function closeMobileMenu() {
   if (!mobileMenu || !mobileMenuButton) return;
   mobileMenu.hidden = true;
+  document.body.classList.remove('student-menu-open');
   mobileMenuButton.setAttribute('aria-expanded', 'false');
 }
 

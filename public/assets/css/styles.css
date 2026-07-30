@@ -9011,6 +9011,7 @@ body:has(.admin-layout) .button-secondary {
   .student-priority-grid,
   .dashboard-insights,
   .admin-summary-grid,
+  .video-gallery,
   .student-course-list,
   .lesson-grid,
   .student-admin-grid,
@@ -10343,5 +10344,857 @@ iframe {
     width: 124px;
     min-width: 124px;
     max-width: 124px;
+  }
+}
+
+/* Universal responsive optimisation
+   This final layer consolidates viewport behaviour after the historical
+   component rules above. It deliberately changes presentation only. */
+:root {
+  --responsive-gutter: clamp(16px, 2.5vw, 32px);
+  --responsive-gutter-compact: clamp(12px, 3.8vw, 18px);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+html {
+  min-width: 0;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: calc(var(--app-header-height) + 16px);
+}
+
+body {
+  min-width: 0;
+  min-height: 100vh;
+  min-height: 100svh;
+  min-height: 100dvh;
+}
+
+.page-shell,
+.student-app-shell,
+.student-main-frame,
+.student-content-area,
+.admin-layout,
+.admin-main,
+.lesson-layout,
+.lesson-main,
+.auth-layout,
+.auth-panel,
+.verification-shell,
+.dialog-card,
+.certificate-dialog-card {
+  min-inline-size: 0;
+}
+
+.student-content-area > *,
+.admin-main > *,
+.lesson-main > *,
+.auth-panel > *,
+.verification-shell > * {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.rich-content,
+.answer-value,
+.configuration-error,
+.empty-note,
+.form-message,
+.certificate-policy-note,
+.student-list-value,
+.student-list-primary,
+.student-list-primary strong,
+.student-list-primary small {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+pre,
+.answer-value {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.admin-table-wrap,
+.credential-table-wrap,
+.certificate-record-table,
+.student-admin-list,
+.certificate-preview-sheet,
+.rich-content {
+  max-inline-size: 100%;
+}
+
+.admin-table-wrap,
+.credential-table-wrap,
+.certificate-record-table,
+.student-admin-list,
+.certificate-preview-sheet,
+.rich-content table {
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.rich-content table {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.formula,
+.rich-content pre,
+.rich-content code {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.dialog-card,
+.certificate-dialog-card {
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+}
+
+.mobile-menu,
+.admin-sidebar {
+  padding-bottom: calc(16px + var(--safe-bottom));
+}
+
+.toast-container {
+  right: max(12px, var(--safe-right));
+  bottom: max(12px, var(--safe-bottom));
+}
+
+@media (min-width: 1800px) {
+  :root {
+    --workspace-content-max: 1440px;
+  }
+
+  .student-topbar {
+    padding-inline: max(40px, calc((100vw - var(--workspace-sidebar-current) - var(--workspace-content-max)) / 2));
+  }
+}
+
+@media (max-width: 1366px) and (min-width: 1025px) {
+  .student-topbar {
+    padding-inline: 24px;
+  }
+
+  .student-page-heading,
+  .student-content-area {
+    width: min(calc(100% - 48px), var(--workspace-content-max));
+  }
+
+  .admin-main {
+    padding-inline: 24px;
+  }
+
+  .student-priority-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  body.admin-menu-open,
+  body.student-menu-open,
+  body:has(.mobile-menu:not([hidden])) {
+    overflow: hidden;
+    touch-action: none;
+  }
+
+  .student-app-shell,
+  .admin-layout {
+    display: block;
+    width: 100%;
+    min-height: calc(100vh - var(--app-header-height));
+    min-height: calc(100dvh - var(--app-header-height));
+  }
+
+  .student-main-frame,
+  .admin-main {
+    width: 100% !important;
+    max-width: 100%;
+    margin-left: 0 !important;
+  }
+
+  .student-topbar {
+    inset-inline: 0;
+    width: 100%;
+    padding-inline: var(--responsive-gutter);
+  }
+
+  .student-page-heading,
+  .student-content-area {
+    width: min(calc(100% - (var(--responsive-gutter) * 2)), var(--workspace-content-max)) !important;
+    max-width: var(--workspace-content-max);
+    margin-inline: auto;
+    padding-inline: 0 !important;
+  }
+
+  .admin-main {
+    padding: 28px var(--responsive-gutter) calc(44px + var(--safe-bottom));
+  }
+
+  .admin-sidebar,
+  .mobile-menu {
+    height: calc(100vh - var(--app-header-height));
+    height: calc(100dvh - var(--app-header-height));
+    max-height: calc(100dvh - var(--app-header-height));
+  }
+
+  .dashboard-hero,
+  body:has(.student-app-shell) .dashboard-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-header-card,
+  .profile-workspace,
+  .upload-methods,
+  .student-detail-columns,
+  .certificate-student-grid,
+  .certificate-model-grid,
+  .credential-dialog-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .certificate-asset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .survey-admin-row {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .survey-admin-row > :last-child {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .lesson-layout {
+    width: min(calc(100% - (var(--responsive-gutter) * 2)), var(--workspace-content-max));
+    margin-inline: auto;
+  }
+
+  .button,
+  .button-small,
+  .student-list-action,
+  button.text-button,
+  .student-admin-actions button:not(.button),
+  .file-actions button,
+  body:has(.student-app-shell) .button,
+  body:has(.student-app-shell) .button-small,
+  body:has(.admin-layout) .button,
+  body:has(.admin-layout) .button-small,
+  body:has(.admin-layout) .student-list-action {
+    min-height: 44px;
+    height: auto;
+    padding: 11px 14px;
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  .theme-toggle,
+  .header-user,
+  .icon-button,
+  .mobile-menu-button,
+  .video-sound-button,
+  .dialog-close,
+  body:has(.student-app-shell) .theme-toggle,
+  body:has(.student-app-shell) .header-user,
+  body:has(.student-app-shell) .icon-button,
+  body:has(.admin-layout) .theme-toggle {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .admin-identity,
+  body:has(.admin-layout) .admin-identity,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  select {
+    min-height: 44px;
+    height: 44px;
+  }
+
+  .admin-nav,
+  .student-nav a,
+  .sidebar-collapse-button,
+  .lesson-navigation button,
+  .lesson-navigation a {
+    min-height: 44px;
+    height: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  :root {
+    --section-gap: 20px;
+    --grid-gap: 14px;
+  }
+
+  .site-header,
+  body:has(.student-app-shell) .site-header,
+  body:has(.admin-layout) .site-header,
+  body:has(.lesson-layout) .site-header,
+  body:has(.certifications-shell) .site-header {
+    min-height: var(--app-header-height);
+    height: var(--app-header-height);
+    padding-right: max(12px, var(--safe-right));
+    padding-left: max(12px, var(--safe-left));
+  }
+
+  .site-header-actions {
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .student-main-frame {
+    padding-top: 0;
+  }
+
+  .student-topbar {
+    top: var(--app-header-height);
+    min-height: 64px;
+    height: auto;
+    gap: 10px;
+    padding: 10px var(--responsive-gutter-compact);
+  }
+
+  .student-topbar > div:first-child {
+    min-width: 0;
+  }
+
+  .student-topbar h1,
+  .breadcrumb-line {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .student-page-heading,
+  .student-content-area {
+    box-sizing: border-box;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-inline: 0 !important;
+    padding-right: max(var(--responsive-gutter-compact), var(--safe-right)) !important;
+    padding-left: max(var(--responsive-gutter-compact), var(--safe-left)) !important;
+  }
+
+  .student-content-area {
+    overflow: clip;
+    padding-top: 18px;
+    padding-bottom: calc(36px + var(--safe-bottom));
+  }
+
+  .student-content-area > *,
+  .admin-main > *,
+  .lesson-main > * {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .admin-main {
+    width: 100% !important;
+    padding: 22px max(var(--responsive-gutter-compact), var(--safe-right))
+      calc(36px + var(--safe-bottom))
+      max(var(--responsive-gutter-compact), var(--safe-left));
+    overflow: clip;
+  }
+
+  .dashboard-hero,
+  body:has(.student-app-shell) .dashboard-hero {
+    display: grid !important;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+    padding: 18px;
+  }
+
+  .progress-summary,
+  .hero-copy,
+  .student-priority-grid,
+  .dashboard-insights,
+  .insight-card,
+  .video-panel,
+  .video-panel-copy,
+  .video-gallery,
+  .information-panel,
+  .information-grid {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .student-priority-grid,
+  .dashboard-insights,
+  .admin-summary-grid,
+  .student-course-list,
+  .lesson-grid,
+  .student-admin-grid,
+  .admin-course-list,
+  .information-grid,
+  .profile-status-grid,
+  .profile-form-grid,
+  .course-form-grid,
+  .certificate-template-form-grid,
+  .certificate-asset-grid,
+  .certificate-filter-bar,
+  .certificate-model-grid,
+  .certificate-student-grid,
+  .certificate-payment-conditions,
+  .survey-response-list,
+  .survey-option-grid,
+  .credential-management-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .admin-page-heading,
+  .section-heading,
+  .course-section-heading,
+  .profile-section-heading,
+  .attempt-header,
+  .certifications-header {
+    min-width: 0;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-heading-actions,
+  .admin-row-actions,
+  .student-admin-actions,
+  .student-detail-actions,
+  .certification-list-actions,
+  .hero-actions,
+  .dialog-actions,
+  .file-actions {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-heading-actions .button,
+  .admin-row-actions .button,
+  .student-admin-actions .button,
+  .student-detail-actions .button,
+  .certification-list-actions .button,
+  .hero-actions .button,
+  .dialog-actions .button,
+  .file-actions .button {
+    width: 100%;
+  }
+
+  .button,
+  .button-small,
+  .hero-actions .button,
+  .student-list-action,
+  button.text-button,
+  .student-admin-actions button:not(.button),
+  .file-actions button,
+  body:has(.student-app-shell) .button,
+  body:has(.student-app-shell) .button-small,
+  body:has(.admin-layout) .button,
+  body:has(.admin-layout) .button-small,
+  body:has(.admin-layout) .student-list-action {
+    min-height: 44px;
+    height: auto;
+    padding: 11px 14px;
+    font-size: 14px;
+    line-height: 20px;
+    white-space: normal;
+  }
+
+  .theme-toggle,
+  .header-user,
+  .icon-button,
+  .mobile-menu-button,
+  .video-sound-button,
+  .dialog-close,
+  body:has(.student-app-shell) .theme-toggle,
+  body:has(.student-app-shell) .header-user,
+  body:has(.student-app-shell) .icon-button,
+  body:has(.admin-layout) .theme-toggle {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+  }
+
+  .admin-identity,
+  body:has(.admin-layout) .admin-identity {
+    min-height: 44px;
+    height: 44px;
+    padding: 0 12px;
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  select {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    height: 44px;
+  }
+
+  textarea {
+    width: 100%;
+    min-width: 0;
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 20px;
+    min-width: 20px;
+    height: 20px;
+    min-height: 20px;
+  }
+
+  .checkbox-line,
+  .option-item,
+  .authorship-check,
+  .survey-option-grid label,
+  .access-checkbox-option {
+    min-height: 44px;
+  }
+
+  .verification-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 18px;
+  }
+
+  .verification-shell {
+    width: 100%;
+    margin: 0 auto;
+    padding: 32px var(--responsive-gutter-compact);
+  }
+
+  .verification-card {
+    padding: 20px 16px;
+  }
+
+  .verification-card dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .auth-shell {
+    min-height: calc(100vh - var(--app-header-height));
+    min-height: calc(100dvh - var(--app-header-height));
+    padding: 28px var(--responsive-gutter-compact);
+  }
+
+  .auth-card,
+  .auth-card-modern {
+    width: 100%;
+    max-width: 100%;
+    padding: 24px 20px;
+  }
+
+  .auth-brand-row {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .auth-brand-row .brand-mark {
+    width: 56px;
+    height: 56px;
+  }
+
+  .student-status-row {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 10px 12px;
+  }
+
+  .student-status-row .status-pill,
+  .student-status-row .student-score-value,
+  .student-status-actions {
+    grid-column: 2;
+    justify-self: stretch;
+  }
+
+  .student-status-actions {
+    width: 100%;
+  }
+
+  .student-status-actions .button {
+    width: 100%;
+  }
+
+  .certification-list-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .certification-seal {
+    justify-self: start;
+  }
+
+  .survey-admin-row,
+  .survey-admin-row > :last-child {
+    grid-template-columns: minmax(0, 1fr);
+    grid-column: auto;
+  }
+
+  .profile-photo-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-photo-preview,
+  .profile-photo-frame-large {
+    justify-self: start;
+  }
+
+  .timer-card {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .uploaded-file,
+  .admin-file-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lesson-navigation button,
+  .lesson-navigation a {
+    min-height: 44px;
+    height: auto;
+  }
+
+  .file-control input[type="file"] {
+    width: 1px;
+    min-width: 1px;
+    height: 1px;
+    min-height: 1px;
+  }
+
+  .dialog-overlay {
+    padding: max(10px, var(--safe-top)) max(10px, var(--safe-right))
+      max(10px, var(--safe-bottom)) max(10px, var(--safe-left));
+    place-items: start center;
+  }
+
+  .dialog-card,
+  .certificate-dialog-card {
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
+    padding: 22px 16px;
+  }
+
+  .certificate-preview-sheet {
+    width: 100%;
+    padding: 8px;
+    overflow-x: auto;
+  }
+
+  .admin-table-wrap,
+  .credential-table-wrap,
+  .certificate-record-table {
+    position: relative;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1024px) {
+  .student-topbar {
+    height: 66px;
+    min-height: 66px;
+    padding-block: 0;
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .student-topbar-actions {
+    width: auto;
+    flex: 0 1 auto;
+  }
+
+  .global-search {
+    flex: 0 1 260px;
+  }
+
+  .global-search input {
+    width: clamp(190px, 30vw, 280px);
+  }
+}
+
+@media (max-width: 480px) {
+  :root {
+    --responsive-gutter-compact: 12px;
+  }
+
+  .site-brand-copy {
+    display: none;
+  }
+
+  .site-brand-symbol,
+  body:has(.student-app-shell) .site-brand-symbol,
+  body:has(.admin-layout) .site-brand-symbol {
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+  }
+
+  .admin-identity {
+    display: none;
+  }
+
+  .student-topbar h1 {
+    font-size: 18px;
+  }
+
+  .student-page-heading h2,
+  .admin-page-heading h1,
+  .auth-card h1,
+  .admin-login-title {
+    font-size: 24px;
+  }
+
+  .dashboard-hero,
+  body:has(.student-app-shell) .dashboard-hero,
+  .information-panel,
+  .video-panel,
+  .profile-card,
+  .profile-header-card,
+  .certifications-page,
+  .admin-content-panel,
+  .course-management-panel,
+  .certificate-requests-panel,
+  .certificate-register-panel,
+  .survey-admin-panel,
+  .lesson-header,
+  .attempt-header,
+  .content-section,
+  .question-card,
+  .upload-panel,
+  .submission-box {
+    padding: 16px;
+  }
+
+  .hero-greeting {
+    font-size: 24px;
+  }
+
+  .hero-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .hero-meta span {
+    width: 100%;
+  }
+
+  .student-course-card dl,
+  .admin-course-card dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .student-list-table .student-list-row {
+    padding: 14px;
+  }
+
+  .status-pill,
+  .submission-status-pill {
+    width: auto;
+    min-width: min(124px, 100%);
+    max-width: 100%;
+  }
+
+  .certificate-standard-logo {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .certificate-standard-logo img,
+  .certificate-standard-logo-placeholder {
+    width: 72px;
+  }
+}
+
+@media (max-width: 360px) {
+  .site-header,
+  body:has(.student-app-shell) .site-header,
+  body:has(.admin-layout) .site-header {
+    padding-inline: 8px;
+  }
+
+  .site-header-actions {
+    gap: 4px;
+  }
+
+  .student-topbar {
+    padding-inline: 10px;
+  }
+
+  .student-content-area,
+  .student-page-heading,
+  .admin-main,
+  .lesson-layout,
+  .verification-shell {
+    padding-right: max(10px, var(--safe-right)) !important;
+    padding-left: max(10px, var(--safe-left)) !important;
+  }
+
+  .auth-shell {
+    padding-inline: 10px;
+  }
+
+  .auth-card,
+  .auth-card-modern {
+    padding: 20px 14px;
+  }
+
+  .auth-brand-row {
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .auth-brand-row .brand-mark {
+    width: 48px;
+    height: 48px;
+  }
+
+  .mobile-menu,
+  .admin-sidebar {
+    width: min(304px, 92vw) !important;
+  }
+}
+
+@media (max-width: 1024px) and (max-height: 600px) {
+  .auth-shell {
+    align-items: flex-start;
+    padding-block: 20px;
+  }
+
+  .dialog-overlay {
+    place-items: start center;
+  }
+
+  .mobile-menu,
+  .admin-sidebar {
+    overflow-y: auto;
+  }
+}
+
+@media (pointer: coarse) {
+  .student-nav a,
+  .admin-nav,
+  .sidebar-collapse-button,
+  .mobile-menu button,
+  .lesson-navigation button,
+  .lesson-navigation a {
+    min-height: 44px;
   }
 }
