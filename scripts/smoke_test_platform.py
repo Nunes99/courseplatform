@@ -105,6 +105,9 @@ def main():
             student_token = student["sessionToken"]
             courses_data = call("getMyCourses", {"sessionToken": student_token})
             dashboard = call("getDashboard", {"sessionToken": student_token})
+            notification_data = call("getMyNotifications", {"sessionToken": student_token, "limit": 5})
+            assert isinstance(notification_data.get("notifications"), list), notification_data
+            assert int(notification_data.get("unreadCount") or 0) >= 0, notification_data
             courses = courses_data.get("courses") or []
             if courses:
                 course_id = (courses[0].get("course") or {}).get("courseId")
@@ -139,6 +142,9 @@ def main():
                 call("adminListStudents", {"adminToken": admin_token, "limit": 5})
                 call("adminListStaff", {"adminToken": admin_token})
                 submissions = call("adminListSubmissions", {"adminToken": admin_token, "limit": 5})
+                notification_log = call("adminListNotifications", {"adminToken": admin_token, "limit": 5})
+                assert isinstance(notification_log.get("notifications"), list), notification_log
+                assert "configured" in (notification_log.get("whatsappConfiguration") or {}), notification_log
                 if submissions.get("submissions"):
                     progress = submissions["submissions"][0].get("progress") or {}
                     assert progress.get("contentAccessStatus") in {"AVAILABLE", "LOCKED"}, progress

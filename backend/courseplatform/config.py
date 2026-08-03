@@ -175,6 +175,14 @@ class Settings:
         self.supabase_url = os.getenv("SUPABASE_URL", os.getenv("NEXT_PUBLIC_SUPABASE_URL", "")).strip().rstrip("/")
         self.supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
         self.supabase_storage_bucket = os.getenv("SUPABASE_CERTIFICATE_BUCKET", "courseplatform-certificate-assets").strip()
+        self.whatsapp_enabled = os.getenv("WHATSAPP_ENABLED", "false").strip().lower() in {"1", "true", "yes", "sim"}
+        self.whatsapp_access_token = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()
+        self.whatsapp_phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
+        self.whatsapp_graph_api_version = os.getenv("WHATSAPP_GRAPH_API_VERSION", "v23.0").strip() or "v23.0"
+        self.whatsapp_template_name = os.getenv("WHATSAPP_TEMPLATE_NAME", "").strip()
+        self.whatsapp_template_language = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "pt_PT").strip() or "pt_PT"
+        self.whatsapp_platform_url = os.getenv("WHATSAPP_PLATFORM_URL", "").strip()
+        self.whatsapp_timeout_seconds = _int_env("WHATSAPP_TIMEOUT_SECONDS", 12)
         self.cors_origins = [
             item.strip()
             for item in os.getenv("CORS_ORIGINS", "*").split(",")

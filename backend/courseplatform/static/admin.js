@@ -97,7 +97,8 @@ const state = {
     logoUrl: '',
     videos: []
   },
-  staff: []
+  staff: [],
+  notificationLog: null
 };
 
 initialize();
@@ -389,6 +390,7 @@ function warmAdminCache() {
     Promise.allSettled([
       api.adminCourses({ limit: 100 }),
       api.adminMediaConfig(),
+      api.adminNotifications({ limit: 20 }),
       canManageStaff() ? (typeof api.adminStaff === 'function' ? api.adminStaff() : api.adminstaff()) : Promise.resolve()
     ]);
   }, 1200);
@@ -413,6 +415,10 @@ function renderAdminShell() {
         <button class="admin-nav is-active" data-admin-view="pending" aria-label="Submissões" title="Submissões">
           <img src="${iconUrl('inbox', blueIcon)}" alt="">
           <span>Submissões</span>
+        </button>
+        <button class="admin-nav" data-admin-view="notifications" aria-label="Notificações" title="Notificações">
+          <img src="${iconUrl('bell', blueIcon)}" alt="">
+          <span>Notificações</span>
         </button>
         <button class="admin-nav" data-admin-view="students" aria-label="Estudantes" title="Estudantes">
           <img src="${iconUrl('student-male', blueIcon)}" alt="">
@@ -479,6 +485,8 @@ function renderAdminShell() {
 
       if (button.dataset.adminView === 'students') {
         loadStudents();
+      } else if (button.dataset.adminView === 'notifications') {
+        loadNotificationManagement();
       } else if (button.dataset.adminView === 'courses') {
         state.courseMode = 'list';
         loadCourses();
@@ -508,6 +516,202 @@ function setActiveAdminView(view) {
   root.querySelectorAll('[data-admin-view]').forEach((item) => {
     item.classList.toggle('is-active', item.dataset.adminView === view);
   });
+}
+
+function canManageNotifications() {
+  return ['OWNER', 'ADMIN'].includes(state.admin?.role);
+}
+
+function notificationDeliveryLabel(status) {
+  const labels = {
+    SENT: 'Enviado',
+    PENDING: 'Pendente',
+    FAILED: 'Falhou',
+    SKIPPED: 'Não solicitado',
+    NOT_REQUESTED: 'Apenas interna'
+  };
+  return labels[status] || status || 'Apenas interna';
+}
+
+async function loadNotificationManagement(options = {}) {
+  const main = document.querySelector('#adminMain');
+  main.innerHTML = loadingTemplate('A carregar notificações...');
+  try {
+    const [notificationLog, studentResult] = await Promise.all([
+      api.adminNotifications({ limit: 120 }, options),
+      api.adminStudents({ limit: 500 }, options)
+    ]);
+    state.notificationLog = notificationLog;
+    state.students = studentResult.students || [];
+    renderNotificationManagement();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+function renderNotificationManagement() {
+  const main = document.querySelector('#adminMain');
+  const data = state.notificationLog || {};
+  const summary = data.summary || {};
+  const whatsapp = data.whatsappConfiguration || {};
+  const activeStudents = state.students.filter(({ student }) => student?.status === 'ACTIVE');
+
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div>
+        <p class="eyebrow">Comunicação académica</p>
+        <h1>Notificações</h1>
+        <p>Envie atualizações internas e acompanhe as entregas pelo WhatsApp.</p>
+      </div>
+      ${canManageNotifications() && (summary.whatsappPending || summary.whatsappFailed) ? `
+        <button class="button button-secondary" id="retryWhatsAppDeliveries" type="button">
+          Repetir envios pendentes
+        </button>
+      ` : ''}
+    </div>
+
+    <section class="admin-summary-grid">
+      <article class="insight-card"><img src="${iconUrl('bell', goldIcon)}" alt=""><div><span>Internas</span><strong>${Number(summary.internalTotal || 0)}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('message-circle-check', goldIcon)}" alt=""><div><span>WhatsApp enviados</span><strong>${Number(summary.whatsappSent || 0)}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('clock-3', goldIcon)}" alt=""><div><span>Pendentes</span><strong>${Number(summary.whatsappPending || 0)}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('circle-alert', goldIcon)}" alt=""><div><span>Falharam</span><strong>${Number(summary.whatsappFailed || 0)}</strong></div></article>
+    </section>
+
+    <section class="notification-admin-grid">
+      ${canManageNotifications() ? `
+        <article class="admin-content-panel notification-composer-card">
+          <div class="section-heading">
+            <div><p class="eyebrow">Nova atualização</p><h2>Enviar aos estudantes</h2></div>
+          </div>
+          <form id="notificationComposer" class="form-stack">
+            <label>
+              <span>Destinatários</span>
+              <select name="studentIds" multiple size="7" aria-describedby="notificationRecipientHelp">
+                ${activeStudents.map(({ student }) => `
+                  <option value="${escapeHtml(student.studentId)}">${escapeHtml(student.fullName)} · ${escapeHtml(student.publicStudentId || student.email)}</option>
+                `).join('')}
+              </select>
+              <small id="notificationRecipientHelp">Use Ctrl/Cmd para selecionar vários estudantes.</small>
+            </label>
+            <label class="checkbox-line">
+              <input type="checkbox" name="notifyAll" value="true">
+              Enviar a todos os estudantes ativos
+            </label>
+            <div class="profile-form-grid">
+              <label>
+                <span>Tipo</span>
+                <select name="category">
+                  <option value="GENERAL">Comunicado geral</option>
+                  <option value="MODULE_AVAILABLE">Módulos e exercícios</option>
+                  <option value="SUBMISSION_STATUS">Estado de submissão</option>
+                  <option value="REVIEW_FEEDBACK">Avaliação e feedback</option>
+                </select>
+              </label>
+              <label>
+                <span>Prioridade</span>
+                <select name="priority"><option value="NORMAL">Normal</option><option value="HIGH">Alta</option></select>
+              </label>
+            </div>
+            <label><span>Título</span><input name="title" maxlength="180" required></label>
+            <label><span>Mensagem</span><textarea name="message" rows="5" maxlength="1800" required></textarea></label>
+            <label><span>Destino ao abrir</span><input name="actionUrl" value="#/notifications" placeholder="#/lessons"></label>
+            <label class="checkbox-line notification-channel-option">
+              <input type="checkbox" name="sendWhatsApp" value="true">
+              <span><strong>Enviar também pelo WhatsApp</strong><small>Somente estudantes com consentimento e telefone válido receberão a mensagem.</small></span>
+            </label>
+            <button class="button button-primary" type="submit">Enviar atualização</button>
+          </form>
+        </article>
+      ` : ''}
+
+      <article class="admin-content-panel whatsapp-configuration-card">
+        <div class="section-heading">
+          <div><p class="eyebrow">Canal externo</p><h2>WhatsApp Business</h2></div>
+          <span class="status-pill ${whatsapp.configured ? 'status-approved' : 'status-pending'}">${whatsapp.configured ? 'Configurado' : 'Configuração pendente'}</span>
+        </div>
+        <dl class="notification-config-list">
+          <div><dt>Integração ativa</dt><dd>${whatsapp.enabled ? 'Sim' : 'Não'}</dd></div>
+          <div><dt>Número empresarial</dt><dd>${whatsapp.phoneNumberConfigured ? 'Configurado' : 'Em falta'}</dd></div>
+          <div><dt>Modelo aprovado</dt><dd>${escapeHtml(whatsapp.templateName || 'Em falta')}</dd></div>
+          <div><dt>Idioma</dt><dd>${escapeHtml(whatsapp.templateLanguage || 'pt_PT')}</dd></div>
+        </dl>
+        <p class="management-field-hint">As credenciais ficam protegidas nas variáveis do servidor. O modelo deve conter quatro campos: nome, título, mensagem e link.</p>
+      </article>
+    </section>
+
+    <section class="admin-content-panel notification-history-panel">
+      <div class="section-heading"><div><p class="eyebrow">Histórico</p><h2>Atualizações enviadas</h2></div></div>
+      <div class="admin-table-wrap">
+        <table class="admin-table notification-admin-table">
+          <thead><tr><th>Estudante</th><th>Atualização</th><th>Canal interno</th><th>WhatsApp</th><th>Data</th></tr></thead>
+          <tbody>
+            ${(data.notifications || []).length ? data.notifications.map((notification) => `
+              <tr>
+                <td><strong>${escapeHtml(notification.studentName || 'Estudante')}</strong></td>
+                <td><strong>${escapeHtml(notification.title || '')}</strong><small>${escapeHtml(notification.message || '')}</small></td>
+                <td><span class="status-pill status-approved">Registada</span></td>
+                <td><span class="status-pill notification-delivery-${String(notification.whatsapp?.status || '').toLowerCase()}">${escapeHtml(notificationDeliveryLabel(notification.whatsapp?.status))}</span>${notification.whatsapp?.lastError ? `<small title="${escapeHtml(notification.whatsapp.lastError)}">Verificar configuração</small>` : ''}</td>
+                <td>${escapeHtml(formatDate(notification.createdAt))}</td>
+              </tr>
+            `).join('') : '<tr><td colspan="5" class="empty-table">Ainda não existem notificações.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+
+  const form = document.querySelector('#notificationComposer');
+  form?.elements.notifyAll.addEventListener('change', () => {
+    form.elements.studentIds.disabled = form.elements.notifyAll.checked;
+  });
+  form?.addEventListener('submit', submitAdminNotification);
+  document.querySelector('#retryWhatsAppDeliveries')?.addEventListener('click', retryWhatsAppDeliveries);
+  reportHeight();
+}
+
+async function submitAdminNotification(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = new FormData(form);
+  const notifyAll = values.get('notifyAll') === 'true';
+  const studentIds = values.getAll('studentIds');
+  if (!notifyAll && !studentIds.length) {
+    showToast('Selecione pelo menos um estudante.', 'warning');
+    return;
+  }
+  if (notifyAll && !confirmAdminAction(`Enviar esta atualização aos ${state.students.filter(({ student }) => student?.status === 'ACTIVE').length} estudantes ativos?`)) return;
+  setBusy(button, true, 'A enviar...');
+  try {
+    const result = await api.adminCreateNotification({
+      studentIds,
+      notifyAll,
+      category: values.get('category'),
+      priority: values.get('priority'),
+      title: values.get('title'),
+      message: values.get('message'),
+      actionUrl: values.get('actionUrl'),
+      sendWhatsApp: values.get('sendWhatsApp') === 'true'
+    });
+    showToast(`${result.notificationCount} notificação${result.notificationCount === 1 ? '' : 'ões'} criada${result.notificationCount === 1 ? '' : 's'}.`, 'success');
+    await loadNotificationManagement({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+    setBusy(button, false);
+  }
+}
+
+async function retryWhatsAppDeliveries(event) {
+  const button = event.currentTarget;
+  setBusy(button, true, 'A repetir...');
+  try {
+    const result = await api.adminRetryNotificationDeliveries(20);
+    showToast(`${result.delivery?.sent || 0} envio${result.delivery?.sent === 1 ? '' : 's'} concluído${result.delivery?.sent === 1 ? '' : 's'}.`, 'success');
+    await loadNotificationManagement({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+    setBusy(button, false);
+  }
 }
 
 function confirmAdminAction(message) {

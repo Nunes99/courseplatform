@@ -4,6 +4,7 @@ import mimetypes
 import urllib.error
 import urllib.request
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -147,6 +148,7 @@ EVALUATION_STATUSES = {
 }
 ATTEMPT_STATUSES = EVALUATION_STATUSES - {"NOT_STARTED"}
 _ASSESSMENT_SCHEMA_READY = False
+_NOTIFICATION_SCHEMA_READY = False
 
 
 def progress_access_status(row: dict[str, Any] | None) -> str:
@@ -221,6 +223,9 @@ def public_student(row: dict[str, Any] | None):
         "jobTitle": row.get("job_title"),
         "interests": row.get("interests"),
         "profilePhotoUrl": row.get("profile_photo_url"),
+        "whatsappOptIn": as_bool(row.get("whatsapp_opt_in")),
+        "whatsappOptInAt": iso(row.get("whatsapp_opt_in_at")),
+        "notificationPreferences": notification_preferences(row),
         "createdAt": iso(row.get("created_at")),
         "updatedAt": iso(row.get("updated_at")),
         "lastLoginAt": iso(row.get("last_login_at")),
@@ -521,6 +526,350 @@ def public_file(row: dict[str, Any] | None):
         "uploadedAt": iso(row.get("uploaded_at")),
         "status": row.get("status"),
     }
+
+
+DEFAULT_NOTIFICATION_PREFERENCES = {
+    "MODULE_AVAILABLE": True,
+    "SUBMISSION_STATUS": True,
+    "REVIEW_FEEDBACK": True,
+    "GENERAL": True,
+}
+
+NOTIFICATION_STATUS_LABELS = {
+    "LOCKED": "Bloqueado",
+    "AVAILABLE": "Disponível",
+    "NOT_STARTED": "Não iniciado",
+    "IN_PROGRESS": "Em curso",
+    "UNDER_REVIEW": "Em avaliação",
+    "CORRECTION_REQUIRED": "Correção solicitada",
+    "APPROVED": "Aprovado",
+    "APPROVED_WITH_NOTES": "Aprovado com observações",
+    "FAILED": "Não aprovado",
+    "TIME_EXCEEDED": "Tempo excedido",
+}
+
+
+def notification_status_label(value: Any) -> str:
+    normalized = str_value(value).upper()
+    return NOTIFICATION_STATUS_LABELS.get(normalized, normalized.replace("_", " ").title())
+
+
+def notification_preferences(row: dict[str, Any] | None) -> dict[str, bool]:
+    source = (row or {}).get("notification_preferences_json") or {}
+    if isinstance(source, str):
+        try:
+            source = json.loads(source)
+        except json.JSONDecodeError:
+            source = {}
+    if not isinstance(source, dict):
+        source = {}
+    return {
+        key: as_bool(source.get(key, default_value))
+        for key, default_value in DEFAULT_NOTIFICATION_PREFERENCES.items()
+    }
+
+
+NOTIFICATION_FEATURE_SQL = """
+alter table courseplatform.students add column if not exists whatsapp_opt_in boolean not null default false;
+alter table courseplatform.students add column if not exists whatsapp_opt_in_at timestamptz;
+alter table courseplatform.students add column if not exists notification_preferences_json jsonb not null default '{"MODULE_AVAILABLE":true,"SUBMISSION_STATUS":true,"REVIEW_FEEDBACK":true,"GENERAL":true}'::jsonb;
+create table if not exists courseplatform.notifications (
+  notification_id text primary key,
+  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  created_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
+  category text not null default 'GENERAL',
+  title text not null,
+  message text not null,
+  action_url text,
+  entity_type text,
+  entity_id text,
+  priority text not null default 'NORMAL',
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create table if not exists courseplatform.notification_deliveries (
+  delivery_id text primary key,
+  notification_id text not null references courseplatform.notifications(notification_id) on delete cascade,
+  channel text not null,
+  recipient text,
+  status text not null default 'PENDING',
+  provider text,
+  provider_message_id text,
+  attempt_count integer not null default 0,
+  last_error text,
+  created_at timestamptz not null default now(),
+  sent_at timestamptz,
+  updated_at timestamptz,
+  unique(notification_id, channel)
+);
+create index if not exists idx_notifications_student_created on courseplatform.notifications(student_id, created_at desc);
+create index if not exists idx_notifications_student_unread on courseplatform.notifications(student_id, read_at, created_at desc);
+create index if not exists idx_notification_deliveries_status on courseplatform.notification_deliveries(channel, status, created_at);
+"""
+
+
+def ensure_notification_feature_schema(conn) -> None:
+    execute_statements(conn, NOTIFICATION_FEATURE_SQL)
+
+
+def prepare_notification_feature_schema() -> None:
+    global _NOTIFICATION_SCHEMA_READY
+    if _NOTIFICATION_SCHEMA_READY:
+        return
+    with connection() as conn:
+        ensure_notification_feature_schema(conn)
+        conn.commit()
+    _NOTIFICATION_SCHEMA_READY = True
+
+
+def public_notification(row: dict[str, Any] | None):
+    if not row:
+        return None
+    return {
+        "notificationId": row.get("notification_id"),
+        "studentId": row.get("student_id"),
+        "studentName": row.get("student_name") or row.get("full_name"),
+        "category": row.get("category") or "GENERAL",
+        "title": row.get("title"),
+        "message": row.get("message"),
+        "actionUrl": row.get("action_url"),
+        "entityType": row.get("entity_type"),
+        "entityId": row.get("entity_id"),
+        "priority": row.get("priority") or "NORMAL",
+        "readAt": iso(row.get("read_at")),
+        "createdAt": iso(row.get("created_at")),
+        "whatsapp": {
+            "status": row.get("delivery_status") or "NOT_REQUESTED",
+            "recipient": row.get("delivery_recipient"),
+            "providerMessageId": row.get("provider_message_id"),
+            "attemptCount": int(row.get("attempt_count") or 0),
+            "lastError": row.get("last_error"),
+            "sentAt": iso(row.get("sent_at")),
+        },
+    }
+
+
+def normalize_whatsapp_recipient(value: Any) -> str:
+    text = re.sub(r"[^0-9+]", "", str_value(value))
+    if text.startswith("00"):
+        text = f"+{text[2:]}"
+    digits = re.sub(r"\D", "", text)
+    return digits if 8 <= len(digits) <= 15 else ""
+
+
+def safe_notification_action_url(value: Any) -> str:
+    text = str_value(value)
+    if text.startswith("#/") or text.startswith("https://") or text.startswith("http://"):
+        return text[:1000]
+    return "#/notifications"
+
+
+def whatsapp_configuration() -> dict[str, Any]:
+    settings = get_settings()
+    configured = bool(
+        settings.whatsapp_enabled
+        and settings.whatsapp_access_token
+        and settings.whatsapp_phone_number_id
+        and settings.whatsapp_template_name
+        and settings.whatsapp_platform_url
+    )
+    return {
+        "enabled": settings.whatsapp_enabled,
+        "configured": configured,
+        "phoneNumberConfigured": bool(settings.whatsapp_phone_number_id),
+        "templateConfigured": bool(settings.whatsapp_template_name),
+        "templateName": settings.whatsapp_template_name,
+        "templateLanguage": settings.whatsapp_template_language,
+        "platformUrl": settings.whatsapp_platform_url,
+    }
+
+
+def create_student_notification(
+    conn,
+    student_id: str,
+    category: str,
+    title: str,
+    message: str,
+    *,
+    admin_id: str | None = None,
+    action_url: str = "#/notifications",
+    entity_type: str = "",
+    entity_id: str = "",
+    priority: str = "NORMAL",
+    send_whatsapp: bool = True,
+) -> str | None:
+    student = conn.execute(
+        "select * from courseplatform.students where student_id = %s",
+        (student_id,),
+    ).fetchone()
+    if not student:
+        return None
+    normalized_category = str_value(category).upper() or "GENERAL"
+    notification_id = generate_id("NTF")
+    conn.execute(
+        """
+        insert into courseplatform.notifications
+          (notification_id, student_id, created_by_admin_id, category, title, message,
+           action_url, entity_type, entity_id, priority, created_at)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+        """,
+        (
+            notification_id,
+            student_id,
+            admin_id,
+            normalized_category,
+            str_value(title)[:180],
+            str_value(message)[:1800],
+            safe_notification_action_url(action_url),
+            str_value(entity_type)[:80],
+            str_value(entity_id)[:160],
+            str_value(priority).upper() or "NORMAL",
+        ),
+    )
+    if send_whatsapp:
+        recipient = normalize_whatsapp_recipient(student.get("phone"))
+        preferences = notification_preferences(student)
+        opted_in = as_bool(student.get("whatsapp_opt_in")) and preferences.get(normalized_category, True)
+        delivery_status = "PENDING" if opted_in and recipient else "SKIPPED"
+        skip_reason = "" if delivery_status == "PENDING" else (
+            "Consentimento do WhatsApp não concedido para este tipo de atualização."
+            if not opted_in else "Telefone inválido ou sem indicativo internacional."
+        )
+        conn.execute(
+            """
+            insert into courseplatform.notification_deliveries
+              (delivery_id, notification_id, channel, recipient, status, provider,
+               attempt_count, last_error, created_at, updated_at)
+            values (%s, %s, 'WHATSAPP', %s, %s, 'META_CLOUD_API', 0, %s, now(), now())
+            on conflict (notification_id, channel) do nothing
+            """,
+            (generate_id("NDL"), notification_id, recipient or None, delivery_status, skip_reason or None),
+        )
+    return notification_id
+
+
+def send_whatsapp_template(delivery: dict[str, Any]) -> str:
+    settings = get_settings()
+    configuration = whatsapp_configuration()
+    if not configuration["configured"]:
+        raise RuntimeError("Integração WhatsApp ainda não configurada no servidor.")
+    endpoint = (
+        f"https://graph.facebook.com/{settings.whatsapp_graph_api_version}/"
+        f"{settings.whatsapp_phone_number_id}/messages"
+    )
+    action_url = str_value(delivery.get("action_url"))
+    if not action_url.startswith(("https://", "http://")):
+        base = settings.whatsapp_platform_url.rstrip("/")
+        action_url = f"{base}/{action_url}" if action_url.startswith("#/") else base
+    body = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": delivery["recipient"],
+        "type": "template",
+        "template": {
+            "name": settings.whatsapp_template_name,
+            "language": {"code": settings.whatsapp_template_language},
+            "components": [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": str_value(delivery.get("student_name"))[:120] or "Estudante"},
+                    {"type": "text", "text": str_value(delivery.get("title"))[:180]},
+                    {"type": "text", "text": str_value(delivery.get("message"))[:900]},
+                    {"type": "text", "text": action_url[:1000]},
+                ],
+            }],
+        },
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {settings.whatsapp_access_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=max(3, settings.whatsapp_timeout_seconds)) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        response_text = error.read().decode("utf-8", errors="replace")[:700]
+        raise RuntimeError(f"WhatsApp Cloud API HTTP {error.code}: {response_text}") from error
+    messages = result.get("messages") if isinstance(result, dict) else []
+    return str_value(messages[0].get("id")) if messages else ""
+
+
+def deliver_pending_whatsapp(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
+    configuration = whatsapp_configuration()
+    if not configuration["configured"]:
+        return {"sent": 0, "failed": 0, "pending": 0}
+    prepare_notification_feature_schema()
+    query = """
+        select d.*, n.title, n.message, n.action_url, s.full_name as student_name
+        from courseplatform.notification_deliveries d
+        join courseplatform.notifications n on n.notification_id = d.notification_id
+        join courseplatform.students s on s.student_id = n.student_id
+        where d.channel = 'WHATSAPP' and d.status in ('PENDING', 'FAILED')
+          and d.attempt_count < 3
+    """
+    params: list[Any] = []
+    if notification_ids:
+        query += " and d.notification_id = any(%s)"
+        params.append(notification_ids)
+    query += " order by d.created_at limit %s"
+    params.append(max(1, min(int(limit), 200)))
+    rows = fetch_all(query, tuple(params))
+    delivery_results: list[tuple[dict[str, Any], str, str]] = []
+    if rows:
+        worker_count = min(5, len(rows))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {executor.submit(send_whatsapp_template, delivery): delivery for delivery in rows}
+            for future in as_completed(futures):
+                delivery = futures[future]
+                try:
+                    delivery_results.append((delivery, "SENT", future.result()))
+                except Exception as error:
+                    delivery_results.append((delivery, "FAILED", str(error)[:700]))
+
+    sent = 0
+    failed = 0
+    with connection() as conn:
+        for delivery, result_status, result_value in delivery_results:
+            if result_status == "SENT":
+                conn.execute(
+                    """
+                    update courseplatform.notification_deliveries
+                    set status = 'SENT', provider_message_id = %s, attempt_count = attempt_count + 1,
+                        last_error = null, sent_at = now(), updated_at = now()
+                    where delivery_id = %s
+                    """,
+                    (result_value or None, delivery["delivery_id"]),
+                )
+                sent += 1
+            else:
+                conn.execute(
+                    """
+                    update courseplatform.notification_deliveries
+                    set status = 'FAILED', attempt_count = attempt_count + 1,
+                        last_error = %s, updated_at = now()
+                    where delivery_id = %s
+                    """,
+                    (result_value, delivery["delivery_id"]),
+                )
+                failed += 1
+        conn.commit()
+    return {"sent": sent, "failed": failed, "pending": max(0, len(rows) - sent - failed)}
+
+
+def dispatch_notification_deliveries(notification_ids: list[str]) -> None:
+    if not notification_ids:
+        return
+    try:
+        deliver_pending_whatsapp(notification_ids, limit=5)
+    except Exception:
+        # The internal notification is the source of truth; external delivery must
+        # never roll back the administrative action that generated it.
+        return
 
 
 ASSESSMENT_FEATURE_SQL = """
@@ -1794,6 +2143,7 @@ def attempt_status(payload: dict[str, Any]):
 
 
 def update_my_profile(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
     _, student = student_context(payload)
     photo_url = str_value(payload.get("profilePhotoUrl") or student.get("profile_photo_url"))
     if str_value(payload.get("profilePhotoBase64")):
@@ -1803,11 +2153,25 @@ def update_my_profile(payload: dict[str, Any]):
     if as_bool(payload.get("removeProfilePhoto")):
         photo_url = ""
 
+    whatsapp_opt_in = as_bool(payload.get("whatsappOptIn"))
+    phone = str_value(payload.get("phone"))
+    if whatsapp_opt_in and not normalize_whatsapp_recipient(phone):
+        raise ApiError(
+            "INVALID_WHATSAPP_PHONE",
+            "Para ativar o WhatsApp, informe um telefone com indicativo internacional, por exemplo +258.",
+        )
+    preferences = notification_preferences(student)
+    supplied_preferences = payload.get("notificationPreferences")
+    if isinstance(supplied_preferences, dict):
+        for key in DEFAULT_NOTIFICATION_PREFERENCES:
+            if key in supplied_preferences:
+                preferences[key] = as_bool(supplied_preferences[key])
+
     patch = {
         "full_name": str_value(payload.get("fullName") or student.get("full_name")),
         "country": str_value(payload.get("country")),
         "organization": str_value(payload.get("organization")),
-        "phone": str_value(payload.get("phone")),
+        "phone": phone,
         "job_title": str_value(payload.get("jobTitle")),
         "interests": str_value(payload.get("interests")),
         "profile_photo_url": photo_url,
@@ -1817,7 +2181,15 @@ def update_my_profile(payload: dict[str, Any]):
             """
             update courseplatform.students
             set full_name = %s, country = %s, organization = %s, phone = %s,
-                job_title = %s, interests = %s, profile_photo_url = %s, updated_at = now()
+                job_title = %s, interests = %s, profile_photo_url = %s,
+                whatsapp_opt_in = %s,
+                whatsapp_opt_in_at = case
+                  when %s and not coalesce(whatsapp_opt_in, false) then now()
+                  when not %s then null
+                  else whatsapp_opt_in_at
+                end,
+                notification_preferences_json = %s::jsonb,
+                updated_at = now()
             where student_id = %s
             returning *
             """,
@@ -1829,12 +2201,79 @@ def update_my_profile(payload: dict[str, Any]):
                 patch["job_title"],
                 patch["interests"],
                 patch["profile_photo_url"],
+                whatsapp_opt_in,
+                whatsapp_opt_in,
+                whatsapp_opt_in,
+                json.dumps(preferences),
                 student["student_id"],
             ),
         ).fetchone()
         audit(conn, "STUDENT", student["student_id"], "PROFILE_UPDATED", "STUDENT", student["student_id"])
         conn.commit()
     return success({"student": public_student(row)})
+
+
+def my_notifications(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
+    _, student = student_context(payload)
+    limit, offset, page = pagination(payload, default_limit=40, max_limit=100)
+    unread_only = as_bool(payload.get("unreadOnly"))
+    where_unread = "and n.read_at is null" if unread_only else ""
+    rows = fetch_all(
+        f"""
+        select n.*, d.status as delivery_status, d.recipient as delivery_recipient,
+               d.provider_message_id, d.attempt_count, d.last_error, d.sent_at
+        from courseplatform.notifications n
+        left join courseplatform.notification_deliveries d
+          on d.notification_id = n.notification_id and d.channel = 'WHATSAPP'
+        where n.student_id = %s {where_unread}
+        order by n.created_at desc
+        limit %s offset %s
+        """,
+        (student["student_id"], limit, offset),
+    )
+    unread = fetch_one(
+        "select count(*) as count from courseplatform.notifications where student_id = %s and read_at is null",
+        (student["student_id"],),
+    )
+    total = fetch_one(
+        "select count(*) as count from courseplatform.notifications where student_id = %s",
+        (student["student_id"],),
+    )
+    return success({
+        "notifications": [public_notification(row) for row in rows],
+        "unreadCount": int((unread or {}).get("count") or 0),
+        "total": int((total or {}).get("count") or 0),
+        "page": page,
+        "limit": limit,
+    })
+
+
+def mark_notification_read(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
+    _, student = student_context(payload)
+    notification_id = str_value(payload.get("notificationId"))
+    mark_all = as_bool(payload.get("markAll"))
+    if not notification_id and not mark_all:
+        raise ApiError("NOTIFICATION_REQUIRED", "Selecione uma notificação.")
+    with connection() as conn:
+        if mark_all:
+            result = conn.execute(
+                "update courseplatform.notifications set read_at = coalesce(read_at, now()) where student_id = %s",
+                (student["student_id"],),
+            )
+        else:
+            result = conn.execute(
+                """
+                update courseplatform.notifications
+                set read_at = coalesce(read_at, now())
+                where notification_id = %s and student_id = %s
+                """,
+                (notification_id, student["student_id"]),
+            )
+        updated_count = result.rowcount
+        conn.commit()
+    return success({"updatedCount": updated_count})
 
 
 def change_my_access_code(payload: dict[str, Any]):
@@ -2721,6 +3160,7 @@ def admin_review_submission(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     require_fields(payload, ["attemptId", "decision", "score"])
     prepare_assessment_feature_schema()
+    prepare_notification_feature_schema()
     decision = str_value(payload.get("decision")).upper()
     if decision not in {"APPROVED", "APPROVED_WITH_NOTES", "CORRECTION_REQUIRED", "FAILED"}:
         raise ApiError("INVALID_DECISION", "Decisão inválida.")
@@ -2730,6 +3170,7 @@ def admin_review_submission(payload: dict[str, Any]):
     attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
     if not attempt:
         raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
+    notification_ids: list[str] = []
     with connection() as conn:
         review = conn.execute(
             """
@@ -2773,8 +3214,31 @@ def admin_review_submission(payload: dict[str, Any]):
             (status, status, status, now, score, now, attempt.get("progress_id")),
         )
         refresh_enrollment_progress(conn, attempt.get("progress_id"))
+        lesson = conn.execute(
+            "select title from courseplatform.lessons where lesson_id = %s",
+            (attempt["lesson_id"],),
+        ).fetchone() or {}
+        comments = str_value(payload.get("comments"))
+        message = f"{lesson.get('title') or 'Atividade'}: {notification_status_label(decision)}."
+        if comments:
+            message = f"{message} Comentário do avaliador: {comments}"
+        notification_id = create_student_notification(
+            conn,
+            attempt["student_id"],
+            "REVIEW_FEEDBACK" if comments else "SUBMISSION_STATUS",
+            "Avaliação atualizada",
+            message,
+            admin_id=admin["admin_id"],
+            action_url="#/grades",
+            entity_type="ATTEMPT",
+            entity_id=attempt["attempt_id"],
+            priority="HIGH" if status == "CORRECTION_REQUIRED" else "NORMAL",
+        )
+        if notification_id:
+            notification_ids.append(notification_id)
         audit(conn, "ADMIN", admin["admin_id"], "SUBMISSION_REVIEWED", "ATTEMPT", attempt["attempt_id"], {"decision": decision, "score": score})
         conn.commit()
+    dispatch_notification_deliveries(notification_ids)
     return success({"attempt": public_attempt(updated), "review": public_review(review)})
 
 
@@ -2782,6 +3246,8 @@ def admin_authorize_retry(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     require_fields(payload, ["attemptId"])
     prepare_assessment_feature_schema()
+    prepare_notification_feature_schema()
+    notification_ids: list[str] = []
     with connection() as conn:
         attempt = conn.execute(
             """
@@ -2803,8 +3269,27 @@ def admin_authorize_retry(payload: dict[str, Any]):
             """,
             (attempt.get("progress_id"),),
         )
+        lesson = conn.execute(
+            "select title from courseplatform.lessons where lesson_id = %s",
+            (attempt["lesson_id"],),
+        ).fetchone() or {}
+        notification_id = create_student_notification(
+            conn,
+            attempt["student_id"],
+            "SUBMISSION_STATUS",
+            "Nova tentativa autorizada",
+            f"Pode realizar uma nova tentativa em {lesson.get('title') or 'atividade'}.",
+            admin_id=admin["admin_id"],
+            action_url=f"#/lesson/{attempt['lesson_id']}",
+            entity_type="ATTEMPT",
+            entity_id=attempt["attempt_id"],
+            priority="HIGH",
+        )
+        if notification_id:
+            notification_ids.append(notification_id)
         audit(conn, "ADMIN", admin["admin_id"], "RETRY_AUTHORIZED", "ATTEMPT", attempt["attempt_id"])
         conn.commit()
+    dispatch_notification_deliveries(notification_ids)
     return success({"attempt": public_attempt(attempt)})
 
 
@@ -2812,6 +3297,7 @@ def admin_update_attempt(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     require_fields(payload, ["attemptId", "status"])
     prepare_assessment_feature_schema()
+    prepare_notification_feature_schema()
     status = str_value(payload.get("status")).upper()
     if status not in ATTEMPT_STATUSES:
         raise ApiError("INVALID_ATTEMPT_STATUS", "Estado da tentativa inválido.")
@@ -2827,6 +3313,7 @@ def admin_update_attempt(payload: dict[str, Any]):
     if status == "IN_PROGRESS" and deadline and deadline <= utc_now():
         raise ApiError("INVALID_DEADLINE", "Uma tentativa em curso precisa de um prazo futuro.")
 
+    notification_ids: list[str] = []
     with connection() as conn:
         attempt = conn.execute(
             "select * from courseplatform.attempts where attempt_id = %s",
@@ -2839,6 +3326,9 @@ def admin_update_attempt(payload: dict[str, Any]):
             (attempt.get("progress_id"),),
         ).fetchone()
         resolved_access = access_status or progress_access_status(progress)
+        status_changed = str_value(attempt.get("status")).upper() != status
+        deadline_changed = deadline_supplied and iso(attempt.get("deadline_at")) != iso(deadline)
+        access_changed = bool(access_status) and progress_access_status(progress) != resolved_access
         updated = conn.execute(
             """
             update courseplatform.attempts
@@ -2905,7 +3395,30 @@ def admin_update_attempt(payload: dict[str, Any]):
                 "contentAccessStatus": resolved_access,
             },
         )
+        if status_changed or deadline_changed or access_changed:
+            lesson = conn.execute(
+                "select title from courseplatform.lessons where lesson_id = %s",
+                (attempt["lesson_id"],),
+            ).fetchone() or {}
+            details = f"{lesson.get('title') or 'Atividade'}: {notification_status_label(status)}."
+            if deadline_supplied and deadline:
+                details = f"{details} Novo prazo: {iso(deadline)}."
+            notification_id = create_student_notification(
+                conn,
+                attempt["student_id"],
+                "SUBMISSION_STATUS",
+                "Prazo da submissão atualizado" if deadline_changed and not status_changed else "Estado da submissão atualizado",
+                details,
+                admin_id=admin["admin_id"],
+                action_url="#/submissions",
+                entity_type="ATTEMPT",
+                entity_id=attempt["attempt_id"],
+                priority="HIGH" if status in {"CORRECTION_REQUIRED", "TIME_EXCEEDED"} else "NORMAL",
+            )
+            if notification_id:
+                notification_ids.append(notification_id)
         conn.commit()
+    dispatch_notification_deliveries(notification_ids)
     return success({"attempt": public_attempt(updated), "progress": public_progress(updated_progress) if updated_progress else None})
 
 
@@ -3382,6 +3895,7 @@ def admin_assign_students_to_group(payload: dict[str, Any]):
 def admin_set_lesson_access(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     prepare_assessment_feature_schema()
+    prepare_notification_feature_schema()
     status = str_value(payload.get("status") or "AVAILABLE").upper()
     if status not in CONTENT_ACCESS_STATUSES:
         raise ApiError("INVALID_STATUS", "Estado de acesso inválido.")
@@ -3397,6 +3911,7 @@ def admin_set_lesson_access(payload: dict[str, Any]):
     if not lesson_ids or not student_ids:
         raise ApiError("EMPTY_ACCESS_TARGET", "Selecione módulos e estudantes.")
     updated = 0
+    notification_ids: list[str] = []
     with connection() as conn:
         for student_id in student_ids:
             for lesson_id in lesson_ids:
@@ -3423,6 +3938,14 @@ def admin_set_lesson_access(payload: dict[str, Any]):
                         """,
                         (generate_id("ENR"), student_id, lesson["course_id"]),
                     ).fetchone()
+                previous = conn.execute(
+                    """
+                    select * from courseplatform.lesson_progress
+                    where enrollment_id = %s and lesson_id = %s
+                    """,
+                    (enrollment["enrollment_id"], lesson_id),
+                ).fetchone()
+                previous_access = progress_access_status(previous)
                 conn.execute(
                     """
                     insert into courseplatform.lesson_progress
@@ -3442,15 +3965,35 @@ def admin_set_lesson_access(payload: dict[str, Any]):
                     """,
                     (generate_id("PRG"), enrollment["enrollment_id"], student_id, lesson_id, status, status, status),
                 )
+                if previous_access != status:
+                    notification_id = create_student_notification(
+                        conn,
+                        student_id,
+                        "MODULE_AVAILABLE",
+                        "Novo módulo disponível" if status == "AVAILABLE" else "Acesso ao módulo atualizado",
+                        (
+                            f"O módulo {lesson.get('title') or lesson_id} está disponível para leitura e exercícios."
+                            if status == "AVAILABLE"
+                            else f"O acesso ao módulo {lesson.get('title') or lesson_id} foi temporariamente bloqueado."
+                        ),
+                        admin_id=admin["admin_id"],
+                        action_url=f"#/lesson/{lesson_id}" if status == "AVAILABLE" else "#/lessons",
+                        entity_type="LESSON",
+                        entity_id=lesson_id,
+                    )
+                    if notification_id:
+                        notification_ids.append(notification_id)
                 updated += 1
         audit(conn, "ADMIN", admin["admin_id"], "LESSON_ACCESS_CHANGED", "LESSON_PROGRESS", "", {"lessonCount": len(lesson_ids), "studentCount": len(student_ids), "status": status})
         conn.commit()
+    dispatch_notification_deliveries(notification_ids)
     return success({"studentCount": len(student_ids), "lessonCount": len(lesson_ids), "updatedCount": updated})
 
 
 def admin_manage_lesson_progress(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     prepare_assessment_feature_schema()
+    prepare_notification_feature_schema()
     lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
     student_ids = set(payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else [])
     group_ids = payload.get("groupIds") if isinstance(payload.get("groupIds"), list) else []
@@ -3475,6 +4018,7 @@ def admin_manage_lesson_progress(payload: dict[str, Any]):
 
     updated = 0
     enrollment_ids: set[str] = set()
+    notification_ids: list[str] = []
     with connection() as conn:
         if group_ids:
             rows = conn.execute(
@@ -3529,6 +4073,8 @@ def admin_manage_lesson_progress(payload: dict[str, Any]):
                     """,
                     (enrollment["enrollment_id"], lesson_id),
                 ).fetchone()
+                previous_access = progress_access_status(progress)
+                previous_evaluation = progress_evaluation_status(progress)
                 resolved_access = access_status or progress_access_status(progress)
                 resolved_evaluation = evaluation_status or progress_evaluation_status(progress)
                 resolved_legacy = legacy_progress_status(resolved_access, resolved_evaluation)
@@ -3616,6 +4162,28 @@ def admin_manage_lesson_progress(payload: dict[str, Any]):
                             lesson_id,
                         ),
                     )
+                access_changed = previous_access != resolved_access
+                evaluation_changed = previous_evaluation != resolved_evaluation
+                if access_changed or evaluation_changed:
+                    message_parts = []
+                    if access_changed:
+                        message_parts.append(f"Conteúdo: {notification_status_label(resolved_access)}")
+                    if evaluation_changed:
+                        message_parts.append(f"Avaliação: {notification_status_label(resolved_evaluation)}")
+                    notification_id = create_student_notification(
+                        conn,
+                        student_id,
+                        "MODULE_AVAILABLE" if access_changed else "SUBMISSION_STATUS",
+                        "Novo módulo disponível" if access_changed and resolved_access == "AVAILABLE" else "Módulo atualizado",
+                        f"{lesson.get('title') or lesson_id}. {'; '.join(message_parts)}.",
+                        admin_id=admin["admin_id"],
+                        action_url=f"#/lesson/{lesson_id}" if resolved_access == "AVAILABLE" else "#/lessons",
+                        entity_type="LESSON_PROGRESS",
+                        entity_id=progress["progress_id"],
+                        priority="HIGH" if resolved_evaluation == "CORRECTION_REQUIRED" else "NORMAL",
+                    )
+                    if notification_id:
+                        notification_ids.append(notification_id)
                 enrollment_ids.add(enrollment["enrollment_id"])
                 updated += 1
 
@@ -3641,6 +4209,7 @@ def admin_manage_lesson_progress(payload: dict[str, Any]):
             },
         )
         conn.commit()
+    dispatch_notification_deliveries(notification_ids)
     return success({
         "studentCount": len(student_ids),
         "lessonCount": len(lesson_ids),
@@ -4280,6 +4849,106 @@ def verify_certificate(payload: dict[str, Any]):
     return success({"valid": certificate.get("status") == "ISSUED", "certificate": {"certificateNumber": certificate.get("certificate_number"), "verificationCode": certificate.get("verification_code"), "issueDate": iso(certificate.get("issue_date")), "finalScore": float(certificate.get("final_score") or 0), "status": certificate.get("status")}, "student": {"fullName": certificate.get("full_name")}, "course": {"title": certificate.get("title")}})
 
 
+def admin_list_notifications(payload: dict[str, Any]):
+    _, _admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    prepare_notification_feature_schema()
+    limit, offset, page = pagination(payload, default_limit=80, max_limit=200)
+    rows = fetch_all(
+        """
+        select n.*, s.full_name as student_name,
+               d.status as delivery_status, d.recipient as delivery_recipient,
+               d.provider_message_id, d.attempt_count, d.last_error, d.sent_at
+        from courseplatform.notifications n
+        join courseplatform.students s on s.student_id = n.student_id
+        left join courseplatform.notification_deliveries d
+          on d.notification_id = n.notification_id and d.channel = 'WHATSAPP'
+        order by n.created_at desc
+        limit %s offset %s
+        """,
+        (limit, offset),
+    )
+    totals = fetch_one(
+        """
+        select
+          (select count(*) from courseplatform.notifications) as internal_total,
+          count(*) filter (where d.status = 'SENT') as whatsapp_sent,
+          count(*) filter (where d.status = 'PENDING') as whatsapp_pending,
+          count(*) filter (where d.status = 'FAILED') as whatsapp_failed,
+          count(*) filter (where d.status = 'SKIPPED') as whatsapp_skipped
+        from courseplatform.notification_deliveries d
+        """
+    ) or {}
+    return success({
+        "notifications": [public_notification(row) for row in rows],
+        "summary": {
+            "internalTotal": int(totals.get("internal_total") or 0),
+            "whatsappSent": int(totals.get("whatsapp_sent") or 0),
+            "whatsappPending": int(totals.get("whatsapp_pending") or 0),
+            "whatsappFailed": int(totals.get("whatsapp_failed") or 0),
+            "whatsappSkipped": int(totals.get("whatsapp_skipped") or 0),
+        },
+        "whatsappConfiguration": whatsapp_configuration(),
+        "page": page,
+        "limit": limit,
+    })
+
+
+def admin_create_notification(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_notification_feature_schema()
+    require_fields(payload, ["title", "message"])
+    notify_all = as_bool(payload.get("notifyAll"))
+    student_ids = payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else []
+    student_ids = [str_value(student_id) for student_id in student_ids if str_value(student_id)]
+    if notify_all:
+        student_ids = [
+            row["student_id"]
+            for row in fetch_all("select student_id from courseplatform.students where status = 'ACTIVE' order by full_name")
+        ]
+    if not student_ids:
+        raise ApiError("NOTIFICATION_RECIPIENT_REQUIRED", "Selecione pelo menos um estudante.")
+    notification_ids: list[str] = []
+    with connection() as conn:
+        for student_id in dict.fromkeys(student_ids):
+            notification_id = create_student_notification(
+                conn,
+                student_id,
+                str_value(payload.get("category") or "GENERAL"),
+                str_value(payload.get("title")),
+                str_value(payload.get("message")),
+                admin_id=admin["admin_id"],
+                action_url=safe_notification_action_url(payload.get("actionUrl")),
+                entity_type="MANUAL_UPDATE",
+                entity_id="",
+                priority=str_value(payload.get("priority") or "NORMAL"),
+                send_whatsapp=as_bool(payload.get("sendWhatsApp")),
+            )
+            if notification_id:
+                notification_ids.append(notification_id)
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "NOTIFICATION_SENT",
+            "NOTIFICATION",
+            "",
+            {"studentCount": len(notification_ids), "sendWhatsApp": as_bool(payload.get("sendWhatsApp"))},
+        )
+        conn.commit()
+    dispatch_notification_deliveries(notification_ids)
+    return success({"notificationCount": len(notification_ids), "notificationIds": notification_ids})
+
+
+def admin_retry_notification_deliveries(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_notification_feature_schema()
+    result = deliver_pending_whatsapp(limit=max(1, min(int_value(payload.get("limit"), 20), 20)))
+    with connection() as conn:
+        audit(conn, "ADMIN", admin["admin_id"], "NOTIFICATION_DELIVERIES_RETRIED", "NOTIFICATION", "", result)
+        conn.commit()
+    return success({"delivery": result, "whatsappConfiguration": whatsapp_configuration()})
+
+
 def not_implemented(action: str):
     raise ApiError("NOT_IMPLEMENTED", f"A ação {action} ainda não foi portada para a API Python.")
 
@@ -4307,6 +4976,8 @@ ACTIONS = {
     "getLesson": get_lesson,
     "getAttemptStatus": attempt_status,
     "updateMyProfile": update_my_profile,
+    "getMyNotifications": my_notifications,
+    "markNotificationRead": mark_notification_read,
     "changeMyAccessCode": change_my_access_code,
     "getMyCertifications": my_certifications,
     "requestProfessionalCertificate": request_professional_certificate,
@@ -4339,6 +5010,9 @@ ACTIONS = {
     "adminListCertificateSurveys": admin_list_certificate_surveys,
     "adminSaveCertificateSurvey": admin_save_certificate_survey,
     "adminUploadCertificateAsset": admin_upload_certificate_asset,
+    "adminListNotifications": admin_list_notifications,
+    "adminCreateNotification": admin_create_notification,
+    "adminRetryNotificationDeliveries": admin_retry_notification_deliveries,
     "adminSaveMediaConfig": admin_save_media_config,
     "adminSaveStaff": admin_save_staff,
     "adminSetStaffStatus": admin_set_staff_status,

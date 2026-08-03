@@ -74,8 +74,14 @@ const state = {
     videos: []
   },
   certifications: null,
+  notifications: {
+    items: [],
+    unreadCount: 0,
+    total: 0
+  },
   timerId: null,
-  pollId: null
+  pollId: null,
+  notificationPollId: null
 };
 
 initialize().catch((error) => {
@@ -155,6 +161,11 @@ async function route() {
 
     if (routeName === 'profile') {
       await renderProfile();
+      return;
+    }
+
+    if (routeName === 'notifications') {
+      await renderNotifications();
       return;
     }
 
@@ -464,6 +475,7 @@ function studentAppShell(activeView, content, page = {}) {
     { id: 'lessons', label: 'Aulas e módulos', href: '#/lessons', icon: 'reading' },
     { id: 'submissions', label: 'Submissões', href: '#/submissions', icon: 'upload-to-cloud' },
     { id: 'grades', label: 'Notas e feedback', href: '#/grades', icon: 'checked-checkbox' },
+    { id: 'notifications', label: 'Notificações', href: '#/notifications', icon: 'bell' },
     { id: 'certifications', label: 'Certificados', href: '#/certifications', icon: 'diploma' },
     { id: 'support', label: 'Suporte', href: config.institutionalUrl || '#/', icon: 'help' },
     { id: 'profile', label: 'Perfil', href: '#/profile', icon: 'user-male-circle' }
@@ -522,6 +534,11 @@ function studentAppShell(activeView, content, page = {}) {
             </label>
             <a class="icon-button" href="#/certifications" aria-label="Certificados">
               <img src="${iconUrl('diploma', blueIcon)}" alt="">
+            </a>
+            <a class="icon-button notification-button" href="#/notifications"
+              aria-label="Notificações${state.notifications.unreadCount ? `: ${state.notifications.unreadCount} não lidas` : ''}">
+              <img src="${iconUrl('bell', blueIcon)}" alt="">
+              ${state.notifications.unreadCount ? `<span class="notification-badge">${Math.min(state.notifications.unreadCount, 99)}</span>` : ''}
             </a>
           </div>
         </div>
@@ -623,7 +640,11 @@ async function renderDashboard(view = 'overview') {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar o curso...');
 
-  const home = await api.studentHome(state.selectedCourseId);
+  const [home, notificationData] = await Promise.all([
+    api.studentHome(state.selectedCourseId),
+    api.notifications({ limit: 6 })
+  ]);
+  setNotificationState(notificationData);
   state.myCourses = Array.isArray(home.courses) ? home.courses : [];
   state.selectedCourseId = home.selectedCourseId || state.selectedCourseId || config.courseId || '';
   localStorage.setItem('courseSelectedCourseId', state.selectedCourseId);
@@ -993,6 +1014,7 @@ async function renderDashboard(view = 'overview') {
   });
 
   bindVideoSoundEvents();
+  startNotificationPolling();
   renderMath();
 }
 
@@ -1085,6 +1107,134 @@ function courseRemainingDaysLabel(endDate) {
   return `${days} dias`;
 }
 
+function setNotificationState(data = {}) {
+  state.notifications = {
+    items: Array.isArray(data.notifications) ? data.notifications : [],
+    unreadCount: Number(data.unreadCount || 0),
+    total: Number(data.total || 0)
+  };
+}
+
+function notificationCategoryMeta(category) {
+  const categories = {
+    MODULE_AVAILABLE: { label: 'Módulos e exercícios', icon: 'book-open' },
+    SUBMISSION_STATUS: { label: 'Estado da submissão', icon: 'clipboard-list' },
+    REVIEW_FEEDBACK: { label: 'Avaliação e feedback', icon: 'message-square' },
+    GENERAL: { label: 'Atualização', icon: 'bell' }
+  };
+  return categories[category] || categories.GENERAL;
+}
+
+function notificationItemTemplate(notification) {
+  const meta = notificationCategoryMeta(notification.category);
+  const actionUrl = notification.actionUrl || '#/notifications';
+  return `
+    <article class="notification-item ${notification.readAt ? '' : 'is-unread'}"
+      data-notification-id="${escapeHtml(notification.notificationId)}">
+      <div class="notification-item-icon" aria-hidden="true">
+        <img src="${iconUrl(meta.icon, notification.readAt ? blueIcon : goldIcon)}" alt="">
+      </div>
+      <div class="notification-item-copy">
+        <div class="notification-item-meta">
+          <span>${escapeHtml(meta.label)}</span>
+          <time>${escapeHtml(formatDate(notification.createdAt))}</time>
+        </div>
+        <h2>${escapeHtml(notification.title || 'Atualização')}</h2>
+        <p>${escapeHtml(notification.message || '')}</p>
+        <div class="notification-item-actions">
+          ${actionUrl ? `<a class="button button-primary button-small" href="${escapeHtml(actionUrl)}" data-open-notification>Abrir</a>` : ''}
+          ${notification.readAt ? '' : '<button class="button button-secondary button-small" type="button" data-mark-notification>Lida</button>'}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+async function renderNotifications() {
+  clearTimers();
+  root.innerHTML = loadingTemplate('A carregar notificações...');
+
+  const [home, notificationData] = await Promise.all([
+    api.studentHome(state.selectedCourseId),
+    api.notifications({ limit: 100 })
+  ]);
+  state.myCourses = Array.isArray(home.courses) ? home.courses : [];
+  state.selectedCourseId = home.selectedCourseId || state.selectedCourseId || config.courseId || '';
+  state.dashboard = normalizeStudentDashboard(home);
+  setNotificationState(notificationData);
+  setMediaConfig(home.mediaConfig || {});
+  applyBrandLogo();
+
+  const student = state.dashboard.student || {};
+  headerUser.innerHTML = profileAvatarTemplate(student, 'header-avatar');
+  headerUser.title = 'Editar perfil pessoal';
+  headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
+  headerUser.hidden = false;
+  if (mobileMenuButton) mobileMenuButton.hidden = false;
+  logoutButton.hidden = false;
+
+  root.innerHTML = studentAppShell('notifications', `
+    <section class="notifications-page" aria-label="Central de notificações">
+      <div class="notifications-toolbar">
+        <div>
+          <p class="eyebrow">Atualizações da plataforma</p>
+          <h2>Central de notificações</h2>
+          <p>${state.notifications.unreadCount
+            ? `${state.notifications.unreadCount} notificação${state.notifications.unreadCount === 1 ? '' : 'ões'} por ler.`
+            : 'Não existem notificações por ler.'}</p>
+        </div>
+        ${state.notifications.unreadCount
+          ? '<button class="button button-secondary" id="markAllNotifications" type="button">Marcar todas como lidas</button>'
+          : ''}
+      </div>
+      <div class="notification-list">
+        ${state.notifications.items.length
+          ? state.notifications.items.map(notificationItemTemplate).join('')
+          : '<div class="empty-note">Ainda não recebeu atualizações.</div>'}
+      </div>
+    </section>
+  `, {
+    eyebrow: 'Notificações',
+    topbarTitle: 'Notificações',
+    title: 'Atualizações importantes',
+    description: 'Acompanhe módulos, exercícios, submissões e comentários de avaliação.',
+    compactHeading: true
+  });
+
+  document.querySelector('#markAllNotifications')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    setBusy(button, true, 'A atualizar...');
+    try {
+      await api.markNotificationRead('', true);
+      await renderNotifications();
+    } catch (error) {
+      handleError(error);
+      setBusy(button, false);
+    }
+  });
+  root.querySelectorAll('[data-mark-notification]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const item = button.closest('[data-notification-id]');
+      try {
+        await api.markNotificationRead(item?.dataset.notificationId || '');
+        await renderNotifications();
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  });
+  root.querySelectorAll('[data-open-notification]').forEach((link) => {
+    link.addEventListener('click', () => {
+      const item = link.closest('[data-notification-id]');
+      if (item?.classList.contains('is-unread')) {
+        api.markNotificationRead(item.dataset.notificationId).catch(() => {});
+      }
+    });
+  });
+  startNotificationPolling();
+  reportHeight();
+}
+
 async function renderProfile() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar perfil...');
@@ -1094,6 +1244,7 @@ async function renderProfile() {
     courseBundle = await api.myCourses();
     state.myCourses = courseBundle.courses || [];
   }
+  setNotificationState(await api.notifications({ limit: 6 }));
   const student = courseBundle?.student || state.dashboard?.student || {};
   headerUser.innerHTML = profileAvatarTemplate(student, 'header-avatar');
   headerUser.title = 'Editar perfil pessoal';
@@ -1174,7 +1325,7 @@ async function renderProfile() {
             </label>
             <label>
               <span>Telefone</span>
-              <input name="phone" value="${escapeHtml(student.phone || '')}">
+              <input name="phone" value="${escapeHtml(student.phone || '')}" placeholder="+258 84 000 0000">
             </label>
             <label>
               <span>Organização</span>
@@ -1190,6 +1341,36 @@ async function renderProfile() {
             <span>Interesses académicos ou profissionais</span>
             <textarea name="interests" rows="5">${escapeHtml(student.interests || '')}</textarea>
           </label>
+
+          <fieldset class="profile-notification-settings">
+            <legend>Preferências de notificações</legend>
+            <label class="checkbox-line notification-consent-option">
+              <input type="checkbox" name="whatsappOptIn" value="true" ${student.whatsappOptIn ? 'checked' : ''}>
+              <span>
+                <strong>Receber atualizações pelo WhatsApp</strong>
+                <small>Autorizo o envio de notificações académicas para o telefone indicado. Posso retirar esta autorização a qualquer momento.</small>
+              </span>
+            </label>
+            <div class="notification-preference-grid">
+              <label class="checkbox-line">
+                <input type="checkbox" name="notifyModuleAvailable" value="true" ${student.notificationPreferences?.MODULE_AVAILABLE !== false ? 'checked' : ''}>
+                Módulos e exercícios disponíveis
+              </label>
+              <label class="checkbox-line">
+                <input type="checkbox" name="notifySubmissionStatus" value="true" ${student.notificationPreferences?.SUBMISSION_STATUS !== false ? 'checked' : ''}>
+                Mudanças no estado das submissões
+              </label>
+              <label class="checkbox-line">
+                <input type="checkbox" name="notifyReviewFeedback" value="true" ${student.notificationPreferences?.REVIEW_FEEDBACK !== false ? 'checked' : ''}>
+                Comentários e resultados de avaliação
+              </label>
+              <label class="checkbox-line">
+                <input type="checkbox" name="notifyGeneral" value="true" ${student.notificationPreferences?.GENERAL !== false ? 'checked' : ''}>
+                Comunicados gerais
+              </label>
+            </div>
+            <small>As notificações internas continuam disponíveis na central da plataforma.</small>
+          </fieldset>
 
           <div class="profile-actions">
             <a class="button button-secondary" href="#/">Voltar ao curso</a>
@@ -1246,6 +1427,7 @@ async function renderProfile() {
   document.querySelector('#passwordForm').addEventListener('submit', changePassword);
   document.querySelector('#profileLogoutButton').addEventListener('click', logout);
   bindProfilePhotoPreview(student);
+  startNotificationPolling();
   reportHeight();
 }
 
@@ -1260,6 +1442,17 @@ async function saveProfile(event) {
 
   values.profilePhotoFile = profilePhotoFile && profilePhotoFile.size ? profilePhotoFile : null;
   values.removeProfilePhoto = formData.get('removeProfilePhoto') === 'true' ? 'true' : '';
+  values.whatsappOptIn = formData.get('whatsappOptIn') === 'true';
+  values.notificationPreferences = {
+    MODULE_AVAILABLE: formData.get('notifyModuleAvailable') === 'true',
+    SUBMISSION_STATUS: formData.get('notifySubmissionStatus') === 'true',
+    REVIEW_FEEDBACK: formData.get('notifyReviewFeedback') === 'true',
+    GENERAL: formData.get('notifyGeneral') === 'true'
+  };
+  delete values.notifyModuleAvailable;
+  delete values.notifySubmissionStatus;
+  delete values.notifyReviewFeedback;
+  delete values.notifyGeneral;
   setBusy(button, true, 'A guardar...');
 
   try {
@@ -2081,8 +2274,42 @@ async function refreshExpiredAttempt() {
 function clearTimers() {
   window.clearInterval(state.timerId);
   window.clearInterval(state.pollId);
+  window.clearInterval(state.notificationPollId);
   state.timerId = null;
   state.pollId = null;
+  state.notificationPollId = null;
+}
+
+function updateNotificationBadge() {
+  const button = document.querySelector('.notification-button');
+  if (!button) return;
+  const unreadCount = Number(state.notifications.unreadCount || 0);
+  button.setAttribute('aria-label', unreadCount ? `Notificações: ${unreadCount} não lidas` : 'Notificações');
+  const currentBadge = button.querySelector('.notification-badge');
+  if (!unreadCount) {
+    currentBadge?.remove();
+    return;
+  }
+  const badge = currentBadge || document.createElement('span');
+  badge.className = 'notification-badge';
+  badge.textContent = String(Math.min(unreadCount, 99));
+  if (!currentBadge) button.appendChild(badge);
+}
+
+function startNotificationPolling() {
+  window.clearInterval(state.notificationPollId);
+  if (!api?.hasStudentSession()) return;
+  const interval = Math.max(30000, Number(config.pollIntervalMs || 60000));
+  state.notificationPollId = window.setInterval(async () => {
+    if (document.hidden || !api.hasStudentSession()) return;
+    try {
+      setNotificationState(await api.notifications({ limit: 6 }));
+      updateNotificationBadge();
+    } catch {
+      // A central interna permanece disponível; uma falha temporária será
+      // repetida automaticamente no próximo ciclo.
+    }
+  }, interval);
 }
 
 function buildLessonNavigation() {

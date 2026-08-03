@@ -197,6 +197,17 @@ export class CoursePlatformApi {
     return this.studentRequest('updateMyProfile', payload);
   }
 
+  notifications(filters = {}) {
+    return this.studentRequest('getMyNotifications', filters);
+  }
+
+  markNotificationRead(notificationId = '', markAll = false) {
+    return this.studentRequest('markNotificationRead', {
+      notificationId,
+      markAll
+    });
+  }
+
   async changeMyAccessCode(currentAccessCode, newAccessCode) {
     const result = await this.studentRequest('changeMyAccessCode', {
       currentAccessCode,
@@ -510,6 +521,18 @@ export class CoursePlatformApi {
 
   adminManageLessonProgress(payload) {
     return this.mutateAdmin('adminManageLessonProgress', payload);
+  }
+
+  adminNotifications(filters = {}, options = {}) {
+    return this.cachedAdminRequest('adminListNotifications', filters, options);
+  }
+
+  adminCreateNotification(payload) {
+    return this.mutateAdmin('adminCreateNotification', payload);
+  }
+
+  adminRetryNotificationDeliveries(limit = 20) {
+    return this.mutateAdmin('adminRetryNotificationDeliveries', { limit });
   }
 
   adminCertificateRequests(filters = {}, options = {}) {

@@ -41,6 +41,9 @@ alter table courseplatform.students add column if not exists password_hash text;
 alter table courseplatform.students add column if not exists password_changed_at timestamptz;
 alter table courseplatform.students add column if not exists password_reset_required boolean not null default false;
 alter table courseplatform.students alter column access_code drop not null;
+alter table courseplatform.students add column if not exists whatsapp_opt_in boolean not null default false;
+alter table courseplatform.students add column if not exists whatsapp_opt_in_at timestamptz;
+alter table courseplatform.students add column if not exists notification_preferences_json jsonb not null default '{"MODULE_AVAILABLE":true,"SUBMISSION_STATUS":true,"REVIEW_FEEDBACK":true,"GENERAL":true}'::jsonb;
 
 alter table courseplatform.admins add column if not exists password_hash text;
 alter table courseplatform.admins add column if not exists password_changed_at timestamptz;
@@ -239,6 +242,37 @@ create table if not exists courseplatform.reviews (
   reviewed_at timestamptz
 );
 
+create table if not exists courseplatform.notifications (
+  notification_id text primary key,
+  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  created_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
+  category text not null default 'GENERAL',
+  title text not null,
+  message text not null,
+  action_url text,
+  entity_type text,
+  entity_id text,
+  priority text not null default 'NORMAL',
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists courseplatform.notification_deliveries (
+  delivery_id text primary key,
+  notification_id text not null references courseplatform.notifications(notification_id) on delete cascade,
+  channel text not null,
+  recipient text,
+  status text not null default 'PENDING',
+  provider text,
+  provider_message_id text,
+  attempt_count integer not null default 0,
+  last_error text,
+  created_at timestamptz not null default now(),
+  sent_at timestamptz,
+  updated_at timestamptz,
+  unique(notification_id, channel)
+);
+
 -- Independent module access and assessment state. These statements also migrate
 -- installations created before the two states were separated.
 alter table courseplatform.lessons
@@ -414,6 +448,9 @@ create index if not exists idx_progress_access_evaluation on courseplatform.less
 create index if not exists idx_attempts_student_lesson on courseplatform.attempts(student_id, lesson_id);
 create index if not exists idx_attempts_status_dates on courseplatform.attempts(status, submitted_at, reviewed_at);
 create index if not exists idx_reviews_attempt on courseplatform.reviews(attempt_id, reviewed_at);
+create index if not exists idx_notifications_student_created on courseplatform.notifications(student_id, created_at desc);
+create index if not exists idx_notifications_student_unread on courseplatform.notifications(student_id, read_at, created_at desc);
+create index if not exists idx_notification_deliveries_status on courseplatform.notification_deliveries(channel, status, created_at);
 create index if not exists idx_files_attempt on courseplatform.files(attempt_id, status);
 create index if not exists idx_certificate_requests_student_course on courseplatform.certificate_requests(student_id, course_id, status);
 create index if not exists idx_group_members_group on courseplatform.group_members(group_id, status);
@@ -437,6 +474,8 @@ alter table courseplatform.attempts enable row level security;
 alter table courseplatform.answers enable row level security;
 alter table courseplatform.files enable row level security;
 alter table courseplatform.reviews enable row level security;
+alter table courseplatform.notifications enable row level security;
+alter table courseplatform.notification_deliveries enable row level security;
 alter table courseplatform.certificates enable row level security;
 alter table courseplatform.audit_log enable row level security;
 alter table courseplatform.settings enable row level security;
@@ -470,6 +509,8 @@ create or replace view public.attempts as select * from courseplatform.attempts;
 create or replace view public.answers as select * from courseplatform.answers;
 create or replace view public.files as select * from courseplatform.files;
 create or replace view public.reviews as select * from courseplatform.reviews;
+create or replace view public.notifications as select * from courseplatform.notifications;
+create or replace view public.notification_deliveries as select * from courseplatform.notification_deliveries;
 create or replace view public.certificates as select * from courseplatform.certificates;
 create or replace view public.audit_log as select * from courseplatform.audit_log;
 create or replace view public.settings as select * from courseplatform.settings;
