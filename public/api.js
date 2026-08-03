@@ -197,6 +197,18 @@ export class CoursePlatformApi {
     return this.studentRequest('updateMyProfile', payload);
   }
 
+  startTelegramLink() {
+    return this.studentRequest('studentStartTelegramLink');
+  }
+
+  confirmTelegramLink(linkToken) {
+    return this.studentRequest('studentConfirmTelegramLink', { linkToken });
+  }
+
+  unlinkTelegram() {
+    return this.studentRequest('studentUnlinkTelegram');
+  }
+
   notifications(filters = {}) {
     return this.studentRequest('getMyNotifications', filters);
   }
@@ -533,6 +545,14 @@ export class CoursePlatformApi {
 
   adminSaveWhatsAppConfiguration(whatsappConfiguration) {
     return this.mutateAdmin('adminSaveWhatsAppConfiguration', { whatsappConfiguration });
+  }
+
+  adminSaveEmailConfiguration(emailConfiguration) {
+    return this.mutateAdmin('adminSaveEmailConfiguration', { emailConfiguration });
+  }
+
+  adminSaveTelegramConfiguration(telegramConfiguration) {
+    return this.mutateAdmin('adminSaveTelegramConfiguration', { telegramConfiguration });
   }
 
   adminRetryNotificationDeliveries(limit = 20) {

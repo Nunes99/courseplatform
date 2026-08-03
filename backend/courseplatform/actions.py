@@ -1,13 +1,20 @@
 import base64
+import ipaddress
 import json
 import mimetypes
+import secrets
+import smtplib
+import ssl
 import urllib.error
 import urllib.request
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from email.utils import formataddr, make_msgid
+from html import escape as html_escape
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from .config import get_settings
 from .db import connection, ensure_schema, fetch_all, fetch_one, schema_exists
@@ -226,6 +233,11 @@ def public_student(row: dict[str, Any] | None):
         "profilePhotoUrl": row.get("profile_photo_url"),
         "whatsappOptIn": as_bool(row.get("whatsapp_opt_in")),
         "whatsappOptInAt": iso(row.get("whatsapp_opt_in_at")),
+        "emailOptIn": as_bool(row.get("email_opt_in")),
+        "emailOptInAt": iso(row.get("email_opt_in_at")),
+        "telegramLinked": bool(normalize_telegram_recipient(row.get("telegram_chat_id"))),
+        "telegramOptIn": as_bool(row.get("telegram_opt_in")),
+        "telegramOptInAt": iso(row.get("telegram_opt_in_at")),
         "notificationPreferences": notification_preferences(row),
         "createdAt": iso(row.get("created_at")),
         "updatedAt": iso(row.get("updated_at")),
@@ -573,6 +585,11 @@ def notification_preferences(row: dict[str, Any] | None) -> dict[str, bool]:
 NOTIFICATION_FEATURE_SQL = """
 alter table courseplatform.students add column if not exists whatsapp_opt_in boolean not null default false;
 alter table courseplatform.students add column if not exists whatsapp_opt_in_at timestamptz;
+alter table courseplatform.students add column if not exists email_opt_in boolean not null default false;
+alter table courseplatform.students add column if not exists email_opt_in_at timestamptz;
+alter table courseplatform.students add column if not exists telegram_chat_id text;
+alter table courseplatform.students add column if not exists telegram_opt_in boolean not null default false;
+alter table courseplatform.students add column if not exists telegram_opt_in_at timestamptz;
 alter table courseplatform.students add column if not exists notification_preferences_json jsonb not null default '{"MODULE_AVAILABLE":true,"SUBMISSION_STATUS":true,"REVIEW_FEEDBACK":true,"GENERAL":true}'::jsonb;
 create table if not exists courseplatform.notifications (
   notification_id text primary key,
@@ -615,6 +632,30 @@ create table if not exists courseplatform.notification_channel_settings (
   updated_by text references courseplatform.admins(admin_id) on delete set null,
   updated_at timestamptz
 );
+alter table courseplatform.notification_channel_settings add column if not exists smtp_host text;
+alter table courseplatform.notification_channel_settings add column if not exists smtp_port integer;
+alter table courseplatform.notification_channel_settings add column if not exists smtp_username text;
+alter table courseplatform.notification_channel_settings add column if not exists smtp_password_encrypted bytea;
+alter table courseplatform.notification_channel_settings add column if not exists from_email text;
+alter table courseplatform.notification_channel_settings add column if not exists from_name text;
+alter table courseplatform.notification_channel_settings add column if not exists use_tls boolean;
+alter table courseplatform.notification_channel_settings add column if not exists bot_username text;
+alter table courseplatform.notification_channel_settings add column if not exists parse_mode text;
+create table if not exists courseplatform.telegram_link_tokens (
+  token_hash text primary key,
+  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+  telegram_update_id bigint,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_telegram_link_tokens_student
+  on courseplatform.telegram_link_tokens(student_id, created_at desc);
+create table if not exists courseplatform.notification_channel_state (
+  channel text primary key,
+  cursor_value bigint not null default 0,
+  updated_at timestamptz
+);
 create index if not exists idx_notifications_student_created on courseplatform.notifications(student_id, created_at desc);
 create index if not exists idx_notifications_student_unread on courseplatform.notifications(student_id, read_at, created_at desc);
 create index if not exists idx_notification_deliveries_status on courseplatform.notification_deliveries(channel, status, created_at);
@@ -638,9 +679,24 @@ def prepare_notification_feature_schema() -> None:
 def public_notification(row: dict[str, Any] | None):
     if not row:
         return None
-    delivery_status = row.get("delivery_status") or "NOT_REQUESTED"
-    if delivery_status == "PROCESSING":
-        delivery_status = "PENDING"
+    def delivery(channel: str) -> dict[str, Any]:
+        prefix = channel.lower()
+        # Legacy WhatsApp-only selects expose unprefixed delivery columns.
+        fallback = channel == "WHATSAPP"
+        status = row.get(f"{prefix}_status") or (row.get("delivery_status") if fallback else None) or "NOT_REQUESTED"
+        if status == "PROCESSING":
+            status = "PENDING"
+        recipient = row.get(f"{prefix}_recipient") or (row.get("delivery_recipient") if fallback else None)
+        return {
+            "status": status,
+            # Telegram chat IDs are private provider identifiers and are never
+            # part of an API response, including administrative history.
+            "recipient": None if channel == "TELEGRAM" else recipient,
+            "providerMessageId": row.get(f"{prefix}_provider_message_id") or (row.get("provider_message_id") if fallback else None),
+            "attemptCount": int(row.get(f"{prefix}_attempt_count") or (row.get("attempt_count") if fallback else 0) or 0),
+            "lastError": row.get(f"{prefix}_last_error") or (row.get("last_error") if fallback else None),
+            "sentAt": iso(row.get(f"{prefix}_sent_at") or (row.get("sent_at") if fallback else None)),
+        }
     return {
         "notificationId": row.get("notification_id"),
         "studentId": row.get("student_id"),
@@ -654,14 +710,9 @@ def public_notification(row: dict[str, Any] | None):
         "priority": row.get("priority") or "NORMAL",
         "readAt": iso(row.get("read_at")),
         "createdAt": iso(row.get("created_at")),
-        "whatsapp": {
-            "status": delivery_status,
-            "recipient": row.get("delivery_recipient"),
-            "providerMessageId": row.get("provider_message_id"),
-            "attemptCount": int(row.get("attempt_count") or 0),
-            "lastError": row.get("last_error"),
-            "sentAt": iso(row.get("sent_at")),
-        },
+        "whatsapp": delivery("WHATSAPP"),
+        "email": delivery("EMAIL"),
+        "telegram": delivery("TELEGRAM"),
     }
 
 
@@ -671,6 +722,62 @@ def normalize_whatsapp_recipient(value: Any) -> str:
         text = f"+{text[2:]}"
     digits = re.sub(r"\D", "", text)
     return digits if 8 <= len(digits) <= 15 else ""
+
+
+def normalize_email_recipient(value: Any) -> str:
+    text = normalize_email(str_value(value))
+    if len(text) > 254 or "\r" in text or "\n" in text:
+        return ""
+    local, separator, domain = text.rpartition("@")
+    if not separator or not local or not domain or "." not in domain:
+        return ""
+    if len(local) > 64 or not re.fullmatch(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+", local, re.IGNORECASE):
+        return ""
+    if not re.fullmatch(r"[a-z0-9.-]+", domain, re.IGNORECASE) or domain.startswith((".", "-")):
+        return ""
+    return text
+
+
+def normalize_telegram_recipient(value: Any) -> str:
+    text = str_value(value)
+    # Student accounts are linked only to private chats. Negative IDs identify
+    # groups/channels and must never become a personal notification endpoint.
+    return text if re.fullmatch(r"\d{5,20}", text) else ""
+
+
+def redact_notification_error(value: Any, *secrets_to_hide: Any) -> str:
+    text = str(value)
+    for secret in secrets_to_hide:
+        secret_text = str_value(secret)
+        if secret_text:
+            text = text.replace(secret_text, "[redacted]")
+    text = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+\-/=]+", "Bearer [redacted]", text)
+    text = re.sub(r"(?i)(?:bot)?\d{5,20}:[A-Za-z0-9_-]{20,}", "[redacted]", text)
+    return text[:700]
+
+
+def notification_encryption_key(settings: Any | None = None) -> str:
+    settings = settings or get_settings()
+    return str_value(
+        getattr(settings, "notification_config_encryption_key", "")
+        or getattr(settings, "whatsapp_config_encryption_key", "")
+    )
+
+
+def decrypt_notification_secret(channel: str, column: str, encryption_key: str) -> str:
+    if channel not in {"WHATSAPP", "EMAIL", "TELEGRAM"} or column not in {
+        "access_token_encrypted", "smtp_password_encrypted"
+    }:
+        raise ValueError("Canal ou coluna de segredo inválidos.")
+    row = fetch_one(
+        f"""
+        select pgp_sym_decrypt({column}, %s)::text as secret
+        from courseplatform.notification_channel_settings
+        where channel = %s
+        """,
+        (encryption_key, channel),
+    ) or {}
+    return str_value(row.get("secret"))
 
 
 def valid_whatsapp_platform_url(value: Any) -> bool:
@@ -687,6 +794,41 @@ def valid_whatsapp_platform_url(value: Any) -> bool:
         )
     except ValueError:
         return False
+
+
+def valid_notification_host(value: Any) -> bool:
+    text = str_value(value)
+    if not text or len(text) > 253 or "\r" in text or "\n" in text:
+        return False
+    # SMTP accepts DNS names and literal IPv4/IPv6 addresses. It must not
+    # contain a scheme, path, credentials or an embedded port.
+    if "://" in text or any(character in text for character in "/@?#"):
+        return False
+    candidate = text[1:-1] if text.startswith("[") and text.endswith("]") else text
+    try:
+        # Prevent the administration form from being used to probe local or
+        # private network services through the SMTP client.
+        return ipaddress.ip_address(candidate).is_global
+    except ValueError:
+        normalized = candidate.lower().rstrip(".")
+        if normalized == "localhost" or normalized.endswith(".localhost"):
+            return False
+        return bool(re.fullmatch(r"[a-zA-Z0-9.-]+", candidate) and not candidate.startswith((".", "-")))
+
+
+def valid_telegram_bot_token(value: Any) -> bool:
+    return bool(re.fullmatch(r"\d{5,20}:[A-Za-z0-9_-]{20,}", str_value(value)))
+
+
+def normalize_telegram_parse_mode(value: Any) -> str:
+    normalized = str_value(value).upper()
+    if normalized in {"", "NONE", "PLAIN"}:
+        return ""
+    if normalized == "HTML":
+        return "HTML"
+    if normalized in {"MARKDOWNV2", "MARKDOWN_V2"}:
+        return "MarkdownV2"
+    return "HTML"
 
 
 def safe_notification_action_url(value: Any) -> str:
@@ -719,7 +861,8 @@ def whatsapp_runtime_configuration() -> dict[str, Any]:
     template_language = str_value(source.get("template_language")) if managed_by_admin else settings.whatsapp_template_language
     platform_url = str_value(source.get("platform_url")) if managed_by_admin else settings.whatsapp_platform_url
     stored_token_configured = as_bool(source.get("stored_token_configured"))
-    encryption_key_configured = len(settings.whatsapp_config_encryption_key.encode("utf-8")) >= 32
+    encryption_key = notification_encryption_key(settings)
+    encryption_key_configured = len(encryption_key.encode("utf-8")) >= 32
     access_token = settings.whatsapp_access_token
     token_source = "ENV" if access_token else "NONE"
     token_error = ""
@@ -727,15 +870,9 @@ def whatsapp_runtime_configuration() -> dict[str, Any]:
     if stored_token_configured:
         if encryption_key_configured:
             try:
-                token_row = fetch_one(
-                    """
-                    select pgp_sym_decrypt(access_token_encrypted, %s)::text as access_token
-                    from courseplatform.notification_channel_settings
-                    where channel = 'WHATSAPP'
-                    """,
-                    (settings.whatsapp_config_encryption_key,),
-                ) or {}
-                decrypted_token = str_value(token_row.get("access_token"))
+                decrypted_token = decrypt_notification_secret(
+                    "WHATSAPP", "access_token_encrypted", encryption_key
+                )
                 if decrypted_token:
                     access_token = decrypted_token
                     token_source = "ADMIN"
@@ -782,6 +919,168 @@ def whatsapp_configuration() -> dict[str, Any]:
     }
 
 
+def email_runtime_configuration() -> dict[str, Any]:
+    """Resolve SMTP settings while keeping the password server-side."""
+    prepare_notification_feature_schema()
+    settings = get_settings()
+    row = fetch_one(
+        """
+        select channel, enabled, smtp_host, smtp_port, smtp_username,
+               from_email, from_name, use_tls,
+               smtp_password_encrypted is not null as stored_password_configured,
+               updated_at
+        from courseplatform.notification_channel_settings
+        where channel = 'EMAIL'
+        """
+    )
+    managed_by_admin = bool(row)
+    source = row or {}
+    enabled = as_bool(source.get("enabled")) if managed_by_admin else settings.email_enabled
+    smtp_host = str_value(source.get("smtp_host")) if managed_by_admin else settings.smtp_host
+    smtp_port = int_value(source.get("smtp_port"), 587) if managed_by_admin else settings.smtp_port
+    smtp_username = str_value(source.get("smtp_username")) if managed_by_admin else settings.smtp_username
+    from_email = normalize_email_recipient(source.get("from_email")) if managed_by_admin else normalize_email_recipient(settings.smtp_from_email)
+    from_name = str_value(source.get("from_name")) if managed_by_admin else settings.smtp_from_name
+    use_tls = as_bool(source.get("use_tls")) if managed_by_admin else settings.smtp_use_tls
+    stored_password_configured = as_bool(source.get("stored_password_configured"))
+    encryption_key = notification_encryption_key(settings)
+    encryption_key_configured = len(encryption_key.encode("utf-8")) >= 32
+    smtp_password = settings.smtp_password
+    password_source = "ENV" if smtp_password else "NONE"
+    password_error = ""
+    if stored_password_configured:
+        if encryption_key_configured:
+            try:
+                decrypted = decrypt_notification_secret("EMAIL", "smtp_password_encrypted", encryption_key)
+                if decrypted:
+                    smtp_password = decrypted
+                    password_source = "ADMIN"
+            except Exception:
+                password_error = "A palavra-passe SMTP guardada não pôde ser desencriptada. Confirme a chave do servidor."
+        elif not smtp_password:
+            password_error = "Defina NOTIFICATION_CONFIG_ENCRYPTION_KEY com pelo menos 32 bytes."
+    authentication_ready = not smtp_username or bool(smtp_password)
+    configured = bool(
+        enabled
+        and valid_notification_host(smtp_host)
+        and 1 <= smtp_port <= 65535
+        and (smtp_port == 465 or use_tls)
+        and from_email
+        and authentication_ready
+    )
+    return {
+        "enabled": enabled,
+        "configured": configured,
+        "smtpHost": smtp_host,
+        "smtpPort": smtp_port,
+        "smtpUsername": smtp_username,
+        "smtpPassword": smtp_password,
+        "fromEmail": from_email,
+        "fromName": from_name,
+        "useTls": use_tls,
+        "platformUrl": settings.platform_url,
+        "passwordConfigured": bool(smtp_password),
+        "storedPasswordConfigured": stored_password_configured,
+        "passwordSource": password_source,
+        "passwordError": password_error,
+        "encryptionKeyConfigured": encryption_key_configured,
+        "source": "ADMIN" if managed_by_admin else "ENV",
+        "updatedAt": iso(source.get("updated_at")),
+        "timeoutSeconds": settings.smtp_timeout_seconds,
+    }
+
+
+def email_configuration() -> dict[str, Any]:
+    configuration = email_runtime_configuration()
+    return {
+        key: value
+        for key, value in configuration.items()
+        if key not in {"smtpPassword", "timeoutSeconds"}
+    }
+
+
+def telegram_runtime_configuration() -> dict[str, Any]:
+    """Resolve Telegram Bot API settings without exposing the bot token."""
+    prepare_notification_feature_schema()
+    settings = get_settings()
+    row = fetch_one(
+        """
+        select channel, enabled, bot_username, parse_mode,
+               access_token_encrypted is not null as stored_token_configured,
+               updated_at
+        from courseplatform.notification_channel_settings
+        where channel = 'TELEGRAM'
+        """
+    )
+    managed_by_admin = bool(row)
+    source = row or {}
+    enabled = as_bool(source.get("enabled")) if managed_by_admin else settings.telegram_enabled
+    bot_username = str_value(source.get("bot_username")) if managed_by_admin else settings.telegram_bot_username
+    parse_mode = normalize_telegram_parse_mode(source.get("parse_mode") if managed_by_admin else settings.telegram_parse_mode)
+    stored_token_configured = as_bool(source.get("stored_token_configured"))
+    encryption_key = notification_encryption_key(settings)
+    encryption_key_configured = len(encryption_key.encode("utf-8")) >= 32
+    bot_token = settings.telegram_bot_token
+    token_source = "ENV" if bot_token else "NONE"
+    token_error = ""
+    if stored_token_configured:
+        if encryption_key_configured:
+            try:
+                decrypted = decrypt_notification_secret("TELEGRAM", "access_token_encrypted", encryption_key)
+                if decrypted:
+                    bot_token = decrypted
+                    token_source = "ADMIN"
+            except Exception:
+                token_error = "O token do bot guardado não pôde ser desencriptado. Confirme a chave do servidor."
+        elif not bot_token:
+            token_error = "Defina NOTIFICATION_CONFIG_ENCRYPTION_KEY com pelo menos 32 bytes."
+    configured = bool(enabled and valid_telegram_bot_token(bot_token))
+    return {
+        "enabled": enabled,
+        "configured": configured,
+        "botToken": bot_token,
+        "botUsername": bot_username,
+        "parseMode": parse_mode,
+        "platformUrl": settings.platform_url,
+        "tokenConfigured": bool(bot_token),
+        "storedTokenConfigured": stored_token_configured,
+        "tokenSource": token_source,
+        "tokenError": token_error,
+        "encryptionKeyConfigured": encryption_key_configured,
+        "source": "ADMIN" if managed_by_admin else "ENV",
+        "updatedAt": iso(source.get("updated_at")),
+        "timeoutSeconds": settings.telegram_timeout_seconds,
+    }
+
+
+def telegram_configuration() -> dict[str, Any]:
+    configuration = telegram_runtime_configuration()
+    return {
+        key: value
+        for key, value in configuration.items()
+        if key not in {"botToken", "timeoutSeconds"}
+    }
+
+
+def student_notification_channel_info() -> dict[str, Any]:
+    """Student-safe provider discovery; credentials and SMTP topology stay private."""
+    email = email_configuration()
+    telegram = telegram_configuration()
+    whatsapp = whatsapp_configuration()
+    return {
+        "whatsapp": {"enabled": bool(whatsapp.get("enabled")), "configured": bool(whatsapp.get("configured"))},
+        "email": {"enabled": bool(email.get("enabled")), "configured": bool(email.get("configured"))},
+        "telegram": {
+            "enabled": bool(telegram.get("enabled")),
+            "configured": bool(telegram.get("configured")),
+            "botUsername": telegram.get("botUsername") or "",
+            "linkingAvailable": bool(
+                telegram.get("enabled") and telegram.get("configured") and telegram.get("botUsername")
+            ),
+        },
+    }
+
+
 def create_student_notification(
     conn,
     student_id: str,
@@ -795,6 +1094,8 @@ def create_student_notification(
     entity_id: str = "",
     priority: str = "NORMAL",
     send_whatsapp: bool = True,
+    send_email: bool = True,
+    send_telegram: bool = True,
 ) -> str | None:
     student = conn.execute(
         "select * from courseplatform.students where student_id = %s",
@@ -824,24 +1125,52 @@ def create_student_notification(
             str_value(priority).upper() or "NORMAL",
         ),
     )
-    if send_whatsapp:
-        recipient = normalize_whatsapp_recipient(student.get("phone"))
-        preferences = notification_preferences(student)
-        opted_in = as_bool(student.get("whatsapp_opt_in")) and preferences.get(normalized_category, True)
-        delivery_status = "PENDING" if opted_in and recipient else "SKIPPED"
+    preferences = notification_preferences(student)
+
+    def queue_delivery(
+        channel: str,
+        recipient: str,
+        opted_in: bool,
+        provider: str,
+        missing_contact_message: str,
+    ) -> None:
+        consented = opted_in and preferences.get(normalized_category, True)
+        delivery_status = "PENDING" if consented and recipient else "SKIPPED"
         skip_reason = "" if delivery_status == "PENDING" else (
-            "Consentimento do WhatsApp não concedido para este tipo de atualização."
-            if not opted_in else "Telefone inválido ou sem indicativo internacional."
+            f"Consentimento de {channel.title()} não concedido para este tipo de atualização."
+            if not consented else missing_contact_message
         )
         conn.execute(
             """
             insert into courseplatform.notification_deliveries
               (delivery_id, notification_id, channel, recipient, status, provider,
                attempt_count, last_error, created_at, updated_at)
-            values (%s, %s, 'WHATSAPP', %s, %s, 'META_CLOUD_API', 0, %s, now(), now())
+            values (%s, %s, %s, %s, %s, %s, 0, %s, now(), now())
             on conflict (notification_id, channel) do nothing
             """,
-            (generate_id("NDL"), notification_id, recipient or None, delivery_status, skip_reason or None),
+            (
+                generate_id("NDL"), notification_id, channel, recipient or None,
+                delivery_status, provider, skip_reason or None,
+            ),
+        )
+
+    if send_whatsapp:
+        queue_delivery(
+            "WHATSAPP", normalize_whatsapp_recipient(student.get("phone")),
+            as_bool(student.get("whatsapp_opt_in")), "META_CLOUD_API",
+            "Telefone inválido ou sem indicativo internacional.",
+        )
+    if send_email:
+        queue_delivery(
+            "EMAIL", normalize_email_recipient(student.get("email")),
+            as_bool(student.get("email_opt_in")), "SMTP",
+            "Endereço de email inválido ou em falta.",
+        )
+    if send_telegram:
+        queue_delivery(
+            "TELEGRAM", normalize_telegram_recipient(student.get("telegram_chat_id")),
+            as_bool(student.get("telegram_opt_in")), "TELEGRAM_BOT_API",
+            "Chat ID do Telegram inválido ou em falta.",
         )
     return notification_id
 
@@ -891,7 +1220,8 @@ def send_whatsapp_template(delivery: dict[str, Any], configuration: dict[str, An
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         response_text = error.read().decode("utf-8", errors="replace")[:700]
-        raise RuntimeError(f"WhatsApp Cloud API HTTP {error.code}: {response_text}") from error
+        safe_error = redact_notification_error(response_text, configuration.get("accessToken"))
+        raise RuntimeError(f"WhatsApp Cloud API HTTP {error.code}: {safe_error}") from error
     messages = result.get("messages") if isinstance(result, dict) else []
     provider_message_id = str_value(messages[0].get("id")) if messages else ""
     if not provider_message_id:
@@ -899,10 +1229,278 @@ def send_whatsapp_template(delivery: dict[str, Any], configuration: dict[str, An
     return provider_message_id
 
 
-def claim_whatsapp_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    """Atomically lease queued deliveries so concurrent workers cannot send duplicates."""
+def resolved_notification_action_url(delivery: dict[str, Any], configuration: dict[str, Any]) -> str:
+    action_url = str_value(delivery.get("action_url"))
+    if action_url.startswith(("https://", "http://")):
+        return action_url
+    base = str_value(configuration.get("platformUrl")).rstrip("/")
+    if base and action_url.startswith("#/"):
+        return f"{base}/{action_url}"
+    return ""
+
+
+def _notification_plain_text(delivery: dict[str, Any], action_url: str = "") -> str:
+    parts = [
+        str_value(delivery.get("student_name")) or "Estudante",
+        "",
+        str_value(delivery.get("title")) or "Atualização académica",
+        "",
+        str_value(delivery.get("message")),
+    ]
+    if action_url:
+        parts.extend(["", f"Abrir na plataforma: {action_url}"])
+    return "\n".join(parts).strip()
+
+
+def send_email_notification(delivery: dict[str, Any], configuration: dict[str, Any] | None = None) -> str:
+    configuration = configuration or email_runtime_configuration()
+    if not configuration["configured"]:
+        raise RuntimeError("Integração de email ainda não configurada no servidor.")
+    recipient = normalize_email_recipient(delivery.get("recipient"))
+    if not recipient:
+        raise RuntimeError("Endereço de email do destinatário inválido.")
+
+    title = re.sub(r"[\r\n]+", " ", str_value(delivery.get("title")))[:180] or "Atualização académica"
+    action_url = resolved_notification_action_url(delivery, configuration)
+    message = EmailMessage()
+    message_id = make_msgid(domain=configuration["fromEmail"].partition("@")[2] or None)
+    message["Message-ID"] = message_id
+    message["Subject"] = title
+    message["From"] = formataddr((configuration.get("fromName") or "", configuration["fromEmail"]))
+    message["To"] = recipient
+    message.set_content(_notification_plain_text(delivery, action_url))
+    action_html = (
+        f'<p><a href="{html_escape(action_url, quote=True)}">Abrir na plataforma</a></p>'
+        if action_url.startswith(("https://", "http://")) else ""
+    )
+    message.add_alternative(
+        "<!doctype html><html><body>"
+        f"<p>{html_escape(str_value(delivery.get('student_name')) or 'Estudante')},</p>"
+        f"<h1>{html_escape(title)}</h1>"
+        f"<p>{html_escape(str_value(delivery.get('message'))).replace(chr(10), '<br>')}</p>"
+        f"{action_html}</body></html>",
+        subtype="html",
+    )
+
+    try:
+        port = int(configuration["smtpPort"])
+        smtp_class = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
+        smtp_options: dict[str, Any] = {
+            "host": configuration["smtpHost"],
+            "port": port,
+            "timeout": max(3, int(configuration.get("timeoutSeconds") or 12)),
+        }
+        if port == 465:
+            smtp_options["context"] = ssl.create_default_context()
+        with smtp_class(**smtp_options) as smtp:
+            smtp.ehlo()
+            if port != 465 and configuration.get("useTls"):
+                smtp.starttls(context=ssl.create_default_context())
+                smtp.ehlo()
+            if configuration.get("smtpUsername"):
+                smtp.login(configuration["smtpUsername"], configuration.get("smtpPassword") or "")
+            smtp.send_message(message)
+    except (smtplib.SMTPException, OSError, TimeoutError) as error:
+        safe_error = redact_notification_error(error, configuration.get("smtpPassword"))
+        raise RuntimeError(f"Falha no envio SMTP: {safe_error}") from error
+    return message_id.strip("<>")
+
+
+def _telegram_markdown_v2(value: Any) -> str:
+    return re.sub(r"([_\*\[\]\(\)~`>#+\-=|{}.!])", r"\\\1", str_value(value))
+
+
+def send_telegram_notification(delivery: dict[str, Any], configuration: dict[str, Any] | None = None) -> str:
+    configuration = configuration or telegram_runtime_configuration()
+    if not configuration["configured"]:
+        raise RuntimeError("Integração Telegram ainda não configurada no servidor.")
+    recipient = normalize_telegram_recipient(delivery.get("recipient"))
+    if not recipient:
+        raise RuntimeError("Chat ID do Telegram inválido.")
+
+    name = str_value(delivery.get("student_name")) or "Estudante"
+    title = str_value(delivery.get("title"))[:180]
+    body_message = str_value(delivery.get("message"))[:3000]
+    action_url = resolved_notification_action_url(delivery, configuration)
+    parse_mode = normalize_telegram_parse_mode(configuration.get("parseMode"))
+    if parse_mode == "HTML":
+        text = f"<b>{html_escape(title)}</b>\n\n{html_escape(name)},\n{html_escape(body_message)}"
+        if action_url:
+            text += f"\n\n{html_escape(action_url)}"
+    elif parse_mode == "MarkdownV2":
+        text = f"*{_telegram_markdown_v2(title)}*\n\n{_telegram_markdown_v2(name)},\n{_telegram_markdown_v2(body_message)}"
+        if action_url:
+            text += f"\n\n{_telegram_markdown_v2(action_url)}"
+    else:
+        text = f"{title}\n\n{name},\n{body_message}"
+        if action_url:
+            text += f"\n\n{action_url}"
+    if len(text) > 4096:
+        # Avoid cutting an HTML entity or a Markdown escape sequence. Oversized
+        # formatted content is safely downgraded to plain text.
+        parse_mode = ""
+        text = f"{title}\n\n{name},\n{body_message}"
+        if action_url:
+            text += f"\n\n{action_url}"
+    request_body: dict[str, Any] = {
+        "chat_id": recipient,
+        "text": text[:4096],
+        "disable_web_page_preview": True,
+    }
+    if parse_mode:
+        request_body["parse_mode"] = parse_mode
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{configuration['botToken']}/sendMessage",
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=max(3, int(configuration.get("timeoutSeconds") or 12)),
+        ) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        response_text = error.read().decode("utf-8", errors="replace")[:700]
+        safe_error = redact_notification_error(response_text, configuration.get("botToken"))
+        raise RuntimeError(f"Telegram Bot API HTTP {error.code}: {safe_error}") from error
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        safe_error = redact_notification_error(error, configuration.get("botToken"))
+        raise RuntimeError(f"Falha no envio pelo Telegram: {safe_error}") from error
+    message_id = str_value((result.get("result") or {}).get("message_id")) if isinstance(result, dict) else ""
+    if not isinstance(result, dict) or not result.get("ok") or not message_id:
+        description = str_value(result.get("description")) if isinstance(result, dict) else "Resposta inválida"
+        safe_error = redact_notification_error(description, configuration.get("botToken"))
+        raise RuntimeError(f"A API do Telegram rejeitou a mensagem: {safe_error}")
+    return message_id
+
+
+def telegram_get_updates(configuration: dict[str, Any], offset: int = 0) -> list[dict[str, Any]]:
+    """Read pending bot updates without long polling (used by account linking)."""
+    if not configuration.get("configured"):
+        raise RuntimeError("Integração Telegram ainda não configurada no servidor.")
+    query = urlencode({
+        "offset": max(0, int(offset)),
+        "limit": 100,
+        "timeout": 0,
+        "allowed_updates": json.dumps(["message"]),
+    })
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{configuration['botToken']}/getUpdates?{query}",
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=max(3, int(configuration.get("timeoutSeconds") or 12)),
+        ) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        response_text = error.read().decode("utf-8", errors="replace")[:700]
+        safe_error = redact_notification_error(response_text, configuration.get("botToken"))
+        raise RuntimeError(f"Telegram Bot API HTTP {error.code}: {safe_error}") from error
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        safe_error = redact_notification_error(error, configuration.get("botToken"))
+        raise RuntimeError(f"Falha ao confirmar a ligação ao Telegram: {safe_error}") from error
+    updates = result.get("result") if isinstance(result, dict) else None
+    if not isinstance(result, dict) or not result.get("ok") or not isinstance(updates, list):
+        description = str_value(result.get("description")) if isinstance(result, dict) else "Resposta inválida"
+        safe_error = redact_notification_error(description, configuration.get("botToken"))
+        raise RuntimeError(f"A API do Telegram rejeitou a consulta: {safe_error}")
+    return [item for item in updates if isinstance(item, dict)]
+
+
+def process_telegram_link_updates(configuration: dict[str, Any] | None = None) -> int:
+    """Associate every valid /start token in the queue before advancing its offset."""
+    configuration = configuration or telegram_runtime_configuration()
+    state = fetch_one(
+        "select cursor_value from courseplatform.notification_channel_state where channel = 'TELEGRAM'"
+    ) or {}
+    offset = int_value(state.get("cursor_value"))
+    updates = telegram_get_updates(configuration, offset)
+    if not updates:
+        return 0
+    linked = 0
+    highest_update_id = offset - 1
+    with connection() as conn:
+        for update in updates:
+            update_id = int_value(update.get("update_id"), -1)
+            highest_update_id = max(highest_update_id, update_id)
+            message = update.get("message") if isinstance(update.get("message"), dict) else {}
+            chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+            match = re.fullmatch(
+                r"/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{20,64})",
+                str_value(message.get("text")),
+            )
+            chat_id = normalize_telegram_recipient(chat.get("id"))
+            if not match or not chat_id or str_value(chat.get("type")) != "private":
+                continue
+            token_hash = hash_secret(match.group(1))
+            link = conn.execute(
+                """
+                select * from courseplatform.telegram_link_tokens
+                where token_hash = %s and consumed_at is null and expires_at > now()
+                for update
+                """,
+                (token_hash,),
+            ).fetchone()
+            if not link:
+                continue
+            conn.execute(
+                """
+                update courseplatform.students
+                set telegram_chat_id = %s, telegram_opt_in = true,
+                    telegram_opt_in_at = coalesce(telegram_opt_in_at, now()), updated_at = now()
+                where student_id = %s
+                """,
+                (chat_id, link["student_id"]),
+            )
+            conn.execute(
+                """
+                update courseplatform.telegram_link_tokens
+                set consumed_at = now(), telegram_update_id = %s
+                where token_hash = %s
+                """,
+                (update_id, token_hash),
+            )
+            audit(
+                conn,
+                "STUDENT",
+                link["student_id"],
+                "TELEGRAM_LINKED",
+                "STUDENT",
+                link["student_id"],
+                {"channel": "TELEGRAM"},
+            )
+            linked += 1
+        if highest_update_id >= offset:
+            conn.execute(
+                """
+                insert into courseplatform.notification_channel_state(channel, cursor_value, updated_at)
+                values ('TELEGRAM', %s, now())
+                on conflict (channel) do update set
+                  cursor_value = greatest(courseplatform.notification_channel_state.cursor_value, excluded.cursor_value),
+                  updated_at = now()
+                """,
+                (highest_update_id + 1,),
+            )
+        conn.commit()
+    return linked
+
+
+def claim_notification_deliveries(
+    channel: str,
+    notification_ids: list[str] | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Atomically lease one channel's queue so workers cannot send duplicates."""
+    normalized_channel = str_value(channel).upper()
+    if normalized_channel not in {"WHATSAPP", "EMAIL", "TELEGRAM"}:
+        raise ValueError("Canal de notificação inválido.")
     notification_filter = ""
-    params: list[Any] = []
+    params: list[Any] = [normalized_channel]
     if notification_ids:
         notification_filter = " and d.notification_id = any(%s)"
         params.append(notification_ids)
@@ -911,7 +1509,7 @@ def claim_whatsapp_deliveries(notification_ids: list[str] | None, limit: int) ->
         with candidates as (
           select d.delivery_id
           from courseplatform.notification_deliveries d
-          where d.channel = 'WHATSAPP'
+          where d.channel = %s
             and (
               d.status in ('PENDING', 'FAILED')
               or (
@@ -946,23 +1544,50 @@ def claim_whatsapp_deliveries(notification_ids: list[str] | None, limit: int) ->
     return rows
 
 
-def deliver_pending_whatsapp(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
-    configuration = whatsapp_runtime_configuration()
+def claim_whatsapp_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
+    return claim_notification_deliveries("WHATSAPP", notification_ids, limit)
+
+
+def claim_email_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
+    return claim_notification_deliveries("EMAIL", notification_ids, limit)
+
+
+def claim_telegram_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
+    return claim_notification_deliveries("TELEGRAM", notification_ids, limit)
+
+
+def deliver_pending_channel(
+    channel: str,
+    configuration_loader,
+    sender,
+    notification_ids: list[str] | None = None,
+    limit: int = 50,
+) -> dict[str, int]:
+    configuration = configuration_loader()
     if not configuration["configured"]:
         return {"sent": 0, "failed": 0, "pending": 0}
     prepare_notification_feature_schema()
-    rows = claim_whatsapp_deliveries(notification_ids, limit)
+    rows = claim_notification_deliveries(channel, notification_ids, limit)
     delivery_results: list[tuple[dict[str, Any], str, str]] = []
     if rows:
         worker_count = min(5, len(rows))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {executor.submit(send_whatsapp_template, delivery, configuration): delivery for delivery in rows}
+            futures = {executor.submit(sender, delivery, configuration): delivery for delivery in rows}
             for future in as_completed(futures):
                 delivery = futures[future]
                 try:
                     delivery_results.append((delivery, "SENT", future.result()))
                 except Exception as error:
-                    delivery_results.append((delivery, "FAILED", str(error)[:700]))
+                    delivery_results.append((
+                        delivery,
+                        "FAILED",
+                        redact_notification_error(
+                            error,
+                            configuration.get("accessToken"),
+                            configuration.get("smtpPassword"),
+                            configuration.get("botToken"),
+                        ),
+                    ))
 
     sent = 0
     failed = 0
@@ -993,15 +1618,44 @@ def deliver_pending_whatsapp(notification_ids: list[str] | None = None, limit: i
     return {"sent": sent, "failed": failed, "pending": max(0, len(rows) - sent - failed)}
 
 
+def deliver_pending_whatsapp(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
+    return deliver_pending_channel(
+        "WHATSAPP", whatsapp_runtime_configuration, send_whatsapp_template,
+        notification_ids, limit,
+    )
+
+
+def deliver_pending_email(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
+    return deliver_pending_channel(
+        "EMAIL", email_runtime_configuration, send_email_notification,
+        notification_ids, limit,
+    )
+
+
+def deliver_pending_telegram(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
+    return deliver_pending_channel(
+        "TELEGRAM", telegram_runtime_configuration, send_telegram_notification,
+        notification_ids, limit,
+    )
+
+
 def dispatch_notification_deliveries(notification_ids: list[str]) -> None:
     if not notification_ids:
         return
-    try:
-        deliver_pending_whatsapp(notification_ids, limit=5)
-    except Exception:
-        # The internal notification is the source of truth; external delivery must
-        # never roll back the administrative action that generated it.
-        return
+    for delivery_function in (
+        deliver_pending_whatsapp,
+        deliver_pending_email,
+        deliver_pending_telegram,
+    ):
+        try:
+            # Keep the request bounded while covering a typical class in one
+            # operation. Larger campaigns remain safely queued and are exposed
+            # through the administrative retry control.
+            delivery_function(notification_ids, limit=20)
+        except Exception:
+            # Internal notifications are the source of truth; a provider outage
+            # must never roll back the administrative transaction.
+            continue
 
 
 ASSESSMENT_FEATURE_SQL = """
@@ -2012,7 +2666,11 @@ def my_courses(payload: dict[str, Any]):
     with connection() as conn:
         _, student = student_context_with_conn(conn, payload)
         rows = student_courses_rows(conn, student["student_id"])
-    return success({"student": public_student(student), "courses": student_courses_payload(rows)})
+    return success({
+        "student": public_student(student),
+        "courses": student_courses_payload(rows),
+        "notificationChannelInfo": student_notification_channel_info(),
+    })
 
 
 def student_courses_rows(conn, student_id: str):
@@ -2274,6 +2932,114 @@ def attempt_status(payload: dict[str, Any]):
     })
 
 
+def student_start_telegram_link(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
+    _, student = student_context(payload)
+    configuration = telegram_runtime_configuration()
+    bot_username = str_value(configuration.get("botUsername")).lstrip("@")
+    if not configuration.get("configured") or not bot_username:
+        raise ApiError(
+            "TELEGRAM_LINK_UNAVAILABLE",
+            "A ligação ao Telegram ainda não está disponível. Contacte a administração.",
+        )
+    token = secrets.token_urlsafe(24)
+    with connection() as conn:
+        conn.execute(
+            """
+            update courseplatform.telegram_link_tokens
+            set consumed_at = coalesce(consumed_at, now())
+            where student_id = %s and consumed_at is null
+            """,
+            (student["student_id"],),
+        )
+        conn.execute(
+            """
+            insert into courseplatform.telegram_link_tokens
+              (token_hash, student_id, expires_at, created_at)
+            values (%s, %s, now() + interval '15 minutes', now())
+            """,
+            (hash_secret(token), student["student_id"]),
+        )
+        conn.commit()
+    return success({
+        "linkUrl": f"https://t.me/{bot_username}?start={token}",
+        "linkToken": token,
+        "botUsername": bot_username,
+        "expiresInSeconds": 900,
+    })
+
+
+def student_confirm_telegram_link(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
+    _, student = student_context(payload)
+    link_token = str_value(payload.get("linkToken"))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", link_token):
+        raise ApiError("INVALID_TELEGRAM_LINK_TOKEN", "A ligação ao Telegram é inválida ou expirou.")
+    pending = fetch_one(
+        """
+        select token_hash from courseplatform.telegram_link_tokens
+        where token_hash = %s and student_id = %s and consumed_at is null and expires_at > now()
+        """,
+        (hash_secret(link_token), student["student_id"]),
+    )
+    if not pending:
+        raise ApiError("TELEGRAM_LINK_EXPIRED", "A ligação ao Telegram é inválida ou expirou. Gere uma nova ligação.")
+    try:
+        process_telegram_link_updates()
+    except RuntimeError as error:
+        raise ApiError("TELEGRAM_LINK_CHECK_FAILED", str(error)) from error
+    linked_student = fetch_one(
+        "select * from courseplatform.students where student_id = %s",
+        (student["student_id"],),
+    ) or student
+    consumed = fetch_one(
+        "select consumed_at from courseplatform.telegram_link_tokens where token_hash = %s and student_id = %s",
+        (hash_secret(link_token), student["student_id"]),
+    ) or {}
+    if not consumed.get("consumed_at") or not normalize_telegram_recipient(linked_student.get("telegram_chat_id")):
+        return success({
+            "linked": False,
+            "student": public_student(linked_student),
+            "message": "Abra o bot, toque em Iniciar e volte a confirmar.",
+        })
+    return success({"linked": True, "student": public_student(linked_student)})
+
+
+def student_unlink_telegram(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
+    _, student = student_context(payload)
+    with connection() as conn:
+        row = conn.execute(
+            """
+            update courseplatform.students
+            set telegram_chat_id = null, telegram_opt_in = false,
+                telegram_opt_in_at = null, updated_at = now()
+            where student_id = %s
+            returning *
+            """,
+            (student["student_id"],),
+        ).fetchone()
+        conn.execute(
+            """
+            update courseplatform.telegram_link_tokens
+            set consumed_at = coalesce(consumed_at, now())
+            where student_id = %s and consumed_at is null
+            """,
+            (student["student_id"],),
+        )
+        audit(
+            conn,
+            "STUDENT",
+            student["student_id"],
+            "TELEGRAM_UNLINKED",
+            "STUDENT",
+            student["student_id"],
+            {"channel": "TELEGRAM"},
+        )
+        conn.commit()
+    return success({"unlinked": True, "student": public_student(row)})
+
+
 def update_my_profile(payload: dict[str, Any]):
     prepare_notification_feature_schema()
     _, student = student_context(payload)
@@ -2285,12 +3051,30 @@ def update_my_profile(payload: dict[str, Any]):
     if as_bool(payload.get("removeProfilePhoto")):
         photo_url = ""
 
-    whatsapp_opt_in = as_bool(payload.get("whatsappOptIn"))
+    whatsapp_opt_in = (
+        as_bool(payload.get("whatsappOptIn"))
+        if "whatsappOptIn" in payload else as_bool(student.get("whatsapp_opt_in"))
+    )
+    email_opt_in = (
+        as_bool(payload.get("emailOptIn"))
+        if "emailOptIn" in payload else as_bool(student.get("email_opt_in"))
+    )
+    telegram_opt_in = (
+        as_bool(payload.get("telegramOptIn"))
+        if "telegramOptIn" in payload else as_bool(student.get("telegram_opt_in"))
+    )
     phone = str_value(payload.get("phone"))
     if whatsapp_opt_in and not normalize_whatsapp_recipient(phone):
         raise ApiError(
             "INVALID_WHATSAPP_PHONE",
             "Para ativar o WhatsApp, informe um telefone com indicativo internacional, por exemplo +258.",
+        )
+    if email_opt_in and not normalize_email_recipient(student.get("email")):
+        raise ApiError("INVALID_NOTIFICATION_EMAIL", "A conta não possui um endereço de email válido.")
+    if telegram_opt_in and not normalize_telegram_recipient(student.get("telegram_chat_id")):
+        raise ApiError(
+            "TELEGRAM_LINK_REQUIRED",
+            "Ligue primeiro a sua conta ao bot oficial do Telegram.",
         )
     preferences = notification_preferences(student)
     supplied_preferences = payload.get("notificationPreferences")
@@ -2320,6 +3104,18 @@ def update_my_profile(payload: dict[str, Any]):
                   when not %s then null
                   else whatsapp_opt_in_at
                 end,
+                email_opt_in = %s,
+                email_opt_in_at = case
+                  when %s and not coalesce(email_opt_in, false) then now()
+                  when not %s then null
+                  else email_opt_in_at
+                end,
+                telegram_opt_in = %s,
+                telegram_opt_in_at = case
+                  when %s and not coalesce(telegram_opt_in, false) then now()
+                  when not %s then null
+                  else telegram_opt_in_at
+                end,
                 notification_preferences_json = %s::jsonb,
                 updated_at = now()
             where student_id = %s
@@ -2336,13 +3132,36 @@ def update_my_profile(payload: dict[str, Any]):
                 whatsapp_opt_in,
                 whatsapp_opt_in,
                 whatsapp_opt_in,
+                email_opt_in,
+                email_opt_in,
+                email_opt_in,
+                telegram_opt_in,
+                telegram_opt_in,
+                telegram_opt_in,
                 json.dumps(preferences),
                 student["student_id"],
             ),
         ).fetchone()
-        audit(conn, "STUDENT", student["student_id"], "PROFILE_UPDATED", "STUDENT", student["student_id"])
+        audit(
+            conn,
+            "STUDENT",
+            student["student_id"],
+            "PROFILE_UPDATED",
+            "STUDENT",
+            student["student_id"],
+            {
+                "notificationConsent": {
+                    "whatsapp": whatsapp_opt_in,
+                    "email": email_opt_in,
+                    "telegram": telegram_opt_in,
+                }
+            },
+        )
         conn.commit()
-    return success({"student": public_student(row)})
+    return success({
+        "student": public_student(row),
+        "notificationChannelInfo": student_notification_channel_info(),
+    })
 
 
 def my_notifications(payload: dict[str, Any]):
@@ -2353,11 +3172,26 @@ def my_notifications(payload: dict[str, Any]):
     where_unread = "and n.read_at is null" if unread_only else ""
     rows = fetch_all(
         f"""
-        select n.*, d.status as delivery_status, d.recipient as delivery_recipient,
-               d.provider_message_id, d.attempt_count, d.last_error, d.sent_at
+        select n.*,
+               w.status as whatsapp_status, w.recipient as whatsapp_recipient,
+               w.provider_message_id as whatsapp_provider_message_id,
+               w.attempt_count as whatsapp_attempt_count, w.last_error as whatsapp_last_error,
+               w.sent_at as whatsapp_sent_at,
+               e.status as email_status, e.recipient as email_recipient,
+               e.provider_message_id as email_provider_message_id,
+               e.attempt_count as email_attempt_count, e.last_error as email_last_error,
+               e.sent_at as email_sent_at,
+               t.status as telegram_status, t.recipient as telegram_recipient,
+               t.provider_message_id as telegram_provider_message_id,
+               t.attempt_count as telegram_attempt_count, t.last_error as telegram_last_error,
+               t.sent_at as telegram_sent_at
         from courseplatform.notifications n
-        left join courseplatform.notification_deliveries d
-          on d.notification_id = n.notification_id and d.channel = 'WHATSAPP'
+        left join courseplatform.notification_deliveries w
+          on w.notification_id = n.notification_id and w.channel = 'WHATSAPP'
+        left join courseplatform.notification_deliveries e
+          on e.notification_id = n.notification_id and e.channel = 'EMAIL'
+        left join courseplatform.notification_deliveries t
+          on t.notification_id = n.notification_id and t.channel = 'TELEGRAM'
         where n.student_id = %s {where_unread}
         order by n.created_at desc
         limit %s offset %s
@@ -5011,13 +5845,26 @@ def admin_list_notifications(payload: dict[str, Any]):
     rows = fetch_all(
         """
         select n.*, s.full_name as student_name,
-               case when d.status = 'PROCESSING' then 'PENDING' else d.status end as delivery_status,
-               d.recipient as delivery_recipient,
-               d.provider_message_id, d.attempt_count, d.last_error, d.sent_at
+               w.status as whatsapp_status, w.recipient as whatsapp_recipient,
+               w.provider_message_id as whatsapp_provider_message_id,
+               w.attempt_count as whatsapp_attempt_count, w.last_error as whatsapp_last_error,
+               w.sent_at as whatsapp_sent_at,
+               e.status as email_status, e.recipient as email_recipient,
+               e.provider_message_id as email_provider_message_id,
+               e.attempt_count as email_attempt_count, e.last_error as email_last_error,
+               e.sent_at as email_sent_at,
+               t.status as telegram_status, t.recipient as telegram_recipient,
+               t.provider_message_id as telegram_provider_message_id,
+               t.attempt_count as telegram_attempt_count, t.last_error as telegram_last_error,
+               t.sent_at as telegram_sent_at
         from courseplatform.notifications n
         join courseplatform.students s on s.student_id = n.student_id
-        left join courseplatform.notification_deliveries d
-          on d.notification_id = n.notification_id and d.channel = 'WHATSAPP'
+        left join courseplatform.notification_deliveries w
+          on w.notification_id = n.notification_id and w.channel = 'WHATSAPP'
+        left join courseplatform.notification_deliveries e
+          on e.notification_id = n.notification_id and e.channel = 'EMAIL'
+        left join courseplatform.notification_deliveries t
+          on t.notification_id = n.notification_id and t.channel = 'TELEGRAM'
         order by n.created_at desc
         limit %s offset %s
         """,
@@ -5027,10 +5874,18 @@ def admin_list_notifications(payload: dict[str, Any]):
         """
         select
           (select count(*) from courseplatform.notifications) as internal_total,
-          count(*) filter (where d.status = 'SENT') as whatsapp_sent,
-          count(*) filter (where d.status in ('PENDING', 'PROCESSING')) as whatsapp_pending,
-          count(*) filter (where d.status = 'FAILED') as whatsapp_failed,
-          count(*) filter (where d.status = 'SKIPPED') as whatsapp_skipped
+          count(*) filter (where d.channel = 'WHATSAPP' and d.status = 'SENT') as whatsapp_sent,
+          count(*) filter (where d.channel = 'WHATSAPP' and d.status in ('PENDING', 'PROCESSING')) as whatsapp_pending,
+          count(*) filter (where d.channel = 'WHATSAPP' and d.status = 'FAILED') as whatsapp_failed,
+          count(*) filter (where d.channel = 'WHATSAPP' and d.status = 'SKIPPED') as whatsapp_skipped,
+          count(*) filter (where d.channel = 'EMAIL' and d.status = 'SENT') as email_sent,
+          count(*) filter (where d.channel = 'EMAIL' and d.status in ('PENDING', 'PROCESSING')) as email_pending,
+          count(*) filter (where d.channel = 'EMAIL' and d.status = 'FAILED') as email_failed,
+          count(*) filter (where d.channel = 'EMAIL' and d.status = 'SKIPPED') as email_skipped,
+          count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'SENT') as telegram_sent,
+          count(*) filter (where d.channel = 'TELEGRAM' and d.status in ('PENDING', 'PROCESSING')) as telegram_pending,
+          count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'FAILED') as telegram_failed,
+          count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'SKIPPED') as telegram_skipped
         from courseplatform.notification_deliveries d
         """
     ) or {}
@@ -5042,8 +5897,18 @@ def admin_list_notifications(payload: dict[str, Any]):
             "whatsappPending": int(totals.get("whatsapp_pending") or 0),
             "whatsappFailed": int(totals.get("whatsapp_failed") or 0),
             "whatsappSkipped": int(totals.get("whatsapp_skipped") or 0),
+            "emailSent": int(totals.get("email_sent") or 0),
+            "emailPending": int(totals.get("email_pending") or 0),
+            "emailFailed": int(totals.get("email_failed") or 0),
+            "emailSkipped": int(totals.get("email_skipped") or 0),
+            "telegramSent": int(totals.get("telegram_sent") or 0),
+            "telegramPending": int(totals.get("telegram_pending") or 0),
+            "telegramFailed": int(totals.get("telegram_failed") or 0),
+            "telegramSkipped": int(totals.get("telegram_skipped") or 0),
         },
         "whatsappConfiguration": whatsapp_configuration(),
+        "emailConfiguration": email_configuration(),
+        "telegramConfiguration": telegram_configuration(),
         "page": page,
         "limit": limit,
     })
@@ -5078,6 +5943,8 @@ def admin_create_notification(payload: dict[str, Any]):
                 entity_id="",
                 priority=str_value(payload.get("priority") or "NORMAL"),
                 send_whatsapp=as_bool(payload.get("sendWhatsApp")),
+                send_email=as_bool(payload.get("sendEmail")),
+                send_telegram=as_bool(payload.get("sendTelegram")),
             )
             if notification_id:
                 notification_ids.append(notification_id)
@@ -5088,7 +5955,12 @@ def admin_create_notification(payload: dict[str, Any]):
             "NOTIFICATION_SENT",
             "NOTIFICATION",
             "",
-            {"studentCount": len(notification_ids), "sendWhatsApp": as_bool(payload.get("sendWhatsApp"))},
+            {
+                "studentCount": len(notification_ids),
+                "sendWhatsApp": as_bool(payload.get("sendWhatsApp")),
+                "sendEmail": as_bool(payload.get("sendEmail")),
+                "sendTelegram": as_bool(payload.get("sendTelegram")),
+            },
         )
         conn.commit()
     dispatch_notification_deliveries(notification_ids)
@@ -5129,15 +6001,16 @@ def admin_save_whatsapp_configuration(payload: dict[str, Any]):
         raise ApiError("INVALID_WHATSAPP_LANGUAGE", "Utilize um idioma no formato pt_PT.")
     if platform_url and not valid_whatsapp_platform_url(platform_url):
         raise ApiError("INVALID_WHATSAPP_PLATFORM_URL", "Informe um endereço http:// ou https:// completo e válido.")
-    if access_token and not settings.whatsapp_config_encryption_key:
+    encryption_key = notification_encryption_key(settings)
+    if access_token and not encryption_key:
         raise ApiError(
             "WHATSAPP_ENCRYPTION_KEY_REQUIRED",
-            "Defina WHATSAPP_CONFIG_ENCRYPTION_KEY no servidor antes de guardar o token pelo painel.",
+            "Defina NOTIFICATION_CONFIG_ENCRYPTION_KEY no servidor antes de guardar o token pelo painel.",
         )
-    if access_token and len(settings.whatsapp_config_encryption_key.encode("utf-8")) < 32:
+    if access_token and len(encryption_key.encode("utf-8")) < 32:
         raise ApiError(
             "WEAK_WHATSAPP_ENCRYPTION_KEY",
-            "WHATSAPP_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
+            "NOTIFICATION_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
         )
 
     with connection() as conn:
@@ -5153,10 +6026,10 @@ def admin_save_whatsapp_configuration(payload: dict[str, Any]):
         if access_token:
             encrypted_token = conn.execute(
                 "select pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256') as encrypted_token",
-                (access_token, settings.whatsapp_config_encryption_key),
+                (access_token, encryption_key),
             ).fetchone()["encrypted_token"]
 
-        encryption_key_configured = len(settings.whatsapp_config_encryption_key.encode("utf-8")) >= 32
+        encryption_key_configured = len(encryption_key.encode("utf-8")) >= 32
         token_available = bool(
             access_token
             or (encrypted_token is not None and encryption_key_configured)
@@ -5214,14 +6087,222 @@ def admin_save_whatsapp_configuration(payload: dict[str, Any]):
     return success({"whatsappConfiguration": whatsapp_configuration()})
 
 
+def admin_save_email_configuration(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_notification_feature_schema()
+    settings = get_settings()
+    configuration = payload.get("emailConfiguration")
+    if not isinstance(configuration, dict):
+        configuration = payload
+    enabled = as_bool(configuration.get("enabled"))
+    smtp_host = str_value(configuration.get("smtpHost"))
+    smtp_port = int_value(configuration.get("smtpPort"), 587)
+    smtp_username = str_value(configuration.get("smtpUsername"))
+    smtp_password = str_value(configuration.get("smtpPassword"))
+    from_email = normalize_email_recipient(configuration.get("fromEmail"))
+    raw_from_email = str_value(configuration.get("fromEmail"))
+    from_name = str_value(configuration.get("fromName"))
+    use_tls = as_bool(configuration.get("useTls"))
+    remove_password = as_bool(configuration.get("removeSmtpPassword"))
+    encryption_key = notification_encryption_key(settings)
+    if smtp_password and remove_password:
+        raise ApiError("AMBIGUOUS_SMTP_PASSWORD_UPDATE", "Escolha entre substituir ou remover a palavra-passe SMTP.")
+    if smtp_host and not valid_notification_host(smtp_host):
+        raise ApiError("INVALID_SMTP_HOST", "Informe apenas um hostname SMTP válido, sem protocolo ou caminho.")
+    if not 1 <= smtp_port <= 65535:
+        raise ApiError("INVALID_SMTP_PORT", "A porta SMTP deve estar entre 1 e 65535.")
+    if enabled and smtp_port != 465 and not use_tls:
+        raise ApiError(
+            "INSECURE_SMTP_TRANSPORT",
+            "Ative TLS para proteger as credenciais e o conteúdo do email. A porta 465 utiliza TLS implícito.",
+        )
+    if len(smtp_username) > 320:
+        raise ApiError("INVALID_SMTP_USERNAME", "O utilizador SMTP excede o tamanho permitido.")
+    if len(smtp_password) > 8192:
+        raise ApiError("INVALID_SMTP_PASSWORD", "A palavra-passe SMTP excede o tamanho permitido.")
+    if raw_from_email and not from_email:
+        raise ApiError("INVALID_SMTP_FROM_EMAIL", "Informe um endereço de remetente válido.")
+    if len(from_name) > 120 or "\r" in from_name or "\n" in from_name:
+        raise ApiError("INVALID_SMTP_FROM_NAME", "O nome do remetente é inválido.")
+    if smtp_password and len(encryption_key.encode("utf-8")) < 32:
+        raise ApiError(
+            "WEAK_NOTIFICATION_ENCRYPTION_KEY",
+            "NOTIFICATION_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
+        )
+    with connection() as conn:
+        existing = conn.execute(
+            """
+            select smtp_password_encrypted
+            from courseplatform.notification_channel_settings where channel = 'EMAIL'
+            """
+        ).fetchone() or {}
+        encrypted_password = None if remove_password else existing.get("smtp_password_encrypted")
+        if smtp_password:
+            encrypted_password = conn.execute(
+                "select pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256') as encrypted_secret",
+                (smtp_password, encryption_key),
+            ).fetchone()["encrypted_secret"]
+        stored_password_available = bool(
+            smtp_password
+            or (encrypted_password is not None and len(encryption_key.encode("utf-8")) >= 32)
+            or settings.smtp_password
+        )
+        if enabled and not (
+            smtp_host and from_email and (not smtp_username or stored_password_available)
+        ):
+            raise ApiError(
+                "INCOMPLETE_EMAIL_CONFIGURATION",
+                "Preencha o servidor, o remetente e, quando houver autenticação, a palavra-passe SMTP.",
+            )
+        conn.execute(
+            """
+            insert into courseplatform.notification_channel_settings
+              (channel, enabled, smtp_host, smtp_port, smtp_username,
+               smtp_password_encrypted, from_email, from_name, use_tls, updated_by, updated_at)
+            values ('EMAIL', %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+            on conflict (channel) do update set
+              enabled = excluded.enabled, smtp_host = excluded.smtp_host,
+              smtp_port = excluded.smtp_port, smtp_username = excluded.smtp_username,
+              smtp_password_encrypted = excluded.smtp_password_encrypted,
+              from_email = excluded.from_email, from_name = excluded.from_name,
+              use_tls = excluded.use_tls, updated_by = excluded.updated_by, updated_at = now()
+            """,
+            (
+                enabled, smtp_host or None, smtp_port, smtp_username or None,
+                encrypted_password, from_email or None, from_name or None,
+                use_tls, admin["admin_id"],
+            ),
+        )
+        audit(
+            conn, "ADMIN", admin["admin_id"], "EMAIL_CONFIGURATION_UPDATED",
+            "NOTIFICATION_CHANNEL", "EMAIL",
+            {
+                "enabled": enabled, "smtpHostConfigured": bool(smtp_host),
+                "fromEmailConfigured": bool(from_email),
+                "passwordChanged": bool(smtp_password or remove_password),
+            },
+        )
+        conn.commit()
+    return success({"emailConfiguration": email_configuration()})
+
+
+def admin_save_telegram_configuration(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_notification_feature_schema()
+    settings = get_settings()
+    configuration = payload.get("telegramConfiguration")
+    if not isinstance(configuration, dict):
+        configuration = payload
+    enabled = as_bool(configuration.get("enabled"))
+    bot_token = str_value(configuration.get("botToken"))
+    bot_username = str_value(configuration.get("botUsername")).lstrip("@")
+    raw_parse_mode = str_value(configuration.get("parseMode")) or "HTML"
+    parse_mode = normalize_telegram_parse_mode(raw_parse_mode)
+    remove_token = as_bool(configuration.get("removeBotToken"))
+    encryption_key = notification_encryption_key(settings)
+    if bot_token and remove_token:
+        raise ApiError("AMBIGUOUS_TELEGRAM_TOKEN_UPDATE", "Escolha entre substituir ou remover o token do bot.")
+    if bot_token and not valid_telegram_bot_token(bot_token):
+        raise ApiError("INVALID_TELEGRAM_BOT_TOKEN", "O token do bot Telegram possui um formato inválido.")
+    if bot_username and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", bot_username):
+        raise ApiError("INVALID_TELEGRAM_BOT_USERNAME", "Informe o username do bot sem @, com 5 a 32 caracteres.")
+    if raw_parse_mode.upper() not in {"HTML", "MARKDOWNV2", "MARKDOWN_V2", "NONE", "PLAIN"}:
+        raise ApiError("INVALID_TELEGRAM_PARSE_MODE", "Utilize HTML, MarkdownV2 ou sem formatação.")
+    if len(bot_token) > 256:
+        raise ApiError("INVALID_TELEGRAM_BOT_TOKEN", "O token do bot excede o tamanho permitido.")
+    if bot_token and len(encryption_key.encode("utf-8")) < 32:
+        raise ApiError(
+            "WEAK_NOTIFICATION_ENCRYPTION_KEY",
+            "NOTIFICATION_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
+        )
+    with connection() as conn:
+        existing = conn.execute(
+            """
+            select access_token_encrypted
+            from courseplatform.notification_channel_settings where channel = 'TELEGRAM'
+            """
+        ).fetchone() or {}
+        encrypted_token = None if remove_token else existing.get("access_token_encrypted")
+        if bot_token:
+            encrypted_token = conn.execute(
+                "select pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256') as encrypted_secret",
+                (bot_token, encryption_key),
+            ).fetchone()["encrypted_secret"]
+        token_available = bool(
+            bot_token
+            or (encrypted_token is not None and len(encryption_key.encode("utf-8")) >= 32)
+            or settings.telegram_bot_token
+        )
+        if enabled and not (bot_username and token_available):
+            raise ApiError(
+                "INCOMPLETE_TELEGRAM_CONFIGURATION",
+                "Preencha o username e o token do bot antes de ativar o Telegram.",
+            )
+        conn.execute(
+            """
+            insert into courseplatform.notification_channel_settings
+              (channel, enabled, bot_username, parse_mode, access_token_encrypted, updated_by, updated_at)
+            values ('TELEGRAM', %s, %s, %s, %s, %s, now())
+            on conflict (channel) do update set
+              enabled = excluded.enabled, bot_username = excluded.bot_username,
+              parse_mode = excluded.parse_mode,
+              access_token_encrypted = excluded.access_token_encrypted,
+              updated_by = excluded.updated_by, updated_at = now()
+            """,
+            (enabled, bot_username or None, parse_mode or None, encrypted_token, admin["admin_id"]),
+        )
+        audit(
+            conn, "ADMIN", admin["admin_id"], "TELEGRAM_CONFIGURATION_UPDATED",
+            "NOTIFICATION_CHANNEL", "TELEGRAM",
+            {
+                "enabled": enabled, "botUsernameConfigured": bool(bot_username),
+                "parseMode": parse_mode, "tokenChanged": bool(bot_token or remove_token),
+            },
+        )
+        conn.commit()
+    return success({"telegramConfiguration": telegram_configuration()})
+
+
 def admin_retry_notification_deliveries(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     prepare_notification_feature_schema()
-    result = deliver_pending_whatsapp(limit=max(1, min(int_value(payload.get("limit"), 20), 20)))
+    limit = max(1, min(int_value(payload.get("limit"), 20), 20))
+    requested = payload.get("channels") if isinstance(payload.get("channels"), list) else []
+    channels = [str_value(channel).upper() for channel in requested]
+    channels = [channel for channel in dict.fromkeys(channels) if channel in {"WHATSAPP", "EMAIL", "TELEGRAM"}]
+    if not channels:
+        channels = ["WHATSAPP", "EMAIL", "TELEGRAM"]
+    delivery_functions = {
+        "WHATSAPP": deliver_pending_whatsapp,
+        "EMAIL": deliver_pending_email,
+        "TELEGRAM": deliver_pending_telegram,
+    }
+    deliveries: dict[str, dict[str, int]] = {}
+    for channel in channels:
+        try:
+            deliveries[channel.lower()] = delivery_functions[channel](limit=limit)
+        except Exception as error:
+            deliveries[channel.lower()] = {
+                "sent": 0, "failed": 1, "pending": 0,
+                "error": redact_notification_error(error),
+            }
+    result = {
+        key: sum(int(channel_result.get(key) or 0) for channel_result in deliveries.values())
+        for key in ("sent", "failed", "pending")
+    }
     with connection() as conn:
-        audit(conn, "ADMIN", admin["admin_id"], "NOTIFICATION_DELIVERIES_RETRIED", "NOTIFICATION", "", result)
+        audit(
+            conn, "ADMIN", admin["admin_id"], "NOTIFICATION_DELIVERIES_RETRIED",
+            "NOTIFICATION", "", {"total": result, "channels": channels},
+        )
         conn.commit()
-    return success({"delivery": result, "whatsappConfiguration": whatsapp_configuration()})
+    return success({
+        "delivery": result,
+        "deliveries": deliveries,
+        "whatsappConfiguration": whatsapp_configuration(),
+        "emailConfiguration": email_configuration(),
+        "telegramConfiguration": telegram_configuration(),
+    })
 
 
 def not_implemented(action: str):
@@ -5248,6 +6329,9 @@ ACTIONS = {
     "getDashboard": dashboard,
     "getStudentHome": student_home,
     "getMyCourses": my_courses,
+    "studentStartTelegramLink": student_start_telegram_link,
+    "studentConfirmTelegramLink": student_confirm_telegram_link,
+    "studentUnlinkTelegram": student_unlink_telegram,
     "getLesson": get_lesson,
     "getAttemptStatus": attempt_status,
     "updateMyProfile": update_my_profile,
@@ -5288,6 +6372,8 @@ ACTIONS = {
     "adminListNotifications": admin_list_notifications,
     "adminCreateNotification": admin_create_notification,
     "adminSaveWhatsAppConfiguration": admin_save_whatsapp_configuration,
+    "adminSaveEmailConfiguration": admin_save_email_configuration,
+    "adminSaveTelegramConfiguration": admin_save_telegram_configuration,
     "adminRetryNotificationDeliveries": admin_retry_notification_deliveries,
     "adminSaveMediaConfig": admin_save_media_config,
     "adminSaveStaff": admin_save_staff,

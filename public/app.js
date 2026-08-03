@@ -79,6 +79,9 @@ const state = {
     unreadCount: 0,
     total: 0
   },
+  notificationChannelInfo: null,
+  telegramLinkToken: '',
+  telegramLinkUrl: '',
   timerId: null,
   pollId: null,
   notificationPollId: null
@@ -1239,13 +1242,17 @@ async function renderProfile() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar perfil...');
 
-  let courseBundle = null;
-  if (!state.dashboard?.student || !state.myCourses.length) {
-    courseBundle = await api.myCourses();
-    state.myCourses = courseBundle.courses || [];
-  }
+  const courseBundle = await api.myCourses();
+  state.myCourses = courseBundle.courses || [];
+  state.notificationChannelInfo = courseBundle.notificationChannelInfo || null;
   setNotificationState(await api.notifications({ limit: 6 }));
   const student = courseBundle?.student || state.dashboard?.student || {};
+  const channelInfo = state.notificationChannelInfo || {};
+  const telegramInfo = channelInfo.telegram || {};
+  const telegramLinked = Boolean(student.telegramLinked);
+  const whatsappActive = Boolean(student.whatsappOptIn && channelInfo.whatsapp?.configured);
+  const emailActive = Boolean(student.emailOptIn && channelInfo.email?.configured);
+  const telegramActive = Boolean(student.telegramOptIn && telegramLinked && telegramInfo.configured);
   headerUser.innerHTML = profileAvatarTemplate(student, 'header-avatar');
   headerUser.title = 'Editar perfil pessoal';
   headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
@@ -1344,13 +1351,46 @@ async function renderProfile() {
 
           <fieldset class="profile-notification-settings">
             <legend>Preferências de notificações</legend>
-            <label class="checkbox-line notification-consent-option">
-              <input type="checkbox" name="whatsappOptIn" value="true" ${student.whatsappOptIn ? 'checked' : ''}>
-              <span>
-                <strong>Receber atualizações pelo WhatsApp</strong>
-                <small>Autorizo o envio de notificações académicas para o telefone indicado. Posso retirar esta autorização a qualquer momento.</small>
-              </span>
-            </label>
+            <p class="profile-notification-intro">Escolha livremente um ou vários canais. A central de notificações da plataforma permanece sempre ativa.</p>
+            <div class="profile-notification-channels">
+              <label class="checkbox-line notification-consent-option notification-channel-option">
+                <input type="checkbox" name="whatsappOptIn" value="true" ${student.whatsappOptIn ? 'checked' : ''}>
+                <span>
+                  <strong>WhatsApp</strong>
+                  <small>Atualizações académicas enviadas para o telefone indicado no perfil.</small>
+                  <span class="notification-channel-state ${whatsappActive ? 'is-active' : ''}">${whatsappActive ? 'Ativo' : student.whatsappOptIn ? 'Autorizado' : 'Opcional'}</span>
+                </span>
+              </label>
+              <label class="checkbox-line notification-consent-option notification-channel-option">
+                <input type="checkbox" name="emailOptIn" value="true" ${student.emailOptIn ? 'checked' : ''}>
+                <span>
+                  <strong>Email</strong>
+                  <small>Mensagens enviadas para ${escapeHtml(student.email || 'o email da conta')}.</small>
+                  <span class="notification-channel-state ${emailActive ? 'is-active' : ''}">${emailActive ? 'Ativo' : student.emailOptIn ? 'Autorizado' : 'Opcional'}</span>
+                </span>
+              </label>
+              <div class="notification-consent-option notification-channel-option notification-telegram-option">
+                <input type="checkbox" name="telegramOptIn" value="true" ${student.telegramOptIn ? 'checked' : ''} ${telegramLinked ? '' : 'disabled'} aria-label="Receber atualizações pelo Telegram">
+                <span>
+                  <strong>Telegram</strong>
+                  <small>${telegramLinked
+                    ? 'Conta associada ao bot oficial. Pode suspender as mensagens sem remover a associação.'
+                    : telegramInfo.linkingAvailable
+                      ? `Associe a sua conta através do bot @${escapeHtml(telegramInfo.botUsername || '')}.`
+                      : 'A associação ainda não foi disponibilizada pela administração.'}</small>
+                  <span class="notification-channel-state ${telegramActive ? 'is-active' : ''}">${telegramLinked ? (telegramActive ? 'Ativo' : student.telegramOptIn ? 'Autorizado' : 'Associado') : 'Não associado'}</span>
+                  <span class="notification-telegram-actions" id="telegramLinkActions">
+                    ${telegramLinked ? `
+                      <button class="button button-secondary" id="telegramUnlinkButton" type="button">Remover associação</button>
+                    ` : `
+                      <button class="button button-secondary" id="telegramLinkButton" type="button" ${telegramInfo.linkingAvailable ? '' : 'disabled'}>Associar Telegram</button>
+                      <a class="button button-secondary" id="telegramOpenLink" href="${escapeHtml(state.telegramLinkUrl || '#')}" target="_blank" rel="noopener noreferrer" ${state.telegramLinkUrl ? '' : 'hidden'}>Abrir bot</a>
+                      <button class="button button-primary" id="telegramConfirmButton" type="button" ${state.telegramLinkToken ? '' : 'hidden'}>Confirmar associação</button>
+                    `}
+                  </span>
+                </span>
+              </div>
+            </div>
             <div class="notification-preference-grid">
               <label class="checkbox-line">
                 <input type="checkbox" name="notifyModuleAvailable" value="true" ${student.notificationPreferences?.MODULE_AVAILABLE !== false ? 'checked' : ''}>
@@ -1369,7 +1409,7 @@ async function renderProfile() {
                 Comunicados gerais
               </label>
             </div>
-            <small>As notificações internas continuam disponíveis na central da plataforma.</small>
+            <small>Ao ativar um canal, autoriza apenas notificações académicas e pode retirar a autorização a qualquer momento.</small>
           </fieldset>
 
           <div class="profile-actions">
@@ -1426,6 +1466,9 @@ async function renderProfile() {
   document.querySelector('#profileForm').addEventListener('submit', saveProfile);
   document.querySelector('#passwordForm').addEventListener('submit', changePassword);
   document.querySelector('#profileLogoutButton').addEventListener('click', logout);
+  document.querySelector('#telegramLinkButton')?.addEventListener('click', startTelegramLink);
+  document.querySelector('#telegramConfirmButton')?.addEventListener('click', confirmTelegramLink);
+  document.querySelector('#telegramUnlinkButton')?.addEventListener('click', unlinkTelegram);
   bindProfilePhotoPreview(student);
   startNotificationPolling();
   reportHeight();
@@ -1443,6 +1486,8 @@ async function saveProfile(event) {
   values.profilePhotoFile = profilePhotoFile && profilePhotoFile.size ? profilePhotoFile : null;
   values.removeProfilePhoto = formData.get('removeProfilePhoto') === 'true' ? 'true' : '';
   values.whatsappOptIn = formData.get('whatsappOptIn') === 'true';
+  values.emailOptIn = formData.get('emailOptIn') === 'true';
+  values.telegramOptIn = formData.get('telegramOptIn') === 'true';
   values.notificationPreferences = {
     MODULE_AVAILABLE: formData.get('notifyModuleAvailable') === 'true',
     SUBMISSION_STATUS: formData.get('notifySubmissionStatus') === 'true',
@@ -2278,6 +2323,79 @@ function clearTimers() {
   state.timerId = null;
   state.pollId = null;
   state.notificationPollId = null;
+}
+
+async function startTelegramLink(event) {
+  const button = event.currentTarget;
+  const botWindow = window.open('', '_blank');
+  if (botWindow) botWindow.opener = null;
+  setBusy(button, true, 'A preparar...');
+  try {
+    const result = await api.startTelegramLink();
+    state.telegramLinkToken = result.linkToken || '';
+    state.telegramLinkUrl = result.linkUrl || '';
+    const confirmButton = document.querySelector('#telegramConfirmButton');
+    if (confirmButton) confirmButton.hidden = !state.telegramLinkToken;
+    const directLink = document.querySelector('#telegramOpenLink');
+    if (directLink) {
+      directLink.href = state.telegramLinkUrl || '#';
+      directLink.hidden = !state.telegramLinkUrl;
+    }
+    if (botWindow && state.telegramLinkUrl) {
+      botWindow.location.replace(state.telegramLinkUrl);
+    } else if (botWindow) {
+      botWindow.close();
+    }
+    showToast('No Telegram, toque em “Iniciar” e depois confirme a associação aqui.', 'success');
+  } catch (error) {
+    if (botWindow) botWindow.close();
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function confirmTelegramLink(event) {
+  const button = event.currentTarget;
+  if (!state.telegramLinkToken) {
+    showToast('Gere primeiro uma ligação ao Telegram.', 'error');
+    return;
+  }
+  setBusy(button, true, 'A confirmar...');
+  try {
+    const result = await api.confirmTelegramLink(state.telegramLinkToken);
+    if (!result.linked) {
+      showToast(result.message || 'Ainda não foi possível confirmar. Inicie o bot e tente novamente.', 'error');
+      return;
+    }
+    state.telegramLinkToken = '';
+    state.telegramLinkUrl = '';
+    if (state.dashboard) state.dashboard.student = result.student;
+    showToast('Telegram associado e ativado.', 'success');
+    await renderProfile();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function unlinkTelegram(event) {
+  if (!window.confirm('Remover a associação ao Telegram e interromper as notificações neste canal?')) return;
+  const button = event.currentTarget;
+  setBusy(button, true, 'A remover...');
+  try {
+    const result = await api.unlinkTelegram();
+    state.telegramLinkToken = '';
+    state.telegramLinkUrl = '';
+    if (state.dashboard) state.dashboard.student = result.student;
+    showToast('Associação ao Telegram removida.', 'success');
+    await renderProfile();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+  }
 }
 
 function updateNotificationBadge() {

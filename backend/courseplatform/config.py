@@ -183,7 +183,29 @@ class Settings:
         self.whatsapp_template_name = os.getenv("WHATSAPP_TEMPLATE_NAME", "").strip()
         self.whatsapp_template_language = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "pt_PT").strip() or "pt_PT"
         self.whatsapp_platform_url = os.getenv("WHATSAPP_PLATFORM_URL", "").strip()
+        self.platform_url = os.getenv("PLATFORM_URL", self.whatsapp_platform_url).strip().rstrip("/")
         self.whatsapp_timeout_seconds = _int_env("WHATSAPP_TIMEOUT_SECONDS", 12)
+        # One server-only key protects every credential saved through the
+        # administration panel. The WhatsApp-specific name remains a fallback
+        # so existing installations keep working without a credential migration.
+        self.notification_config_encryption_key = os.getenv(
+            "NOTIFICATION_CONFIG_ENCRYPTION_KEY",
+            os.getenv("WHATSAPP_CONFIG_ENCRYPTION_KEY", ""),
+        ).strip()
+        self.email_enabled = os.getenv("EMAIL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "sim"}
+        self.smtp_host = os.getenv("SMTP_HOST", "").strip()
+        self.smtp_port = _int_env("SMTP_PORT", 587)
+        self.smtp_username = os.getenv("SMTP_USERNAME", "").strip()
+        self.smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
+        self.smtp_from_email = os.getenv("SMTP_FROM_EMAIL", "").strip()
+        self.smtp_from_name = os.getenv("SMTP_FROM_NAME", "").strip()
+        self.smtp_use_tls = os.getenv("SMTP_USE_TLS", "true").strip().lower() in {"1", "true", "yes", "sim"}
+        self.smtp_timeout_seconds = _int_env("SMTP_TIMEOUT_SECONDS", 12)
+        self.telegram_enabled = os.getenv("TELEGRAM_ENABLED", "false").strip().lower() in {"1", "true", "yes", "sim"}
+        self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        self.telegram_bot_username = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+        self.telegram_parse_mode = os.getenv("TELEGRAM_PARSE_MODE", "HTML").strip() or "HTML"
+        self.telegram_timeout_seconds = _int_env("TELEGRAM_TIMEOUT_SECONDS", 12)
         self.cors_origins = [
             item.strip()
             for item in os.getenv("CORS_ORIGINS", "*").split(",")

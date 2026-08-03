@@ -155,7 +155,7 @@ class WhatsAppBackendTests(unittest.TestCase):
         self.assertIn("set status = 'processing'", normalized_query)
         self.assertIn("d.status = 'processing'", normalized_query)
         self.assertIn("interval '5 minutes'", normalized_query)
-        self.assertEqual(database.params, (["NTF-1"], 7))
+        self.assertEqual(database.params, ("WHATSAPP", ["NTF-1"], 7))
         self.assertTrue(database.committed)
 
     def test_admin_token_requires_a_strong_server_encryption_key(self):

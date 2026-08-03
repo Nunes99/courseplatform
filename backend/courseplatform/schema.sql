@@ -43,6 +43,11 @@ alter table courseplatform.students add column if not exists password_reset_requ
 alter table courseplatform.students alter column access_code drop not null;
 alter table courseplatform.students add column if not exists whatsapp_opt_in boolean not null default false;
 alter table courseplatform.students add column if not exists whatsapp_opt_in_at timestamptz;
+alter table courseplatform.students add column if not exists email_opt_in boolean not null default false;
+alter table courseplatform.students add column if not exists email_opt_in_at timestamptz;
+alter table courseplatform.students add column if not exists telegram_chat_id text;
+alter table courseplatform.students add column if not exists telegram_opt_in boolean not null default false;
+alter table courseplatform.students add column if not exists telegram_opt_in_at timestamptz;
 alter table courseplatform.students add column if not exists notification_preferences_json jsonb not null default '{"MODULE_AVAILABLE":true,"SUBMISSION_STATUS":true,"REVIEW_FEEDBACK":true,"GENERAL":true}'::jsonb;
 
 alter table courseplatform.admins add column if not exists password_hash text;
@@ -286,6 +291,30 @@ create table if not exists courseplatform.notification_channel_settings (
   updated_at timestamptz
 );
 
+alter table courseplatform.notification_channel_settings add column if not exists smtp_host text;
+alter table courseplatform.notification_channel_settings add column if not exists smtp_port integer;
+alter table courseplatform.notification_channel_settings add column if not exists smtp_username text;
+alter table courseplatform.notification_channel_settings add column if not exists smtp_password_encrypted bytea;
+alter table courseplatform.notification_channel_settings add column if not exists from_email text;
+alter table courseplatform.notification_channel_settings add column if not exists from_name text;
+alter table courseplatform.notification_channel_settings add column if not exists use_tls boolean;
+alter table courseplatform.notification_channel_settings add column if not exists bot_username text;
+alter table courseplatform.notification_channel_settings add column if not exists parse_mode text;
+create table if not exists courseplatform.telegram_link_tokens (
+  token_hash text primary key,
+  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+  telegram_update_id bigint,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists courseplatform.notification_channel_state (
+  channel text primary key,
+  cursor_value bigint not null default 0,
+  updated_at timestamptz
+);
+
 -- Independent module access and assessment state. These statements also migrate
 -- installations created before the two states were separated.
 alter table courseplatform.lessons
@@ -464,6 +493,7 @@ create index if not exists idx_reviews_attempt on courseplatform.reviews(attempt
 create index if not exists idx_notifications_student_created on courseplatform.notifications(student_id, created_at desc);
 create index if not exists idx_notifications_student_unread on courseplatform.notifications(student_id, read_at, created_at desc);
 create index if not exists idx_notification_deliveries_status on courseplatform.notification_deliveries(channel, status, created_at);
+create index if not exists idx_telegram_link_tokens_student on courseplatform.telegram_link_tokens(student_id, created_at desc);
 create index if not exists idx_files_attempt on courseplatform.files(attempt_id, status);
 create index if not exists idx_certificate_requests_student_course on courseplatform.certificate_requests(student_id, course_id, status);
 create index if not exists idx_group_members_group on courseplatform.group_members(group_id, status);
@@ -490,6 +520,8 @@ alter table courseplatform.reviews enable row level security;
 alter table courseplatform.notifications enable row level security;
 alter table courseplatform.notification_deliveries enable row level security;
 alter table courseplatform.notification_channel_settings enable row level security;
+alter table courseplatform.telegram_link_tokens enable row level security;
+alter table courseplatform.notification_channel_state enable row level security;
 alter table courseplatform.certificates enable row level security;
 alter table courseplatform.audit_log enable row level security;
 alter table courseplatform.settings enable row level security;
@@ -527,7 +559,11 @@ create or replace view public.notifications as select * from courseplatform.noti
 create or replace view public.notification_deliveries as select * from courseplatform.notification_deliveries;
 create or replace view public.notification_channel_settings as
   select channel, enabled, phone_number_id, graph_api_version, template_name,
-         template_language, platform_url, access_token_encrypted is not null as token_configured,
+         template_language, platform_url,
+         smtp_host, smtp_port, smtp_username,
+         smtp_password_encrypted is not null as smtp_password_configured,
+         from_email, from_name, use_tls, bot_username, parse_mode,
+         access_token_encrypted is not null as token_configured,
          updated_by, updated_at
   from courseplatform.notification_channel_settings;
 create or replace view public.certificates as select * from courseplatform.certificates;

@@ -11348,7 +11348,7 @@ pre,
   max-width: 100%;
 }
 
-/* Internal notifications and WhatsApp delivery management. */
+/* Internal and optional external notification channels. */
 .notification-button {
   position: relative;
 }
@@ -11482,6 +11482,91 @@ pre,
   font-weight: 600;
 }
 
+.profile-notification-intro {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.profile-notification-channels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-notification-channels > .notification-channel-option {
+  display: grid;
+  grid-column: auto;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+  min-height: 142px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.profile-notification-channels > label.notification-channel-option {
+  cursor: pointer;
+}
+
+.profile-notification-channels > .notification-channel-option:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.profile-notification-channels > .notification-channel-option:focus-within {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.profile-notification-channels > .notification-channel-option > input {
+  margin-top: 3px;
+}
+
+.profile-notification-channels .notification-channel-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  width: 92px;
+  min-width: 92px;
+  height: 26px;
+  margin-top: 7px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.profile-notification-channels .notification-channel-state.is-active {
+  border-color: color-mix(in srgb, var(--success) 42%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  color: var(--success);
+}
+
+.notification-telegram-actions {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 8px !important;
+  margin-top: 8px;
+}
+
+.notification-telegram-actions .button {
+  width: auto;
+  min-height: 32px;
+}
+
 .notification-consent-option,
 .notification-channel-option {
   align-items: flex-start;
@@ -11514,19 +11599,37 @@ pre,
 }
 
 .notification-composer-card,
+.notification-configuration-card,
 .whatsapp-configuration-card {
   align-content: start;
 }
 
 .notification-composer-card > .form-stack,
+.notification-configuration-card > .form-stack,
 .whatsapp-configuration-card > .form-stack {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .notification-composer-card > .form-stack > *,
+.notification-configuration-card > .form-stack > *,
 .whatsapp-configuration-card > .form-stack > * {
   grid-column: 1;
   min-width: 0;
+}
+
+.notification-configuration-stack {
+  display: grid;
+  min-width: 0;
+  gap: var(--grid-gap);
+  align-content: start;
+}
+
+.notification-configuration-card .section-heading {
+  align-items: center;
+}
+
+.notification-configuration-card .section-heading .status-pill {
+  flex: 0 0 auto;
 }
 
 .notification-recipient-picker {
@@ -11548,6 +11651,7 @@ pre,
 .notification-recipient-summary,
 .notification-recipient-actions,
 .notification-recipient-channels,
+.notification-configuration-meta,
 .whatsapp-configuration-meta {
   display: flex;
   align-items: center;
@@ -11709,30 +11813,94 @@ pre,
 }
 
 .notification-recipient-channels {
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
 }
 
 .notification-recipient-channels .status-pill {
-  min-width: 92px;
+  flex: 0 0 96px;
+  width: 96px;
+  min-width: 96px;
+  padding-inline: 7px;
+  font-size: 10px;
 }
 
+.notification-channel-state.is-ready,
 .notification-recipient-channels .status-approved {
   border: 1px solid color-mix(in srgb, var(--success) 38%, transparent);
   background: color-mix(in srgb, var(--success) 13%, var(--surface));
   color: var(--success);
 }
 
-.notification-whatsapp-state.is-ready {
+.notification-whatsapp-state.is-ready,
+.notification-channel-state.is-ready {
   border: 1px solid color-mix(in srgb, var(--success) 42%, transparent);
   background: color-mix(in srgb, var(--success) 12%, var(--surface));
   color: var(--success);
 }
 
-.notification-whatsapp-state.is-unavailable {
+.notification-whatsapp-state.is-unavailable,
+.notification-channel-state.is-unavailable {
   border: 1px solid var(--line);
   background: var(--surface-soft);
   color: var(--muted);
+}
+
+.notification-channel-selector {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.notification-channel-selector legend {
+  padding: 0 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.notification-channel-selector > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.notification-channel-selector-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.notification-channel-selector-grid .notification-channel-option {
+  grid-column: auto;
+  min-height: 64px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.notification-channel-selector-grid .notification-channel-option:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+}
+
+.notification-channel-selector-grid .notification-channel-option:has(input:disabled) {
+  opacity: .68;
+  cursor: not-allowed;
+}
+
+.notification-channel-selector-grid .notification-channel-option:focus-within {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .notification-recipient-empty {
@@ -11752,10 +11920,12 @@ pre,
   line-height: 1.45;
 }
 
+.notification-configuration-form,
 .whatsapp-configuration-form {
   min-width: 0;
 }
 
+.notification-security-note,
 .whatsapp-security-note {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
@@ -11770,19 +11940,23 @@ pre,
   line-height: 1.5;
 }
 
+.notification-security-note.is-secure,
 .whatsapp-security-note.is-secure {
   border-color: color-mix(in srgb, var(--success) 28%, var(--line));
 }
 
+.notification-security-note.is-warning,
 .whatsapp-security-note.is-warning {
   border-color: color-mix(in srgb, var(--warning) 42%, var(--line));
 }
 
+.notification-security-note img,
 .whatsapp-security-note img {
   width: 19px;
   height: 19px;
 }
 
+.notification-configuration-meta,
 .whatsapp-configuration-meta {
   flex-wrap: wrap;
   justify-content: space-between;
@@ -11791,10 +11965,12 @@ pre,
   font-size: 12px;
 }
 
+.notification-configuration-meta strong,
 .whatsapp-configuration-meta strong {
   color: var(--text);
 }
 
+.notification-remove-secret,
 .whatsapp-remove-token {
   color: var(--danger);
 }
@@ -11864,7 +12040,7 @@ pre,
   color: var(--muted);
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1240px) {
   .notification-admin-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -11875,6 +12051,10 @@ pre,
 }
 
 @media (max-width: 760px) {
+  .notification-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .notifications-toolbar {
     align-items: stretch;
     flex-direction: column;
@@ -11898,6 +12078,23 @@ pre,
   }
 
   .notification-preference-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-notification-channels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-notification-channels > .notification-channel-option {
+    min-height: 0;
+  }
+
+  .notification-telegram-actions .button {
+    flex: 1 1 160px;
+    width: 100%;
+  }
+
+  .notification-channel-selector-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -11928,6 +12125,71 @@ pre,
     grid-column: 3;
     justify-content: flex-start;
   }
+
+  .notification-history-panel .admin-table-wrap {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .notification-admin-table,
+  .notification-admin-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .notification-admin-table thead {
+    display: none;
+  }
+
+  .notification-admin-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .notification-admin-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 14px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+
+  .notification-admin-table td {
+    display: grid;
+    align-content: start;
+    min-width: 0;
+    height: auto;
+    gap: 4px;
+    padding: 8px 0;
+    border: 0;
+  }
+
+  .notification-admin-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .notification-admin-table td:nth-child(1),
+  .notification-admin-table td:nth-child(2) {
+    grid-column: 1 / -1;
+  }
+
+  .notification-admin-table td:nth-child(1) {
+    padding-top: 0;
+  }
+
+  .notification-admin-table td:nth-child(2) {
+    min-width: 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+  }
 }
 
 @media (max-width: 480px) {
@@ -11952,12 +12214,38 @@ pre,
   }
 
   .notification-recipient-channels {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    width: 100%;
+  }
+
+  .notification-recipient-channels .status-pill {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .notification-configuration-card .section-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .notification-admin-table tr {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .notification-admin-table td,
+  .notification-admin-table td:nth-child(1),
+  .notification-admin-table td:nth-child(2) {
+    grid-column: 1;
   }
 }
 
 @media (max-width: 360px) {
+  .notification-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .notification-recipient-actions {
     grid-template-columns: minmax(0, 1fr);
   }

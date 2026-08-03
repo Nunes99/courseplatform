@@ -523,9 +523,13 @@ function canManageNotifications() {
   return ['OWNER', 'ADMIN'].includes(state.admin?.role);
 }
 
-function notificationDeliveryLabel(status) {
+function notificationDeliveryLabel(status, channel = '') {
   const labels = {
-    SENT: 'Aceite pela Meta',
+    SENT: channel === 'WHATSAPP'
+      ? 'Aceite pela Meta'
+      : channel === 'TELEGRAM'
+        ? 'Aceite pelo Telegram'
+        : 'Enviado',
     PENDING: 'Pendente',
     FAILED: 'Falhou',
     SKIPPED: 'Não solicitado',
@@ -549,20 +553,38 @@ function notificationRecipientTemplate(student) {
       ? (phone ? 'Telefone inválido' : 'Telefone em falta')
       : 'Sem autorização';
   const whatsappClass = whatsappReady ? 'is-ready' : 'is-unavailable';
+  const email = String(student.email || '').trim();
+  const hasValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const emailReady = Boolean(student.emailOptIn && hasValidEmail);
+  const emailLabel = emailReady
+    ? 'Email autorizado'
+    : !email
+      ? 'Email em falta'
+      : student.emailOptIn
+      ? 'Email inválido'
+      : 'Email sem autorização';
+  const telegramLinked = Boolean(student.telegramLinked);
+  const telegramReady = Boolean(student.telegramOptIn && telegramLinked);
+  const telegramLabel = telegramReady
+    ? 'Telegram autorizado'
+    : student.telegramOptIn
+      ? 'Telegram não associado'
+      : 'Telegram sem autorização';
   const publicId = studentPublicIdLabel(student.publicStudentId);
-  const searchText = notificationSearchText(student.fullName, publicId, student.email, phone);
+  const searchText = notificationSearchText(student.fullName, publicId, email, phone);
   return `
     <label class="notification-recipient-row" data-recipient-row data-search="${escapeHtml(searchText)}">
       <input type="checkbox" name="studentIds" value="${escapeHtml(student.studentId)}">
       <span class="notification-recipient-avatar" aria-hidden="true">${escapeHtml(studentInitials(student.fullName))}</span>
       <span class="notification-recipient-copy">
         <strong>${escapeHtml(student.fullName || 'Estudante')}</strong>
-        <span>${escapeHtml(publicId)} · ${escapeHtml(student.email || 'Sem email')}</span>
+        <span>${escapeHtml(publicId)} · ${escapeHtml(email || 'Sem email')}</span>
         <small>${escapeHtml(phone || 'Sem telefone registado')}</small>
       </span>
-      <span class="notification-recipient-channels">
-        <span class="status-pill status-approved"><span class="sr-only">Canal </span>Interna</span>
-        <span class="status-pill notification-whatsapp-state ${whatsappClass}">${escapeHtml(whatsappLabel)}</span>
+      <span class="notification-recipient-channels" aria-label="Disponibilidade dos canais">
+        <span class="status-pill notification-channel-state ${emailReady ? 'is-ready' : 'is-unavailable'}" aria-label="${escapeHtml(emailLabel)}" title="${escapeHtml(emailLabel)}">Email · ${emailReady ? 'Sim' : 'Não'}</span>
+        <span class="status-pill notification-channel-state ${whatsappClass}" aria-label="${escapeHtml(whatsappLabel)}" title="${escapeHtml(whatsappLabel)}">WhatsApp · ${whatsappReady ? 'Sim' : 'Não'}</span>
+        <span class="status-pill notification-channel-state ${telegramReady ? 'is-ready' : 'is-unavailable'}" aria-label="${escapeHtml(telegramLabel)}" title="${escapeHtml(telegramLabel)}">Telegram · ${telegramReady ? 'Sim' : 'Não'}</span>
       </span>
     </label>
   `;
@@ -590,28 +612,36 @@ function renderNotificationManagement() {
   const data = state.notificationLog || {};
   const summary = data.summary || {};
   const whatsapp = data.whatsappConfiguration || {};
+  const email = data.emailConfiguration || {};
+  const telegram = data.telegramConfiguration || {};
+  const emailPasswordConfigured = Boolean(email.passwordConfigured ?? email.smtpPasswordConfigured);
+  const emailStoredPasswordConfigured = Boolean(email.storedPasswordConfigured ?? email.storedSmtpPasswordConfigured);
   const activeStudents = state.students.filter(({ student }) => student?.status === 'ACTIVE');
   const activeStudentTotal = Math.max(activeStudents.length, state.notificationStudentTotal || 0);
+  const pendingDeliveries = Number(summary.whatsappPending || 0) + Number(summary.emailPending || 0) + Number(summary.telegramPending || 0);
+  const failedDeliveries = Number(summary.whatsappFailed || 0) + Number(summary.emailFailed || 0) + Number(summary.telegramFailed || 0);
 
   main.innerHTML = `
     <div class="admin-page-heading">
       <div>
         <p class="eyebrow">Comunicação académica</p>
         <h1>Notificações</h1>
-        <p>Envie atualizações internas e acompanhe as entregas pelo WhatsApp.</p>
+        <p>Envie atualizações internas, por email, WhatsApp ou Telegram, em simultâneo ou separadamente.</p>
       </div>
-      ${canManageNotifications() && (summary.whatsappPending || summary.whatsappFailed) ? `
-        <button class="button button-secondary" id="retryWhatsAppDeliveries" type="button">
+      ${canManageNotifications() && (pendingDeliveries || failedDeliveries) ? `
+        <button class="button button-secondary" id="retryNotificationDeliveries" type="button">
           Repetir envios pendentes
         </button>
       ` : ''}
     </div>
 
-    <section class="admin-summary-grid">
+    <section class="admin-summary-grid notification-summary-grid">
       <article class="insight-card"><img src="${iconUrl('bell', goldIcon)}" alt=""><div><span>Internas</span><strong>${Number(summary.internalTotal || 0)}</strong></div></article>
-      <article class="insight-card"><img src="${iconUrl('message-circle-check', goldIcon)}" alt=""><div><span>Aceites pela Meta</span><strong>${Number(summary.whatsappSent || 0)}</strong></div></article>
-      <article class="insight-card"><img src="${iconUrl('clock-3', goldIcon)}" alt=""><div><span>Pendentes</span><strong>${Number(summary.whatsappPending || 0)}</strong></div></article>
-      <article class="insight-card"><img src="${iconUrl('circle-alert', goldIcon)}" alt=""><div><span>Falharam</span><strong>${Number(summary.whatsappFailed || 0)}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('mail-check', goldIcon)}" alt=""><div><span>Emails enviados</span><strong>${Number(summary.emailSent || 0)}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('message-circle-check', goldIcon)}" alt=""><div><span>WhatsApp aceites</span><strong>${Number(summary.whatsappSent || 0)}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('send', goldIcon)}" alt=""><div><span>Telegram aceites</span><strong>${Number(summary.telegramSent || 0)}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('clock-3', goldIcon)}" alt=""><div><span>Entregas pendentes</span><strong>${pendingDeliveries}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('circle-alert', goldIcon)}" alt=""><div><span>Entregas com falha</span><strong>${failedDeliveries}</strong></div></article>
     </section>
 
     <section class="notification-admin-grid">
@@ -674,16 +704,31 @@ function renderNotificationManagement() {
             <label><span>Título</span><input name="title" maxlength="180" required></label>
             <label><span>Mensagem</span><textarea name="message" rows="5" maxlength="1800" required></textarea></label>
             <label><span>Destino ao abrir</span><input name="actionUrl" value="#/notifications" placeholder="#/lessons"></label>
-            <label class="checkbox-line notification-channel-option">
-              <input type="checkbox" name="sendWhatsApp" value="true">
-              <span><strong>Enviar também pelo WhatsApp</strong><small>Somente estudantes com consentimento e telefone válido receberão a mensagem.</small></span>
-            </label>
+            <fieldset class="notification-channel-selector">
+              <legend>Canais de envio</legend>
+              <p>A notificação interna é sempre registada. Selecione nenhum, um ou vários canais externos.</p>
+              <div class="notification-channel-selector-grid">
+                <label class="checkbox-line notification-channel-option">
+                  <input type="checkbox" name="sendEmail" value="true" ${email.configured ? '' : 'disabled'}>
+                  <span><strong>Email</strong><small>${email.configured ? 'Exige consentimento e um endereço válido.' : 'Configure e ative o SMTP para utilizar este canal.'}</small></span>
+                </label>
+                <label class="checkbox-line notification-channel-option">
+                  <input type="checkbox" name="sendWhatsApp" value="true" ${whatsapp.configured ? '' : 'disabled'}>
+                  <span><strong>WhatsApp</strong><small>${whatsapp.configured ? 'Exige consentimento e telefone válido.' : 'Configure e ative o WhatsApp para utilizar este canal.'}</small></span>
+                </label>
+                <label class="checkbox-line notification-channel-option">
+                  <input type="checkbox" name="sendTelegram" value="true" ${telegram.configured ? '' : 'disabled'}>
+                  <span><strong>Telegram</strong><small>${telegram.configured ? 'Exige consentimento e uma conta associada.' : 'Configure e ative o bot para utilizar este canal.'}</small></span>
+                </label>
+              </div>
+            </fieldset>
             <button class="button button-primary" type="submit">Enviar atualização</button>
           </form>
         </article>
       ` : ''}
 
-      <article class="admin-content-panel whatsapp-configuration-card">
+      <div class="notification-configuration-stack">
+      <article class="admin-content-panel notification-configuration-card whatsapp-configuration-card">
         <div class="section-heading">
           <div><p class="eyebrow">Canal externo</p><h2>WhatsApp Business</h2></div>
           <span class="status-pill ${whatsapp.configured ? 'status-approved' : 'status-pending'}">${whatsapp.configured ? 'Configurado' : 'Configuração pendente'}</span>
@@ -732,7 +777,7 @@ function renderNotificationManagement() {
               <img src="${iconUrl(whatsapp.encryptionKeyConfigured ? 'shield-check' : 'triangle-alert', whatsapp.encryptionKeyConfigured ? blueIcon : goldIcon)}" alt="">
               <span>${whatsapp.encryptionKeyConfigured
                 ? 'O token é encriptado antes de ser guardado e nunca é apresentado novamente.'
-                : 'Defina WHATSAPP_CONFIG_ENCRYPTION_KEY no servidor para guardar ou substituir o token por este painel.'}</span>
+                : 'Defina NOTIFICATION_CONFIG_ENCRYPTION_KEY no servidor para guardar ou substituir credenciais por este painel.'}</span>
             </div>
             ${whatsapp.tokenError ? `<p class="field-error">${escapeHtml(whatsapp.tokenError)}</p>` : ''}
             <div class="whatsapp-configuration-meta">
@@ -751,23 +796,158 @@ function renderNotificationManagement() {
           </dl>
         `}
       </article>
+      <article class="admin-content-panel notification-configuration-card email-configuration-card">
+        <div class="section-heading">
+          <div><p class="eyebrow">Canal externo</p><h2>Email por SMTP</h2></div>
+          <span class="status-pill ${email.configured ? 'status-approved' : 'status-pending'}">${email.configured ? 'Configurado' : 'Configuração pendente'}</span>
+        </div>
+        ${canManageNotifications() ? `
+          <form id="emailConfigurationForm" class="form-stack notification-configuration-form">
+            <label class="checkbox-line notification-channel-option">
+              <input type="checkbox" name="enabled" value="true" ${email.enabled ? 'checked' : ''}>
+              <span><strong>Ativar o envio por email</strong><small>Utiliza o servidor SMTP da instituição sem interferir nas notificações internas.</small></span>
+            </label>
+            <div class="profile-form-grid">
+              <label>
+                <span>Servidor SMTP</span>
+                <input name="smtpHost" value="${escapeHtml(email.smtpHost || '')}" placeholder="smtp.exemplo.org" autocomplete="off">
+              </label>
+              <label>
+                <span>Porta SMTP</span>
+                <input name="smtpPort" type="number" inputmode="numeric" min="1" max="65535" value="${escapeHtml(email.smtpPort || 587)}">
+              </label>
+              <label>
+                <span>Utilizador SMTP</span>
+                <input name="smtpUsername" value="${escapeHtml(email.smtpUsername || '')}" placeholder="notificacoes@exemplo.org" autocomplete="username">
+              </label>
+              <label>
+                <span>Nome do remetente</span>
+                <input name="fromName" value="${escapeHtml(email.fromName || '')}" placeholder="Formação académica">
+              </label>
+              <label>
+                <span>Email do remetente</span>
+                <input name="fromEmail" type="email" value="${escapeHtml(email.fromEmail || '')}" placeholder="notificacoes@exemplo.org">
+              </label>
+              <label>
+                <span>Palavra-passe SMTP</span>
+                <input name="smtpPassword" type="password" autocomplete="new-password" maxlength="8192"
+                  placeholder="${emailPasswordConfigured ? 'Palavra-passe configurada — deixe vazio para manter' : 'Introduza a palavra-passe SMTP'}"
+                  ${email.encryptionKeyConfigured === false ? 'disabled' : ''}>
+              </label>
+            </div>
+            <label class="checkbox-line notification-channel-option">
+              <input type="checkbox" name="useTls" value="true" ${email.useTls !== false ? 'checked' : ''}>
+              <span><strong>Usar ligação segura TLS</strong><small>Recomendado para proteger as credenciais e o conteúdo durante o envio.</small></span>
+            </label>
+            ${emailStoredPasswordConfigured ? `
+              <label class="checkbox-line notification-remove-secret">
+                <input type="checkbox" name="removeSmtpPassword" value="true">
+                Remover a palavra-passe guardada no painel
+              </label>
+            ` : ''}
+            <div class="notification-security-note ${email.encryptionKeyConfigured === false ? 'is-warning' : 'is-secure'}">
+              <img src="${iconUrl(email.encryptionKeyConfigured === false ? 'triangle-alert' : 'shield-check', email.encryptionKeyConfigured === false ? goldIcon : blueIcon)}" alt="">
+              <span>${email.encryptionKeyConfigured === false
+                ? 'Configure a chave de encriptação no servidor antes de guardar a palavra-passe SMTP.'
+                : 'A palavra-passe é encriptada antes de ser guardada e nunca é apresentada novamente.'}</span>
+            </div>
+            ${email.passwordError ? `<p class="field-error">${escapeHtml(email.passwordError)}</p>` : ''}
+            <div class="notification-configuration-meta">
+              <span>Origem: <strong>${email.source === 'ADMIN' ? 'Painel administrativo' : 'Servidor'}</strong></span>
+              <span>Credencial: <strong>${emailPasswordConfigured ? 'Protegida' : 'Em falta'}</strong></span>
+            </div>
+            <button class="button button-primary" type="submit">Guardar configuração</button>
+          </form>
+        ` : `
+          <dl class="notification-config-list">
+            <div><dt>Integração ativa</dt><dd>${email.enabled ? 'Sim' : 'Não'}</dd></div>
+            <div><dt>Servidor SMTP</dt><dd>${email.smtpHostConfigured || email.smtpHost ? 'Configurado' : 'Em falta'}</dd></div>
+            <div><dt>Remetente</dt><dd>${escapeHtml(email.fromEmail || 'Em falta')}</dd></div>
+            <div><dt>Ligação segura</dt><dd>${email.useTls !== false ? 'TLS' : 'Sem TLS'}</dd></div>
+          </dl>
+        `}
+      </article>
+
+      <article class="admin-content-panel notification-configuration-card telegram-configuration-card">
+        <div class="section-heading">
+          <div><p class="eyebrow">Canal externo</p><h2>Telegram Bot</h2></div>
+          <span class="status-pill ${telegram.configured ? 'status-approved' : 'status-pending'}">${telegram.configured ? 'Configurado' : 'Configuração pendente'}</span>
+        </div>
+        ${canManageNotifications() ? `
+          <form id="telegramConfigurationForm" class="form-stack notification-configuration-form">
+            <label class="checkbox-line notification-channel-option">
+              <input type="checkbox" name="enabled" value="true" ${telegram.enabled ? 'checked' : ''}>
+              <span><strong>Ativar o envio pelo Telegram</strong><small>Os estudantes precisam de autorizar o canal e associar a conta no perfil.</small></span>
+            </label>
+            <div class="profile-form-grid">
+              <label>
+                <span>Utilizador do bot</span>
+                <input name="botUsername" value="${escapeHtml(telegram.botUsername || '')}" pattern="@?[A-Za-z][A-Za-z0-9_]{4,31}" placeholder="@instituicao_bot" autocomplete="off">
+              </label>
+              <label>
+                <span>Formatação das mensagens</span>
+                <select name="parseMode">
+                  <option value="HTML" ${telegram.parseMode === 'HTML' || telegram.parseMode == null ? 'selected' : ''}>HTML</option>
+                  <option value="MarkdownV2" ${telegram.parseMode === 'MarkdownV2' ? 'selected' : ''}>Markdown V2</option>
+                  <option value="NONE" ${telegram.parseMode === '' || telegram.parseMode === 'NONE' ? 'selected' : ''}>Sem formatação</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              <span>Token do bot</span>
+              <input name="botToken" type="password" autocomplete="new-password" maxlength="256"
+                placeholder="${telegram.tokenConfigured ? 'Token configurado — deixe vazio para manter' : 'Cole o token fornecido pelo BotFather'}"
+                ${telegram.encryptionKeyConfigured === false ? 'disabled' : ''}>
+            </label>
+            ${telegram.storedTokenConfigured ? `
+              <label class="checkbox-line notification-remove-secret">
+                <input type="checkbox" name="removeBotToken" value="true">
+                Remover o token guardado no painel
+              </label>
+            ` : ''}
+            <div class="notification-security-note ${telegram.encryptionKeyConfigured === false ? 'is-warning' : 'is-secure'}">
+              <img src="${iconUrl(telegram.encryptionKeyConfigured === false ? 'triangle-alert' : 'shield-check', telegram.encryptionKeyConfigured === false ? goldIcon : blueIcon)}" alt="">
+              <span>${telegram.encryptionKeyConfigured === false
+                ? 'Configure a chave de encriptação no servidor antes de guardar o token do bot.'
+                : 'O token é encriptado antes de ser guardado e nunca é apresentado novamente.'}</span>
+            </div>
+            ${telegram.tokenError ? `<p class="field-error">${escapeHtml(telegram.tokenError)}</p>` : ''}
+            <div class="notification-configuration-meta">
+              <span>Origem: <strong>${telegram.source === 'ADMIN' ? 'Painel administrativo' : 'Servidor'}</strong></span>
+              <span>Token: <strong>${telegram.tokenConfigured ? 'Protegido' : 'Em falta'}</strong></span>
+            </div>
+            <p class="management-field-hint">O estudante deve iniciar uma conversa com o bot antes de receber notificações.</p>
+            <button class="button button-primary" type="submit">Guardar configuração</button>
+          </form>
+        ` : `
+          <dl class="notification-config-list">
+            <div><dt>Integração ativa</dt><dd>${telegram.enabled ? 'Sim' : 'Não'}</dd></div>
+            <div><dt>Bot</dt><dd>${escapeHtml(telegram.botUsername || 'Em falta')}</dd></div>
+            <div><dt>Token</dt><dd>${telegram.tokenConfigured ? 'Protegido' : 'Em falta'}</dd></div>
+            <div><dt>Formatação</dt><dd>${escapeHtml(telegram.parseMode || 'Sem formatação')}</dd></div>
+          </dl>
+        `}
+      </article>
+      </div>
     </section>
 
     <section class="admin-content-panel notification-history-panel">
       <div class="section-heading"><div><p class="eyebrow">Histórico</p><h2>Atualizações enviadas</h2></div></div>
       <div class="admin-table-wrap">
         <table class="admin-table notification-admin-table">
-          <thead><tr><th>Estudante</th><th>Atualização</th><th>Canal interno</th><th>WhatsApp</th><th>Data</th></tr></thead>
+          <thead><tr><th>Estudante</th><th>Atualização</th><th>Interna</th><th>Email</th><th>WhatsApp</th><th>Telegram</th><th>Data</th></tr></thead>
           <tbody>
             ${(data.notifications || []).length ? data.notifications.map((notification) => `
               <tr>
-                <td><strong>${escapeHtml(notification.studentName || 'Estudante')}</strong></td>
-                <td><strong>${escapeHtml(notification.title || '')}</strong><small>${escapeHtml(notification.message || '')}</small></td>
-                <td><span class="status-pill status-approved">Registada</span></td>
-                <td><span class="status-pill notification-delivery-${String(notification.whatsapp?.status || '').toLowerCase()}">${escapeHtml(notificationDeliveryLabel(notification.whatsapp?.status))}</span>${notification.whatsapp?.lastError ? `<small title="${escapeHtml(notification.whatsapp.lastError)}">Verificar configuração</small>` : ''}</td>
-                <td>${escapeHtml(formatDate(notification.createdAt))}</td>
+                <td data-label="Estudante"><strong>${escapeHtml(notification.studentName || 'Estudante')}</strong></td>
+                <td data-label="Atualização"><strong>${escapeHtml(notification.title || '')}</strong><small>${escapeHtml(notification.message || '')}</small></td>
+                <td data-label="Interna"><span class="status-pill status-approved">Registada</span></td>
+                <td data-label="Email"><span class="status-pill notification-delivery-${String(notification.email?.status || '').toLowerCase()}">${escapeHtml(notificationDeliveryLabel(notification.email?.status, 'EMAIL'))}</span>${notification.email?.lastError ? `<small title="${escapeHtml(notification.email.lastError)}">Verificar configuração</small>` : ''}</td>
+                <td data-label="WhatsApp"><span class="status-pill notification-delivery-${String(notification.whatsapp?.status || '').toLowerCase()}">${escapeHtml(notificationDeliveryLabel(notification.whatsapp?.status, 'WHATSAPP'))}</span>${notification.whatsapp?.lastError ? `<small title="${escapeHtml(notification.whatsapp.lastError)}">Verificar configuração</small>` : ''}</td>
+                <td data-label="Telegram"><span class="status-pill notification-delivery-${String(notification.telegram?.status || '').toLowerCase()}">${escapeHtml(notificationDeliveryLabel(notification.telegram?.status, 'TELEGRAM'))}</span>${notification.telegram?.lastError ? `<small title="${escapeHtml(notification.telegram.lastError)}">Verificar configuração</small>` : ''}</td>
+                <td data-label="Data">${escapeHtml(formatDate(notification.createdAt))}</td>
               </tr>
-            `).join('') : '<tr><td colspan="5" class="empty-table">Ainda não existem notificações.</td></tr>'}
+            `).join('') : '<tr><td colspan="7" class="empty-table">Ainda não existem notificações.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -778,7 +958,9 @@ function renderNotificationManagement() {
   bindNotificationRecipientPicker(form);
   form?.addEventListener('submit', submitAdminNotification);
   document.querySelector('#whatsappConfigurationForm')?.addEventListener('submit', saveWhatsAppConfiguration);
-  document.querySelector('#retryWhatsAppDeliveries')?.addEventListener('click', retryWhatsAppDeliveries);
+  document.querySelector('#emailConfigurationForm')?.addEventListener('submit', saveEmailConfiguration);
+  document.querySelector('#telegramConfigurationForm')?.addEventListener('submit', saveTelegramConfiguration);
+  document.querySelector('#retryNotificationDeliveries')?.addEventListener('click', retryNotificationDeliveries);
   reportHeight();
 }
 
@@ -887,7 +1069,9 @@ async function submitAdminNotification(event) {
       title: values.get('title'),
       message: values.get('message'),
       actionUrl: values.get('actionUrl'),
-      sendWhatsApp: values.get('sendWhatsApp') === 'true'
+      sendWhatsApp: values.get('sendWhatsApp') === 'true',
+      sendEmail: values.get('sendEmail') === 'true',
+      sendTelegram: values.get('sendTelegram') === 'true'
     });
     showToast(`${result.notificationCount} notificação${result.notificationCount === 1 ? '' : 'ões'} criada${result.notificationCount === 1 ? '' : 's'}.`, 'success');
     await loadNotificationManagement({ force: true });
@@ -923,7 +1107,57 @@ async function saveWhatsAppConfiguration(event) {
   }
 }
 
-async function retryWhatsAppDeliveries(event) {
+async function saveEmailConfiguration(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = new FormData(form);
+  setBusy(button, true, 'A guardar...');
+  try {
+    const result = await api.adminSaveEmailConfiguration({
+      enabled: values.get('enabled') === 'true',
+      smtpHost: values.get('smtpHost') || '',
+      smtpPort: Number(values.get('smtpPort') || 587),
+      smtpUsername: values.get('smtpUsername') || '',
+      smtpPassword: values.get('smtpPassword') || '',
+      fromEmail: values.get('fromEmail') || '',
+      fromName: values.get('fromName') || '',
+      useTls: values.get('useTls') === 'true',
+      removeSmtpPassword: values.get('removeSmtpPassword') === 'true'
+    });
+    state.notificationLog.emailConfiguration = result.emailConfiguration;
+    showToast('Configuração de email guardada.', 'success');
+    await loadNotificationManagement({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+    setBusy(button, false);
+  }
+}
+
+async function saveTelegramConfiguration(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = new FormData(form);
+  setBusy(button, true, 'A guardar...');
+  try {
+    const result = await api.adminSaveTelegramConfiguration({
+      enabled: values.get('enabled') === 'true',
+      botToken: values.get('botToken') || '',
+      botUsername: values.get('botUsername') || '',
+      parseMode: values.get('parseMode') || '',
+      removeBotToken: values.get('removeBotToken') === 'true'
+    });
+    state.notificationLog.telegramConfiguration = result.telegramConfiguration;
+    showToast('Configuração do Telegram guardada.', 'success');
+    await loadNotificationManagement({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+    setBusy(button, false);
+  }
+}
+
+async function retryNotificationDeliveries(event) {
   const button = event.currentTarget;
   setBusy(button, true, 'A repetir...');
   try {
