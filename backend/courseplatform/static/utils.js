@@ -83,6 +83,8 @@ export function safeHtml(value) {
 
 const DEFAULT_FAVICON_URL = './assets/app-icon.svg';
 const DEFAULT_TOUCH_ICON_URL = './assets/app-icon-180.png';
+const BRAND_FAVICON_BACKGROUND = '#00365B';
+const BRAND_FAVICON_SIZE = 256;
 
 export function applyBrandFavicon(rawLogoUrl = '') {
   if (!document?.head) return;
@@ -112,17 +114,77 @@ export function applyBrandFavicon(rawLogoUrl = '') {
   favicon.dataset.brandFavicon = logoUrl;
   const probe = new Image();
   probe.decoding = 'async';
+  if (/^https?:/i.test(logoUrl)) probe.crossOrigin = 'anonymous';
   probe.addEventListener('load', () => {
     if (favicon.dataset.brandFavicon !== logoUrl) return;
-    favicon.removeAttribute('type');
-    favicon.href = logoUrl;
-    if (touchIcon) touchIcon.href = logoUrl;
+    try {
+      const generatedFavicon = renderBrandFavicon(probe);
+      applyGeneratedFavicon(favicon, touchIcon, logoUrl, generatedFavicon);
+    } catch {
+      applyFallback();
+    }
   }, { once: true });
   probe.addEventListener('error', () => {
     if (favicon.dataset.brandFavicon !== logoUrl) return;
     applyFallback();
   }, { once: true });
   probe.src = logoUrl;
+}
+
+function applyGeneratedFavicon(favicon, touchIcon, logoUrl, generatedFavicon) {
+  if (favicon.dataset.brandFavicon !== logoUrl) return;
+  favicon.type = 'image/png';
+  favicon.href = generatedFavicon;
+  if (touchIcon) touchIcon.href = generatedFavicon;
+}
+
+function renderBrandFavicon(image) {
+  const canvas = document.createElement('canvas');
+  canvas.width = BRAND_FAVICON_SIZE;
+  canvas.height = BRAND_FAVICON_SIZE;
+
+  const context = canvas.getContext('2d');
+  if (!context || !image.naturalWidth || !image.naturalHeight) {
+    throw new Error('Não foi possível preparar o favicon.');
+  }
+
+  const cornerRadius = 44;
+  context.beginPath();
+  context.moveTo(cornerRadius, 0);
+  context.lineTo(BRAND_FAVICON_SIZE - cornerRadius, 0);
+  context.quadraticCurveTo(BRAND_FAVICON_SIZE, 0, BRAND_FAVICON_SIZE, cornerRadius);
+  context.lineTo(BRAND_FAVICON_SIZE, BRAND_FAVICON_SIZE - cornerRadius);
+  context.quadraticCurveTo(
+    BRAND_FAVICON_SIZE,
+    BRAND_FAVICON_SIZE,
+    BRAND_FAVICON_SIZE - cornerRadius,
+    BRAND_FAVICON_SIZE
+  );
+  context.lineTo(cornerRadius, BRAND_FAVICON_SIZE);
+  context.quadraticCurveTo(0, BRAND_FAVICON_SIZE, 0, BRAND_FAVICON_SIZE - cornerRadius);
+  context.lineTo(0, cornerRadius);
+  context.quadraticCurveTo(0, 0, cornerRadius, 0);
+  context.closePath();
+  context.fillStyle = BRAND_FAVICON_BACKGROUND;
+  context.fill();
+
+  const availableSize = BRAND_FAVICON_SIZE - 64;
+  const scale = Math.min(availableSize / image.naturalWidth, availableSize / image.naturalHeight);
+  const width = Math.max(1, image.naturalWidth * scale);
+  const height = Math.max(1, image.naturalHeight * scale);
+  const x = (BRAND_FAVICON_SIZE - width) / 2;
+  const y = (BRAND_FAVICON_SIZE - height) / 2;
+
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.shadowColor = 'rgba(255, 248, 228, 0.35)';
+  context.shadowBlur = 8;
+  context.drawImage(image, x, y, width, height);
+  context.shadowColor = 'transparent';
+  context.shadowBlur = 0;
+  context.drawImage(image, x, y, width, height);
+
+  return canvas.toDataURL('image/png');
 }
 
 function normalizeFaviconUrl(rawLogoUrl) {
