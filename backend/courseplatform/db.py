@@ -38,6 +38,12 @@ def _connect():
                 settings.database_url,
                 connect_timeout=settings.db_connect_timeout,
                 row_factory=dict_row,
+                # Supabase/Supavisor transaction pooling can move consecutive
+                # transactions to different server sessions. Named prepared
+                # statements are session-scoped and may therefore collide
+                # (for example: "_pg3_0 already exists"). Keep queries on the
+                # extended protocol without Psycopg's automatic preparation.
+                prepare_threshold=None,
             )
         except psycopg.OperationalError as error:
             last_error = error
