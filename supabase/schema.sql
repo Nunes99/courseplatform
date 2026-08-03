@@ -232,6 +232,33 @@ create table if not exists courseplatform.chat_reads (
   )
 );
 
+create table if not exists courseplatform.chat_message_receipts (
+  receipt_id text primary key,
+  message_id text not null references courseplatform.chat_messages(message_id) on delete cascade,
+  actor_type text not null,
+  student_id text references courseplatform.students(student_id) on delete cascade,
+  admin_id text references courseplatform.admins(admin_id) on delete cascade,
+  delivered_at timestamptz not null default now(),
+  read_at timestamptz,
+  updated_at timestamptz not null default now(),
+  check (actor_type in ('STUDENT', 'ADMIN')),
+  check (
+    (actor_type = 'STUDENT' and student_id is not null and admin_id is null)
+    or (actor_type = 'ADMIN' and admin_id is not null and student_id is null)
+  )
+);
+
+create table if not exists courseplatform.chat_presence (
+  presence_id text primary key,
+  actor_type text not null,
+  actor_id text not null,
+  current_room_id text,
+  last_seen_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(actor_type, actor_id),
+  check (actor_type in ('STUDENT', 'ADMIN'))
+);
+
 create unique index if not exists idx_chat_reads_student
   on courseplatform.chat_reads(room_id, student_id) where student_id is not null;
 create unique index if not exists idx_chat_reads_admin
@@ -580,6 +607,12 @@ create unique index if not exists idx_chat_rooms_direct_students
   on courseplatform.chat_rooms(direct_student_one_id, direct_student_two_id)
   where room_type = 'DIRECT' and status = 'ACTIVE';
 create index if not exists idx_chat_messages_room_created on courseplatform.chat_messages(room_id, created_at desc);
+create unique index if not exists idx_chat_receipts_student
+  on courseplatform.chat_message_receipts(message_id, student_id) where student_id is not null;
+create unique index if not exists idx_chat_receipts_admin
+  on courseplatform.chat_message_receipts(message_id, admin_id) where admin_id is not null;
+create index if not exists idx_chat_presence_seen
+  on courseplatform.chat_presence(actor_type, last_seen_at desc);
 create index if not exists idx_chat_reports_status on courseplatform.chat_message_reports(status, created_at desc);
 create unique index if not exists idx_chat_reports_open_student
   on courseplatform.chat_message_reports(message_id, reported_by_student_id)
@@ -602,6 +635,8 @@ alter table courseplatform.group_members enable row level security;
 alter table courseplatform.chat_rooms enable row level security;
 alter table courseplatform.chat_messages enable row level security;
 alter table courseplatform.chat_reads enable row level security;
+alter table courseplatform.chat_message_receipts enable row level security;
+alter table courseplatform.chat_presence enable row level security;
 alter table courseplatform.chat_message_reports enable row level security;
 alter table courseplatform.lesson_progress enable row level security;
 alter table courseplatform.attempts enable row level security;

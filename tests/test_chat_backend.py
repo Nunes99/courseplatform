@@ -80,11 +80,28 @@ class ChatBackendTests(unittest.TestCase):
         self.assertEqual(message["body"], "")
         self.assertEqual(message["sender"]["publicId"], "STU-2026-01")
 
+    def test_public_message_exposes_delivery_and_read_state(self):
+        actor = {"type": "STUDENT", "id": "STU-1"}
+        base = {
+            "message_id": "MSG-2",
+            "room_id": "ROOM-1",
+            "sender_type": "STUDENT",
+            "sender_student_id": "STU-1",
+            "student_name": "Ana Teste",
+            "status": "ACTIVE",
+            "body": "Mensagem",
+        }
+        delivered = actions.public_chat_message({**base, "delivered_count": 1}, actor)
+        read = actions.public_chat_message({**base, "delivered_count": 1, "read_count": 1}, actor)
+        self.assertEqual(delivered["deliveryStatus"], "DELIVERED")
+        self.assertEqual(read["deliveryStatus"], "READ")
+
     def test_chat_actions_are_registered_for_students_and_admins(self):
         expected = {
             "getChatRooms",
             "getChatContacts",
             "startDirectChat",
+            "updatePresence",
             "getChatMessages",
             "sendChatMessage",
             "editChatMessage",
@@ -97,6 +114,8 @@ class ChatBackendTests(unittest.TestCase):
             "adminEditChatMessage",
             "adminDeleteChatMessage",
             "adminMarkChatRoomRead",
+            "adminUpdatePresence",
+            "adminGetPlatformStatistics",
         }
         self.assertTrue(expected.issubset(actions.ACTIONS))
 

@@ -93,7 +93,8 @@ const state = {
   telegramLinkUrl: '',
   timerId: null,
   pollId: null,
-  notificationPollId: null
+  notificationPollId: null,
+  presencePollId: null
 };
 
 let deferredInstallPrompt = null;
@@ -171,7 +172,18 @@ async function initialize() {
     return;
   }
 
+  startPresenceHeartbeat();
   route();
+}
+
+function startPresenceHeartbeat() {
+  window.clearInterval(state.presencePollId);
+  const heartbeat = () => {
+    if (document.hidden || !api?.hasStudentSession()) return;
+    api.updatePresence(activeChatWorkspace?.activeRoom?.roomId || '').catch(() => {});
+  };
+  heartbeat();
+  state.presencePollId = window.setInterval(heartbeat, 30000);
 }
 
 function isStandaloneApp() {
@@ -773,6 +785,7 @@ async function login(event) {
 
   try {
     await api.login(data.get('email'), data.get('accessCode'));
+    startPresenceHeartbeat();
     location.hash = '#/';
     await renderDashboard();
   } catch (error) {
@@ -899,6 +912,8 @@ async function copyText(text, successMessage) {
 }
 
 async function logout() {
+  window.clearInterval(state.presencePollId);
+  state.presencePollId = null;
   try {
     await api.logout();
   } catch {

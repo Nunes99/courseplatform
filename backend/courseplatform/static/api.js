@@ -248,6 +248,10 @@ export class CoursePlatformApi {
     return this.studentRequest('startDirectChat', { publicStudentId });
   }
 
+  updatePresence(currentRoomId = '') {
+    return this.studentRequest('updatePresence', { currentRoomId });
+  }
+
   chatMessages(roomId, options = {}) {
     return this.studentRequest('getChatMessages', {
       roomId,
@@ -508,6 +512,10 @@ export class CoursePlatformApi {
     return this.cachedAdminRequest('adminListPendingSubmissions', payload, cacheOptions);
   }
 
+  adminPlatformStatistics(options = {}) {
+    return this.cachedAdminRequest('adminGetPlatformStatistics', {}, options);
+  }
+
   adminSubmissions(filters = {}, options = {}) {
     return this.cachedAdminRequest('adminListSubmissions', filters, options);
   }
@@ -620,6 +628,10 @@ export class CoursePlatformApi {
 
   adminChatRooms() {
     return this.adminRequest('adminListChatRooms');
+  }
+
+  adminUpdatePresence(currentRoomId = '') {
+    return this.adminRequest('adminUpdatePresence', { currentRoomId });
   }
 
   adminChatMessages(roomId, options = {}) {

@@ -57,6 +57,21 @@ function chatDay(value) {
   return new Intl.DateTimeFormat('pt-PT', { dateStyle: 'long' }).format(date);
 }
 
+function presenceLabel(peer = {}) {
+  if (peer.isOnline) return 'Online agora';
+  const date = new Date(peer.lastSeenAt || '');
+  if (Number.isNaN(date.getTime())) return 'Offline';
+  return `Visto ${new Intl.DateTimeFormat('pt-PT', {
+    day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+  }).format(date)}`;
+}
+
+function deliveryLabel(status, count = 0) {
+  if (status === 'READ') return count > 1 ? `Lida por ${count}` : 'Lida';
+  if (status === 'DELIVERED') return count > 1 ? `Entregue a ${count}` : 'Entregue';
+  return 'Enviada';
+}
+
 function roomTypeLabel(type) {
   return {
     COMMUNITY: 'Comunidade',
@@ -97,6 +112,11 @@ export class ChatWorkspace {
     this.pollCount = 0;
     this.polling = false;
     this.destroyed = false;
+    this.visibilityHandler = () => {
+      if (document.visibilityState !== 'visible' || !this.activeRoom) return;
+      this.request('presence', this.activeRoom.roomId).catch(() => {});
+      this.markActiveRoomRead(this.activeRoom.roomId);
+    };
   }
 
   async start() {
@@ -118,6 +138,7 @@ export class ChatWorkspace {
     this.destroyed = true;
     window.clearInterval(this.pollTimer);
     this.pollTimer = null;
+    document.removeEventListener('visibilitychange', this.visibilityHandler);
   }
 
   request(name, ...args) {
@@ -128,7 +149,8 @@ export class ChatWorkspace {
           send: 'adminSendChatMessage',
           edit: 'adminEditChatMessage',
           delete: 'adminDeleteChatMessage',
-          read: 'adminMarkChatRoomRead'
+          read: 'adminMarkChatRoomRead',
+          presence: 'adminUpdatePresence'
         }
       : {
           rooms: 'chatRooms',
@@ -139,7 +161,8 @@ export class ChatWorkspace {
           read: 'markChatRoomRead',
           report: 'reportChatMessage',
           contacts: 'chatContacts',
-          startDirect: 'startDirectChat'
+          startDirect: 'startDirectChat',
+          presence: 'updatePresence'
         };
     const method = this.api[methods[name]];
     if (typeof method !== 'function') throw new Error('O módulo de mensagens não está disponível nesta versão.');
@@ -214,6 +237,7 @@ export class ChatWorkspace {
   }
 
   bindEvents() {
+    document.addEventListener('visibilitychange', this.visibilityHandler);
     this.mount.querySelector('.chat-search input')?.addEventListener('input', (event) => {
       this.search = event.currentTarget.value.trim().toLowerCase();
       this.renderSidebarContent();
@@ -318,10 +342,13 @@ export class ChatWorkspace {
       const preview = lastMessage
         ? `${lastMessage.isMine ? 'Você: ' : ''}${lastMessage.isDeleted ? 'Mensagem removida' : compactText(lastMessage.body)}`
         : room.description;
-      const peerPhoto = room.roomType === 'DIRECT' ? safeImageUrl(room.peer?.profilePhotoUrl) : '';
+      const peerPhoto = room.peer ? safeImageUrl(room.peer.profilePhotoUrl) : '';
       const roomAvatar = peerPhoto
         ? `<img src="${escapeHtml(peerPhoto)}" alt="" data-chat-avatar-fallback="${escapeHtml(initials(room.name))}">`
         : `<img src="${icon(roomIcon(room.roomType), room.roomId === this.activeRoom?.roomId ? 'ffffff' : '00365b')}" alt="">`;
+      const roomMeta = room.peer
+        ? `<span class="chat-presence-dot ${room.peer?.isOnline ? '' : 'is-offline'}"></span>${escapeHtml(presenceLabel(room.peer))}`
+        : `${escapeHtml(roomTypeLabel(room.roomType))} · ${Number(room.participantCount || 0)} participantes`;
       return `
         <button type="button" role="option" aria-selected="${String(room.roomId === this.activeRoom?.roomId)}"
           class="chat-room-item ${room.roomId === this.activeRoom?.roomId ? 'is-active' : ''}"
@@ -330,7 +357,7 @@ export class ChatWorkspace {
           <span class="chat-room-copy">
             <span class="chat-room-title-row"><strong>${escapeHtml(room.name)}</strong><time>${escapeHtml(chatTime(lastMessage?.createdAt))}</time></span>
             <span class="chat-room-preview">${escapeHtml(preview || 'Sem mensagens')}</span>
-            <span class="chat-room-meta">${escapeHtml(roomTypeLabel(room.roomType))} · ${Number(room.participantCount || 0)} participantes</span>
+            <span class="chat-room-meta">${roomMeta}</span>
           </span>
           ${room.unreadCount ? `<span class="chat-unread-count" aria-label="${room.unreadCount} mensagens não lidas">${Math.min(room.unreadCount, 99)}</span>` : ''}
         </button>
@@ -359,11 +386,11 @@ export class ChatWorkspace {
       const courses = (contact.sharedCourses || []).map((course) => course.title).join(', ');
       return `
         <button type="button" class="chat-contact-item" data-chat-contact="${escapeHtml(contact.publicStudentId)}">
-          <span class="chat-contact-avatar">${avatar}</span>
+          <span class="chat-contact-avatar">${avatar}<i class="chat-contact-presence ${contact.isOnline ? 'is-online' : ''}" aria-label="${escapeHtml(presenceLabel(contact))}"></i></span>
           <span class="chat-contact-copy">
             <strong>${escapeHtml(contact.fullName)}</strong>
             <span>${escapeHtml(compactText(courses || 'Colega do seu curso', 64))}</span>
-            <small>${escapeHtml(contact.publicStudentId || '')}</small>
+            <small>${escapeHtml(contact.publicStudentId || '')} · ${escapeHtml(presenceLabel(contact))}</small>
           </span>
           <span class="chat-contact-action" aria-hidden="true"><img src="${icon(contact.roomId ? 'message-circle' : 'message-circle-plus')}" alt=""></span>
         </button>
@@ -439,6 +466,7 @@ export class ChatWorkspace {
       this.renderConversation();
       this.scrollToBottom(false);
       this.updateTotalUnread();
+      this.markActiveRoomRead(roomId);
     } catch (error) {
       this.renderConversationError(error);
     }
@@ -461,17 +489,20 @@ export class ChatWorkspace {
     const panel = this.mount.querySelector('.chat-conversation-panel');
     const room = this.activeRoom;
     if (!panel || !room) return;
-    const peerPhoto = room.roomType === 'DIRECT' ? safeImageUrl(room.peer?.profilePhotoUrl) : '';
+    const peerPhoto = room.peer ? safeImageUrl(room.peer.profilePhotoUrl) : '';
     const activeAvatar = peerPhoto
       ? `<img src="${escapeHtml(peerPhoto)}" alt="" data-chat-avatar-fallback="${escapeHtml(initials(room.name))}">`
       : `<img src="${icon(roomIcon(room.roomType), 'ffffff')}" alt="">`;
+    const activePresence = room.peer
+      ? `<span class="chat-presence-dot ${room.peer?.isOnline ? '' : 'is-offline'}"></span>${escapeHtml(presenceLabel(room.peer))}`
+      : `<span class="chat-presence-dot"></span>${escapeHtml(roomTypeLabel(room.roomType))} · ${Number(room.participantCount || 0)} participantes · ${Number(room.onlineCount || 0)} online`;
     panel.innerHTML = `
       <header class="chat-conversation-header">
         <button class="chat-mobile-back" type="button" aria-label="Voltar às conversas"><img src="${icon('arrow-left')}" alt=""></button>
         <span class="chat-active-avatar">${activeAvatar}</span>
         <div class="chat-active-copy">
           <h2>${escapeHtml(room.name)}</h2>
-          <p><span class="chat-presence-dot"></span>${escapeHtml(roomTypeLabel(room.roomType))} · ${Number(room.participantCount || 0)} participantes</p>
+          <p>${activePresence}</p>
         </div>
         <button class="chat-info-button" type="button" aria-label="Informações da conversa" title="${escapeHtml(room.description || roomTypeLabel(room.roomType))}"><img src="${icon('info')}" alt=""></button>
       </header>
@@ -521,6 +552,9 @@ export class ChatWorkspace {
     const canEdit = message.isMine && !message.isDeleted;
     const canDelete = !message.isDeleted && (message.isMine || this.mode === 'admin');
     const canReport = !message.isDeleted && !message.isMine && this.mode === 'student';
+    const receiptStatus = ['SENT', 'DELIVERED', 'READ'].includes(message.deliveryStatus) ? message.deliveryStatus : 'SENT';
+    const receiptCount = receiptStatus === 'READ' ? Number(message.readCount || 0) : Number(message.deliveredCount || 0);
+    const receiptLabel = deliveryLabel(receiptStatus, receiptCount);
     return `
       <article class="chat-message ${message.isMine ? 'is-mine' : ''} ${message.isDeleted ? 'is-deleted' : ''}" data-message-id="${escapeHtml(message.messageId)}">
         <div class="chat-message-avatar">${avatar}</div>
@@ -530,6 +564,11 @@ export class ChatWorkspace {
             ${message.sender?.type === 'ADMIN' ? '<span class="chat-trainer-badge">Formador</span>' : ''}
             <time>${escapeHtml(chatTime(message.createdAt))}</time>
             ${message.editedAt && !message.isDeleted ? '<small>Editada</small>' : ''}
+            ${message.isMine && !message.isDeleted ? `
+              <span class="chat-delivery-status is-${receiptStatus.toLowerCase()}" title="${escapeHtml(receiptLabel)}" aria-label="${escapeHtml(receiptLabel)}">
+                <img src="${icon(receiptStatus === 'SENT' ? 'check' : 'check-check')}" alt=""><small>${escapeHtml(receiptLabel)}</small>
+              </span>
+            ` : ''}
             ${this.mode === 'admin' && message.reportCount ? `<span class="chat-report-badge"><img src="${icon('flag', 'b42318')}" alt="">${message.reportCount}</span>` : ''}
           </div>
           <div class="chat-message-bubble">
@@ -720,6 +759,7 @@ export class ChatWorkspace {
     if (this.polling || this.destroyed) return;
     this.polling = true;
     try {
+      await this.request('presence', this.activeRoom?.roomId || '');
       if (this.activeRoom) {
         const latest = this.messages.reduce((value, message) => {
           const candidate = message.updatedAt || message.createdAt || '';
@@ -740,11 +780,13 @@ export class ChatWorkspace {
             const list = this.mount.querySelector('.chat-message-list');
             if (list) list.innerHTML = this.messagesTemplate();
             if (wasNearBottom) this.scrollToBottom();
+            this.markActiveRoomRead(this.activeRoom.roomId);
           }
         }
       }
       this.pollCount += 1;
       if (this.pollCount % 3 === 0) await this.loadRooms({ quiet: true });
+      if (this.mode === 'student' && this.pollCount % 6 === 0) await this.loadContacts({ quiet: true });
     } catch {
       // Uma falha temporária não interrompe a conversa; o ciclo seguinte tenta novamente.
     } finally {
@@ -767,5 +809,17 @@ export class ChatWorkspace {
 
   updateTotalUnread() {
     this.onUnreadChange?.(this.rooms.reduce((sum, room) => sum + Number(room.unreadCount || 0), 0));
+  }
+
+  async markActiveRoomRead(roomId) {
+    if (!roomId || document.visibilityState !== 'visible') return;
+    try {
+      await this.request('read', roomId);
+      const room = this.rooms.find((item) => item.roomId === roomId);
+      if (room) room.unreadCount = 0;
+      this.updateTotalUnread();
+    } catch {
+      // A próxima atualização volta a tentar sem interromper a conversa.
+    }
   }
 }

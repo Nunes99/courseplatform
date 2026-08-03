@@ -452,7 +452,7 @@ def expire_attempt_if_needed(attempt: dict[str, Any] | None):
             (attempt["attempt_id"],),
         ).fetchone()
         if updated:
-            conn.execute(
+            changed = conn.execute(
                 """
                 update courseplatform.lesson_progress
                 set status = 'TIME_EXCEEDED', evaluation_status = 'TIME_EXCEEDED', updated_at = now()
@@ -2320,6 +2320,37 @@ create unique index if not exists idx_chat_reads_student
   on courseplatform.chat_reads(room_id, student_id) where student_id is not null;
 create unique index if not exists idx_chat_reads_admin
   on courseplatform.chat_reads(room_id, admin_id) where admin_id is not null;
+create table if not exists courseplatform.chat_message_receipts (
+  receipt_id text primary key,
+  message_id text not null references courseplatform.chat_messages(message_id) on delete cascade,
+  actor_type text not null,
+  student_id text references courseplatform.students(student_id) on delete cascade,
+  admin_id text references courseplatform.admins(admin_id) on delete cascade,
+  delivered_at timestamptz not null default now(),
+  read_at timestamptz,
+  updated_at timestamptz not null default now(),
+  check (actor_type in ('STUDENT', 'ADMIN')),
+  check (
+    (actor_type = 'STUDENT' and student_id is not null and admin_id is null)
+    or (actor_type = 'ADMIN' and admin_id is not null and student_id is null)
+  )
+);
+create unique index if not exists idx_chat_receipts_student
+  on courseplatform.chat_message_receipts(message_id, student_id) where student_id is not null;
+create unique index if not exists idx_chat_receipts_admin
+  on courseplatform.chat_message_receipts(message_id, admin_id) where admin_id is not null;
+create table if not exists courseplatform.chat_presence (
+  presence_id text primary key,
+  actor_type text not null,
+  actor_id text not null,
+  current_room_id text,
+  last_seen_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(actor_type, actor_id),
+  check (actor_type in ('STUDENT', 'ADMIN'))
+);
+create index if not exists idx_chat_presence_seen
+  on courseplatform.chat_presence(actor_type, last_seen_at desc);
 create table if not exists courseplatform.chat_message_reports (
   report_id text primary key,
   message_id text not null references courseplatform.chat_messages(message_id) on delete cascade,
@@ -2346,6 +2377,8 @@ create unique index if not exists idx_chat_reports_open_student
 alter table courseplatform.chat_rooms enable row level security;
 alter table courseplatform.chat_messages enable row level security;
 alter table courseplatform.chat_reads enable row level security;
+alter table courseplatform.chat_message_receipts enable row level security;
+alter table courseplatform.chat_presence enable row level security;
 alter table courseplatform.chat_message_reports enable row level security;
 """
 
@@ -3353,11 +3386,24 @@ def recover_admin_access(payload: dict[str, Any]):
 def logout(payload: dict[str, Any]):
     token = payload.get("sessionToken") or payload.get("adminToken")
     if token:
+        prepare_chat_feature_schema()
         with connection() as conn:
+            session = conn.execute(
+                "select subject_id from courseplatform.sessions where session_token = %s",
+                (hash_secret(token),),
+            ).fetchone() or {}
             conn.execute(
                 "update courseplatform.sessions set active = false, revoked_at = now() where session_token = %s",
                 (hash_secret(token),),
             )
+            subject_id = str_value(session.get("subject_id"))
+            actor_type = "ADMIN" if subject_id.startswith("ADMIN:") else "STUDENT"
+            actor_id = subject_id.replace("ADMIN:", "", 1) if actor_type == "ADMIN" else subject_id
+            if actor_id:
+                conn.execute(
+                    "delete from courseplatform.chat_presence where actor_type = %s and actor_id = %s",
+                    (actor_type, actor_id),
+                )
             conn.commit()
     return success({"loggedOut": True})
 
@@ -4686,6 +4732,160 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
             "certificate_profile": profile,
         },
     }
+
+
+def admin_platform_statistics(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    prepare_chat_feature_schema()
+    prepare_notification_feature_schema()
+    with connection() as conn:
+        summary = conn.execute(
+            """
+            select
+              (select count(*) from courseplatform.students where status = 'ACTIVE') as active_students,
+              (select count(*) from courseplatform.chat_presence p
+               join courseplatform.students s on s.student_id = p.actor_id and s.status = 'ACTIVE'
+               where p.actor_type = 'STUDENT' and p.last_seen_at > now() - interval '75 seconds') as online_students,
+              (select count(*) from courseplatform.courses where status = 'ACTIVE') as active_courses,
+              (select count(*) from courseplatform.enrollments where status in ('ACTIVE', 'COMPLETED')) as enrollments,
+              (select count(*) from courseplatform.attempts where status in ('SUBMITTED', 'UNDER_REVIEW')) as pending_reviews,
+              (select count(*) from courseplatform.certificates where coalesce(status, 'ISSUED') = 'ISSUED') as issued_certificates
+            """
+        ).fetchone() or {}
+        engagement = conn.execute(
+            """
+            select
+              (select count(*) from courseplatform.students s
+               where s.status = 'ACTIVE' and (
+                 s.last_login_at >= now() - interval '24 hours'
+                 or exists (select 1 from courseplatform.chat_presence p where p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '24 hours')
+               )) as active_today,
+              (select count(*) from courseplatform.students s
+               where s.status = 'ACTIVE' and (
+                 s.last_login_at >= now() - interval '7 days'
+                 or exists (select 1 from courseplatform.chat_presence p where p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '7 days')
+               )) as active_7_days,
+              (select count(*) from courseplatform.students s
+               where s.status = 'ACTIVE' and (
+                 s.last_login_at >= now() - interval '30 days'
+                 or exists (select 1 from courseplatform.chat_presence p where p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '30 days')
+               )) as active_30_days,
+              (select count(*) from courseplatform.chat_messages
+               where status = 'ACTIVE' and created_at >= now() - interval '7 days') as messages_7_days,
+              (select count(*) from courseplatform.attempts
+               where submitted_at >= now() - interval '30 days') as submissions_30_days,
+              (select count(*) from courseplatform.notifications
+               where created_at >= now() - interval '30 days') as notifications_30_days
+            """
+        ).fetchone() or {}
+        performance = conn.execute(
+            """
+            select
+              coalesce((select avg(progress_percent) from courseplatform.enrollments
+                        where status in ('ACTIVE', 'COMPLETED')), 0) as average_progress,
+              coalesce((select 100.0 * count(*) filter (where status = 'COMPLETED') / nullif(count(*), 0)
+                        from courseplatform.enrollments where status in ('ACTIVE', 'COMPLETED')), 0) as completion_rate,
+              coalesce((select 100.0 * count(*) filter (where status = 'APPROVED') / nullif(count(*), 0)
+                        from courseplatform.attempts
+                        where status in ('APPROVED', 'FAILED', 'CORRECTION_REQUIRED')), 0) as approval_rate
+            """
+        ).fetchone() or {}
+        operations = conn.execute(
+            """
+            select
+              (select count(*) from courseplatform.notification_deliveries where status = 'FAILED') as failed_deliveries,
+              (select count(*) from courseplatform.certificate_requests where status in ('REQUESTED', 'PAYMENT_SUBMITTED')) as pending_certificates,
+              (select count(*) from courseplatform.students where status in ('BLOCKED', 'INACTIVE')) as inactive_students,
+              (select count(*) from courseplatform.attempts where status = 'TIME_EXCEEDED') as expired_attempts,
+              (select count(*) from courseplatform.chat_message_reports where status = 'OPEN') as open_chat_reports
+            """
+        ).fetchone() or {}
+        courses = conn.execute(
+            """
+            with enrollment_stats as (
+              select course_id,
+                     count(*) filter (where status in ('ACTIVE', 'COMPLETED')) as student_count,
+                     count(*) filter (where status = 'COMPLETED') as completed_count,
+                     coalesce(avg(progress_percent) filter (where status in ('ACTIVE', 'COMPLETED')), 0) as average_progress
+              from courseplatform.enrollments group by course_id
+            ), pending_stats as (
+              select l.course_id, count(*) as pending_reviews
+              from courseplatform.attempts a
+              join courseplatform.lessons l on l.lesson_id = a.lesson_id
+              where a.status in ('SUBMITTED', 'UNDER_REVIEW')
+              group by l.course_id
+            )
+            select c.course_id, c.course_code, c.title,
+                   coalesce(e.student_count, 0) as student_count,
+                   coalesce(e.completed_count, 0) as completed_count,
+                   coalesce(e.average_progress, 0) as average_progress,
+                   coalesce(p.pending_reviews, 0) as pending_reviews
+            from courseplatform.courses c
+            left join enrollment_stats e on e.course_id = c.course_id
+            left join pending_stats p on p.course_id = c.course_id
+            where c.status = 'ACTIVE'
+            order by student_count desc, c.title
+            limit 10
+            """
+        ).fetchall()
+        activity = conn.execute(
+            """
+            select day::date as activity_date,
+                   (select count(*) from courseplatform.attempts a
+                    where a.submitted_at >= day and a.submitted_at < day + interval '1 day') as submissions,
+                   (select count(*) from courseplatform.chat_messages m
+                    where m.status = 'ACTIVE' and m.created_at >= day and m.created_at < day + interval '1 day') as messages
+            from generate_series(current_date - interval '6 days', current_date, interval '1 day') day
+            order by day
+            """
+        ).fetchall()
+        conn.commit()
+    numeric = lambda row, key: int(row.get(key) or 0)
+    return success({
+        "summary": {
+            "activeStudents": numeric(summary, "active_students"),
+            "onlineStudents": numeric(summary, "online_students"),
+            "activeCourses": numeric(summary, "active_courses"),
+            "enrollments": numeric(summary, "enrollments"),
+            "pendingReviews": numeric(summary, "pending_reviews"),
+            "issuedCertificates": numeric(summary, "issued_certificates"),
+        },
+        "engagement": {
+            "activeToday": numeric(engagement, "active_today"),
+            "active7Days": numeric(engagement, "active_7_days"),
+            "active30Days": numeric(engagement, "active_30_days"),
+            "messages7Days": numeric(engagement, "messages_7_days"),
+            "submissions30Days": numeric(engagement, "submissions_30_days"),
+            "notifications30Days": numeric(engagement, "notifications_30_days"),
+        },
+        "performance": {
+            "averageProgress": round(float(performance.get("average_progress") or 0), 1),
+            "completionRate": round(float(performance.get("completion_rate") or 0), 1),
+            "approvalRate": round(float(performance.get("approval_rate") or 0), 1),
+        },
+        "operations": {
+            "failedDeliveries": numeric(operations, "failed_deliveries"),
+            "pendingCertificates": numeric(operations, "pending_certificates"),
+            "inactiveStudents": numeric(operations, "inactive_students"),
+            "expiredAttempts": numeric(operations, "expired_attempts"),
+            "openChatReports": numeric(operations, "open_chat_reports"),
+        },
+        "courses": [{
+            "courseId": row.get("course_id") or "",
+            "courseCode": row.get("course_code") or "",
+            "title": row.get("title") or "Curso",
+            "studentCount": int(row.get("student_count") or 0),
+            "completedCount": int(row.get("completed_count") or 0),
+            "averageProgress": round(float(row.get("average_progress") or 0), 1),
+            "pendingReviews": int(row.get("pending_reviews") or 0),
+        } for row in courses],
+        "activity": [{
+            "date": iso(row.get("activity_date")),
+            "submissions": int(row.get("submissions") or 0),
+            "messages": int(row.get("messages") or 0),
+        } for row in activity],
+        "generatedAt": iso(utc_now()),
+    })
 
 
 def admin_list_courses(payload: dict[str, Any]):
@@ -7424,6 +7624,26 @@ def chat_message_body(value: Any) -> str:
     return body
 
 
+def touch_chat_presence(conn, actor: dict[str, Any], room_id: str = "") -> None:
+    conn.execute(
+        """
+        insert into courseplatform.chat_presence
+          (presence_id, actor_type, actor_id, current_room_id, last_seen_at, updated_at)
+        values (%s, %s, %s, %s, now(), now())
+        on conflict (actor_type, actor_id) do update set
+          current_room_id = excluded.current_room_id,
+          last_seen_at = now(),
+          updated_at = now()
+        """,
+        (
+            generate_id("CPR"),
+            actor["type"],
+            actor["id"],
+            str_value(room_id)[:160] or None,
+        ),
+    )
+
+
 def chat_actor_with_conn(conn, payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("adminToken"):
         session = validate_session_with_conn(conn, str_value(payload.get("adminToken")), "ADMIN")
@@ -7436,9 +7656,13 @@ def chat_actor_with_conn(conn, payload: dict[str, Any]) -> dict[str, Any]:
             raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
         if admin.get("role") not in {"OWNER", "ADMIN", "REVIEWER"}:
             raise ApiError("FORBIDDEN", "O seu perfil não possui acesso às conversas.")
-        return {"type": "ADMIN", "id": admin_id, "record": admin}
+        actor = {"type": "ADMIN", "id": admin_id, "record": admin}
+        touch_chat_presence(conn, actor, payload.get("roomId") or payload.get("currentRoomId") or "")
+        return actor
     _, student = student_context_with_conn(conn, payload)
-    return {"type": "STUDENT", "id": student["student_id"], "record": student}
+    actor = {"type": "STUDENT", "id": student["student_id"], "record": student}
+    touch_chat_presence(conn, actor, payload.get("roomId") or payload.get("currentRoomId") or "")
+    return actor
 
 
 def upsert_chat_room(
@@ -7660,7 +7884,13 @@ def chat_message_row(conn, message_id: str) -> dict[str, Any] | None:
                reply.body as reply_body, reply.status as reply_status,
                rs.full_name as reply_student_name, ra.full_name as reply_admin_name,
                (select count(*) from courseplatform.chat_message_reports r
-                where r.message_id = m.message_id and r.status = 'OPEN') as report_count
+                where r.message_id = m.message_id and r.status = 'OPEN') as report_count,
+               (select count(*) from courseplatform.chat_message_receipts receipt
+                where receipt.message_id = m.message_id and receipt.delivered_at is not null) as delivered_count,
+               (select count(*) from courseplatform.chat_message_receipts receipt
+                where receipt.message_id = m.message_id and receipt.read_at is not null) as read_count,
+               (select max(receipt.read_at) from courseplatform.chat_message_receipts receipt
+                where receipt.message_id = m.message_id) as last_read_at
         from courseplatform.chat_messages m
         left join courseplatform.students s on s.student_id = m.sender_student_id
         left join courseplatform.admins a on a.admin_id = m.sender_admin_id
@@ -7681,6 +7911,9 @@ def public_chat_message(row: dict[str, Any] | None, actor: dict[str, Any]) -> di
     sender_name = row.get("admin_name") if sender_type == "ADMIN" else row.get("student_name")
     reply_name = row.get("reply_admin_name") or row.get("reply_student_name") or "Participante"
     deleted = row.get("status") in {"DELETED", "MODERATED"}
+    delivered_count = int(row.get("delivered_count") or 0)
+    read_count = int(row.get("read_count") or 0)
+    delivery_status = "READ" if read_count else "DELIVERED" if delivered_count else "SENT"
     return {
         "messageId": row.get("message_id"),
         "roomId": row.get("room_id"),
@@ -7702,13 +7935,97 @@ def public_chat_message(row: dict[str, Any] | None, actor: dict[str, Any]) -> di
             "body": "Mensagem removida" if row.get("reply_status") in {"DELETED", "MODERATED"} else row.get("reply_body") or "",
         } if row.get("reply_to_message_id") else None,
         "reportCount": int(row.get("report_count") or 0),
+        "deliveryStatus": delivery_status,
+        "deliveredCount": delivered_count,
+        "readCount": read_count,
+        "lastReadAt": iso(row.get("last_read_at")),
         "createdAt": iso(row.get("created_at")),
         "editedAt": iso(row.get("edited_at")),
         "updatedAt": iso(row.get("updated_at")),
     }
 
 
+def record_chat_message_receipts(
+    conn,
+    message_ids: list[str],
+    actor: dict[str, Any],
+    *,
+    mark_read: bool = False,
+) -> None:
+    if not message_ids:
+        return
+    rows = conn.execute(
+        """
+        select message_id, sender_type, sender_student_id, sender_admin_id
+        from courseplatform.chat_messages
+        where message_id = any(%s)
+        """,
+        (message_ids,),
+    ).fetchall()
+    for row in rows:
+        sender_id = row.get("sender_student_id") if row.get("sender_type") == "STUDENT" else row.get("sender_admin_id")
+        if row.get("sender_type") == actor["type"] and sender_id == actor["id"]:
+            continue
+        if actor["type"] == "STUDENT":
+            changed = conn.execute(
+                """
+                insert into courseplatform.chat_message_receipts
+                  (receipt_id, message_id, actor_type, student_id, delivered_at, read_at, updated_at)
+                values (%s, %s, 'STUDENT', %s, now(), %s, now())
+                on conflict (message_id, student_id) where student_id is not null do update set
+                  delivered_at = coalesce(courseplatform.chat_message_receipts.delivered_at, now()),
+                  read_at = case when %s then coalesce(courseplatform.chat_message_receipts.read_at, now())
+                                 else courseplatform.chat_message_receipts.read_at end,
+                  updated_at = now()
+                where %s and courseplatform.chat_message_receipts.read_at is null
+                returning message_id
+                """,
+                (
+                    generate_id("CRC"), row["message_id"], actor["id"],
+                    bool(mark_read) and utc_now() or None, bool(mark_read), bool(mark_read),
+                ),
+            ).fetchone()
+        else:
+            changed = conn.execute(
+                """
+                insert into courseplatform.chat_message_receipts
+                  (receipt_id, message_id, actor_type, admin_id, delivered_at, read_at, updated_at)
+                values (%s, %s, 'ADMIN', %s, now(), %s, now())
+                on conflict (message_id, admin_id) where admin_id is not null do update set
+                  delivered_at = coalesce(courseplatform.chat_message_receipts.delivered_at, now()),
+                  read_at = case when %s then coalesce(courseplatform.chat_message_receipts.read_at, now())
+                                 else courseplatform.chat_message_receipts.read_at end,
+                  updated_at = now()
+                where %s and courseplatform.chat_message_receipts.read_at is null
+                returning message_id
+                """,
+                (
+                    generate_id("CRC"), row["message_id"], actor["id"],
+                    bool(mark_read) and utc_now() or None, bool(mark_read), bool(mark_read),
+                ),
+            ).fetchone()
+        if changed:
+            conn.execute(
+                "update courseplatform.chat_messages set updated_at = now() where message_id = %s",
+                (row["message_id"],),
+            )
+
+
 def mark_chat_room_read_with_conn(conn, room_id: str, actor: dict[str, Any]) -> None:
+    message_rows = conn.execute(
+        """
+        select message_id from courseplatform.chat_messages
+        where room_id = %s and status = 'ACTIVE'
+        order by created_at desc limit 200
+        """,
+        (room_id,),
+    ).fetchall()
+    record_chat_message_receipts(
+        conn,
+        [row["message_id"] for row in message_rows],
+        actor,
+        mark_read=True,
+    )
     if actor["type"] == "STUDENT":
         conn.execute(
             """
@@ -7815,9 +8132,13 @@ def public_chat_room(
         )
         peer = conn.execute(
             """
-            select public_student_id, full_name, profile_photo_url, organization
-            from courseplatform.students
-            where student_id = %s and status = 'ACTIVE'
+            select s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
+                   presence.last_seen_at,
+                   coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
+            from courseplatform.students s
+            left join courseplatform.chat_presence presence
+              on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
+            where s.student_id = %s and s.status = 'ACTIVE'
             """,
             (peer_id,),
         ).fetchone() or {}
@@ -7827,13 +8148,38 @@ def public_chat_room(
             "fullName": peer.get("full_name") or "Colega de curso",
             "profilePhotoUrl": peer.get("profile_photo_url") or "",
             "organization": peer.get("organization") or "",
+            "isOnline": bool(peer.get("is_online")),
+            "lastSeenAt": iso(peer.get("last_seen_at")),
         }
     if room.get("room_type") == "SUPPORT" and actor["type"] == "ADMIN":
         owner = conn.execute(
-            "select full_name from courseplatform.students where student_id = %s",
+            """
+            select s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
+                   presence.last_seen_at,
+                   coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
+            from courseplatform.students s
+            left join courseplatform.chat_presence presence
+              on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
+            where s.student_id = %s
+            """,
             (room.get("owner_student_id"),),
         ).fetchone() or {}
         display_name = owner.get("full_name") or "Apoio ao estudante"
+        peer_payload = {
+            "publicStudentId": owner.get("public_student_id") or "",
+            "fullName": owner.get("full_name") or "Estudante",
+            "profilePhotoUrl": owner.get("profile_photo_url") or "",
+            "organization": owner.get("organization") or "",
+            "isOnline": bool(owner.get("is_online")),
+            "lastSeenAt": iso(owner.get("last_seen_at")),
+        }
+    online = conn.execute(
+        """
+        select count(*) as count from courseplatform.chat_presence
+        where current_room_id = %s and last_seen_at > now() - interval '75 seconds'
+        """,
+        (room["room_id"],),
+    ).fetchone() or {}
     return {
         "roomId": room.get("room_id"),
         "roomType": room.get("room_type"),
@@ -7842,6 +8188,7 @@ def public_chat_room(
         "courseId": room.get("course_id") or "",
         "groupId": room.get("group_id") or "",
         "peer": peer_payload,
+        "onlineCount": int(online.get("count") or 0),
         "participantCount": chat_room_participant_count(conn, room, active_admin_count),
         "unreadCount": int(unread.get("count") or 0),
         "lastMessage": public_chat_message(chat_message_row(conn, last_message["message_id"]), actor) if last_message else None,
@@ -7860,7 +8207,9 @@ def chat_list_contacts(payload: dict[str, Any]):
             select peer.student_id, peer.public_student_id, peer.full_name,
                    peer.profile_photo_url, peer.organization,
                    c.course_id, c.title,
-                   direct_room.room_id
+                   direct_room.room_id,
+                   presence.last_seen_at,
+                   coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
             from courseplatform.enrollments mine
             join courseplatform.enrollments shared
               on shared.course_id = mine.course_id
@@ -7877,6 +8226,8 @@ def chat_list_contacts(payload: dict[str, Any]):
              and direct_room.status = 'ACTIVE'
              and direct_room.direct_student_one_id = least(mine.student_id, peer.student_id)
              and direct_room.direct_student_two_id = greatest(mine.student_id, peer.student_id)
+            left join courseplatform.chat_presence presence
+              on presence.actor_type = 'STUDENT' and presence.actor_id = peer.student_id
             where mine.student_id = %s
               and mine.status in ('ACTIVE', 'COMPLETED')
             order by peer.full_name, c.title
@@ -7891,6 +8242,8 @@ def chat_list_contacts(payload: dict[str, Any]):
                 "profilePhotoUrl": row.get("profile_photo_url") or "",
                 "organization": row.get("organization") or "",
                 "roomId": row.get("room_id") or "",
+                "isOnline": bool(row.get("is_online")),
+                "lastSeenAt": iso(row.get("last_seen_at")),
                 "sharedCourses": [],
             })
             course = {"courseId": row.get("course_id") or "", "title": row.get("title") or "Curso"}
@@ -7958,6 +8311,18 @@ def chat_start_direct(payload: dict[str, Any]):
     return success({"room": room_payload})
 
 
+def chat_presence_heartbeat(payload: dict[str, Any]):
+    prepare_chat_feature_schema()
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        conn.commit()
+    return success({
+        "online": True,
+        "actorType": actor["type"],
+        "capturedAt": iso(utc_now()),
+    })
+
+
 def chat_list_rooms(payload: dict[str, Any]):
     prepare_chat_feature_schema()
     with connection() as conn:
@@ -8022,8 +8387,9 @@ def chat_list_messages(payload: dict[str, Any]):
                 (room["room_id"], limit),
             ).fetchall()
             rows.reverse()
-        messages = [public_chat_message(chat_message_row(conn, row["message_id"]), actor) for row in rows]
-        mark_chat_room_read_with_conn(conn, room["room_id"], actor)
+        message_ids = [row["message_id"] for row in rows]
+        record_chat_message_receipts(conn, message_ids, actor)
+        messages = [public_chat_message(chat_message_row(conn, message_id), actor) for message_id in message_ids]
         room_payload = public_chat_room(conn, room, actor)
         conn.commit()
     return success({"room": room_payload, "messages": messages})
@@ -8293,6 +8659,7 @@ ACTIONS = {
     "getChatRooms": chat_list_rooms,
     "getChatContacts": chat_list_contacts,
     "startDirectChat": chat_start_direct,
+    "updatePresence": chat_presence_heartbeat,
     "getChatMessages": chat_list_messages,
     "sendChatMessage": chat_send_message,
     "editChatMessage": chat_edit_message,
@@ -8311,6 +8678,7 @@ ACTIONS = {
     "deleteUploadedFile": delete_uploaded_file,
     "submitAttempt": submit_attempt,
     "getMyCertificate": my_certificate,
+    "adminGetPlatformStatistics": admin_platform_statistics,
     "adminListCourses": admin_list_courses,
     "adminGetCourseStructure": admin_course_structure,
     "adminListGroups": admin_list_groups,
@@ -8334,6 +8702,7 @@ ACTIONS = {
     "adminUploadCertificateAsset": admin_upload_certificate_asset,
     "adminListNotifications": admin_list_notifications,
     "adminListChatRooms": chat_list_rooms,
+    "adminUpdatePresence": chat_presence_heartbeat,
     "adminGetChatMessages": chat_list_messages,
     "adminSendChatMessage": chat_send_message,
     "adminEditChatMessage": chat_edit_message,

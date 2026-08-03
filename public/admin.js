@@ -59,6 +59,7 @@ let studentSearchTimer;
 let courseSearchTimer;
 const state = {
   admin: null,
+  statistics: null,
   pending: [],
   submissionFilters: {
     status: 'ALL',
@@ -105,6 +106,7 @@ const state = {
 };
 
 let activeAdminChatWorkspace = null;
+let adminPresencePollId = null;
 
 initialize();
 
@@ -182,7 +184,7 @@ async function initialize() {
       state.admin = result.admin;
       renderAdminShell();
       warmAdminCache();
-      loadPending();
+      loadPlatformStatistics();
     } catch (error) {
       handleAdminError(error);
     }
@@ -265,7 +267,7 @@ async function login(event) {
     adminIdentity.textContent = `${result.admin.fullName} · ${result.admin.role}`;
     renderAdminShell();
     warmAdminCache();
-    await loadPending();
+    await loadPlatformStatistics();
   } catch (error) {
     if (error instanceof ApiError && error.code === 'INVALID_ADMIN_CREDENTIALS') {
       errorBox.innerHTML = `
@@ -377,6 +379,8 @@ function renderAdminRecoveryResult(overlay, result, email) {
 }
 
 async function logout() {
+  window.clearInterval(adminPresencePollId);
+  adminPresencePollId = null;
   activeAdminChatWorkspace?.destroy();
   activeAdminChatWorkspace = null;
   try {
@@ -385,6 +389,7 @@ async function logout() {
     sessionStorage.removeItem('courseAdminToken');
   }
   state.admin = null;
+  state.statistics = null;
   state.staff = [];
   renderAdminLogin();
 }
@@ -419,7 +424,11 @@ function renderAdminShell() {
           ${brandSymbolTemplate('admin-sidebar-symbol')}
           <h2>Gestão da Summer School</h2>
         </div>
-        <button class="admin-nav is-active" data-admin-view="pending" aria-label="Submissões" title="Submissões">
+        <button class="admin-nav is-active" data-admin-view="overview" aria-label="Visão geral" title="Visão geral">
+          <img src="${iconUrl('classroom', blueIcon)}" alt="">
+          <span>Visão geral</span>
+        </button>
+        <button class="admin-nav" data-admin-view="pending" aria-label="Submissões" title="Submissões">
           <img src="${iconUrl('inbox', blueIcon)}" alt="">
           <span>Submissões</span>
         </button>
@@ -495,7 +504,9 @@ function renderAdminShell() {
       adminMobileMenuButton?.setAttribute('aria-expanded', 'false');
       setActiveAdminView(button.dataset.adminView);
 
-      if (button.dataset.adminView === 'students') {
+      if (button.dataset.adminView === 'overview') {
+        loadPlatformStatistics();
+      } else if (button.dataset.adminView === 'students') {
         loadStudents();
       } else if (button.dataset.adminView === 'notifications') {
         loadNotificationManagement();
@@ -524,7 +535,18 @@ function renderAdminShell() {
     });
   });
   root.querySelector('[data-admin-logout]')?.addEventListener('click', logout);
+  startAdminPresenceHeartbeat();
   api.adminChatRooms().then((result) => updateAdminChatUnread(result.unreadCount)).catch(() => {});
+}
+
+function startAdminPresenceHeartbeat() {
+  window.clearInterval(adminPresencePollId);
+  const heartbeat = () => {
+    if (document.hidden || !api?.hasAdminSession()) return;
+    api.adminUpdatePresence(activeAdminChatWorkspace?.activeRoom?.roomId || '').catch(() => {});
+  };
+  heartbeat();
+  adminPresencePollId = window.setInterval(heartbeat, 30000);
 }
 
 function setActiveAdminView(view) {
@@ -543,6 +565,138 @@ function updateAdminChatUnread(unreadCount) {
     badge.hidden = count === 0;
     badge.textContent = String(Math.min(count, 99));
   });
+}
+
+async function loadPlatformStatistics(options = {}) {
+  const adminMain = document.querySelector('#adminMain');
+  if (!adminMain) return;
+  adminMain.innerHTML = loadingTemplate('A preparar os indicadores da plataforma...');
+  try {
+    state.statistics = await api.adminPlatformStatistics(options);
+    renderPlatformStatistics();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+function statisticsMetric(iconName, label, value, note = '', tone = '') {
+  return `
+    <article class="platform-stat-card ${tone ? `is-${tone}` : ''}">
+      <span class="platform-stat-icon"><img src="${iconUrl(iconName, goldIcon)}" alt=""></span>
+      <div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong><small>${escapeHtml(note)}</small></div>
+    </article>
+  `;
+}
+
+function renderPlatformStatistics() {
+  const main = document.querySelector('#adminMain');
+  if (!main) return;
+  const data = state.statistics || {};
+  const summary = data.summary || {};
+  const engagement = data.engagement || {};
+  const performance = data.performance || {};
+  const operations = data.operations || {};
+  const courses = Array.isArray(data.courses) ? data.courses : [];
+  const activity = Array.isArray(data.activity) ? data.activity : [];
+  const maximumActivity = Math.max(1, ...activity.flatMap((item) => [Number(item.messages || 0), Number(item.submissions || 0)]));
+  const operationalItems = [
+    ['Falhas de envio', operations.failedDeliveries, 'triangle-alert', 'Notificações externas que precisam de nova tentativa.'],
+    ['Certificados pendentes', operations.pendingCertificates, 'award', 'Pedidos aguardando análise ou confirmação.'],
+    ['Relatos no chat', operations.openChatReports, 'flag', 'Mensagens denunciadas aguardando moderação.'],
+    ['Prazos excedidos', operations.expiredAttempts, 'clock-alert', 'Tentativas cujo tempo terminou.'],
+    ['Contas inativas', operations.inactiveStudents, 'user-round-x', 'Estudantes bloqueados ou inativos.']
+  ];
+  main.innerHTML = `
+    <section class="admin-page-heading platform-statistics-heading">
+      <div>
+        <p class="eyebrow">Visão operacional</p>
+        <h1>Indicadores da plataforma</h1>
+        <p>Acompanhe participação, desempenho académico e pontos que exigem atenção.</p>
+      </div>
+      <button class="button button-secondary button-small" type="button" id="refreshPlatformStatistics">
+        <img src="${iconUrl('refresh-cw', blueIcon)}" alt="">Atualizar
+      </button>
+    </section>
+
+    <section class="platform-stat-grid" aria-label="Indicadores principais">
+      ${statisticsMetric('users', 'Estudantes ativos', Number(summary.activeStudents || 0), `${Number(engagement.active30Days || 0)} ativos nos últimos 30 dias`)}
+      ${statisticsMetric('radio', 'Online agora', Number(summary.onlineStudents || 0), 'Presença atualizada em tempo real', 'online')}
+      ${statisticsMetric('book-open', 'Cursos ativos', Number(summary.activeCourses || 0), `${Number(summary.enrollments || 0)} matrículas ativas`)}
+      ${statisticsMetric('clipboard-check', 'Avaliações pendentes', Number(summary.pendingReviews || 0), 'Submissões por analisar', Number(summary.pendingReviews || 0) ? 'attention' : '')}
+      ${statisticsMetric('award', 'Certificados emitidos', Number(summary.issuedCertificates || 0), `${Number(operations.pendingCertificates || 0)} pedidos pendentes`)}
+      ${statisticsMetric('message-square', 'Mensagens em 7 dias', Number(engagement.messages7Days || 0), 'Comunicação interna da plataforma')}
+    </section>
+
+    <section class="platform-stat-layout">
+      <article class="admin-content-panel platform-performance-panel">
+        <div class="platform-panel-heading"><div><p class="eyebrow">Resultados</p><h2>Desempenho académico</h2></div></div>
+        ${[
+          ['Progresso médio', performance.averageProgress],
+          ['Taxa de conclusão', performance.completionRate],
+          ['Taxa de aprovação', performance.approvalRate]
+        ].map(([label, value]) => `
+          <div class="platform-progress-row">
+            <div><span>${escapeHtml(label)}</span><strong>${Number(value || 0).toFixed(1)}%</strong></div>
+            <span class="platform-progress-track"><i style="width:${Math.max(0, Math.min(100, Number(value || 0)))}%"></i></span>
+          </div>
+        `).join('')}
+        <div class="platform-engagement-grid">
+          <div><span>Ativos hoje</span><strong>${Number(engagement.activeToday || 0)}</strong></div>
+          <div><span>Ativos em 7 dias</span><strong>${Number(engagement.active7Days || 0)}</strong></div>
+          <div><span>Submissões em 30 dias</span><strong>${Number(engagement.submissions30Days || 0)}</strong></div>
+          <div><span>Notificações em 30 dias</span><strong>${Number(engagement.notifications30Days || 0)}</strong></div>
+        </div>
+      </article>
+
+      <article class="admin-content-panel platform-activity-panel">
+        <div class="platform-panel-heading">
+          <div><p class="eyebrow">Últimos 7 dias</p><h2>Atividade diária</h2></div>
+          <div class="platform-chart-legend"><span class="is-messages">Mensagens</span><span class="is-submissions">Submissões</span></div>
+        </div>
+        <div class="platform-activity-chart" role="img" aria-label="Mensagens e submissões dos últimos sete dias">
+          ${activity.map((item) => {
+            const date = new Date(item.date);
+            const label = Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('pt-PT', { weekday: 'short' }).format(date).replace('.', '');
+            const messageHeight = Math.max(Number(item.messages || 0) ? 8 : 2, Number(item.messages || 0) / maximumActivity * 100);
+            const submissionHeight = Math.max(Number(item.submissions || 0) ? 8 : 2, Number(item.submissions || 0) / maximumActivity * 100);
+            return `<div class="platform-activity-day"><div><i class="is-messages" style="height:${messageHeight}%" title="${Number(item.messages || 0)} mensagens"></i><i class="is-submissions" style="height:${submissionHeight}%" title="${Number(item.submissions || 0)} submissões"></i></div><span>${escapeHtml(label)}</span></div>`;
+          }).join('') || '<div class="empty-note">Ainda não existem dados de atividade.</div>'}
+        </div>
+      </article>
+    </section>
+
+    <section class="admin-content-panel platform-operations-panel">
+      <div class="platform-panel-heading"><div><p class="eyebrow">Atenção operacional</p><h2>Situações a acompanhar</h2></div></div>
+      <div class="platform-operation-grid">
+        ${operationalItems.map(([label, value, itemIcon, description]) => `
+          <article class="platform-operation-item ${Number(value || 0) ? 'has-alert' : 'is-clear'}">
+            <span><img src="${iconUrl(Number(value || 0) ? itemIcon : 'circle-check', Number(value || 0) ? 'c9a55b' : '168764')}" alt=""></span>
+            <div><strong>${Number(value || 0)}</strong><b>${escapeHtml(label)}</b><small>${escapeHtml(Number(value || 0) ? description : 'Sem ocorrências pendentes.')}</small></div>
+          </article>
+        `).join('')}
+      </div>
+    </section>
+
+    <section class="admin-content-panel platform-course-panel">
+      <div class="platform-panel-heading"><div><p class="eyebrow">Cursos</p><h2>Desempenho por curso</h2></div><small>Atualizado ${escapeHtml(formatDate(data.generatedAt || new Date().toISOString(), true))}</small></div>
+      <div class="table-scroll">
+        <table class="platform-course-table">
+          <thead><tr><th>Curso</th><th>Estudantes</th><th>Concluíram</th><th>Progresso médio</th><th>Pendentes</th></tr></thead>
+          <tbody>${courses.map((course) => `
+            <tr>
+              <td><strong>${escapeHtml(course.title)}</strong><small>${escapeHtml(course.courseCode || '')}</small></td>
+              <td>${Number(course.studentCount || 0)}</td>
+              <td>${Number(course.completedCount || 0)}</td>
+              <td><span class="platform-table-progress"><i style="width:${Math.max(0, Math.min(100, Number(course.averageProgress || 0)))}%"></i></span><b>${Number(course.averageProgress || 0).toFixed(1)}%</b></td>
+              <td><span class="status-pill ${Number(course.pendingReviews || 0) ? 'status-pending' : 'status-approved'}">${Number(course.pendingReviews || 0)}</span></td>
+            </tr>
+          `).join('') || '<tr><td colspan="5"><div class="empty-note">Ainda não existem cursos ativos.</div></td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+  main.querySelector('#refreshPlatformStatistics')?.addEventListener('click', () => loadPlatformStatistics({ force: true }));
+  reportHeight();
 }
 
 async function renderAdminChat() {
