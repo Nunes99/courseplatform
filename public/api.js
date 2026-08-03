@@ -236,6 +236,38 @@ export class CoursePlatformApi {
     });
   }
 
+  chatRooms() {
+    return this.studentRequest('getChatRooms');
+  }
+
+  chatMessages(roomId, options = {}) {
+    return this.studentRequest('getChatMessages', {
+      roomId,
+      limit: options.limit || 80,
+      since: options.since || ''
+    });
+  }
+
+  sendChatMessage(roomId, body, replyToMessageId = '') {
+    return this.studentRequest('sendChatMessage', { roomId, body, replyToMessageId });
+  }
+
+  editChatMessage(messageId, body) {
+    return this.studentRequest('editChatMessage', { messageId, body });
+  }
+
+  deleteChatMessage(messageId) {
+    return this.studentRequest('deleteChatMessage', { messageId });
+  }
+
+  markChatRoomRead(roomId) {
+    return this.studentRequest('markChatRoomRead', { roomId });
+  }
+
+  reportChatMessage(messageId, reason) {
+    return this.studentRequest('reportChatMessage', { messageId, reason });
+  }
+
   async changeMyAccessCode(currentAccessCode, newAccessCode) {
     const result = await this.studentRequest('changeMyAccessCode', {
       currentAccessCode,
@@ -576,6 +608,34 @@ export class CoursePlatformApi {
 
   adminCreateNotification(payload) {
     return this.mutateAdmin('adminCreateNotification', payload);
+  }
+
+  adminChatRooms() {
+    return this.adminRequest('adminListChatRooms');
+  }
+
+  adminChatMessages(roomId, options = {}) {
+    return this.adminRequest('adminGetChatMessages', {
+      roomId,
+      limit: options.limit || 80,
+      since: options.since || ''
+    });
+  }
+
+  adminSendChatMessage(roomId, body, replyToMessageId = '') {
+    return this.adminRequest('adminSendChatMessage', { roomId, body, replyToMessageId });
+  }
+
+  adminEditChatMessage(messageId, body) {
+    return this.adminRequest('adminEditChatMessage', { messageId, body });
+  }
+
+  adminDeleteChatMessage(messageId) {
+    return this.adminRequest('adminDeleteChatMessage', { messageId });
+  }
+
+  adminMarkChatRoomRead(roomId) {
+    return this.adminRequest('adminMarkChatRoomRead', { roomId });
   }
 
   adminSaveNotificationTemplate(notificationTemplate) {

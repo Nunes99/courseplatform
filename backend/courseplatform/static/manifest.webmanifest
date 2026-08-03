@@ -2,7 +2,7 @@
   "id": "./",
   "name": "LMTWEBNAIRS Summer School",
   "short_name": "Summer School",
-  "description": "Área do estudante, aulas, avaliações, notificações e certificados.",
+  "description": "Área do estudante, aulas, mensagens, avaliações, notificações e certificados.",
   "lang": "pt-PT",
   "dir": "ltr",
   "start_url": "./#/",

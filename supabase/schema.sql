@@ -171,6 +171,74 @@ create table if not exists courseplatform.group_members (
   unique(group_id, student_id)
 );
 
+create table if not exists courseplatform.chat_rooms (
+  room_id text primary key,
+  room_key text not null unique,
+  room_type text not null,
+  name text not null,
+  description text,
+  course_id text references courseplatform.courses(course_id) on delete cascade,
+  group_id text references courseplatform.groups(group_id) on delete cascade,
+  owner_student_id text references courseplatform.students(student_id) on delete cascade,
+  created_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
+  status text not null default 'ACTIVE',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (room_type in ('COMMUNITY', 'COURSE', 'GROUP', 'SUPPORT'))
+);
+
+create table if not exists courseplatform.chat_messages (
+  message_id text primary key,
+  room_id text not null references courseplatform.chat_rooms(room_id) on delete cascade,
+  sender_type text not null,
+  sender_student_id text references courseplatform.students(student_id) on delete set null,
+  sender_admin_id text references courseplatform.admins(admin_id) on delete set null,
+  body text not null,
+  reply_to_message_id text references courseplatform.chat_messages(message_id) on delete set null,
+  status text not null default 'ACTIVE',
+  edited_at timestamptz,
+  deleted_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (sender_type in ('STUDENT', 'ADMIN')),
+  check (
+    (sender_type = 'STUDENT' and sender_student_id is not null and sender_admin_id is null)
+    or (sender_type = 'ADMIN' and sender_admin_id is not null and sender_student_id is null)
+  )
+);
+
+create table if not exists courseplatform.chat_reads (
+  read_id text primary key,
+  room_id text not null references courseplatform.chat_rooms(room_id) on delete cascade,
+  actor_type text not null,
+  student_id text references courseplatform.students(student_id) on delete cascade,
+  admin_id text references courseplatform.admins(admin_id) on delete cascade,
+  last_read_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (actor_type in ('STUDENT', 'ADMIN')),
+  check (
+    (actor_type = 'STUDENT' and student_id is not null and admin_id is null)
+    or (actor_type = 'ADMIN' and admin_id is not null and student_id is null)
+  )
+);
+
+create unique index if not exists idx_chat_reads_student
+  on courseplatform.chat_reads(room_id, student_id) where student_id is not null;
+create unique index if not exists idx_chat_reads_admin
+  on courseplatform.chat_reads(room_id, admin_id) where admin_id is not null;
+
+create table if not exists courseplatform.chat_message_reports (
+  report_id text primary key,
+  message_id text not null references courseplatform.chat_messages(message_id) on delete cascade,
+  reported_by_student_id text references courseplatform.students(student_id) on delete set null,
+  reason text not null,
+  status text not null default 'OPEN',
+  resolved_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
+  resolution_note text,
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
 create table if not exists courseplatform.lesson_progress (
   progress_id text primary key,
   enrollment_id text not null references courseplatform.enrollments(enrollment_id) on delete cascade,
@@ -497,6 +565,12 @@ create index if not exists idx_telegram_link_tokens_student on courseplatform.te
 create index if not exists idx_files_attempt on courseplatform.files(attempt_id, status);
 create index if not exists idx_certificate_requests_student_course on courseplatform.certificate_requests(student_id, course_id, status);
 create index if not exists idx_group_members_group on courseplatform.group_members(group_id, status);
+create index if not exists idx_chat_rooms_context on courseplatform.chat_rooms(room_type, course_id, group_id, status);
+create index if not exists idx_chat_messages_room_created on courseplatform.chat_messages(room_id, created_at desc);
+create index if not exists idx_chat_reports_status on courseplatform.chat_message_reports(status, created_at desc);
+create unique index if not exists idx_chat_reports_open_student
+  on courseplatform.chat_message_reports(message_id, reported_by_student_id)
+  where status = 'OPEN' and reported_by_student_id is not null;
 create index if not exists idx_student_import_email on courseplatform.student_import(email);
 create index if not exists idx_new_credentials_student on courseplatform.new_credentials(student_id, status);
 create index if not exists idx_media_content_course on courseplatform.media_content(course_id, status);
@@ -512,6 +586,10 @@ alter table courseplatform.question_options enable row level security;
 alter table courseplatform.groups enable row level security;
 alter table courseplatform.enrollments enable row level security;
 alter table courseplatform.group_members enable row level security;
+alter table courseplatform.chat_rooms enable row level security;
+alter table courseplatform.chat_messages enable row level security;
+alter table courseplatform.chat_reads enable row level security;
+alter table courseplatform.chat_message_reports enable row level security;
 alter table courseplatform.lesson_progress enable row level security;
 alter table courseplatform.attempts enable row level security;
 alter table courseplatform.answers enable row level security;
@@ -550,6 +628,10 @@ create or replace view public.question_options as select * from courseplatform.q
 create or replace view public.groups as select * from courseplatform.groups;
 create or replace view public.enrollments as select * from courseplatform.enrollments;
 create or replace view public.group_members as select * from courseplatform.group_members;
+create or replace view public.chat_rooms as select * from courseplatform.chat_rooms;
+create or replace view public.chat_messages as select * from courseplatform.chat_messages;
+create or replace view public.chat_reads as select * from courseplatform.chat_reads;
+create or replace view public.chat_message_reports as select * from courseplatform.chat_message_reports;
 create or replace view public.lesson_progress as select * from courseplatform.lesson_progress;
 create or replace view public.attempts as select * from courseplatform.attempts;
 create or replace view public.answers as select * from courseplatform.answers;

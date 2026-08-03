@@ -163,6 +163,7 @@ EVALUATION_STATUSES = {
 ATTEMPT_STATUSES = EVALUATION_STATUSES - {"NOT_STARTED"}
 _ASSESSMENT_SCHEMA_READY = False
 _NOTIFICATION_SCHEMA_READY = False
+_CHAT_SCHEMA_READY = False
 
 
 def progress_access_status(row: dict[str, Any] | None) -> str:
@@ -2254,6 +2255,100 @@ def dispatch_notification_deliveries(notification_ids: list[str]) -> None:
             # Internal notifications are the source of truth; a provider outage
             # must never roll back the administrative transaction.
             continue
+
+
+CHAT_FEATURE_SQL = """
+create table if not exists courseplatform.chat_rooms (
+  room_id text primary key,
+  room_key text not null unique,
+  room_type text not null,
+  name text not null,
+  description text,
+  course_id text references courseplatform.courses(course_id) on delete cascade,
+  group_id text references courseplatform.groups(group_id) on delete cascade,
+  owner_student_id text references courseplatform.students(student_id) on delete cascade,
+  created_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
+  status text not null default 'ACTIVE',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (room_type in ('COMMUNITY', 'COURSE', 'GROUP', 'SUPPORT'))
+);
+create table if not exists courseplatform.chat_messages (
+  message_id text primary key,
+  room_id text not null references courseplatform.chat_rooms(room_id) on delete cascade,
+  sender_type text not null,
+  sender_student_id text references courseplatform.students(student_id) on delete set null,
+  sender_admin_id text references courseplatform.admins(admin_id) on delete set null,
+  body text not null,
+  reply_to_message_id text references courseplatform.chat_messages(message_id) on delete set null,
+  status text not null default 'ACTIVE',
+  edited_at timestamptz,
+  deleted_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (sender_type in ('STUDENT', 'ADMIN')),
+  check (
+    (sender_type = 'STUDENT' and sender_student_id is not null and sender_admin_id is null)
+    or (sender_type = 'ADMIN' and sender_admin_id is not null and sender_student_id is null)
+  )
+);
+create table if not exists courseplatform.chat_reads (
+  read_id text primary key,
+  room_id text not null references courseplatform.chat_rooms(room_id) on delete cascade,
+  actor_type text not null,
+  student_id text references courseplatform.students(student_id) on delete cascade,
+  admin_id text references courseplatform.admins(admin_id) on delete cascade,
+  last_read_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (actor_type in ('STUDENT', 'ADMIN')),
+  check (
+    (actor_type = 'STUDENT' and student_id is not null and admin_id is null)
+    or (actor_type = 'ADMIN' and admin_id is not null and student_id is null)
+  )
+);
+create unique index if not exists idx_chat_reads_student
+  on courseplatform.chat_reads(room_id, student_id) where student_id is not null;
+create unique index if not exists idx_chat_reads_admin
+  on courseplatform.chat_reads(room_id, admin_id) where admin_id is not null;
+create table if not exists courseplatform.chat_message_reports (
+  report_id text primary key,
+  message_id text not null references courseplatform.chat_messages(message_id) on delete cascade,
+  reported_by_student_id text references courseplatform.students(student_id) on delete set null,
+  reason text not null,
+  status text not null default 'OPEN',
+  resolved_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
+  resolution_note text,
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+create index if not exists idx_chat_rooms_context
+  on courseplatform.chat_rooms(room_type, course_id, group_id, status);
+create index if not exists idx_chat_messages_room_created
+  on courseplatform.chat_messages(room_id, created_at desc);
+create index if not exists idx_chat_reports_status
+  on courseplatform.chat_message_reports(status, created_at desc);
+create unique index if not exists idx_chat_reports_open_student
+  on courseplatform.chat_message_reports(message_id, reported_by_student_id)
+  where status = 'OPEN' and reported_by_student_id is not null;
+alter table courseplatform.chat_rooms enable row level security;
+alter table courseplatform.chat_messages enable row level security;
+alter table courseplatform.chat_reads enable row level security;
+alter table courseplatform.chat_message_reports enable row level security;
+"""
+
+
+def ensure_chat_feature_schema(conn) -> None:
+    execute_statements(conn, CHAT_FEATURE_SQL)
+
+
+def prepare_chat_feature_schema() -> None:
+    global _CHAT_SCHEMA_READY
+    if _CHAT_SCHEMA_READY:
+        return
+    with connection() as conn:
+        ensure_chat_feature_schema(conn)
+        conn.commit()
+    _CHAT_SCHEMA_READY = True
 
 
 ASSESSMENT_FEATURE_SQL = """
@@ -7307,6 +7402,663 @@ def admin_retry_notification_deliveries(payload: dict[str, Any]):
     })
 
 
+def chat_message_body(value: Any) -> str:
+    body = str(value or "").replace("\x00", "").strip()
+    if not body:
+        raise ApiError("CHAT_MESSAGE_REQUIRED", "Escreva uma mensagem antes de enviar.")
+    if len(body) > 2000:
+        raise ApiError("CHAT_MESSAGE_TOO_LONG", "A mensagem não pode exceder 2 000 caracteres.")
+    return body
+
+
+def chat_actor_with_conn(conn, payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("adminToken"):
+        session = validate_session_with_conn(conn, str_value(payload.get("adminToken")), "ADMIN")
+        admin_id = str(session["subject_id"]).replace("ADMIN:", "", 1)
+        admin = conn.execute(
+            "select * from courseplatform.admins where admin_id = %s",
+            (admin_id,),
+        ).fetchone()
+        if not admin or admin.get("status") != "ACTIVE":
+            raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
+        if admin.get("role") not in {"OWNER", "ADMIN", "REVIEWER"}:
+            raise ApiError("FORBIDDEN", "O seu perfil não possui acesso às conversas.")
+        return {"type": "ADMIN", "id": admin_id, "record": admin}
+    _, student = student_context_with_conn(conn, payload)
+    return {"type": "STUDENT", "id": student["student_id"], "record": student}
+
+
+def upsert_chat_room(
+    conn,
+    room_key: str,
+    room_type: str,
+    name: str,
+    description: str,
+    *,
+    course_id: str | None = None,
+    group_id: str | None = None,
+    owner_student_id: str | None = None,
+) -> dict[str, Any] | None:
+    return conn.execute(
+        """
+        insert into courseplatform.chat_rooms
+          (room_id, room_key, room_type, name, description, course_id, group_id,
+           owner_student_id, status, created_at, updated_at)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', now(), now())
+        on conflict (room_key) do update set
+          name = excluded.name,
+          description = excluded.description,
+          course_id = excluded.course_id,
+          group_id = excluded.group_id,
+          owner_student_id = excluded.owner_student_id,
+          updated_at = now()
+        where (
+          courseplatform.chat_rooms.name,
+          courseplatform.chat_rooms.description,
+          courseplatform.chat_rooms.course_id,
+          courseplatform.chat_rooms.group_id,
+          courseplatform.chat_rooms.owner_student_id
+        ) is distinct from (
+          excluded.name,
+          excluded.description,
+          excluded.course_id,
+          excluded.group_id,
+          excluded.owner_student_id
+        )
+        returning *
+        """,
+        (
+            generate_id("CRM"), room_key, room_type, name[:160], description[:500],
+            course_id, group_id, owner_student_id,
+        ),
+    ).fetchone()
+
+
+def sync_chat_rooms(conn, actor: dict[str, Any]) -> None:
+    upsert_chat_room(
+        conn,
+        "COMMUNITY",
+        "COMMUNITY",
+        "Comunidade geral",
+        "Espaço comum para estudantes e formadores da plataforma.",
+    )
+    if actor["type"] == "STUDENT":
+        student_id = actor["id"]
+        courses = conn.execute(
+            """
+            select distinct c.course_id, c.title
+            from courseplatform.enrollments e
+            join courseplatform.courses c on c.course_id = e.course_id
+            where e.student_id = %s
+              and e.status in ('ACTIVE', 'COMPLETED')
+              and c.status = 'ACTIVE'
+            order by c.title
+            """,
+            (student_id,),
+        ).fetchall()
+        groups = conn.execute(
+            """
+            select distinct g.group_id, g.name, g.course_id
+            from courseplatform.groups g
+            left join courseplatform.group_members gm
+              on gm.group_id = g.group_id and gm.student_id = %s and gm.status = 'ACTIVE'
+            left join courseplatform.enrollments e
+              on e.group_id = g.group_id and e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED')
+            where g.status = 'ACTIVE' and (gm.group_member_id is not null or e.enrollment_id is not null)
+            order by g.name
+            """,
+            (student_id, student_id),
+        ).fetchall()
+        for course in courses:
+            upsert_chat_room(
+                conn, f"COURSE:{course['course_id']}", "COURSE", course["title"],
+                "Conversa do curso com estudantes e formadores matriculados.",
+                course_id=course["course_id"],
+            )
+        for group in groups:
+            upsert_chat_room(
+                conn, f"GROUP:{group['group_id']}", "GROUP", group["name"],
+                "Canal reservado aos membros deste grupo.",
+                course_id=group.get("course_id"), group_id=group["group_id"],
+            )
+        upsert_chat_room(
+            conn, f"SUPPORT:{student_id}", "SUPPORT", "Apoio com formadores",
+            "Conversa privada entre o estudante e a equipa de formação.",
+            owner_student_id=student_id,
+        )
+        return
+
+    courses = conn.execute(
+        "select course_id, title from courseplatform.courses where status = 'ACTIVE' order by title"
+    ).fetchall()
+    groups = conn.execute(
+        "select group_id, name, course_id from courseplatform.groups where status = 'ACTIVE' order by name"
+    ).fetchall()
+    students_without_support = conn.execute(
+        """
+        select s.student_id
+        from courseplatform.students s
+        where s.status = 'ACTIVE'
+          and not exists (
+            select 1 from courseplatform.chat_rooms r
+            where r.room_key = 'SUPPORT:' || s.student_id
+          )
+        order by s.full_name
+        limit 2000
+        """
+    ).fetchall()
+    for course in courses:
+        upsert_chat_room(
+            conn, f"COURSE:{course['course_id']}", "COURSE", course["title"],
+            "Conversa do curso com estudantes e formadores matriculados.",
+            course_id=course["course_id"],
+        )
+    for group in groups:
+        upsert_chat_room(
+            conn, f"GROUP:{group['group_id']}", "GROUP", group["name"],
+            "Canal reservado aos membros deste grupo.",
+            course_id=group.get("course_id"), group_id=group["group_id"],
+        )
+    for student in students_without_support:
+        upsert_chat_room(
+            conn, f"SUPPORT:{student['student_id']}", "SUPPORT", "Apoio com formadores",
+            "Conversa privada entre o estudante e a equipa de formação.",
+            owner_student_id=student["student_id"],
+        )
+
+
+def student_can_access_chat_room(conn, student_id: str, room: dict[str, Any]) -> bool:
+    room_type = room.get("room_type")
+    if room_type == "COMMUNITY":
+        return True
+    if room_type == "SUPPORT":
+        return room.get("owner_student_id") == student_id
+    if room_type == "COURSE":
+        row = conn.execute(
+            """
+            select 1 from courseplatform.enrollments
+            where student_id = %s and course_id = %s and status in ('ACTIVE', 'COMPLETED')
+            limit 1
+            """,
+            (student_id, room.get("course_id")),
+        ).fetchone()
+        return bool(row)
+    if room_type == "GROUP":
+        row = conn.execute(
+            """
+            select 1
+            from courseplatform.groups g
+            left join courseplatform.group_members gm
+              on gm.group_id = g.group_id and gm.student_id = %s and gm.status = 'ACTIVE'
+            left join courseplatform.enrollments e
+              on e.group_id = g.group_id and e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED')
+            where g.group_id = %s and g.status = 'ACTIVE'
+              and (gm.group_member_id is not null or e.enrollment_id is not null)
+            limit 1
+            """,
+            (student_id, student_id, room.get("group_id")),
+        ).fetchone()
+        return bool(row)
+    return False
+
+
+def accessible_chat_room(conn, room_id: str, actor: dict[str, Any]) -> dict[str, Any]:
+    room = conn.execute(
+        "select * from courseplatform.chat_rooms where room_id = %s and status = 'ACTIVE'",
+        (room_id,),
+    ).fetchone()
+    if not room:
+        raise ApiError("CHAT_ROOM_NOT_FOUND", "A conversa não foi encontrada.")
+    if actor["type"] == "STUDENT" and not student_can_access_chat_room(conn, actor["id"], room):
+        raise ApiError("CHAT_ROOM_FORBIDDEN", "Não possui acesso a esta conversa.")
+    return room
+
+
+def chat_message_row(conn, message_id: str) -> dict[str, Any] | None:
+    return conn.execute(
+        """
+        select m.*,
+               s.full_name as student_name, s.public_student_id, s.profile_photo_url,
+               a.full_name as admin_name, a.role as admin_role,
+               reply.body as reply_body, reply.status as reply_status,
+               rs.full_name as reply_student_name, ra.full_name as reply_admin_name,
+               (select count(*) from courseplatform.chat_message_reports r
+                where r.message_id = m.message_id and r.status = 'OPEN') as report_count
+        from courseplatform.chat_messages m
+        left join courseplatform.students s on s.student_id = m.sender_student_id
+        left join courseplatform.admins a on a.admin_id = m.sender_admin_id
+        left join courseplatform.chat_messages reply on reply.message_id = m.reply_to_message_id
+        left join courseplatform.students rs on rs.student_id = reply.sender_student_id
+        left join courseplatform.admins ra on ra.admin_id = reply.sender_admin_id
+        where m.message_id = %s
+        """,
+        (message_id,),
+    ).fetchone()
+
+
+def public_chat_message(row: dict[str, Any] | None, actor: dict[str, Any]) -> dict[str, Any] | None:
+    if not row:
+        return None
+    sender_type = row.get("sender_type") or "STUDENT"
+    sender_id = row.get("sender_admin_id") if sender_type == "ADMIN" else row.get("sender_student_id")
+    sender_name = row.get("admin_name") if sender_type == "ADMIN" else row.get("student_name")
+    reply_name = row.get("reply_admin_name") or row.get("reply_student_name") or "Participante"
+    deleted = row.get("status") in {"DELETED", "MODERATED"}
+    return {
+        "messageId": row.get("message_id"),
+        "roomId": row.get("room_id"),
+        "body": "" if deleted else row.get("body") or "",
+        "status": row.get("status") or "ACTIVE",
+        "isDeleted": deleted,
+        "isMine": sender_type == actor["type"] and sender_id == actor["id"],
+        "sender": {
+            "type": sender_type,
+            "id": row.get("public_student_id") if sender_type == "STUDENT" else "",
+            "name": sender_name or ("Formador" if sender_type == "ADMIN" else "Estudante"),
+            "publicId": row.get("public_student_id") or "",
+            "role": row.get("admin_role") or "STUDENT",
+            "profilePhotoUrl": row.get("profile_photo_url") or "",
+        },
+        "replyTo": {
+            "messageId": row.get("reply_to_message_id"),
+            "senderName": reply_name,
+            "body": "Mensagem removida" if row.get("reply_status") in {"DELETED", "MODERATED"} else row.get("reply_body") or "",
+        } if row.get("reply_to_message_id") else None,
+        "reportCount": int(row.get("report_count") or 0),
+        "createdAt": iso(row.get("created_at")),
+        "editedAt": iso(row.get("edited_at")),
+        "updatedAt": iso(row.get("updated_at")),
+    }
+
+
+def mark_chat_room_read_with_conn(conn, room_id: str, actor: dict[str, Any]) -> None:
+    if actor["type"] == "STUDENT":
+        conn.execute(
+            """
+            insert into courseplatform.chat_reads
+              (read_id, room_id, actor_type, student_id, last_read_at, updated_at)
+            values (%s, %s, 'STUDENT', %s, now(), now())
+            on conflict (room_id, student_id) where student_id is not null
+            do update set last_read_at = now(), updated_at = now()
+            """,
+            (generate_id("CRD"), room_id, actor["id"]),
+        )
+    else:
+        conn.execute(
+            """
+            insert into courseplatform.chat_reads
+              (read_id, room_id, actor_type, admin_id, last_read_at, updated_at)
+            values (%s, %s, 'ADMIN', %s, now(), now())
+            on conflict (room_id, admin_id) where admin_id is not null
+            do update set last_read_at = now(), updated_at = now()
+            """,
+            (generate_id("CRD"), room_id, actor["id"]),
+        )
+
+
+def chat_room_participant_count(conn, room: dict[str, Any], active_admin_count: int | None = None) -> int:
+    if active_admin_count is None:
+        active_admins = conn.execute(
+            "select count(*) as count from courseplatform.admins where status = 'ACTIVE'"
+        ).fetchone() or {}
+        admin_count = int(active_admins.get("count") or 0)
+    else:
+        admin_count = active_admin_count
+    if room.get("room_type") == "SUPPORT":
+        return 1 + admin_count
+    if room.get("room_type") == "COURSE":
+        row = conn.execute(
+            """
+            select count(distinct student_id) as count from courseplatform.enrollments
+            where course_id = %s and status in ('ACTIVE', 'COMPLETED')
+            """,
+            (room.get("course_id"),),
+        ).fetchone() or {}
+        return int(row.get("count") or 0) + admin_count
+    if room.get("room_type") == "GROUP":
+        row = conn.execute(
+            """
+            select count(distinct student_id) as count
+            from (
+              select student_id from courseplatform.group_members
+              where group_id = %s and status = 'ACTIVE'
+              union
+              select student_id from courseplatform.enrollments
+              where group_id = %s and status in ('ACTIVE', 'COMPLETED')
+            ) members
+            """,
+            (room.get("group_id"), room.get("group_id")),
+        ).fetchone() or {}
+        return int(row.get("count") or 0) + admin_count
+    row = conn.execute(
+        "select count(*) as count from courseplatform.students where status = 'ACTIVE'"
+    ).fetchone() or {}
+    return int(row.get("count") or 0) + admin_count
+
+
+def public_chat_room(
+    conn,
+    room: dict[str, Any],
+    actor: dict[str, Any],
+    active_admin_count: int | None = None,
+) -> dict[str, Any]:
+    actor_column = "student_id" if actor["type"] == "STUDENT" else "admin_id"
+    sender_column = "sender_student_id" if actor["type"] == "STUDENT" else "sender_admin_id"
+    last_message = conn.execute(
+        """
+        select message_id from courseplatform.chat_messages
+        where room_id = %s order by created_at desc limit 1
+        """,
+        (room["room_id"],),
+    ).fetchone()
+    unread = conn.execute(
+        f"""
+        select count(*) as count
+        from courseplatform.chat_messages m
+        where m.room_id = %s
+          and m.status = 'ACTIVE'
+          and m.{sender_column} is distinct from %s
+          and m.created_at > coalesce((
+            select last_read_at from courseplatform.chat_reads
+            where room_id = %s and {actor_column} = %s
+            order by last_read_at desc limit 1
+          ), 'epoch'::timestamptz)
+        """,
+        (room["room_id"], actor["id"], room["room_id"], actor["id"]),
+    ).fetchone() or {}
+    display_name = room.get("name") or "Conversa"
+    if room.get("room_type") == "SUPPORT" and actor["type"] == "ADMIN":
+        owner = conn.execute(
+            "select full_name from courseplatform.students where student_id = %s",
+            (room.get("owner_student_id"),),
+        ).fetchone() or {}
+        display_name = owner.get("full_name") or "Apoio ao estudante"
+    return {
+        "roomId": room.get("room_id"),
+        "roomType": room.get("room_type"),
+        "name": display_name,
+        "description": room.get("description") or "",
+        "courseId": room.get("course_id") or "",
+        "groupId": room.get("group_id") or "",
+        "participantCount": chat_room_participant_count(conn, room, active_admin_count),
+        "unreadCount": int(unread.get("count") or 0),
+        "lastMessage": public_chat_message(chat_message_row(conn, last_message["message_id"]), actor) if last_message else None,
+        "updatedAt": iso(room.get("updated_at")),
+    }
+
+
+def chat_list_rooms(payload: dict[str, Any]):
+    prepare_chat_feature_schema()
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        sync_chat_rooms(conn, actor)
+        rooms = conn.execute(
+            """
+            select r.*,
+                   (select max(m.created_at) from courseplatform.chat_messages m where m.room_id = r.room_id) as last_message_at
+            from courseplatform.chat_rooms r
+            where r.status = 'ACTIVE'
+            order by last_message_at desc nulls last,
+                     case r.room_type when 'COMMUNITY' then 1 when 'GROUP' then 2 when 'COURSE' then 3 else 4 end,
+                     r.name
+            """
+        ).fetchall()
+        if actor["type"] == "STUDENT":
+            rooms = [room for room in rooms if student_can_access_chat_room(conn, actor["id"], room)]
+        active_admins = conn.execute(
+            "select count(*) as count from courseplatform.admins where status = 'ACTIVE'"
+        ).fetchone() or {}
+        active_admin_count = int(active_admins.get("count") or 0)
+        result = [public_chat_room(conn, room, actor, active_admin_count) for room in rooms]
+        conn.commit()
+    return success({
+        "rooms": result,
+        "unreadCount": sum(item["unreadCount"] for item in result),
+        "actor": {
+            "type": actor["type"],
+            "id": actor["record"].get("public_student_id") if actor["type"] == "STUDENT" else "",
+            "name": actor["record"].get("full_name") or "Participante",
+        },
+    })
+
+
+def chat_list_messages(payload: dict[str, Any]):
+    require_fields(payload, ["roomId"])
+    prepare_chat_feature_schema()
+    limit = max(1, min(int_value(payload.get("limit"), 80), 120))
+    since = parse_datetime(payload.get("since")) if payload.get("since") else None
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        room = accessible_chat_room(conn, str_value(payload["roomId"]), actor)
+        if since:
+            rows = conn.execute(
+                """
+                select message_id from courseplatform.chat_messages
+                where room_id = %s and updated_at > %s
+                order by updated_at asc limit %s
+                """,
+                (room["room_id"], since, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                select message_id from courseplatform.chat_messages
+                where room_id = %s
+                order by created_at desc limit %s
+                """,
+                (room["room_id"], limit),
+            ).fetchall()
+            rows.reverse()
+        messages = [public_chat_message(chat_message_row(conn, row["message_id"]), actor) for row in rows]
+        mark_chat_room_read_with_conn(conn, room["room_id"], actor)
+        room_payload = public_chat_room(conn, room, actor)
+        conn.commit()
+    return success({"room": room_payload, "messages": messages})
+
+
+def chat_send_message(payload: dict[str, Any]):
+    require_fields(payload, ["roomId"])
+    body = chat_message_body(payload.get("body"))
+    prepare_chat_feature_schema()
+    prepare_notification_feature_schema()
+    notification_ids: list[str] = []
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        room = accessible_chat_room(conn, str_value(payload["roomId"]), actor)
+        sender_column = "sender_student_id" if actor["type"] == "STUDENT" else "sender_admin_id"
+        recent = conn.execute(
+            f"""
+            select count(*) as count from courseplatform.chat_messages
+            where {sender_column} = %s and created_at > now() - interval '1 minute'
+            """,
+            (actor["id"],),
+        ).fetchone() or {}
+        if int(recent.get("count") or 0) >= 25:
+            raise ApiError("CHAT_RATE_LIMIT", "Aguarde um momento antes de enviar novas mensagens.")
+        reply_id = str_value(payload.get("replyToMessageId"))
+        if reply_id:
+            reply = conn.execute(
+                "select message_id from courseplatform.chat_messages where message_id = %s and room_id = %s",
+                (reply_id, room["room_id"]),
+            ).fetchone()
+            if not reply:
+                raise ApiError("CHAT_REPLY_NOT_FOUND", "A mensagem selecionada para resposta já não está disponível.")
+        message_id = generate_id("CMSG")
+        conn.execute(
+            """
+            insert into courseplatform.chat_messages
+              (message_id, room_id, sender_type, sender_student_id, sender_admin_id,
+               body, reply_to_message_id, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, 'ACTIVE', now(), now())
+            """,
+            (
+                message_id, room["room_id"], actor["type"],
+                actor["id"] if actor["type"] == "STUDENT" else None,
+                actor["id"] if actor["type"] == "ADMIN" else None,
+                body, reply_id or None,
+            ),
+        )
+        conn.execute(
+            "update courseplatform.chat_rooms set updated_at = now() where room_id = %s",
+            (room["room_id"],),
+        )
+        mark_chat_room_read_with_conn(conn, room["room_id"], actor)
+        if actor["type"] == "ADMIN" and room.get("room_type") == "SUPPORT" and room.get("owner_student_id"):
+            notification_id = create_student_notification(
+                conn,
+                room["owner_student_id"],
+                "GENERAL",
+                "Nova mensagem do formador",
+                f"{actor['record'].get('full_name') or 'A equipa de formação'} respondeu à sua conversa de apoio.",
+                admin_id=actor["id"],
+                action_url=f"#/chat/{room['room_id']}",
+                entity_type="CHAT_ROOM",
+                entity_id=room["room_id"],
+                priority="NORMAL",
+                send_whatsapp=False,
+                send_email=False,
+                send_telegram=False,
+                send_push=True,
+            )
+            if notification_id:
+                notification_ids.append(notification_id)
+        message = public_chat_message(chat_message_row(conn, message_id), actor)
+        conn.commit()
+    dispatch_notification_deliveries(notification_ids)
+    return success({"message": message})
+
+
+def chat_edit_message(payload: dict[str, Any]):
+    require_fields(payload, ["messageId"])
+    body = chat_message_body(payload.get("body"))
+    prepare_chat_feature_schema()
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        message = conn.execute(
+            "select * from courseplatform.chat_messages where message_id = %s",
+            (str_value(payload["messageId"]),),
+        ).fetchone()
+        if not message:
+            raise ApiError("CHAT_MESSAGE_NOT_FOUND", "A mensagem não foi encontrada.")
+        accessible_chat_room(conn, message["room_id"], actor)
+        sender_id = message.get("sender_student_id") if actor["type"] == "STUDENT" else message.get("sender_admin_id")
+        if message.get("sender_type") != actor["type"] or sender_id != actor["id"]:
+            raise ApiError("CHAT_MESSAGE_FORBIDDEN", "Só pode editar as suas próprias mensagens.")
+        if message.get("status") != "ACTIVE":
+            raise ApiError("CHAT_MESSAGE_NOT_EDITABLE", "Esta mensagem já não pode ser editada.")
+        conn.execute(
+            """
+            update courseplatform.chat_messages
+            set body = %s, edited_at = now(), updated_at = now()
+            where message_id = %s
+            """,
+            (body, message["message_id"]),
+        )
+        updated = public_chat_message(chat_message_row(conn, message["message_id"]), actor)
+        conn.commit()
+    return success({"message": updated})
+
+
+def chat_delete_message(payload: dict[str, Any]):
+    require_fields(payload, ["messageId"])
+    prepare_chat_feature_schema()
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        message = conn.execute(
+            "select * from courseplatform.chat_messages where message_id = %s",
+            (str_value(payload["messageId"]),),
+        ).fetchone()
+        if not message:
+            raise ApiError("CHAT_MESSAGE_NOT_FOUND", "A mensagem não foi encontrada.")
+        accessible_chat_room(conn, message["room_id"], actor)
+        sender_id = message.get("sender_student_id") if actor["type"] == "STUDENT" else message.get("sender_admin_id")
+        owns_message = message.get("sender_type") == actor["type"] and sender_id == actor["id"]
+        if actor["type"] != "ADMIN" and not owns_message:
+            raise ApiError("CHAT_MESSAGE_FORBIDDEN", "Não possui permissão para remover esta mensagem.")
+        next_status = "DELETED" if owns_message else "MODERATED"
+        conn.execute(
+            """
+            update courseplatform.chat_messages
+            set body = '', status = %s, deleted_at = now(), updated_at = now()
+            where message_id = %s
+            """,
+            (next_status, message["message_id"]),
+        )
+        if actor["type"] == "ADMIN":
+            conn.execute(
+                """
+                update courseplatform.chat_message_reports
+                set status = 'RESOLVED', resolved_by_admin_id = %s,
+                    resolution_note = 'Mensagem removida pela moderação.', resolved_at = now()
+                where message_id = %s and status = 'OPEN'
+                """,
+                (actor["id"], message["message_id"]),
+            )
+        audit(
+            conn, actor["type"], actor["id"], "CHAT_MESSAGE_REMOVED",
+            "CHAT_MESSAGE", message["message_id"], {"status": next_status, "roomId": message["room_id"]},
+        )
+        updated = public_chat_message(chat_message_row(conn, message["message_id"]), actor)
+        conn.commit()
+    return success({"message": updated})
+
+
+def chat_mark_read(payload: dict[str, Any]):
+    require_fields(payload, ["roomId"])
+    prepare_chat_feature_schema()
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        room = accessible_chat_room(conn, str_value(payload["roomId"]), actor)
+        mark_chat_room_read_with_conn(conn, room["room_id"], actor)
+        conn.commit()
+    return success({"roomId": room["room_id"], "unreadCount": 0})
+
+
+def chat_report_message(payload: dict[str, Any]):
+    require_fields(payload, ["messageId"])
+    reason = str_value(payload.get("reason"))
+    if len(reason) < 5 or len(reason) > 500:
+        raise ApiError("INVALID_CHAT_REPORT", "Descreva o motivo da denúncia entre 5 e 500 caracteres.")
+    prepare_chat_feature_schema()
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        if actor["type"] != "STUDENT":
+            raise ApiError("CHAT_REPORT_FORBIDDEN", "Apenas estudantes podem utilizar esta denúncia.")
+        message = conn.execute(
+            "select * from courseplatform.chat_messages where message_id = %s and status = 'ACTIVE'",
+            (str_value(payload["messageId"]),),
+        ).fetchone()
+        if not message:
+            raise ApiError("CHAT_MESSAGE_NOT_FOUND", "A mensagem não foi encontrada.")
+        accessible_chat_room(conn, message["room_id"], actor)
+        if message.get("sender_student_id") == actor["id"]:
+            raise ApiError("CHAT_REPORT_OWN_MESSAGE", "Não pode denunciar a sua própria mensagem.")
+        existing = conn.execute(
+            """
+            select report_id from courseplatform.chat_message_reports
+            where message_id = %s and reported_by_student_id = %s and status = 'OPEN'
+            """,
+            (message["message_id"], actor["id"]),
+        ).fetchone()
+        if existing:
+            raise ApiError("CHAT_REPORT_EXISTS", "Esta mensagem já foi denunciada por si.")
+        report_id = generate_id("CRP")
+        conn.execute(
+            """
+            insert into courseplatform.chat_message_reports
+              (report_id, message_id, reported_by_student_id, reason, status, created_at)
+            values (%s, %s, %s, %s, 'OPEN', now())
+            """,
+            (report_id, message["message_id"], actor["id"], reason),
+        )
+        audit(
+            conn, "STUDENT", actor["id"], "CHAT_MESSAGE_REPORTED",
+            "CHAT_MESSAGE", message["message_id"], {"reportId": report_id},
+        )
+        conn.commit()
+    return success({"reportId": report_id, "reported": True})
+
+
 def not_implemented(action: str):
     raise ApiError("NOT_IMPLEMENTED", f"A ação {action} ainda não foi portada para a API Python.")
 
@@ -7342,6 +8094,13 @@ ACTIONS = {
     "updateMyProfile": update_my_profile,
     "getMyNotifications": my_notifications,
     "markNotificationRead": mark_notification_read,
+    "getChatRooms": chat_list_rooms,
+    "getChatMessages": chat_list_messages,
+    "sendChatMessage": chat_send_message,
+    "editChatMessage": chat_edit_message,
+    "deleteChatMessage": chat_delete_message,
+    "markChatRoomRead": chat_mark_read,
+    "reportChatMessage": chat_report_message,
     "changeMyAccessCode": change_my_access_code,
     "changeMyEmail": change_my_email,
     "getMyCertifications": my_certifications,
@@ -7376,6 +8135,12 @@ ACTIONS = {
     "adminSaveCertificateSurvey": admin_save_certificate_survey,
     "adminUploadCertificateAsset": admin_upload_certificate_asset,
     "adminListNotifications": admin_list_notifications,
+    "adminListChatRooms": chat_list_rooms,
+    "adminGetChatMessages": chat_list_messages,
+    "adminSendChatMessage": chat_send_message,
+    "adminEditChatMessage": chat_edit_message,
+    "adminDeleteChatMessage": chat_delete_message,
+    "adminMarkChatRoomRead": chat_mark_read,
     "adminCreateNotification": admin_create_notification,
     "adminSaveNotificationTemplate": admin_save_notification_template,
     "adminResetNotificationTemplate": admin_reset_notification_template,

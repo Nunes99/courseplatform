@@ -1,4 +1,5 @@
 import { CoursePlatformApi, ApiError } from './api.js';
+import { ChatWorkspace } from './chat.js';
 import {
   debounce,
   escapeHtml,
@@ -79,6 +80,9 @@ const state = {
     unreadCount: 0,
     total: 0
   },
+  chat: {
+    unreadCount: 0
+  },
   notificationChannelInfo: null,
   push: {
     configuration: null,
@@ -93,6 +97,7 @@ const state = {
 };
 
 let deferredInstallPrompt = null;
+let activeChatWorkspace = null;
 window.addEventListener('beforeinstallprompt', (event) => {
   event.preventDefault();
   deferredInstallPrompt = event;
@@ -582,6 +587,8 @@ async function route() {
     return;
   }
 
+  if (routeName !== 'chat') refreshChatUnread();
+
   try {
     if (routeName === 'lesson' && routeValue) {
       await openLesson(routeValue);
@@ -600,6 +607,11 @@ async function route() {
 
     if (routeName === 'notifications') {
       await renderNotifications();
+      return;
+    }
+
+    if (routeName === 'chat') {
+      await renderChat(routeValue ? decodeURIComponent(routeValue) : '');
       return;
     }
 
@@ -914,6 +926,7 @@ function studentAppShell(activeView, content, page = {}) {
     { id: 'submissions', label: 'Submissões', href: '#/submissions', icon: 'upload-to-cloud' },
     { id: 'grades', label: 'Notas e feedback', href: '#/grades', icon: 'checked-checkbox' },
     { id: 'notifications', label: 'Notificações', href: '#/notifications', icon: 'bell' },
+    { id: 'chat', label: 'Mensagens', href: '#/chat', icon: 'message-square' },
     { id: 'certifications', label: 'Certificados', href: '#/certifications', icon: 'diploma' },
     { id: 'support', label: 'Suporte', href: config.institutionalUrl || '#/', icon: 'help' },
     { id: 'profile', label: 'Perfil', href: '#/profile', icon: 'user-male-circle' }
@@ -941,6 +954,7 @@ function studentAppShell(activeView, content, page = {}) {
               ${item.id === 'support' && config.institutionalUrl ? 'target="_blank" rel="noopener"' : ''}>
               <img src="${iconUrl(item.icon, goldIcon)}" alt="">
               <span>${escapeHtml(item.label)}</span>
+              ${item.id === 'chat' ? `<b class="nav-unread-badge" data-chat-nav-badge ${state.chat.unreadCount ? '' : 'hidden'}>${Math.min(state.chat.unreadCount, 99)}</b>` : ''}
             </a>
           `).join('')}
         </nav>
@@ -977,6 +991,11 @@ function studentAppShell(activeView, content, page = {}) {
               aria-label="Notificações${state.notifications.unreadCount ? `: ${state.notifications.unreadCount} não lidas` : ''}">
               <img src="${iconUrl('bell', blueIcon)}" alt="">
               ${state.notifications.unreadCount ? `<span class="notification-badge">${Math.min(state.notifications.unreadCount, 99)}</span>` : ''}
+            </a>
+            <a class="icon-button notification-button" href="#/chat"
+              aria-label="Mensagens${state.chat.unreadCount ? `: ${state.chat.unreadCount} não lidas` : ''}">
+              <img src="${iconUrl('message-square', blueIcon)}" alt="">
+              <span class="notification-badge" data-chat-nav-badge ${state.chat.unreadCount ? '' : 'hidden'}>${Math.min(state.chat.unreadCount, 99)}</span>
             </a>
           </div>
         </div>
@@ -1677,6 +1696,63 @@ async function renderNotifications() {
   });
   startNotificationPolling();
   maybeShowPushRecommendation();
+  reportHeight();
+}
+
+function updateChatUnreadIndicators(unreadCount) {
+  state.chat.unreadCount = Math.max(0, Number(unreadCount || 0));
+  document.querySelectorAll('[data-chat-nav-badge]').forEach((badge) => {
+    badge.hidden = state.chat.unreadCount === 0;
+    badge.textContent = String(Math.min(state.chat.unreadCount, 99));
+  });
+}
+
+function refreshChatUnread() {
+  if (!api?.hasStudentSession()) return;
+  api.chatRooms()
+    .then((result) => updateChatUnreadIndicators(result.unreadCount))
+    .catch(() => {});
+}
+
+async function renderChat(initialRoomId = '') {
+  clearTimers();
+  root.innerHTML = loadingTemplate('A preparar as conversas...');
+
+  const [home, notificationData] = await Promise.all([
+    api.studentHome(state.selectedCourseId),
+    api.notifications({ limit: 6 })
+  ]);
+  state.myCourses = Array.isArray(home.courses) ? home.courses : [];
+  state.selectedCourseId = home.selectedCourseId || state.selectedCourseId || config.courseId || '';
+  state.dashboard = normalizeStudentDashboard(home);
+  setNotificationState(notificationData);
+  setMediaConfig(home.mediaConfig || {});
+  applyBrandLogo();
+
+  const student = state.dashboard.student || {};
+  headerUser.innerHTML = profileAvatarTemplate(student, 'header-avatar');
+  headerUser.title = 'Editar perfil pessoal';
+  headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
+  headerUser.hidden = false;
+  if (mobileMenuButton) mobileMenuButton.hidden = false;
+  logoutButton.hidden = false;
+
+  root.innerHTML = studentAppShell('chat', '<div id="studentChatWorkspace"></div>', {
+    eyebrow: 'Comunicação',
+    topbarTitle: 'Mensagens',
+    title: 'Conversas da formação',
+    description: 'Comunique com formadores, colegas do curso e membros do seu grupo.',
+    compactHeading: true
+  });
+
+  activeChatWorkspace = new ChatWorkspace({
+    api,
+    mount: document.querySelector('#studentChatWorkspace'),
+    mode: 'student',
+    initialRoomId,
+    onUnreadChange: updateChatUnreadIndicators
+  });
+  await activeChatWorkspace.start();
   reportHeight();
 }
 
@@ -2900,6 +2976,8 @@ async function refreshExpiredAttempt() {
 }
 
 function clearTimers() {
+  activeChatWorkspace?.destroy();
+  activeChatWorkspace = null;
   window.clearInterval(state.timerId);
   window.clearInterval(state.pollId);
   window.clearInterval(state.notificationPollId);
@@ -3004,7 +3082,12 @@ function startNotificationPolling() {
   state.notificationPollId = window.setInterval(async () => {
     if (document.hidden || !api.hasStudentSession()) return;
     try {
-      setNotificationState(await api.notifications({ limit: 6 }));
+      const [notificationData, chatData] = await Promise.all([
+        api.notifications({ limit: 6 }),
+        api.chatRooms()
+      ]);
+      setNotificationState(notificationData);
+      updateChatUnreadIndicators(chatData.unreadCount);
       updateNotificationBadge();
     } catch {
       // A central interna permanece disponível; uma falha temporária será

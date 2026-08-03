@@ -1,4 +1,5 @@
 import { CoursePlatformApi, ApiError } from './api.js';
+import { ChatWorkspace } from './chat.js';
 import {
   escapeHtml,
   formatBytes,
@@ -102,6 +103,8 @@ const state = {
   notificationStudentTotal: 0,
   notificationTemplateKey: ''
 };
+
+let activeAdminChatWorkspace = null;
 
 initialize();
 
@@ -374,6 +377,8 @@ function renderAdminRecoveryResult(overlay, result, email) {
 }
 
 async function logout() {
+  activeAdminChatWorkspace?.destroy();
+  activeAdminChatWorkspace = null;
   try {
     await api.adminLogout();
   } catch {
@@ -421,6 +426,11 @@ function renderAdminShell() {
         <button class="admin-nav" data-admin-view="notifications" aria-label="Notificações" title="Notificações">
           <img src="${iconUrl('bell', blueIcon)}" alt="">
           <span>Notificações</span>
+        </button>
+        <button class="admin-nav" data-admin-view="chat" aria-label="Mensagens" title="Mensagens">
+          <img src="${iconUrl('message-square', blueIcon)}" alt="">
+          <span>Mensagens</span>
+          <b class="nav-unread-badge" data-admin-chat-badge hidden>0</b>
         </button>
         <button class="admin-nav" data-admin-view="students" aria-label="Estudantes" title="Estudantes">
           <img src="${iconUrl('student-male', blueIcon)}" alt="">
@@ -489,6 +499,8 @@ function renderAdminShell() {
         loadStudents();
       } else if (button.dataset.adminView === 'notifications') {
         loadNotificationManagement();
+      } else if (button.dataset.adminView === 'chat') {
+        renderAdminChat();
       } else if (button.dataset.adminView === 'courses') {
         state.courseMode = 'list';
         loadCourses();
@@ -512,12 +524,53 @@ function renderAdminShell() {
     });
   });
   root.querySelector('[data-admin-logout]')?.addEventListener('click', logout);
+  api.adminChatRooms().then((result) => updateAdminChatUnread(result.unreadCount)).catch(() => {});
 }
 
 function setActiveAdminView(view) {
+  if (view !== 'chat') {
+    activeAdminChatWorkspace?.destroy();
+    activeAdminChatWorkspace = null;
+  }
   root.querySelectorAll('[data-admin-view]').forEach((item) => {
     item.classList.toggle('is-active', item.dataset.adminView === view);
   });
+}
+
+function updateAdminChatUnread(unreadCount) {
+  const count = Math.max(0, Number(unreadCount || 0));
+  root.querySelectorAll('[data-admin-chat-badge]').forEach((badge) => {
+    badge.hidden = count === 0;
+    badge.textContent = String(Math.min(count, 99));
+  });
+}
+
+async function renderAdminChat() {
+  const adminMain = document.querySelector('#adminMain');
+  if (!adminMain) return;
+  activeAdminChatWorkspace?.destroy();
+  adminMain.innerHTML = `
+    <section class="admin-page-heading admin-chat-heading">
+      <div>
+        <p class="eyebrow">Comunicação interna</p>
+        <h1>Mensagens</h1>
+        <p>Converse com estudantes nos canais de apoio, curso, grupo e comunidade.</p>
+      </div>
+    </section>
+    <div id="adminChatWorkspace"></div>
+  `;
+  activeAdminChatWorkspace = new ChatWorkspace({
+    api,
+    mount: document.querySelector('#adminChatWorkspace'),
+    mode: 'admin',
+    onUnreadChange: updateAdminChatUnread
+  });
+  try {
+    await activeAdminChatWorkspace.start();
+  } catch (error) {
+    showToast(error.message || 'Não foi possível abrir as mensagens.', 'error');
+  }
+  reportHeight();
 }
 
 function canManageNotifications() {
