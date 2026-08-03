@@ -206,6 +206,12 @@ class Settings:
         self.telegram_bot_username = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
         self.telegram_parse_mode = os.getenv("TELEGRAM_PARSE_MODE", "HTML").strip() or "HTML"
         self.telegram_timeout_seconds = _int_env("TELEGRAM_TIMEOUT_SECONDS", 12)
+        self.web_push_enabled = os.getenv("WEB_PUSH_ENABLED", "false").strip().lower() in {"1", "true", "yes", "sim"}
+        self.vapid_public_key = os.getenv("VAPID_PUBLIC_KEY", "").strip()
+        self.vapid_private_key = os.getenv("VAPID_PRIVATE_KEY", "").strip()
+        self.vapid_subject = os.getenv("VAPID_SUBJECT", "").strip()
+        self.web_push_ttl_seconds = _int_env("WEB_PUSH_TTL_SECONDS", 86400)
+        self.web_push_timeout_seconds = _int_env("WEB_PUSH_TIMEOUT_SECONDS", 12)
         self.cors_origins = [
             item.strip()
             for item in os.getenv("CORS_ORIGINS", "*").split(",")

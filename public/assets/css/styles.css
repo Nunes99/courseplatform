@@ -11553,7 +11553,7 @@ pre,
 
 .profile-notification-channels {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -12309,5 +12309,284 @@ pre,
 
   .notification-recipient-actions {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* PWA, Web Push and editable notification templates */
+.notification-push-option .notification-channel-icon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  margin-top: 1px;
+}
+
+.notification-push-option .notification-channel-icon img {
+  width: 18px;
+  height: 18px;
+}
+
+.notification-push-actions {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 8px !important;
+  margin-top: 8px;
+}
+
+.notification-push-actions .button {
+  width: auto;
+  min-height: 32px;
+}
+
+.notification-push-option .notification-channel-state {
+  width: auto;
+  min-width: 92px;
+  max-width: 100%;
+}
+
+.push-recommendation {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 1000;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: min(560px, calc(100vw - 32px));
+  padding: 16px 48px 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.push-recommendation-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+
+.push-recommendation-icon img {
+  width: 22px;
+  height: 22px;
+}
+
+.push-recommendation-copy {
+  min-width: 0;
+}
+
+.push-recommendation-copy strong {
+  display: block;
+  font: 600 15px/1.35 "Manrope", "Inter", sans-serif;
+}
+
+.push-recommendation-copy p {
+  max-width: 48ch;
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.push-recommendation-close {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.notification-channel-overrides {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.notification-channel-overrides summary {
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.notification-channel-overrides[open] summary {
+  margin-bottom: 10px;
+}
+
+.notification-channel-overrides > p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.notification-template-panel {
+  display: grid;
+  gap: 18px;
+  margin-top: var(--grid-gap);
+}
+
+.notification-template-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.notification-template-toolbar label {
+  flex: 1 1 420px;
+  max-width: 560px;
+}
+
+.notification-template-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.notification-template-variables,
+.notification-template-actions,
+.notification-template-preview-grid {
+  grid-column: 1 / -1;
+}
+
+.notification-template-variables {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.notification-template-variables strong {
+  margin-right: 4px;
+  color: var(--text);
+}
+
+.notification-template-variables code {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.notification-template-channel-block {
+  display: grid;
+  align-content: start;
+  gap: 11px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.notification-template-channel-block h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.notification-template-channel-block .eyebrow {
+  margin: 0 0 2px;
+}
+
+.notification-template-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.notification-template-preview-grid article {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.notification-template-preview-grid span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.notification-template-preview-grid strong,
+.notification-template-preview-grid p {
+  overflow-wrap: anywhere;
+}
+
+.notification-template-preview-grid p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.notification-template-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 1024px) {
+  .notification-template-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .notification-template-channel-block {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .push-recommendation {
+    grid-template-columns: 36px minmax(0, 1fr);
+    padding: 14px 48px 14px 14px;
+  }
+
+  .push-recommendation > .button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .push-recommendation-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .notification-push-actions .button,
+  .notification-template-actions .button {
+    flex: 1 1 160px;
+    width: 100%;
+  }
+
+  .notification-template-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .notification-template-preview-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .notification-template-actions {
+    flex-direction: column;
   }
 }

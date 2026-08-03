@@ -1,0 +1,35 @@
+{
+  "id": "./",
+  "name": "LMTWEBNAIRS Summer School",
+  "short_name": "Summer School",
+  "description": "Área do estudante, aulas, avaliações, notificações e certificados.",
+  "lang": "pt-PT",
+  "dir": "ltr",
+  "start_url": "./#/",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#FFF8E4",
+  "theme_color": "#00365B",
+  "categories": ["education", "productivity"],
+  "icons": [
+    {
+      "src": "./assets/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./assets/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./assets/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

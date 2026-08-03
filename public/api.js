@@ -209,6 +209,22 @@ export class CoursePlatformApi {
     return this.studentRequest('studentUnlinkTelegram');
   }
 
+  pushConfiguration() {
+    return this.studentRequest('getPushConfiguration');
+  }
+
+  subscribePush(subscription, deviceLabel = '') {
+    return this.studentRequest('subscribePush', {
+      subscription,
+      deviceLabel,
+      userAgent: navigator.userAgent
+    });
+  }
+
+  unsubscribePush(endpoint = '', allDevices = false) {
+    return this.studentRequest('unsubscribePush', { endpoint, allDevices });
+  }
+
   notifications(filters = {}) {
     return this.studentRequest('getMyNotifications', filters);
   }
@@ -560,6 +576,14 @@ export class CoursePlatformApi {
 
   adminCreateNotification(payload) {
     return this.mutateAdmin('adminCreateNotification', payload);
+  }
+
+  adminSaveNotificationTemplate(notificationTemplate) {
+    return this.mutateAdmin('adminSaveNotificationTemplate', { notificationTemplate });
+  }
+
+  adminResetNotificationTemplate(templateKey) {
+    return this.mutateAdmin('adminResetNotificationTemplate', { templateKey });
   }
 
   adminSaveWhatsAppConfiguration(whatsappConfiguration) {

@@ -262,6 +262,13 @@ create table if not exists courseplatform.notifications (
   created_at timestamptz not null default now()
 );
 
+alter table courseplatform.notifications add column if not exists template_key text;
+alter table courseplatform.notifications add column if not exists template_variables_json jsonb not null default '{}'::jsonb;
+alter table courseplatform.notifications add column if not exists email_subject text;
+alter table courseplatform.notifications add column if not exists email_message text;
+alter table courseplatform.notifications add column if not exists push_title text;
+alter table courseplatform.notifications add column if not exists push_message text;
+
 create table if not exists courseplatform.notification_deliveries (
   delivery_id text primary key,
   notification_id text not null references courseplatform.notifications(notification_id) on delete cascade,
@@ -300,6 +307,32 @@ alter table courseplatform.notification_channel_settings add column if not exist
 alter table courseplatform.notification_channel_settings add column if not exists use_tls boolean;
 alter table courseplatform.notification_channel_settings add column if not exists bot_username text;
 alter table courseplatform.notification_channel_settings add column if not exists parse_mode text;
+create table if not exists courseplatform.notification_templates (
+  template_key text primary key,
+  internal_title_template text not null,
+  internal_message_template text not null,
+  email_subject_template text not null,
+  email_message_template text not null,
+  push_title_template text not null,
+  push_message_template text not null,
+  updated_by text references courseplatform.admins(admin_id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+create table if not exists courseplatform.push_subscriptions (
+  subscription_id text primary key,
+  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  endpoint_hash text not null unique,
+  endpoint_encrypted bytea not null,
+  p256dh_encrypted bytea not null,
+  auth_encrypted bytea not null,
+  user_agent text,
+  device_label text,
+  enabled boolean not null default true,
+  failure_count integer not null default 0,
+  last_success_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 create table if not exists courseplatform.telegram_link_tokens (
   token_hash text primary key,
   student_id text not null references courseplatform.students(student_id) on delete cascade,
@@ -494,6 +527,7 @@ create index if not exists idx_notifications_student_created on courseplatform.n
 create index if not exists idx_notifications_student_unread on courseplatform.notifications(student_id, read_at, created_at desc);
 create index if not exists idx_notification_deliveries_status on courseplatform.notification_deliveries(channel, status, created_at);
 create index if not exists idx_telegram_link_tokens_student on courseplatform.telegram_link_tokens(student_id, created_at desc);
+create index if not exists idx_push_subscriptions_student on courseplatform.push_subscriptions(student_id, enabled, updated_at desc);
 create index if not exists idx_files_attempt on courseplatform.files(attempt_id, status);
 create index if not exists idx_certificate_requests_student_course on courseplatform.certificate_requests(student_id, course_id, status);
 create index if not exists idx_group_members_group on courseplatform.group_members(group_id, status);
@@ -522,6 +556,8 @@ alter table courseplatform.notification_deliveries enable row level security;
 alter table courseplatform.notification_channel_settings enable row level security;
 alter table courseplatform.telegram_link_tokens enable row level security;
 alter table courseplatform.notification_channel_state enable row level security;
+alter table courseplatform.notification_templates enable row level security;
+alter table courseplatform.push_subscriptions enable row level security;
 alter table courseplatform.certificates enable row level security;
 alter table courseplatform.audit_log enable row level security;
 alter table courseplatform.settings enable row level security;
@@ -566,6 +602,15 @@ create or replace view public.notification_channel_settings as
          smtp_password_encrypted is not null as smtp_password_configured,
          from_email, from_name, use_tls, bot_username, parse_mode
   from courseplatform.notification_channel_settings;
+create or replace view public.notification_templates as
+  select template_key, internal_title_template, internal_message_template,
+         email_subject_template, email_message_template,
+         push_title_template, push_message_template, updated_by, updated_at
+  from courseplatform.notification_templates;
+create or replace view public.push_subscriptions as
+  select subscription_id, student_id, endpoint_hash, device_label, enabled,
+         failure_count, last_success_at, created_at, updated_at
+  from courseplatform.push_subscriptions;
 create or replace view public.certificates as select * from courseplatform.certificates;
 create or replace view public.audit_log as select * from courseplatform.audit_log;
 create or replace view public.settings as select * from courseplatform.settings;

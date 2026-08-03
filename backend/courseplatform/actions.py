@@ -16,6 +16,12 @@ from html import escape as html_escape
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
+try:
+    from pywebpush import WebPushException, webpush
+except ImportError:  # pragma: no cover - deployment validation reports this cleanly.
+    WebPushException = RuntimeError
+    webpush = None
+
 from .config import get_settings
 from .db import connection, ensure_schema, fetch_all, fetch_one, schema_exists
 from .security import (
@@ -238,6 +244,7 @@ def public_student(row: dict[str, Any] | None):
         "telegramLinked": bool(normalize_telegram_recipient(row.get("telegram_chat_id"))),
         "telegramOptIn": as_bool(row.get("telegram_opt_in")),
         "telegramOptInAt": iso(row.get("telegram_opt_in_at")),
+        "pushSubscriptionCount": int(row.get("push_subscription_count") or 0),
         "notificationPreferences": notification_preferences(row),
         "createdAt": iso(row.get("created_at")),
         "updatedAt": iso(row.get("updated_at")),
@@ -548,6 +555,100 @@ DEFAULT_NOTIFICATION_PREFERENCES = {
     "GENERAL": True,
 }
 
+NOTIFICATION_TEMPLATE_FIELDS = (
+    "internalTitleTemplate",
+    "internalMessageTemplate",
+    "emailSubjectTemplate",
+    "emailMessageTemplate",
+    "pushTitleTemplate",
+    "pushMessageTemplate",
+)
+
+NOTIFICATION_TEMPLATE_VARIABLES = {
+    "student_name",
+    "course",
+    "module",
+    "activity",
+    "status",
+    "deadline",
+    "feedback",
+    "details",
+    "action_url",
+}
+
+NOTIFICATION_TEMPLATE_DEFINITIONS = {
+    "EMAIL_CHANGED": {
+        "label": "Email de acesso alterado",
+        "category": "GENERAL",
+        "internalTitleTemplate": "Email de acesso alterado",
+        "internalMessageTemplate": "O email de acesso foi atualizado. As notificações por email permanecem suspensas até nova autorização no perfil.",
+        "emailSubjectTemplate": "Email de acesso alterado",
+        "emailMessageTemplate": "Olá, {{student_name}}. O email de acesso foi atualizado. Confirme as preferências de notificações no seu perfil.",
+        "pushTitleTemplate": "Email de acesso alterado",
+        "pushMessageTemplate": "Reveja as preferências de segurança e notificações no seu perfil.",
+    },
+    "REVIEW_UPDATED": {
+        "label": "Avaliação atualizada",
+        "category": "REVIEW_FEEDBACK",
+        "internalTitleTemplate": "Avaliação atualizada",
+        "internalMessageTemplate": "{{details}}",
+        "emailSubjectTemplate": "Atualização da avaliação: {{activity}}",
+        "emailMessageTemplate": "Olá, {{student_name}}. A sua avaliação foi atualizada. {{details}}",
+        "pushTitleTemplate": "Avaliação atualizada",
+        "pushMessageTemplate": "Existe uma atualização em {{activity}}. Consulte os detalhes na plataforma.",
+    },
+    "RETRY_AUTHORIZED": {
+        "label": "Nova tentativa autorizada",
+        "category": "SUBMISSION_STATUS",
+        "internalTitleTemplate": "Nova tentativa autorizada",
+        "internalMessageTemplate": "Pode realizar uma nova tentativa em {{activity}}.",
+        "emailSubjectTemplate": "Nova tentativa disponível: {{activity}}",
+        "emailMessageTemplate": "Olá, {{student_name}}. Foi autorizada uma nova tentativa em {{activity}}.",
+        "pushTitleTemplate": "Nova tentativa disponível",
+        "pushMessageTemplate": "Já pode realizar uma nova tentativa em {{activity}}.",
+    },
+    "SUBMISSION_STATUS_UPDATED": {
+        "label": "Estado da submissão atualizado",
+        "category": "SUBMISSION_STATUS",
+        "internalTitleTemplate": "Estado da submissão atualizado",
+        "internalMessageTemplate": "{{details}}",
+        "emailSubjectTemplate": "Estado atualizado: {{activity}}",
+        "emailMessageTemplate": "Olá, {{student_name}}. O estado da sua submissão foi atualizado. {{details}}",
+        "pushTitleTemplate": "Submissão atualizada",
+        "pushMessageTemplate": "O estado de {{activity}} foi atualizado. Abra a plataforma para consultar.",
+    },
+    "SUBMISSION_DEADLINE_UPDATED": {
+        "label": "Prazo da submissão atualizado",
+        "category": "SUBMISSION_STATUS",
+        "internalTitleTemplate": "Prazo da submissão atualizado",
+        "internalMessageTemplate": "{{details}}",
+        "emailSubjectTemplate": "Novo prazo: {{activity}}",
+        "emailMessageTemplate": "Olá, {{student_name}}. O prazo da sua submissão foi atualizado. {{details}}",
+        "pushTitleTemplate": "Prazo atualizado",
+        "pushMessageTemplate": "Consulte o novo prazo de {{activity}} na plataforma.",
+    },
+    "MODULE_ACCESS_UPDATED": {
+        "label": "Acesso ao módulo atualizado",
+        "category": "MODULE_AVAILABLE",
+        "internalTitleTemplate": "Acesso ao módulo atualizado",
+        "internalMessageTemplate": "{{details}}",
+        "emailSubjectTemplate": "Atualização do módulo: {{module}}",
+        "emailMessageTemplate": "Olá, {{student_name}}. {{details}}",
+        "pushTitleTemplate": "Módulo atualizado",
+        "pushMessageTemplate": "Existe uma atualização no módulo {{module}}.",
+    },
+    "MODULE_PROGRESS_UPDATED": {
+        "label": "Estado do módulo atualizado",
+        "category": "MODULE_AVAILABLE",
+        "internalTitleTemplate": "Módulo atualizado",
+        "internalMessageTemplate": "{{details}}",
+        "emailSubjectTemplate": "Estado do módulo: {{module}}",
+        "emailMessageTemplate": "Olá, {{student_name}}. Os estados do módulo foram atualizados. {{details}}",
+        "pushTitleTemplate": "Módulo atualizado",
+        "pushMessageTemplate": "Os estados de {{module}} foram atualizados.",
+    },
+}
+
 NOTIFICATION_STATUS_LABELS = {
     "LOCKED": "Bloqueado",
     "AVAILABLE": "Disponível",
@@ -605,6 +706,12 @@ create table if not exists courseplatform.notifications (
   read_at timestamptz,
   created_at timestamptz not null default now()
 );
+alter table courseplatform.notifications add column if not exists template_key text;
+alter table courseplatform.notifications add column if not exists template_variables_json jsonb not null default '{}'::jsonb;
+alter table courseplatform.notifications add column if not exists email_subject text;
+alter table courseplatform.notifications add column if not exists email_message text;
+alter table courseplatform.notifications add column if not exists push_title text;
+alter table courseplatform.notifications add column if not exists push_message text;
 create table if not exists courseplatform.notification_deliveries (
   delivery_id text primary key,
   notification_id text not null references courseplatform.notifications(notification_id) on delete cascade,
@@ -641,6 +748,32 @@ alter table courseplatform.notification_channel_settings add column if not exist
 alter table courseplatform.notification_channel_settings add column if not exists use_tls boolean;
 alter table courseplatform.notification_channel_settings add column if not exists bot_username text;
 alter table courseplatform.notification_channel_settings add column if not exists parse_mode text;
+create table if not exists courseplatform.notification_templates (
+  template_key text primary key,
+  internal_title_template text not null,
+  internal_message_template text not null,
+  email_subject_template text not null,
+  email_message_template text not null,
+  push_title_template text not null,
+  push_message_template text not null,
+  updated_by text references courseplatform.admins(admin_id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+create table if not exists courseplatform.push_subscriptions (
+  subscription_id text primary key,
+  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  endpoint_hash text not null unique,
+  endpoint_encrypted bytea not null,
+  p256dh_encrypted bytea not null,
+  auth_encrypted bytea not null,
+  user_agent text,
+  device_label text,
+  enabled boolean not null default true,
+  failure_count integer not null default 0,
+  last_success_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 create table if not exists courseplatform.telegram_link_tokens (
   token_hash text primary key,
   student_id text not null references courseplatform.students(student_id) on delete cascade,
@@ -659,6 +792,7 @@ create table if not exists courseplatform.notification_channel_state (
 create index if not exists idx_notifications_student_created on courseplatform.notifications(student_id, created_at desc);
 create index if not exists idx_notifications_student_unread on courseplatform.notifications(student_id, read_at, created_at desc);
 create index if not exists idx_notification_deliveries_status on courseplatform.notification_deliveries(channel, status, created_at);
+create index if not exists idx_push_subscriptions_student on courseplatform.push_subscriptions(student_id, enabled, updated_at desc);
 """
 
 
@@ -676,6 +810,106 @@ def prepare_notification_feature_schema() -> None:
     _NOTIFICATION_SCHEMA_READY = True
 
 
+_NOTIFICATION_TEMPLATE_COLUMNS = {
+    "internalTitleTemplate": "internal_title_template",
+    "internalMessageTemplate": "internal_message_template",
+    "emailSubjectTemplate": "email_subject_template",
+    "emailMessageTemplate": "email_message_template",
+    "pushTitleTemplate": "push_title_template",
+    "pushMessageTemplate": "push_message_template",
+}
+
+
+def _template_tokens(value: Any) -> set[str]:
+    return set(re.findall(r"{{\s*([a-z_][a-z0-9_]*)\s*}}", str(value or ""), flags=re.IGNORECASE))
+
+
+def _render_notification_template(value: Any, variables: dict[str, Any], fallback: str, limit: int) -> str:
+    source = str(value or fallback)
+    normalized = {key: str_value(item) for key, item in variables.items() if key in NOTIFICATION_TEMPLATE_VARIABLES}
+
+    def replace(match: re.Match) -> str:
+        return normalized.get(match.group(1).lower(), "")
+
+    return re.sub(r"{{\s*([a-z_][a-z0-9_]*)\s*}}", replace, source, flags=re.IGNORECASE).strip()[:limit]
+
+
+def notification_template_payload(template_key: str, row: dict[str, Any] | None = None) -> dict[str, Any]:
+    definition = NOTIFICATION_TEMPLATE_DEFINITIONS[template_key]
+    row = row or {}
+    payload = {
+        "templateKey": template_key,
+        "label": definition["label"],
+        "category": definition["category"],
+        "customized": bool(row),
+        "updatedAt": iso(row.get("updated_at")),
+        "allowedVariables": sorted(NOTIFICATION_TEMPLATE_VARIABLES),
+    }
+    for public_name, column_name in _NOTIFICATION_TEMPLATE_COLUMNS.items():
+        payload[public_name] = row.get(column_name) if row.get(column_name) is not None else definition[public_name]
+        payload[f"default{public_name[0].upper()}{public_name[1:]}"] = definition[public_name]
+    return payload
+
+
+def notification_templates_payload() -> list[dict[str, Any]]:
+    prepare_notification_feature_schema()
+    rows = {
+        row["template_key"]: row
+        for row in fetch_all("select * from courseplatform.notification_templates")
+        if row.get("template_key") in NOTIFICATION_TEMPLATE_DEFINITIONS
+    }
+    return [
+        notification_template_payload(template_key, rows.get(template_key))
+        for template_key in NOTIFICATION_TEMPLATE_DEFINITIONS
+    ]
+
+
+def resolve_notification_content(
+    conn,
+    template_key: str,
+    variables: dict[str, Any] | None,
+    title: str,
+    message: str,
+    *,
+    email_subject: str = "",
+    email_message: str = "",
+    push_title: str = "",
+    push_message: str = "",
+) -> dict[str, Any]:
+    normalized_key = str_value(template_key).upper()
+    context = {
+        key: str_value(value)[:1800]
+        for key, value in (variables or {}).items()
+        if key in NOTIFICATION_TEMPLATE_VARIABLES
+    }
+    if normalized_key not in NOTIFICATION_TEMPLATE_DEFINITIONS:
+        return {
+            "templateKey": "",
+            "variables": context,
+            "title": str_value(title)[:180],
+            "message": str_value(message)[:1800],
+            "emailSubject": str_value(email_subject or title)[:180],
+            "emailMessage": str_value(email_message or message)[:5000],
+            "pushTitle": str_value(push_title or title)[:120],
+            "pushMessage": str_value(push_message or message)[:300],
+        }
+    row = conn.execute(
+        "select * from courseplatform.notification_templates where template_key = %s",
+        (normalized_key,),
+    ).fetchone() or {}
+    template = notification_template_payload(normalized_key, row)
+    return {
+        "templateKey": normalized_key,
+        "variables": context,
+        "title": _render_notification_template(template["internalTitleTemplate"], context, title, 180),
+        "message": _render_notification_template(template["internalMessageTemplate"], context, message, 1800),
+        "emailSubject": _render_notification_template(template["emailSubjectTemplate"], context, email_subject or title, 180),
+        "emailMessage": _render_notification_template(template["emailMessageTemplate"], context, email_message or message, 5000),
+        "pushTitle": _render_notification_template(template["pushTitleTemplate"], context, push_title or title, 120),
+        "pushMessage": _render_notification_template(template["pushMessageTemplate"], context, push_message or message, 300),
+    }
+
+
 def public_notification(row: dict[str, Any] | None):
     if not row:
         return None
@@ -691,7 +925,7 @@ def public_notification(row: dict[str, Any] | None):
             "status": status,
             # Telegram chat IDs are private provider identifiers and are never
             # part of an API response, including administrative history.
-            "recipient": None if channel == "TELEGRAM" else recipient,
+            "recipient": None if channel in {"TELEGRAM", "PUSH"} else recipient,
             "providerMessageId": row.get(f"{prefix}_provider_message_id") or (row.get("provider_message_id") if fallback else None),
             "attemptCount": int(row.get(f"{prefix}_attempt_count") or (row.get("attempt_count") if fallback else 0) or 0),
             "lastError": row.get(f"{prefix}_last_error") or (row.get("last_error") if fallback else None),
@@ -710,9 +944,11 @@ def public_notification(row: dict[str, Any] | None):
         "priority": row.get("priority") or "NORMAL",
         "readAt": iso(row.get("read_at")),
         "createdAt": iso(row.get("created_at")),
+        "templateKey": row.get("template_key") or "",
         "whatsapp": delivery("WHATSAPP"),
         "email": delivery("EMAIL"),
         "telegram": delivery("TELEGRAM"),
+        "push": delivery("PUSH"),
     }
 
 
@@ -826,9 +1062,11 @@ def secure_student_email_update(
         entity_type="ACCOUNT_SECURITY",
         entity_id=student_id,
         priority="HIGH",
+        template_key="EMAIL_CHANGED",
         send_whatsapp=False,
         send_email=False,
         send_telegram=False,
+        send_push=False,
     )
     audit(
         conn,
@@ -1172,11 +1410,94 @@ def telegram_configuration() -> dict[str, Any]:
     }
 
 
+def valid_vapid_subject(value: Any) -> bool:
+    text = str_value(value)
+    if text.startswith("mailto:"):
+        return bool(normalize_email_recipient(text[7:]))
+    try:
+        parsed = urlsplit(text)
+        return parsed.scheme == "https" and bool(parsed.hostname) and not parsed.username and not parsed.password
+    except ValueError:
+        return False
+
+
+def valid_push_endpoint(value: Any) -> bool:
+    text = str_value(value)
+    if not text or len(text) > 4096:
+        return False
+    try:
+        parsed = urlsplit(text)
+        return bool(parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password)
+    except ValueError:
+        return False
+
+
+def valid_push_key(value: Any, minimum: int, maximum: int) -> bool:
+    text = str_value(value)
+    return minimum <= len(text) <= maximum and bool(re.fullmatch(r"[A-Za-z0-9_-]+", text))
+
+
+def valid_vapid_key(value: Any, expected_bytes: int, require_uncompressed_point: bool = False) -> bool:
+    text = str_value(value)
+    if not valid_push_key(text, 40, 100):
+        return False
+    try:
+        padding = "=" * ((4 - len(text) % 4) % 4)
+        decoded = base64.urlsafe_b64decode(f"{text}{padding}")
+    except (ValueError, TypeError):
+        return False
+    if len(decoded) != expected_bytes:
+        return False
+    return not require_uncompressed_point or decoded[0] == 4
+
+
+def web_push_runtime_configuration() -> dict[str, Any]:
+    settings = get_settings()
+    encryption_key = notification_encryption_key(settings)
+    encryption_ready = len(encryption_key.encode("utf-8")) >= 32
+    dependency_ready = webpush is not None
+    enabled = as_bool(getattr(settings, "web_push_enabled", False))
+    public_key = str_value(getattr(settings, "vapid_public_key", ""))
+    private_key = str_value(getattr(settings, "vapid_private_key", ""))
+    subject = str_value(getattr(settings, "vapid_subject", ""))
+    configured = bool(
+        enabled
+        and valid_vapid_key(public_key, 65, require_uncompressed_point=True)
+        and valid_vapid_key(private_key, 32)
+        and valid_vapid_subject(subject)
+        and encryption_ready
+        and dependency_ready
+    )
+    return {
+        "enabled": enabled,
+        "configured": configured,
+        "publicKey": public_key,
+        "privateKey": private_key,
+        "subject": subject,
+        "platformUrl": str_value(getattr(settings, "platform_url", "")),
+        "ttlSeconds": max(60, min(int_value(getattr(settings, "web_push_ttl_seconds", 86400), 86400), 2419200)),
+        "timeoutSeconds": max(3, min(int_value(getattr(settings, "web_push_timeout_seconds", 12), 12), 60)),
+        "encryptionKey": encryption_key,
+        "encryptionKeyConfigured": encryption_ready,
+        "dependencyConfigured": dependency_ready,
+    }
+
+
+def web_push_configuration() -> dict[str, Any]:
+    configuration = web_push_runtime_configuration()
+    return {
+        key: value
+        for key, value in configuration.items()
+        if key not in {"privateKey", "encryptionKey", "ttlSeconds", "timeoutSeconds"}
+    }
+
+
 def student_notification_channel_info() -> dict[str, Any]:
     """Student-safe provider discovery; credentials and SMTP topology stay private."""
     email = email_configuration()
     telegram = telegram_configuration()
     whatsapp = whatsapp_configuration()
+    push = web_push_configuration()
     return {
         "whatsapp": {"enabled": bool(whatsapp.get("enabled")), "configured": bool(whatsapp.get("configured"))},
         "email": {"enabled": bool(email.get("enabled")), "configured": bool(email.get("configured"))},
@@ -1187,6 +1508,11 @@ def student_notification_channel_info() -> dict[str, Any]:
             "linkingAvailable": bool(
                 telegram.get("enabled") and telegram.get("configured") and telegram.get("botUsername")
             ),
+        },
+        "push": {
+            "enabled": bool(push.get("enabled")),
+            "configured": bool(push.get("configured")),
+            "publicKey": push.get("publicKey") or "",
         },
     }
 
@@ -1203,9 +1529,16 @@ def create_student_notification(
     entity_type: str = "",
     entity_id: str = "",
     priority: str = "NORMAL",
+    template_key: str = "",
+    template_variables: dict[str, Any] | None = None,
+    email_subject: str = "",
+    email_message: str = "",
+    push_title: str = "",
+    push_message: str = "",
     send_whatsapp: bool = True,
     send_email: bool = True,
     send_telegram: bool = True,
+    send_push: bool = True,
 ) -> str | None:
     student = conn.execute(
         "select * from courseplatform.students where student_id = %s",
@@ -1214,25 +1547,49 @@ def create_student_notification(
     if not student:
         return None
     normalized_category = str_value(category).upper() or "GENERAL"
+    normalized_action_url = safe_notification_action_url(action_url)
+    variables = dict(template_variables or {})
+    variables["student_name"] = str_value(student.get("full_name")) or "Estudante"
+    variables["action_url"] = normalized_action_url
+    content = resolve_notification_content(
+        conn,
+        template_key,
+        variables,
+        title,
+        message,
+        email_subject=email_subject,
+        email_message=email_message,
+        push_title=push_title,
+        push_message=push_message,
+    )
     notification_id = generate_id("NTF")
     conn.execute(
         """
         insert into courseplatform.notifications
           (notification_id, student_id, created_by_admin_id, category, title, message,
-           action_url, entity_type, entity_id, priority, created_at)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+           action_url, entity_type, entity_id, priority, template_key,
+           template_variables_json, email_subject, email_message, push_title,
+           push_message, created_at)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s::jsonb, %s, %s, %s, %s, now())
         """,
         (
             notification_id,
             student_id,
             admin_id,
             normalized_category,
-            str_value(title)[:180],
-            str_value(message)[:1800],
-            safe_notification_action_url(action_url),
+            content["title"],
+            content["message"],
+            normalized_action_url,
             str_value(entity_type)[:80],
             str_value(entity_id)[:160],
             str_value(priority).upper() or "NORMAL",
+            content["templateKey"] or None,
+            json.dumps(content["variables"]),
+            content["emailSubject"],
+            content["emailMessage"],
+            content["pushTitle"],
+            content["pushMessage"],
         ),
     )
     preferences = notification_preferences(student)
@@ -1281,6 +1638,18 @@ def create_student_notification(
             "TELEGRAM", normalize_telegram_recipient(student.get("telegram_chat_id")),
             as_bool(student.get("telegram_opt_in")), "TELEGRAM_BOT_API",
             "Chat ID do Telegram inválido ou em falta.",
+        )
+    if send_push:
+        active_push = conn.execute(
+            "select count(*) as count from courseplatform.push_subscriptions where student_id = %s and enabled",
+            (student_id,),
+        ).fetchone() or {}
+        queue_delivery(
+            "PUSH",
+            student_id,
+            int(active_push.get("count") or 0) > 0,
+            "WEB_PUSH",
+            "Nenhum dispositivo possui notificações Push ativas.",
         )
     return notification_id
 
@@ -1353,9 +1722,9 @@ def _notification_plain_text(delivery: dict[str, Any], action_url: str = "") -> 
     parts = [
         str_value(delivery.get("student_name")) or "Estudante",
         "",
-        str_value(delivery.get("title")) or "Atualização académica",
+        str_value(delivery.get("email_subject") or delivery.get("title")) or "Atualização académica",
         "",
-        str_value(delivery.get("message")),
+        str_value(delivery.get("email_message") or delivery.get("message")),
     ]
     if action_url:
         parts.extend(["", f"Abrir na plataforma: {action_url}"])
@@ -1370,7 +1739,8 @@ def send_email_notification(delivery: dict[str, Any], configuration: dict[str, A
     if not recipient:
         raise RuntimeError("Endereço de email do destinatário inválido.")
 
-    title = re.sub(r"[\r\n]+", " ", str_value(delivery.get("title")))[:180] or "Atualização académica"
+    title = re.sub(r"[\r\n]+", " ", str_value(delivery.get("email_subject") or delivery.get("title")))[:180] or "Atualização académica"
+    body_message = str_value(delivery.get("email_message") or delivery.get("message"))[:5000]
     action_url = resolved_notification_action_url(delivery, configuration)
     message = EmailMessage()
     message_id = make_msgid(domain=configuration["fromEmail"].partition("@")[2] or None)
@@ -1379,16 +1749,26 @@ def send_email_notification(delivery: dict[str, Any], configuration: dict[str, A
     message["From"] = formataddr((configuration.get("fromName") or "", configuration["fromEmail"]))
     message["To"] = recipient
     message.set_content(_notification_plain_text(delivery, action_url))
+    student_name = html_escape(str_value(delivery.get("student_name")) or "Estudante")
+    brand_name = html_escape(configuration.get("fromName") or "Plataforma de ensino")
+    safe_body = html_escape(body_message).replace(chr(10), "<br>")
     action_html = (
-        f'<p><a href="{html_escape(action_url, quote=True)}">Abrir na plataforma</a></p>'
+        '<p style="margin:28px 0 8px">'
+        f'<a href="{html_escape(action_url, quote=True)}" style="display:inline-block;background:#00365B;color:#FFFFFF;text-decoration:none;padding:11px 18px;border-radius:6px;font:600 14px Inter,Arial,sans-serif">Abrir na plataforma</a>'
+        "</p>"
         if action_url.startswith(("https://", "http://")) else ""
     )
     message.add_alternative(
-        "<!doctype html><html><body>"
-        f"<p>{html_escape(str_value(delivery.get('student_name')) or 'Estudante')},</p>"
-        f"<h1>{html_escape(title)}</h1>"
-        f"<p>{html_escape(str_value(delivery.get('message'))).replace(chr(10), '<br>')}</p>"
-        f"{action_html}</body></html>",
+        "<!doctype html><html lang=\"pt\"><body style=\"margin:0;background:#FFF8E4;padding:24px\">"
+        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center">'
+        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#FFFFFF;border:1px solid rgba(201,165,91,.35);border-radius:12px;overflow:hidden">'
+        f'<tr><td style="background:#00365B;padding:20px 24px;color:#FFF8E4;font:600 16px Manrope,Arial,sans-serif">{brand_name}</td></tr>'
+        '<tr><td style="padding:28px 24px;color:#00365B;font:15px/1.6 Inter,Arial,sans-serif">'
+        f'<p style="margin:0 0 12px">Olá, {student_name}.</p>'
+        f'<h1 style="margin:0 0 16px;font:600 24px/1.25 Manrope,Arial,sans-serif;color:#00365B">{html_escape(title)}</h1>'
+        f'<p style="margin:0">{safe_body}</p>{action_html}'
+        '</td></tr><tr><td style="border-top:1px solid rgba(201,165,91,.25);padding:16px 24px;color:rgba(0,54,91,.68);font:12px/1.5 Inter,Arial,sans-serif">Mensagem académica automática. Pode gerir os canais e categorias no seu perfil.</td></tr>'
+        "</table></td></tr></table></body></html>",
         subtype="html",
     )
 
@@ -1484,6 +1864,98 @@ def send_telegram_notification(delivery: dict[str, Any], configuration: dict[str
         safe_error = redact_notification_error(description, configuration.get("botToken"))
         raise RuntimeError(f"A API do Telegram rejeitou a mensagem: {safe_error}")
     return message_id
+
+
+def push_subscriptions_for_student(student_id: str, encryption_key: str) -> list[dict[str, Any]]:
+    return fetch_all(
+        """
+        select subscription_id,
+               pgp_sym_decrypt(endpoint_encrypted, %s)::text as endpoint,
+               pgp_sym_decrypt(p256dh_encrypted, %s)::text as p256dh,
+               pgp_sym_decrypt(auth_encrypted, %s)::text as auth
+        from courseplatform.push_subscriptions
+        where student_id = %s and enabled
+        order by updated_at desc
+        """,
+        (encryption_key, encryption_key, encryption_key, student_id),
+    )
+
+
+def update_push_subscription_delivery(subscription_id: str, success_result: bool, expired: bool = False) -> None:
+    with connection() as conn:
+        if success_result:
+            conn.execute(
+                """
+                update courseplatform.push_subscriptions
+                set last_success_at = now(), failure_count = 0, updated_at = now()
+                where subscription_id = %s
+                """,
+                (subscription_id,),
+            )
+        else:
+            conn.execute(
+                """
+                update courseplatform.push_subscriptions
+                set failure_count = failure_count + 1,
+                    enabled = case when %s or failure_count >= 4 then false else enabled end,
+                    updated_at = now()
+                where subscription_id = %s
+                """,
+                (expired, subscription_id),
+            )
+        conn.commit()
+
+
+def send_web_push_notification(delivery: dict[str, Any], configuration: dict[str, Any] | None = None) -> str:
+    configuration = configuration or web_push_runtime_configuration()
+    if not configuration.get("configured") or webpush is None:
+        raise RuntimeError("Integração Web Push ainda não configurada no servidor.")
+    student_id = str_value(delivery.get("student_id") or delivery.get("recipient"))
+    if not student_id:
+        raise RuntimeError("Destinatário Push inválido.")
+    subscriptions = push_subscriptions_for_student(student_id, configuration["encryptionKey"])
+    if not subscriptions:
+        raise RuntimeError("Nenhum dispositivo possui notificações Push ativas.")
+    action_url = resolved_notification_action_url(delivery, configuration) or str_value(delivery.get("action_url")) or "#/notifications"
+    payload = json.dumps({
+        "title": str_value(delivery.get("push_title") or delivery.get("title"))[:120],
+        "body": str_value(delivery.get("push_message") or delivery.get("message"))[:300],
+        "url": action_url,
+        "icon": "/assets/app-icon-192.png",
+        "badge": "/assets/app-icon-192.png",
+        "tag": f"courseplatform-{str_value(delivery.get('notification_id'))[:80]}",
+        "notificationId": str_value(delivery.get("notification_id")),
+        "priority": str_value(delivery.get("priority") or "NORMAL"),
+    }, ensure_ascii=False)
+    delivered = 0
+    failures: list[str] = []
+    for subscription in subscriptions:
+        try:
+            response = webpush(
+                subscription_info={
+                    "endpoint": subscription["endpoint"],
+                    "keys": {"p256dh": subscription["p256dh"], "auth": subscription["auth"]},
+                },
+                data=payload,
+                vapid_private_key=configuration["privateKey"],
+                vapid_claims={"sub": configuration["subject"]},
+                ttl=configuration["ttlSeconds"],
+                timeout=configuration["timeoutSeconds"],
+            )
+            status_code = int(getattr(response, "status_code", 201) or 201)
+            if status_code >= 400:
+                raise RuntimeError(f"Serviço Push HTTP {status_code}.")
+            delivered += 1
+            update_push_subscription_delivery(subscription["subscription_id"], True)
+        except Exception as error:
+            response = getattr(error, "response", None)
+            status_code = int(getattr(response, "status_code", 0) or 0)
+            expired = status_code in {404, 410}
+            update_push_subscription_delivery(subscription["subscription_id"], False, expired)
+            failures.append(redact_notification_error(error, subscription.get("endpoint")))
+    if not delivered:
+        raise RuntimeError(failures[-1] if failures else "A notificação Push não foi entregue.")
+    return f"{delivered} dispositivo(s)"
 
 
 def telegram_get_updates(configuration: dict[str, Any], offset: int = 0) -> list[dict[str, Any]]:
@@ -1607,7 +2079,7 @@ def claim_notification_deliveries(
 ) -> list[dict[str, Any]]:
     """Atomically lease one channel's queue so workers cannot send duplicates."""
     normalized_channel = str_value(channel).upper()
-    if normalized_channel not in {"WHATSAPP", "EMAIL", "TELEGRAM"}:
+    if normalized_channel not in {"WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"}:
         raise ValueError("Canal de notificação inválido.")
     notification_filter = ""
     params: list[Any] = [normalized_channel]
@@ -1642,7 +2114,9 @@ def claim_notification_deliveries(
           where d.delivery_id = c.delivery_id
           returning d.*
         )
-        select claimed.*, n.title, n.message, n.action_url, s.full_name as student_name
+        select claimed.*, n.student_id, n.notification_id, n.title, n.message,
+               n.email_subject, n.email_message, n.push_title, n.push_message,
+               n.action_url, n.priority, s.full_name as student_name
         from claimed
         join courseplatform.notifications n on n.notification_id = claimed.notification_id
         join courseplatform.students s on s.student_id = n.student_id
@@ -1664,6 +2138,10 @@ def claim_email_deliveries(notification_ids: list[str] | None, limit: int) -> li
 
 def claim_telegram_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
     return claim_notification_deliveries("TELEGRAM", notification_ids, limit)
+
+
+def claim_push_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
+    return claim_notification_deliveries("PUSH", notification_ids, limit)
 
 
 def deliver_pending_channel(
@@ -1696,6 +2174,8 @@ def deliver_pending_channel(
                             configuration.get("accessToken"),
                             configuration.get("smtpPassword"),
                             configuration.get("botToken"),
+                            configuration.get("privateKey"),
+                            configuration.get("encryptionKey"),
                         ),
                     ))
 
@@ -1749,6 +2229,13 @@ def deliver_pending_telegram(notification_ids: list[str] | None = None, limit: i
     )
 
 
+def deliver_pending_push(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
+    return deliver_pending_channel(
+        "PUSH", web_push_runtime_configuration, send_web_push_notification,
+        notification_ids, limit,
+    )
+
+
 def dispatch_notification_deliveries(notification_ids: list[str]) -> None:
     if not notification_ids:
         return
@@ -1756,6 +2243,7 @@ def dispatch_notification_deliveries(notification_ids: list[str]) -> None:
         deliver_pending_whatsapp,
         deliver_pending_email,
         deliver_pending_telegram,
+        deliver_pending_push,
     ):
         try:
             # Keep the request bounded while covering a typical class in one
@@ -3042,6 +3530,136 @@ def attempt_status(payload: dict[str, Any]):
     })
 
 
+def student_push_configuration(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
+    _, student = student_context(payload)
+    configuration = web_push_configuration()
+    subscription = fetch_one(
+        """
+        select count(*) as count, max(updated_at) as updated_at
+        from courseplatform.push_subscriptions
+        where student_id = %s and enabled
+        """,
+        (student["student_id"],),
+    ) or {}
+    return success({
+        "pushConfiguration": configuration,
+        "subscriptionCount": int(subscription.get("count") or 0),
+        "updatedAt": iso(subscription.get("updated_at")),
+    })
+
+
+def student_subscribe_push(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
+    _, student = student_context(payload)
+    configuration = web_push_runtime_configuration()
+    if not configuration.get("configured"):
+        raise ApiError(
+            "WEB_PUSH_NOT_CONFIGURED",
+            "As notificações Push ainda não estão configuradas no servidor.",
+        )
+    subscription = payload.get("subscription") if isinstance(payload.get("subscription"), dict) else payload
+    endpoint = str_value(subscription.get("endpoint"))
+    keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
+    p256dh = str_value(keys.get("p256dh") or subscription.get("p256dh"))
+    auth_key = str_value(keys.get("auth") or subscription.get("auth"))
+    if not valid_push_endpoint(endpoint):
+        raise ApiError("INVALID_PUSH_ENDPOINT", "A subscrição Push possui um endereço inválido.")
+    if not valid_push_key(p256dh, 60, 200) or not valid_push_key(auth_key, 10, 100):
+        raise ApiError("INVALID_PUSH_KEYS", "As chaves da subscrição Push são inválidas.")
+    encryption_key = str_value(configuration.get("encryptionKey"))
+    if len(encryption_key.encode("utf-8")) < 32:
+        raise ApiError(
+            "WEAK_NOTIFICATION_ENCRYPTION_KEY",
+            "NOTIFICATION_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
+        )
+    endpoint_hash = hash_secret(endpoint)
+    device_label = str_value(payload.get("deviceLabel"))[:120]
+    user_agent = str_value(payload.get("userAgent"))[:500]
+    with connection() as conn:
+        row = conn.execute(
+            """
+            insert into courseplatform.push_subscriptions
+              (subscription_id, student_id, endpoint_hash, endpoint_encrypted,
+               p256dh_encrypted, auth_encrypted, user_agent, device_label,
+               enabled, failure_count, created_at, updated_at)
+            values (
+              %s, %s, %s,
+              pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
+              pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
+              pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
+              %s, %s, true, 0, now(), now()
+            )
+            on conflict (endpoint_hash) do update set
+              student_id = excluded.student_id,
+              endpoint_encrypted = excluded.endpoint_encrypted,
+              p256dh_encrypted = excluded.p256dh_encrypted,
+              auth_encrypted = excluded.auth_encrypted,
+              user_agent = excluded.user_agent,
+              device_label = excluded.device_label,
+              enabled = true,
+              failure_count = 0,
+              updated_at = now()
+            returning subscription_id, device_label, enabled, created_at, updated_at
+            """,
+            (
+                generate_id("PSH"), student["student_id"], endpoint_hash,
+                endpoint, encryption_key, p256dh, encryption_key, auth_key, encryption_key,
+                user_agent or None, device_label or None,
+            ),
+        ).fetchone()
+        audit(
+            conn, "STUDENT", student["student_id"], "PUSH_SUBSCRIBED",
+            "PUSH_SUBSCRIPTION", row["subscription_id"],
+            {"deviceLabel": device_label, "endpointHash": endpoint_hash[:16]},
+        )
+        conn.commit()
+    return success({
+        "subscribed": True,
+        "subscription": {
+            "subscriptionId": row["subscription_id"],
+            "deviceLabel": row.get("device_label") or "",
+            "enabled": as_bool(row.get("enabled")),
+            "updatedAt": iso(row.get("updated_at")),
+        },
+    })
+
+
+def student_unsubscribe_push(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
+    _, student = student_context(payload)
+    endpoint = str_value(payload.get("endpoint"))
+    all_devices = as_bool(payload.get("allDevices"))
+    if not endpoint and not all_devices:
+        raise ApiError("PUSH_SUBSCRIPTION_REQUIRED", "Informe a subscrição Push deste dispositivo.")
+    with connection() as conn:
+        if all_devices:
+            result = conn.execute(
+                """
+                update courseplatform.push_subscriptions
+                set enabled = false, updated_at = now()
+                where student_id = %s and enabled
+                """,
+                (student["student_id"],),
+            )
+        else:
+            result = conn.execute(
+                """
+                update courseplatform.push_subscriptions
+                set enabled = false, updated_at = now()
+                where student_id = %s and endpoint_hash = %s and enabled
+                """,
+                (student["student_id"], hash_secret(endpoint)),
+            )
+        audit(
+            conn, "STUDENT", student["student_id"], "PUSH_UNSUBSCRIBED",
+            "PUSH_SUBSCRIPTION", "ALL" if all_devices else hash_secret(endpoint)[:16],
+            {"allDevices": all_devices, "updatedCount": result.rowcount},
+        )
+        conn.commit()
+    return success({"unsubscribed": True, "updatedCount": result.rowcount})
+
+
 def student_start_telegram_link(payload: dict[str, Any]):
     prepare_notification_feature_schema()
     _, student = student_context(payload)
@@ -3294,7 +3912,11 @@ def my_notifications(payload: dict[str, Any]):
                t.status as telegram_status, t.recipient as telegram_recipient,
                t.provider_message_id as telegram_provider_message_id,
                t.attempt_count as telegram_attempt_count, t.last_error as telegram_last_error,
-               t.sent_at as telegram_sent_at
+               t.sent_at as telegram_sent_at,
+               p.status as push_status,
+               p.provider_message_id as push_provider_message_id,
+               p.attempt_count as push_attempt_count, p.last_error as push_last_error,
+               p.sent_at as push_sent_at
         from courseplatform.notifications n
         left join courseplatform.notification_deliveries w
           on w.notification_id = n.notification_id and w.channel = 'WHATSAPP'
@@ -3302,6 +3924,8 @@ def my_notifications(payload: dict[str, Any]):
           on e.notification_id = n.notification_id and e.channel = 'EMAIL'
         left join courseplatform.notification_deliveries t
           on t.notification_id = n.notification_id and t.channel = 'TELEGRAM'
+        left join courseplatform.notification_deliveries p
+          on p.notification_id = n.notification_id and p.channel = 'PUSH'
         where n.student_id = %s {where_unread}
         order by n.created_at desc
         limit %s offset %s
@@ -4050,12 +4674,14 @@ def admin_list_groups(payload: dict[str, Any]):
 
 def admin_list_students(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    prepare_notification_feature_schema()
     status = (payload.get("status") or "ALL").upper()
     query = str_value(payload.get("query"))
     limit = max(1, min(int_value(payload.get("limit"), 500), 2000))
     rows = fetch_all(
         """
         select s.*,
+          (select count(*) from courseplatform.push_subscriptions ps where ps.student_id = s.student_id and ps.enabled) as push_subscription_count,
           coalesce(jsonb_agg(distinct to_jsonb(e)) filter (where e.enrollment_id is not null), '[]') as enrollments,
           coalesce(jsonb_agg(distinct to_jsonb(gm)) filter (where gm.group_member_id is not null), '[]') as memberships
         from courseplatform.students s
@@ -4385,6 +5011,13 @@ def admin_review_submission(payload: dict[str, Any]):
             entity_type="ATTEMPT",
             entity_id=attempt["attempt_id"],
             priority="HIGH" if status == "CORRECTION_REQUIRED" else "NORMAL",
+            template_key="REVIEW_UPDATED",
+            template_variables={
+                "activity": lesson.get("title") or "Atividade",
+                "status": notification_status_label(decision),
+                "feedback": comments,
+                "details": message,
+            },
         )
         if notification_id:
             notification_ids.append(notification_id)
@@ -4436,6 +5069,8 @@ def admin_authorize_retry(payload: dict[str, Any]):
             entity_type="ATTEMPT",
             entity_id=attempt["attempt_id"],
             priority="HIGH",
+            template_key="RETRY_AUTHORIZED",
+            template_variables={"activity": lesson.get("title") or "atividade"},
         )
         if notification_id:
             notification_ids.append(notification_id)
@@ -4566,6 +5201,13 @@ def admin_update_attempt(payload: dict[str, Any]):
                 entity_type="ATTEMPT",
                 entity_id=attempt["attempt_id"],
                 priority="HIGH" if status in {"CORRECTION_REQUIRED", "TIME_EXCEEDED"} else "NORMAL",
+                template_key="SUBMISSION_DEADLINE_UPDATED" if deadline_changed and not status_changed else "SUBMISSION_STATUS_UPDATED",
+                template_variables={
+                    "activity": lesson.get("title") or "Atividade",
+                    "status": notification_status_label(status),
+                    "deadline": iso(deadline) if deadline_supplied and deadline else "",
+                    "details": details,
+                },
             )
             if notification_id:
                 notification_ids.append(notification_id)
@@ -5202,6 +5844,16 @@ def admin_set_lesson_access(payload: dict[str, Any]):
                         action_url=f"#/lesson/{lesson_id}" if status == "AVAILABLE" else "#/lessons",
                         entity_type="LESSON",
                         entity_id=lesson_id,
+                        template_key="MODULE_ACCESS_UPDATED",
+                        template_variables={
+                            "module": lesson.get("title") or lesson_id,
+                            "status": notification_status_label(status),
+                            "details": (
+                                f"O módulo {lesson.get('title') or lesson_id} está disponível para leitura e exercícios."
+                                if status == "AVAILABLE"
+                                else f"O acesso ao módulo {lesson.get('title') or lesson_id} foi temporariamente bloqueado."
+                            ),
+                        },
                     )
                     if notification_id:
                         notification_ids.append(notification_id)
@@ -5403,6 +6055,12 @@ def admin_manage_lesson_progress(payload: dict[str, Any]):
                         entity_type="LESSON_PROGRESS",
                         entity_id=progress["progress_id"],
                         priority="HIGH" if resolved_evaluation == "CORRECTION_REQUIRED" else "NORMAL",
+                        template_key="MODULE_PROGRESS_UPDATED",
+                        template_variables={
+                            "module": lesson.get("title") or lesson_id,
+                            "status": notification_status_label(resolved_evaluation),
+                            "details": f"{lesson.get('title') or lesson_id}. {'; '.join(message_parts)}.",
+                        },
                     )
                     if notification_id:
                         notification_ids.append(notification_id)
@@ -6089,7 +6747,11 @@ def admin_list_notifications(payload: dict[str, Any]):
                t.status as telegram_status, t.recipient as telegram_recipient,
                t.provider_message_id as telegram_provider_message_id,
                t.attempt_count as telegram_attempt_count, t.last_error as telegram_last_error,
-               t.sent_at as telegram_sent_at
+               t.sent_at as telegram_sent_at,
+               p.status as push_status,
+               p.provider_message_id as push_provider_message_id,
+               p.attempt_count as push_attempt_count, p.last_error as push_last_error,
+               p.sent_at as push_sent_at
         from courseplatform.notifications n
         join courseplatform.students s on s.student_id = n.student_id
         left join courseplatform.notification_deliveries w
@@ -6098,6 +6760,8 @@ def admin_list_notifications(payload: dict[str, Any]):
           on e.notification_id = n.notification_id and e.channel = 'EMAIL'
         left join courseplatform.notification_deliveries t
           on t.notification_id = n.notification_id and t.channel = 'TELEGRAM'
+        left join courseplatform.notification_deliveries p
+          on p.notification_id = n.notification_id and p.channel = 'PUSH'
         order by n.created_at desc
         limit %s offset %s
         """,
@@ -6118,7 +6782,11 @@ def admin_list_notifications(payload: dict[str, Any]):
           count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'SENT') as telegram_sent,
           count(*) filter (where d.channel = 'TELEGRAM' and d.status in ('PENDING', 'PROCESSING')) as telegram_pending,
           count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'FAILED') as telegram_failed,
-          count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'SKIPPED') as telegram_skipped
+          count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'SKIPPED') as telegram_skipped,
+          count(*) filter (where d.channel = 'PUSH' and d.status = 'SENT') as push_sent,
+          count(*) filter (where d.channel = 'PUSH' and d.status in ('PENDING', 'PROCESSING')) as push_pending,
+          count(*) filter (where d.channel = 'PUSH' and d.status = 'FAILED') as push_failed,
+          count(*) filter (where d.channel = 'PUSH' and d.status = 'SKIPPED') as push_skipped
         from courseplatform.notification_deliveries d
         """
     ) or {}
@@ -6138,10 +6806,16 @@ def admin_list_notifications(payload: dict[str, Any]):
             "telegramPending": int(totals.get("telegram_pending") or 0),
             "telegramFailed": int(totals.get("telegram_failed") or 0),
             "telegramSkipped": int(totals.get("telegram_skipped") or 0),
+            "pushSent": int(totals.get("push_sent") or 0),
+            "pushPending": int(totals.get("push_pending") or 0),
+            "pushFailed": int(totals.get("push_failed") or 0),
+            "pushSkipped": int(totals.get("push_skipped") or 0),
         },
         "whatsappConfiguration": whatsapp_configuration(),
         "emailConfiguration": email_configuration(),
         "telegramConfiguration": telegram_configuration(),
+        "pushConfiguration": web_push_configuration(),
+        "notificationTemplates": notification_templates_payload(),
         "page": page,
         "limit": limit,
     })
@@ -6175,9 +6849,14 @@ def admin_create_notification(payload: dict[str, Any]):
                 entity_type="MANUAL_UPDATE",
                 entity_id="",
                 priority=str_value(payload.get("priority") or "NORMAL"),
+                email_subject=str_value(payload.get("emailSubject")),
+                email_message=str_value(payload.get("emailMessage")),
+                push_title=str_value(payload.get("pushTitle")),
+                push_message=str_value(payload.get("pushMessage")),
                 send_whatsapp=as_bool(payload.get("sendWhatsApp")),
                 send_email=as_bool(payload.get("sendEmail")),
                 send_telegram=as_bool(payload.get("sendTelegram")),
+                send_push=as_bool(payload.get("sendPush")),
             )
             if notification_id:
                 notification_ids.append(notification_id)
@@ -6193,11 +6872,99 @@ def admin_create_notification(payload: dict[str, Any]):
                 "sendWhatsApp": as_bool(payload.get("sendWhatsApp")),
                 "sendEmail": as_bool(payload.get("sendEmail")),
                 "sendTelegram": as_bool(payload.get("sendTelegram")),
+                "sendPush": as_bool(payload.get("sendPush")),
             },
         )
         conn.commit()
     dispatch_notification_deliveries(notification_ids)
     return success({"notificationCount": len(notification_ids), "notificationIds": notification_ids})
+
+
+def admin_save_notification_template(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_notification_feature_schema()
+    source = payload.get("notificationTemplate") if isinstance(payload.get("notificationTemplate"), dict) else payload
+    template_key = str_value(source.get("templateKey")).upper()
+    if template_key not in NOTIFICATION_TEMPLATE_DEFINITIONS:
+        raise ApiError("INVALID_NOTIFICATION_TEMPLATE", "Selecione um modelo de notificação válido.")
+    limits = {
+        "internalTitleTemplate": 180,
+        "internalMessageTemplate": 1800,
+        "emailSubjectTemplate": 180,
+        "emailMessageTemplate": 5000,
+        "pushTitleTemplate": 120,
+        "pushMessageTemplate": 300,
+    }
+    values: dict[str, str] = {}
+    for field, limit in limits.items():
+        value = str_value(source.get(field))
+        if not value:
+            raise ApiError("NOTIFICATION_TEMPLATE_FIELD_REQUIRED", "Todos os textos do modelo são obrigatórios.", {"field": field})
+        if len(value) > limit:
+            raise ApiError("NOTIFICATION_TEMPLATE_TOO_LONG", "Um dos textos excede o tamanho permitido.", {"field": field, "limit": limit})
+        unknown_tokens = _template_tokens(value) - NOTIFICATION_TEMPLATE_VARIABLES
+        if unknown_tokens:
+            raise ApiError(
+                "INVALID_NOTIFICATION_TEMPLATE_VARIABLE",
+                "O modelo contém variáveis não suportadas.",
+                {"field": field, "variables": sorted(unknown_tokens)},
+            )
+        values[field] = value
+    with connection() as conn:
+        row = conn.execute(
+            """
+            insert into courseplatform.notification_templates
+              (template_key, internal_title_template, internal_message_template,
+               email_subject_template, email_message_template,
+               push_title_template, push_message_template, updated_by, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, now())
+            on conflict (template_key) do update set
+              internal_title_template = excluded.internal_title_template,
+              internal_message_template = excluded.internal_message_template,
+              email_subject_template = excluded.email_subject_template,
+              email_message_template = excluded.email_message_template,
+              push_title_template = excluded.push_title_template,
+              push_message_template = excluded.push_message_template,
+              updated_by = excluded.updated_by,
+              updated_at = now()
+            returning *
+            """,
+            (
+                template_key,
+                values["internalTitleTemplate"], values["internalMessageTemplate"],
+                values["emailSubjectTemplate"], values["emailMessageTemplate"],
+                values["pushTitleTemplate"], values["pushMessageTemplate"],
+                admin["admin_id"],
+            ),
+        ).fetchone()
+        audit(
+            conn, "ADMIN", admin["admin_id"], "NOTIFICATION_TEMPLATE_UPDATED",
+            "NOTIFICATION_TEMPLATE", template_key,
+        )
+        conn.commit()
+    return success({
+        "notificationTemplate": notification_template_payload(template_key, row),
+        "notificationTemplates": notification_templates_payload(),
+    })
+
+
+def admin_reset_notification_template(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_notification_feature_schema()
+    template_key = str_value(payload.get("templateKey")).upper()
+    if template_key not in NOTIFICATION_TEMPLATE_DEFINITIONS:
+        raise ApiError("INVALID_NOTIFICATION_TEMPLATE", "Selecione um modelo de notificação válido.")
+    with connection() as conn:
+        conn.execute("delete from courseplatform.notification_templates where template_key = %s", (template_key,))
+        audit(
+            conn, "ADMIN", admin["admin_id"], "NOTIFICATION_TEMPLATE_RESET",
+            "NOTIFICATION_TEMPLATE", template_key,
+        )
+        conn.commit()
+    return success({
+        "notificationTemplate": notification_template_payload(template_key),
+        "notificationTemplates": notification_templates_payload(),
+    })
 
 
 def admin_save_whatsapp_configuration(payload: dict[str, Any]):
@@ -6502,13 +7269,14 @@ def admin_retry_notification_deliveries(payload: dict[str, Any]):
     limit = max(1, min(int_value(payload.get("limit"), 20), 20))
     requested = payload.get("channels") if isinstance(payload.get("channels"), list) else []
     channels = [str_value(channel).upper() for channel in requested]
-    channels = [channel for channel in dict.fromkeys(channels) if channel in {"WHATSAPP", "EMAIL", "TELEGRAM"}]
+    channels = [channel for channel in dict.fromkeys(channels) if channel in {"WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"}]
     if not channels:
-        channels = ["WHATSAPP", "EMAIL", "TELEGRAM"]
+        channels = ["WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"]
     delivery_functions = {
         "WHATSAPP": deliver_pending_whatsapp,
         "EMAIL": deliver_pending_email,
         "TELEGRAM": deliver_pending_telegram,
+        "PUSH": deliver_pending_push,
     }
     deliveries: dict[str, dict[str, int]] = {}
     for channel in channels:
@@ -6535,6 +7303,7 @@ def admin_retry_notification_deliveries(payload: dict[str, Any]):
         "whatsappConfiguration": whatsapp_configuration(),
         "emailConfiguration": email_configuration(),
         "telegramConfiguration": telegram_configuration(),
+        "pushConfiguration": web_push_configuration(),
     })
 
 
@@ -6565,6 +7334,9 @@ ACTIONS = {
     "studentStartTelegramLink": student_start_telegram_link,
     "studentConfirmTelegramLink": student_confirm_telegram_link,
     "studentUnlinkTelegram": student_unlink_telegram,
+    "getPushConfiguration": student_push_configuration,
+    "subscribePush": student_subscribe_push,
+    "unsubscribePush": student_unsubscribe_push,
     "getLesson": get_lesson,
     "getAttemptStatus": attempt_status,
     "updateMyProfile": update_my_profile,
@@ -6605,6 +7377,8 @@ ACTIONS = {
     "adminUploadCertificateAsset": admin_upload_certificate_asset,
     "adminListNotifications": admin_list_notifications,
     "adminCreateNotification": admin_create_notification,
+    "adminSaveNotificationTemplate": admin_save_notification_template,
+    "adminResetNotificationTemplate": admin_reset_notification_template,
     "adminSaveWhatsAppConfiguration": admin_save_whatsapp_configuration,
     "adminSaveEmailConfiguration": admin_save_email_configuration,
     "adminSaveTelegramConfiguration": admin_save_telegram_configuration,

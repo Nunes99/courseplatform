@@ -99,7 +99,8 @@ const state = {
   },
   staff: [],
   notificationLog: null,
-  notificationStudentTotal: 0
+  notificationStudentTotal: 0,
+  notificationTemplateKey: ''
 };
 
 initialize();
@@ -529,7 +530,9 @@ function notificationDeliveryLabel(status, channel = '') {
       ? 'Aceite pela Meta'
       : channel === 'TELEGRAM'
         ? 'Aceite pelo Telegram'
-        : 'Enviado',
+        : channel === 'PUSH'
+          ? 'Entregue ao dispositivo'
+          : 'Enviado',
     PENDING: 'Pendente',
     FAILED: 'Falhou',
     SKIPPED: 'Não solicitado',
@@ -570,6 +573,10 @@ function notificationRecipientTemplate(student) {
     : student.telegramOptIn
       ? 'Telegram não associado'
       : 'Telegram sem autorização';
+  const pushReady = Number(student.pushSubscriptionCount || 0) > 0;
+  const pushLabel = pushReady
+    ? `${Number(student.pushSubscriptionCount)} dispositivo(s) com Push`
+    : 'Push não ativado';
   const publicId = studentPublicIdLabel(student.publicStudentId);
   const searchText = notificationSearchText(student.fullName, publicId, email, phone);
   return `
@@ -585,8 +592,61 @@ function notificationRecipientTemplate(student) {
         <span class="status-pill notification-channel-state ${emailReady ? 'is-ready' : 'is-unavailable'}" aria-label="${escapeHtml(emailLabel)}" title="${escapeHtml(emailLabel)}">Email · ${emailReady ? 'Sim' : 'Não'}</span>
         <span class="status-pill notification-channel-state ${whatsappClass}" aria-label="${escapeHtml(whatsappLabel)}" title="${escapeHtml(whatsappLabel)}">WhatsApp · ${whatsappReady ? 'Sim' : 'Não'}</span>
         <span class="status-pill notification-channel-state ${telegramReady ? 'is-ready' : 'is-unavailable'}" aria-label="${escapeHtml(telegramLabel)}" title="${escapeHtml(telegramLabel)}">Telegram · ${telegramReady ? 'Sim' : 'Não'}</span>
+        <span class="status-pill notification-channel-state ${pushReady ? 'is-ready' : 'is-unavailable'}" aria-label="${escapeHtml(pushLabel)}" title="${escapeHtml(pushLabel)}">Push · ${pushReady ? 'Sim' : 'Não'}</span>
       </span>
     </label>
+  `;
+}
+
+function notificationTemplateEditor(templates = []) {
+  if (!templates.length) return '<div class="empty-note">Os modelos ainda não estão disponíveis.</div>';
+  const selectedKey = state.notificationTemplateKey && templates.some((item) => item.templateKey === state.notificationTemplateKey)
+    ? state.notificationTemplateKey
+    : templates[0].templateKey;
+  state.notificationTemplateKey = selectedKey;
+  const template = templates.find((item) => item.templateKey === selectedKey) || templates[0];
+  const variableChips = (template.allowedVariables || []).map((variable) => (
+    `<code>{{${escapeHtml(variable)}}}</code>`
+  )).join('');
+  return `
+    <div class="notification-template-toolbar">
+      <label>
+        <span>Evento automático</span>
+        <select id="notificationTemplateSelect">
+          ${templates.map((item) => `<option value="${escapeHtml(item.templateKey)}" ${item.templateKey === selectedKey ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
+        </select>
+      </label>
+      <span class="status-pill ${template.customized ? 'status-approved' : 'status-pending'}">${template.customized ? 'Personalizado' : 'Modelo padrão'}</span>
+    </div>
+    <form id="notificationTemplateForm" class="form-stack notification-template-form">
+      <input type="hidden" name="templateKey" value="${escapeHtml(template.templateKey)}">
+      <div class="notification-template-variables" aria-label="Variáveis disponíveis">
+        <strong>Variáveis disponíveis</strong>${variableChips}
+      </div>
+      <div class="notification-template-channel-block">
+        <div><p class="eyebrow">Plataforma</p><h3>Notificação interna</h3></div>
+        <label><span>Título</span><input name="internalTitleTemplate" maxlength="180" value="${escapeHtml(template.internalTitleTemplate || '')}" required></label>
+        <label><span>Mensagem</span><textarea name="internalMessageTemplate" rows="3" maxlength="1800" required>${escapeHtml(template.internalMessageTemplate || '')}</textarea></label>
+      </div>
+      <div class="notification-template-channel-block">
+        <div><p class="eyebrow">Email</p><h3>Mensagem enviada por SMTP</h3></div>
+        <label><span>Assunto</span><input name="emailSubjectTemplate" maxlength="180" value="${escapeHtml(template.emailSubjectTemplate || '')}" required></label>
+        <label><span>Conteúdo</span><textarea name="emailMessageTemplate" rows="4" maxlength="5000" required>${escapeHtml(template.emailMessageTemplate || '')}</textarea></label>
+      </div>
+      <div class="notification-template-channel-block">
+        <div><p class="eyebrow">Push</p><h3>Aviso no dispositivo</h3></div>
+        <label><span>Título curto</span><input name="pushTitleTemplate" maxlength="120" value="${escapeHtml(template.pushTitleTemplate || '')}" required></label>
+        <label><span>Mensagem curta</span><textarea name="pushMessageTemplate" rows="3" maxlength="300" required>${escapeHtml(template.pushMessageTemplate || '')}</textarea></label>
+      </div>
+      <div class="notification-template-preview-grid">
+        <article><span>Pré-visualização interna</span><strong>${escapeHtml(template.internalTitleTemplate || '')}</strong><p>${escapeHtml(template.internalMessageTemplate || '')}</p></article>
+        <article><span>Pré-visualização Push</span><strong>${escapeHtml(template.pushTitleTemplate || '')}</strong><p>${escapeHtml(template.pushMessageTemplate || '')}</p></article>
+      </div>
+      <div class="notification-template-actions">
+        <button class="button button-primary" type="submit">Guardar modelo</button>
+        <button class="button button-secondary" id="resetNotificationTemplate" type="button" ${template.customized ? '' : 'disabled'}>Repor modelo padrão</button>
+      </div>
+    </form>
   `;
 }
 
@@ -614,19 +674,21 @@ function renderNotificationManagement() {
   const whatsapp = data.whatsappConfiguration || {};
   const email = data.emailConfiguration || {};
   const telegram = data.telegramConfiguration || {};
+  const push = data.pushConfiguration || {};
+  const notificationTemplates = data.notificationTemplates || [];
   const emailPasswordConfigured = Boolean(email.passwordConfigured ?? email.smtpPasswordConfigured);
   const emailStoredPasswordConfigured = Boolean(email.storedPasswordConfigured ?? email.storedSmtpPasswordConfigured);
   const activeStudents = state.students.filter(({ student }) => student?.status === 'ACTIVE');
   const activeStudentTotal = Math.max(activeStudents.length, state.notificationStudentTotal || 0);
-  const pendingDeliveries = Number(summary.whatsappPending || 0) + Number(summary.emailPending || 0) + Number(summary.telegramPending || 0);
-  const failedDeliveries = Number(summary.whatsappFailed || 0) + Number(summary.emailFailed || 0) + Number(summary.telegramFailed || 0);
+  const pendingDeliveries = Number(summary.whatsappPending || 0) + Number(summary.emailPending || 0) + Number(summary.telegramPending || 0) + Number(summary.pushPending || 0);
+  const failedDeliveries = Number(summary.whatsappFailed || 0) + Number(summary.emailFailed || 0) + Number(summary.telegramFailed || 0) + Number(summary.pushFailed || 0);
 
   main.innerHTML = `
     <div class="admin-page-heading">
       <div>
         <p class="eyebrow">Comunicação académica</p>
         <h1>Notificações</h1>
-        <p>Envie atualizações internas, por email, WhatsApp ou Telegram, em simultâneo ou separadamente.</p>
+        <p>Envie atualizações internas, por email, WhatsApp, Telegram ou Push, em simultâneo ou separadamente.</p>
       </div>
       ${canManageNotifications() && (pendingDeliveries || failedDeliveries) ? `
         <button class="button button-secondary" id="retryNotificationDeliveries" type="button">
@@ -640,6 +702,7 @@ function renderNotificationManagement() {
       <article class="insight-card"><img src="${iconUrl('mail-check', goldIcon)}" alt=""><div><span>Emails enviados</span><strong>${Number(summary.emailSent || 0)}</strong></div></article>
       <article class="insight-card"><img src="${iconUrl('message-circle-check', goldIcon)}" alt=""><div><span>WhatsApp aceites</span><strong>${Number(summary.whatsappSent || 0)}</strong></div></article>
       <article class="insight-card"><img src="${iconUrl('send', goldIcon)}" alt=""><div><span>Telegram aceites</span><strong>${Number(summary.telegramSent || 0)}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('bell-ring', goldIcon)}" alt=""><div><span>Push entregues</span><strong>${Number(summary.pushSent || 0)}</strong></div></article>
       <article class="insight-card"><img src="${iconUrl('clock-3', goldIcon)}" alt=""><div><span>Entregas pendentes</span><strong>${pendingDeliveries}</strong></div></article>
       <article class="insight-card"><img src="${iconUrl('circle-alert', goldIcon)}" alt=""><div><span>Entregas com falha</span><strong>${failedDeliveries}</strong></div></article>
     </section>
@@ -704,6 +767,16 @@ function renderNotificationManagement() {
             <label><span>Título</span><input name="title" maxlength="180" required></label>
             <label><span>Mensagem</span><textarea name="message" rows="5" maxlength="1800" required></textarea></label>
             <label><span>Destino ao abrir</span><input name="actionUrl" value="#/notifications" placeholder="#/lessons"></label>
+            <details class="notification-channel-overrides">
+              <summary>Personalizar Email e Push desta mensagem</summary>
+              <p>Deixe os campos vazios para reutilizar o título e a mensagem internos.</p>
+              <div class="profile-form-grid">
+                <label><span>Assunto do email</span><input name="emailSubject" maxlength="180"></label>
+                <label><span>Título Push</span><input name="pushTitle" maxlength="120"></label>
+              </div>
+              <label><span>Conteúdo do email</span><textarea name="emailMessage" rows="4" maxlength="5000"></textarea></label>
+              <label><span>Mensagem Push</span><textarea name="pushMessage" rows="3" maxlength="300"></textarea></label>
+            </details>
             <fieldset class="notification-channel-selector">
               <legend>Canais de envio</legend>
               <p>A notificação interna é sempre registada. Selecione nenhum, um ou vários canais externos.</p>
@@ -719,6 +792,10 @@ function renderNotificationManagement() {
                 <label class="checkbox-line notification-channel-option">
                   <input type="checkbox" name="sendTelegram" value="true" ${telegram.configured ? '' : 'disabled'}>
                   <span><strong>Telegram</strong><small>${telegram.configured ? 'Exige consentimento e uma conta associada.' : 'Configure e ative o bot para utilizar este canal.'}</small></span>
+                </label>
+                <label class="checkbox-line notification-channel-option">
+                  <input type="checkbox" name="sendPush" value="true" ${push.configured ? '' : 'disabled'}>
+                  <span><strong>Push</strong><small>${push.configured ? 'Envia aos dispositivos autorizados pelo estudante.' : 'Configure as chaves VAPID no servidor para utilizar este canal.'}</small></span>
                 </label>
               </div>
             </fieldset>
@@ -928,14 +1005,43 @@ function renderNotificationManagement() {
           </dl>
         `}
       </article>
+      <article class="admin-content-panel notification-configuration-card push-configuration-card">
+        <div class="section-heading">
+          <div><p class="eyebrow">Canal externo</p><h2>Web Push</h2></div>
+          <span class="status-pill ${push.configured ? 'status-approved' : 'status-pending'}">${push.configured ? 'Configurado' : 'Configuração pendente'}</span>
+        </div>
+        <dl class="notification-config-list">
+          <div><dt>Integração ativa</dt><dd>${push.enabled ? 'Sim' : 'Não'}</dd></div>
+          <div><dt>Chave pública VAPID</dt><dd>${push.publicKey ? 'Configurada' : 'Em falta'}</dd></div>
+          <div><dt>Chave privada</dt><dd>${push.configured ? 'Protegida no servidor' : 'Em falta ou inválida'}</dd></div>
+          <div><dt>Service worker</dt><dd>Incluído na aplicação</dd></div>
+        </dl>
+        <div class="notification-security-note ${push.configured ? 'is-secure' : 'is-warning'}">
+          <img src="${iconUrl(push.configured ? 'shield-check' : 'triangle-alert', push.configured ? blueIcon : goldIcon)}" alt="">
+          <span>${push.configured
+            ? 'Os estudantes podem autorizar notificações individualmente em cada dispositivo.'
+            : 'Defina WEB_PUSH_ENABLED, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY e VAPID_SUBJECT nas variáveis do servidor.'}</span>
+        </div>
+        <p class="management-field-hint">No iPhone e iPad, a aplicação deve ser adicionada ao ecrã principal antes de solicitar autorização.</p>
+      </article>
       </div>
     </section>
+
+    ${canManageNotifications() ? `
+      <section class="admin-content-panel notification-template-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">Conteúdo por evento</p><h2>Modelos de notificações</h2></div>
+        </div>
+        <p class="management-field-hint">Personalize separadamente o texto interno, o email institucional e o aviso Push. Os modelos são aplicados apenas a novas notificações.</p>
+        ${notificationTemplateEditor(notificationTemplates)}
+      </section>
+    ` : ''}
 
     <section class="admin-content-panel notification-history-panel">
       <div class="section-heading"><div><p class="eyebrow">Histórico</p><h2>Atualizações enviadas</h2></div></div>
       <div class="admin-table-wrap">
         <table class="admin-table notification-admin-table">
-          <thead><tr><th>Estudante</th><th>Atualização</th><th>Interna</th><th>Email</th><th>WhatsApp</th><th>Telegram</th><th>Data</th></tr></thead>
+          <thead><tr><th>Estudante</th><th>Atualização</th><th>Interna</th><th>Email</th><th>WhatsApp</th><th>Telegram</th><th>Push</th><th>Data</th></tr></thead>
           <tbody>
             ${(data.notifications || []).length ? data.notifications.map((notification) => `
               <tr>
@@ -945,9 +1051,10 @@ function renderNotificationManagement() {
                 <td data-label="Email"><span class="status-pill notification-delivery-${String(notification.email?.status || '').toLowerCase()}">${escapeHtml(notificationDeliveryLabel(notification.email?.status, 'EMAIL'))}</span>${notification.email?.lastError ? `<small title="${escapeHtml(notification.email.lastError)}">Verificar configuração</small>` : ''}</td>
                 <td data-label="WhatsApp"><span class="status-pill notification-delivery-${String(notification.whatsapp?.status || '').toLowerCase()}">${escapeHtml(notificationDeliveryLabel(notification.whatsapp?.status, 'WHATSAPP'))}</span>${notification.whatsapp?.lastError ? `<small title="${escapeHtml(notification.whatsapp.lastError)}">Verificar configuração</small>` : ''}</td>
                 <td data-label="Telegram"><span class="status-pill notification-delivery-${String(notification.telegram?.status || '').toLowerCase()}">${escapeHtml(notificationDeliveryLabel(notification.telegram?.status, 'TELEGRAM'))}</span>${notification.telegram?.lastError ? `<small title="${escapeHtml(notification.telegram.lastError)}">Verificar configuração</small>` : ''}</td>
+                <td data-label="Push"><span class="status-pill notification-delivery-${String(notification.push?.status || '').toLowerCase()}">${escapeHtml(notificationDeliveryLabel(notification.push?.status, 'PUSH'))}</span>${notification.push?.lastError ? `<small title="${escapeHtml(notification.push.lastError)}">Verificar dispositivo</small>` : ''}</td>
                 <td data-label="Data">${escapeHtml(formatDate(notification.createdAt))}</td>
               </tr>
-            `).join('') : '<tr><td colspan="7" class="empty-table">Ainda não existem notificações.</td></tr>'}
+            `).join('') : '<tr><td colspan="8" class="empty-table">Ainda não existem notificações.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -960,6 +1067,12 @@ function renderNotificationManagement() {
   document.querySelector('#whatsappConfigurationForm')?.addEventListener('submit', saveWhatsAppConfiguration);
   document.querySelector('#emailConfigurationForm')?.addEventListener('submit', saveEmailConfiguration);
   document.querySelector('#telegramConfigurationForm')?.addEventListener('submit', saveTelegramConfiguration);
+  document.querySelector('#notificationTemplateSelect')?.addEventListener('change', (event) => {
+    state.notificationTemplateKey = event.currentTarget.value;
+    renderNotificationManagement();
+  });
+  document.querySelector('#notificationTemplateForm')?.addEventListener('submit', saveNotificationTemplate);
+  document.querySelector('#resetNotificationTemplate')?.addEventListener('click', resetNotificationTemplate);
   document.querySelector('#retryNotificationDeliveries')?.addEventListener('click', retryNotificationDeliveries);
   reportHeight();
 }
@@ -1069,12 +1182,50 @@ async function submitAdminNotification(event) {
       title: values.get('title'),
       message: values.get('message'),
       actionUrl: values.get('actionUrl'),
+      emailSubject: values.get('emailSubject') || '',
+      emailMessage: values.get('emailMessage') || '',
+      pushTitle: values.get('pushTitle') || '',
+      pushMessage: values.get('pushMessage') || '',
       sendWhatsApp: values.get('sendWhatsApp') === 'true',
       sendEmail: values.get('sendEmail') === 'true',
-      sendTelegram: values.get('sendTelegram') === 'true'
+      sendTelegram: values.get('sendTelegram') === 'true',
+      sendPush: values.get('sendPush') === 'true'
     });
     showToast(`${result.notificationCount} notificação${result.notificationCount === 1 ? '' : 'ões'} criada${result.notificationCount === 1 ? '' : 's'}.`, 'success');
     await loadNotificationManagement({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+    setBusy(button, false);
+  }
+}
+
+async function saveNotificationTemplate(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = Object.fromEntries(new FormData(form).entries());
+  setBusy(button, true, 'A guardar...');
+  try {
+    const result = await api.adminSaveNotificationTemplate(values);
+    state.notificationLog.notificationTemplates = result.notificationTemplates || [];
+    showToast('Modelo de notificação guardado.', 'success');
+    renderNotificationManagement();
+  } catch (error) {
+    handleAdminError(error);
+    setBusy(button, false);
+  }
+}
+
+async function resetNotificationTemplate(event) {
+  const button = event.currentTarget;
+  const templateKey = document.querySelector('#notificationTemplateForm [name="templateKey"]')?.value || '';
+  if (!templateKey || !confirmAdminAction('Repor todos os textos deste evento para o modelo padrão?')) return;
+  setBusy(button, true, 'A repor...');
+  try {
+    const result = await api.adminResetNotificationTemplate(templateKey);
+    state.notificationLog.notificationTemplates = result.notificationTemplates || [];
+    showToast('Modelo padrão reposto.', 'success');
+    renderNotificationManagement();
   } catch (error) {
     handleAdminError(error);
     setBusy(button, false);

@@ -80,12 +80,28 @@ const state = {
     total: 0
   },
   notificationChannelInfo: null,
+  push: {
+    configuration: null,
+    subscriptionCount: 0,
+    subscribedOnDevice: false
+  },
   telegramLinkToken: '',
   telegramLinkUrl: '',
   timerId: null,
   pollId: null,
   notificationPollId: null
 };
+
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  localStorage.setItem('coursePlatformAppInstalled', 'true');
+  document.querySelector('#pushRecommendation')?.remove();
+});
 
 initialize().catch((error) => {
   console.error(error);
@@ -101,6 +117,8 @@ async function initialize() {
     renderConfigurationError(error);
     return;
   }
+
+  await initializePwa();
 
   setMediaConfig(localMediaConfig());
   applyBrandLogo();
@@ -139,6 +157,203 @@ async function initialize() {
   }
 
   route();
+}
+
+function isStandaloneApp() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function isIosDevice() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) || (
+    navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+  );
+}
+
+function supportsWebPush() {
+  return window.isSecureContext
+    && 'serviceWorker' in navigator
+    && 'PushManager' in window
+    && 'Notification' in window;
+}
+
+async function initializePwa() {
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return null;
+  try {
+    return await navigator.serviceWorker.register('./sw.js', { scope: './' });
+  } catch (error) {
+    console.warn('Não foi possível registar o service worker.', error);
+    return null;
+  }
+}
+
+function urlBase64ToUint8Array(value) {
+  const padding = '='.repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = window.atob(base64);
+  return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)));
+}
+
+async function refreshPushState(serverState = null) {
+  if (!api?.hasStudentSession()) return state.push;
+  const result = serverState || await api.pushConfiguration();
+  state.push.configuration = result.pushConfiguration || {};
+  state.push.subscriptionCount = Number(result.subscriptionCount || 0);
+  state.push.subscribedOnDevice = false;
+  if (supportsWebPush()) {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      state.push.subscribedOnDevice = Boolean(await registration.pushManager.getSubscription());
+    } catch {
+      state.push.subscribedOnDevice = false;
+    }
+  }
+  return state.push;
+}
+
+function pushDeviceLabel() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || 'Dispositivo';
+  return `${platform} · navegador web`.slice(0, 120);
+}
+
+async function enablePushNotifications(button = null) {
+  if (!supportsWebPush()) {
+    showToast('Este navegador não suporta notificações Push ou a página não utiliza HTTPS.', 'error');
+    return false;
+  }
+  if (isIosDevice() && !isStandaloneApp()) {
+    showToast('No iPhone ou iPad, guarde primeiro a aplicação no ecrã principal e abra-a pelo novo ícone.', 'error');
+    maybeShowPushRecommendation(true);
+    return false;
+  }
+  const configuration = state.push.configuration || (await refreshPushState()).configuration || {};
+  if (!configuration.configured || !configuration.publicKey) {
+    showToast('As notificações Push ainda não estão configuradas pela administração.', 'error');
+    return false;
+  }
+  if (Notification.permission === 'denied') {
+    showToast('As notificações estão bloqueadas nas definições do navegador deste dispositivo.', 'error');
+    return false;
+  }
+  setBusy(button, true, 'A ativar...');
+  try {
+    const permission = Notification.permission === 'granted'
+      ? 'granted'
+      : await Notification.requestPermission();
+    if (permission !== 'granted') {
+      showToast('A autorização para notificações não foi concedida.', 'error');
+      return false;
+    }
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(configuration.publicKey)
+      });
+    }
+    await api.subscribePush(subscription.toJSON(), pushDeviceLabel());
+    state.push.subscribedOnDevice = true;
+    state.push.subscriptionCount = Math.max(1, state.push.subscriptionCount + 1);
+    localStorage.setItem('coursePlatformPushEnabled', 'true');
+    document.querySelector('#pushRecommendation')?.remove();
+    showToast('Notificações Push ativadas neste dispositivo.', 'success');
+    return true;
+  } catch (error) {
+    handleError(error);
+    return false;
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function disablePushNotifications(button = null) {
+  if (!supportsWebPush()) return false;
+  setBusy(button, true, 'A desativar...');
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      await api.unsubscribePush(subscription.endpoint);
+      await subscription.unsubscribe();
+    }
+    state.push.subscribedOnDevice = false;
+    state.push.subscriptionCount = Math.max(0, state.push.subscriptionCount - 1);
+    localStorage.removeItem('coursePlatformPushEnabled');
+    showToast('Notificações Push desativadas neste dispositivo.', 'success');
+    return true;
+  } catch (error) {
+    handleError(error);
+    return false;
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function installWebApp(button = null) {
+  if (isStandaloneApp()) {
+    showToast('A aplicação já está aberta a partir do ecrã principal.', 'success');
+    return true;
+  }
+  if (deferredInstallPrompt) {
+    setBusy(button, true, 'A abrir...');
+    try {
+      await deferredInstallPrompt.prompt();
+      const choice = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      if (choice.outcome === 'accepted') {
+        localStorage.setItem('coursePlatformAppInstalled', 'true');
+        showToast('Aplicação guardada no dispositivo.', 'success');
+        return true;
+      }
+      return false;
+    } finally {
+      setBusy(button, false);
+    }
+  }
+  const guidance = isIosDevice()
+    ? 'No Safari, toque em Partilhar e depois em “Adicionar ao ecrã principal”. Abra a aplicação pelo novo ícone para ativar notificações.'
+    : 'Abra o menu do navegador e escolha “Instalar aplicação” ou “Adicionar ao ecrã principal”.';
+  showToast(guidance, 'success');
+  return false;
+}
+
+function maybeShowPushRecommendation(force = false) {
+  document.querySelector('#pushRecommendation')?.remove();
+  const configuration = state.push.configuration || {};
+  const permissionDenied = supportsWebPush() && Notification.permission === 'denied';
+  if (!configuration.configured || state.push.subscribedOnDevice || permissionDenied) return;
+  const mobile = window.matchMedia('(max-width: 1024px)').matches || isIosDevice();
+  if (!mobile && !force) return;
+  const dismissedAt = Number(localStorage.getItem('pushRecommendationDismissedAt') || 0);
+  if (!force && dismissedAt && Date.now() - dismissedAt < 7 * 24 * 60 * 60 * 1000) return;
+  const installed = isStandaloneApp();
+  const panel = document.createElement('aside');
+  panel.id = 'pushRecommendation';
+  panel.className = 'push-recommendation';
+  panel.setAttribute('aria-label', 'Recomendação de notificações');
+  panel.innerHTML = `
+    <button class="push-recommendation-close" type="button" aria-label="Fechar recomendação">×</button>
+    <div class="push-recommendation-icon"><img src="${iconUrl('bell-ring', goldIcon)}" alt=""></div>
+    <div class="push-recommendation-copy">
+      <strong>${installed ? 'Ative as notificações' : 'Guarde a aplicação no ecrã principal'}</strong>
+      <p>${installed
+        ? 'Receba avisos de novos módulos, prazos e avaliações mesmo com a plataforma fechada.'
+        : 'Tenha acesso rápido e, depois de abrir pelo novo ícone, ative avisos de módulos, prazos e avaliações.'}</p>
+    </div>
+    <button class="button button-primary button-small" type="button" data-push-recommendation-action>${installed ? 'Ativar' : 'Guardar aplicação'}</button>
+  `;
+  document.body.appendChild(panel);
+  panel.querySelector('.push-recommendation-close')?.addEventListener('click', () => {
+    localStorage.setItem('pushRecommendationDismissedAt', String(Date.now()));
+    panel.remove();
+  });
+  panel.querySelector('[data-push-recommendation-action]')?.addEventListener('click', async (event) => {
+    if (installed) {
+      await enablePushNotifications(event.currentTarget);
+    } else {
+      await installWebApp(event.currentTarget);
+    }
+  });
 }
 
 async function route() {
@@ -185,6 +400,7 @@ async function route() {
 
 function renderLogin() {
   clearTimers();
+  document.querySelector('#pushRecommendation')?.remove();
   headerUser.innerHTML = '';
   headerUser.title = '';
   headerUser.removeAttribute('aria-label');
@@ -464,6 +680,9 @@ async function logout() {
   state.dashboard = null;
   state.lesson = null;
   state.attempt = null;
+  state.push.configuration = null;
+  state.push.subscriptionCount = 0;
+  state.push.subscribedOnDevice = false;
   location.hash = '';
   renderLogin();
 }
@@ -604,6 +823,7 @@ function moduleContentAccessStatus(progress = {}) {
   if (['AVAILABLE', 'LOCKED'].includes(progress.contentAccessStatus)) {
     return progress.contentAccessStatus;
   }
+
   return progress.status === 'LOCKED' ? 'LOCKED' : 'AVAILABLE';
 }
 
@@ -643,10 +863,12 @@ async function renderDashboard(view = 'overview') {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar o curso...');
 
-  const [home, notificationData] = await Promise.all([
+  const [home, notificationData, pushData] = await Promise.all([
     api.studentHome(state.selectedCourseId),
-    api.notifications({ limit: 6 })
+    api.notifications({ limit: 6 }),
+    api.pushConfiguration()
   ]);
+  await refreshPushState(pushData);
   setNotificationState(notificationData);
   state.myCourses = Array.isArray(home.courses) ? home.courses : [];
   state.selectedCourseId = home.selectedCourseId || state.selectedCourseId || config.courseId || '';
@@ -1018,6 +1240,7 @@ async function renderDashboard(view = 'overview') {
 
   bindVideoSoundEvents();
   startNotificationPolling();
+  maybeShowPushRecommendation();
   renderMath();
 }
 
@@ -1157,10 +1380,12 @@ async function renderNotifications() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar notificações...');
 
-  const [home, notificationData] = await Promise.all([
+  const [home, notificationData, pushData] = await Promise.all([
     api.studentHome(state.selectedCourseId),
-    api.notifications({ limit: 100 })
+    api.notifications({ limit: 100 }),
+    api.pushConfiguration()
   ]);
+  await refreshPushState(pushData);
   state.myCourses = Array.isArray(home.courses) ? home.courses : [];
   state.selectedCourseId = home.selectedCourseId || state.selectedCourseId || config.courseId || '';
   state.dashboard = normalizeStudentDashboard(home);
@@ -1235,6 +1460,7 @@ async function renderNotifications() {
     });
   });
   startNotificationPolling();
+  maybeShowPushRecommendation();
   reportHeight();
 }
 
@@ -1242,10 +1468,15 @@ async function renderProfile() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar perfil...');
 
-  const courseBundle = await api.myCourses();
+  const [courseBundle, notificationData, pushData] = await Promise.all([
+    api.myCourses(),
+    api.notifications({ limit: 6 }),
+    api.pushConfiguration()
+  ]);
   state.myCourses = courseBundle.courses || [];
   state.notificationChannelInfo = courseBundle.notificationChannelInfo || null;
-  setNotificationState(await api.notifications({ limit: 6 }));
+  setNotificationState(notificationData);
+  await refreshPushState(pushData);
   const student = courseBundle?.student || state.dashboard?.student || {};
   const channelInfo = state.notificationChannelInfo || {};
   const telegramInfo = channelInfo.telegram || {};
@@ -1253,6 +1484,10 @@ async function renderProfile() {
   const whatsappActive = Boolean(student.whatsappOptIn && channelInfo.whatsapp?.configured);
   const emailActive = Boolean(student.emailOptIn && channelInfo.email?.configured);
   const telegramActive = Boolean(student.telegramOptIn && telegramLinked && telegramInfo.configured);
+  const pushInfo = state.push.configuration || channelInfo.push || {};
+  const pushSupported = supportsWebPush();
+  const pushActive = Boolean(pushSupported && pushInfo.configured && state.push.subscribedOnDevice);
+  const pushBlocked = pushSupported && Notification.permission === 'denied';
   headerUser.innerHTML = profileAvatarTemplate(student, 'header-avatar');
   headerUser.title = 'Editar perfil pessoal';
   headerUser.setAttribute('aria-label', 'Editar perfil pessoal');
@@ -1394,6 +1629,30 @@ async function renderProfile() {
                   </span>
                 </span>
               </div>
+              <div class="notification-consent-option notification-channel-option notification-push-option">
+                <span class="notification-channel-icon" aria-hidden="true"><img src="${iconUrl('bell-ring', blueIcon)}" alt=""></span>
+                <span>
+                  <strong>Notificações Push</strong>
+                  <small>${!pushSupported
+                    ? 'Este navegador não suporta Web Push ou a plataforma não está aberta por HTTPS.'
+                    : pushBlocked
+                      ? 'As notificações estão bloqueadas nas definições deste navegador.'
+                    : !pushInfo.configured
+                      ? 'O canal Push ainda precisa de ser ativado pela administração.'
+                      : pushActive
+                        ? 'Este dispositivo recebe avisos mesmo quando a plataforma está fechada.'
+                        : isIosDevice() && !isStandaloneApp()
+                          ? 'No iPhone ou iPad, guarde a aplicação no ecrã principal antes de ativar.'
+                          : 'Ative avisos de módulos, prazos e avaliações neste dispositivo.'}</small>
+                  <span class="notification-channel-state ${pushActive ? 'is-active' : ''}">${pushActive ? 'Ativo neste dispositivo' : pushBlocked ? 'Bloqueado no navegador' : state.push.subscriptionCount ? `${state.push.subscriptionCount} dispositivo(s) associado(s)` : 'Opcional'}</span>
+                  <span class="notification-push-actions">
+                    ${!isStandaloneApp() ? '<button class="button button-secondary" id="installWebAppButton" type="button">Guardar aplicação</button>' : ''}
+                    ${pushActive
+                      ? '<button class="button button-secondary" id="disablePushButton" type="button">Desativar neste dispositivo</button>'
+                      : `<button class="button button-primary" id="enablePushButton" type="button" ${pushSupported && pushInfo.configured && !pushBlocked ? '' : 'disabled'}>Ativar notificações</button>`}
+                  </span>
+                </span>
+              </div>
             </div>
             <div class="notification-preference-grid">
               <label class="checkbox-line">
@@ -1476,8 +1735,18 @@ async function renderProfile() {
   document.querySelector('#telegramLinkButton')?.addEventListener('click', startTelegramLink);
   document.querySelector('#telegramConfirmButton')?.addEventListener('click', confirmTelegramLink);
   document.querySelector('#telegramUnlinkButton')?.addEventListener('click', unlinkTelegram);
+  document.querySelector('#installWebAppButton')?.addEventListener('click', async (event) => {
+    await installWebApp(event.currentTarget);
+  });
+  document.querySelector('#enablePushButton')?.addEventListener('click', async (event) => {
+    if (await enablePushNotifications(event.currentTarget)) await renderProfile();
+  });
+  document.querySelector('#disablePushButton')?.addEventListener('click', async (event) => {
+    if (await disablePushNotifications(event.currentTarget)) await renderProfile();
+  });
   bindProfilePhotoPreview(student);
   startNotificationPolling();
+  maybeShowPushRecommendation();
   reportHeight();
 }
 

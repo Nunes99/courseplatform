@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Plataforma de ensino</title>
+  <rect width="512" height="512" rx="96" fill="#00365B"/>
+  <path d="M104 174 256 92l152 82-152 82-152-82Z" fill="#EAC78B"/>
+  <path d="M148 222v112c0 40 48 72 108 72s108-32 108-72V222l-108 58-108-58Z" fill="#FFF8E4"/>
+  <path d="M408 181v126" fill="none" stroke="#C9A55B" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="408" cy="332" r="20" fill="#C9A55B"/>
+</svg>
