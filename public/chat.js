@@ -1,6 +1,7 @@
 import { escapeHtml, showToast } from './utils.js';
 
 const ICONS = 'https://api.iconify.design/lucide';
+const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 const CHAT_EMOJIS = [
   '😀', '😃', '😂', '😊', '😍', '🤝', '👏', '👍',
   '🙏', '🎉', '✅', '📚', '💡', '✍️', '🚀', '🔥',
@@ -100,6 +101,7 @@ export class ChatWorkspace {
     this.initialRoomId = initialRoomId;
     this.onUnreadChange = onUnreadChange;
     this.rooms = [];
+    this.actor = null;
     this.contacts = [];
     this.messages = [];
     this.activeRoom = null;
@@ -111,6 +113,16 @@ export class ChatWorkspace {
     this.pollTimer = null;
     this.pollCount = 0;
     this.polling = false;
+    this.pollIntervalMs = 4000;
+    this.realtimePollIntervalMs = 15000;
+    this.realtimeClient = null;
+    this.realtimeChannels = new Map();
+    this.realtimeConfiguration = null;
+    this.realtimePromise = null;
+    this.realtimeRefreshTimers = new Map();
+    this.realtimeRefreshingRooms = new Set();
+    this.realtimeDirtyRooms = new Set();
+    this.realtimeConnectedRooms = new Set();
     this.destroyed = false;
     this.visibilityHandler = () => {
       if (document.visibilityState !== 'visible' || !this.activeRoom) return;
@@ -122,22 +134,32 @@ export class ChatWorkspace {
   async start() {
     this.renderFrame();
     this.bindEvents();
+    this.realtimePromise = this.initializeRealtime().catch(() => false);
     await Promise.all([
       this.loadRooms(),
       this.mode === 'student' ? this.loadContacts({ quiet: true }) : Promise.resolve()
     ]);
+    await this.realtimePromise;
+    await this.syncRealtimeChannels();
     if (this.destroyed || !this.rooms.length) return;
     const preferred = this.rooms.find((room) => room.roomId === this.initialRoomId);
     if (preferred || window.matchMedia('(min-width: 761px)').matches) {
       await this.selectRoom((preferred || this.rooms[0]).roomId, { updateAddress: false });
     }
-    this.pollTimer = window.setInterval(() => this.poll(), 4000);
+    this.startPolling();
   }
 
   destroy() {
     this.destroyed = true;
     window.clearInterval(this.pollTimer);
     this.pollTimer = null;
+    this.realtimeRefreshTimers.forEach((timer) => window.clearTimeout(timer));
+    this.realtimeRefreshTimers.clear();
+    this.realtimeDirtyRooms.clear();
+    this.realtimeChannels.forEach((channel) => this.realtimeClient?.removeChannel(channel));
+    this.realtimeChannels.clear();
+    this.realtimeClient?.removeAllChannels?.();
+    this.realtimeClient = null;
     document.removeEventListener('visibilitychange', this.visibilityHandler);
   }
 
@@ -150,7 +172,8 @@ export class ChatWorkspace {
           edit: 'adminEditChatMessage',
           delete: 'adminDeleteChatMessage',
           read: 'adminMarkChatRoomRead',
-          presence: 'adminUpdatePresence'
+          presence: 'adminUpdatePresence',
+          realtime: 'adminChatRealtimeConfiguration'
         }
       : {
           rooms: 'chatRooms',
@@ -162,11 +185,193 @@ export class ChatWorkspace {
           report: 'reportChatMessage',
           contacts: 'chatContacts',
           startDirect: 'startDirectChat',
-          presence: 'updatePresence'
+          presence: 'updatePresence',
+          realtime: 'chatRealtimeConfiguration'
         };
     const method = this.api[methods[name]];
     if (typeof method !== 'function') throw new Error('O módulo de mensagens não está disponível nesta versão.');
     return method.apply(this.api, args);
+  }
+
+  async initializeRealtime({ refreshToken = false } = {}) {
+    const result = await this.request('realtime');
+    const configuration = result?.realtime || {};
+    this.realtimeConfiguration = configuration;
+    this.realtimePollIntervalMs = Math.max(4000, Number(configuration.pollIntervalMs || 15000));
+    if (!configuration.enabled || !configuration.url || !configuration.publishableKey || !configuration.accessToken) {
+      this.usePollingFallback();
+      return false;
+    }
+    try {
+      if (!this.realtimeClient) {
+        const { createClient } = await import(SUPABASE_ESM);
+        if (this.destroyed) return false;
+        this.realtimeClient = createClient(configuration.url, configuration.publishableKey, {
+          auth: {
+            persistSession: false,
+            autoRefreshToken: false,
+            detectSessionInUrl: false
+          },
+          realtime: {
+            params: { eventsPerSecond: 12 },
+            heartbeatIntervalMs: 25000,
+            reconnectAfterMs: (tries) => Math.min(1000 * (2 ** Math.min(tries, 5)), 30000)
+          }
+        });
+      }
+      await this.realtimeClient.realtime.setAuth(configuration.accessToken);
+      if (!refreshToken) await this.syncRealtimeChannels();
+      return true;
+    } catch (error) {
+      console.warn('Não foi possível iniciar as mensagens em tempo real.', error);
+      this.usePollingFallback();
+      return false;
+    }
+  }
+
+  async syncRealtimeChannels() {
+    if (!this.realtimeClient || this.destroyed) return;
+    const desiredChannels = new Map();
+    const inboxTopic = String(this.realtimeConfiguration?.inboxTopic || '').trim();
+    if (inboxTopic) desiredChannels.set('inbox', { topic: inboxTopic, type: 'inbox' });
+    if (this.activeRoom?.roomId) {
+      desiredChannels.set(`room:${this.activeRoom.roomId}`, {
+        topic: `chat:room:${this.activeRoom.roomId}:messages`,
+        type: 'room',
+        roomId: this.activeRoom.roomId
+      });
+    }
+
+    this.realtimeChannels.forEach((channel, channelKey) => {
+      const desired = desiredChannels.get(channelKey);
+      if (desired && channel.topic?.endsWith(desired.topic)) return;
+      this.realtimeClient.removeChannel(channel);
+      this.realtimeChannels.delete(channelKey);
+      this.realtimeConnectedRooms.delete(channelKey);
+    });
+
+    desiredChannels.forEach((descriptor, channelKey) => {
+      if (this.realtimeChannels.has(channelKey)) return;
+      let channel = this.realtimeClient.channel(descriptor.topic, { config: { private: true } });
+      if (descriptor.type === 'inbox') {
+        channel = channel.on('broadcast', { event: 'ROOMS_CHANGED' }, () => this.scheduleRealtimeInboxRefresh());
+      } else {
+        channel = channel
+          .on('broadcast', { event: 'INSERT' }, () => this.scheduleRealtimeRefresh(descriptor.roomId))
+          .on('broadcast', { event: 'UPDATE' }, () => this.scheduleRealtimeRefresh(descriptor.roomId))
+          .on('broadcast', { event: 'DELETE' }, () => this.scheduleRealtimeRefresh(descriptor.roomId));
+      }
+      channel.subscribe((status, error) => {
+        if (status === 'SUBSCRIBED') this.realtimeConnectedRooms.add(channelKey);
+        if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+          this.realtimeConnectedRooms.delete(channelKey);
+          if (error) console.warn(`Falha no canal Realtime ${channelKey}.`, error);
+        }
+        this.updateRealtimeTransportState();
+      });
+      this.realtimeChannels.set(channelKey, channel);
+    });
+    this.updateRealtimeTransportState();
+  }
+
+  realtimeHasFullCoverage() {
+    if (!this.realtimeChannels.size) return false;
+    return [...this.realtimeChannels.keys()].every((channelKey) => this.realtimeConnectedRooms.has(channelKey));
+  }
+
+  updateRealtimeTransportState() {
+    const connected = this.realtimeHasFullCoverage();
+    this.updateLiveIndicator(connected);
+    this.setPollingInterval(connected ? this.realtimePollIntervalMs : 4000);
+  }
+
+  usePollingFallback() {
+    this.updateLiveIndicator(false);
+    this.setPollingInterval(4000);
+  }
+
+  setPollingInterval(intervalMs) {
+    const nextInterval = Math.max(4000, Number(intervalMs || 4000));
+    if (this.pollIntervalMs === nextInterval) return;
+    this.pollIntervalMs = nextInterval;
+    if (this.pollTimer !== null) this.startPolling();
+  }
+
+  startPolling() {
+    window.clearInterval(this.pollTimer);
+    if (this.destroyed) {
+      this.pollTimer = null;
+      return;
+    }
+    this.pollTimer = window.setInterval(() => this.poll(), this.pollIntervalMs);
+  }
+
+  updateLiveIndicator(connected) {
+    const indicator = this.mount.querySelector('.chat-live-indicator');
+    if (!indicator) return;
+    indicator.classList.toggle('is-connected', Boolean(connected));
+    indicator.innerHTML = `<i></i>${connected ? ' Em tempo real' : ' Atualização automática'}`;
+  }
+
+  scheduleRealtimeRefresh(roomId) {
+    if (!roomId || this.destroyed) return;
+    if (this.realtimeRefreshingRooms.has(roomId)) {
+      this.realtimeDirtyRooms.add(roomId);
+      return;
+    }
+    window.clearTimeout(this.realtimeRefreshTimers.get(roomId));
+    const timer = window.setTimeout(() => {
+      this.realtimeRefreshTimers.delete(roomId);
+      this.refreshRoomFromRealtime(roomId);
+    }, 90);
+    this.realtimeRefreshTimers.set(roomId, timer);
+  }
+
+  scheduleRealtimeInboxRefresh() {
+    if (this.destroyed) return;
+    const timerKey = 'inbox';
+    window.clearTimeout(this.realtimeRefreshTimers.get(timerKey));
+    const timer = window.setTimeout(async () => {
+      this.realtimeRefreshTimers.delete(timerKey);
+      await this.loadRooms({ quiet: true });
+      await this.syncRealtimeChannels();
+    }, 90);
+    this.realtimeRefreshTimers.set(timerKey, timer);
+  }
+
+  async refreshRoomFromRealtime(roomId) {
+    if (this.destroyed) return;
+    if (this.realtimeRefreshingRooms.has(roomId)) {
+      this.realtimeDirtyRooms.add(roomId);
+      return;
+    }
+    this.realtimeRefreshingRooms.add(roomId);
+    this.realtimeDirtyRooms.delete(roomId);
+    try {
+      if (this.activeRoom?.roomId !== roomId) {
+        await this.loadRooms({ quiet: true });
+        return;
+      }
+      const wasNearBottom = this.isNearBottom();
+      const result = await this.request('messages', roomId, { limit: 80 });
+      if (this.destroyed || this.activeRoom?.roomId !== roomId) return;
+      const pending = this.messages.filter((message) => message.isPending || message.isFailed);
+      const serverMessages = Array.isArray(result.messages) ? result.messages : [];
+      const serverIds = new Set(serverMessages.map((message) => message.messageId));
+      this.messages = [...serverMessages, ...pending.filter((message) => !serverIds.has(message.messageId))]
+        .sort((first, second) => new Date(first.createdAt) - new Date(second.createdAt));
+      this.activeRoom = result.room || this.activeRoom;
+      const list = this.mount.querySelector('.chat-message-list');
+      if (list) list.innerHTML = this.messagesTemplate();
+      if (wasNearBottom) this.scrollToBottom(false);
+      this.markActiveRoomRead(roomId);
+      await this.loadRooms({ quiet: true });
+    } catch {
+      // Polling remains active as a lossless fallback.
+    } finally {
+      this.realtimeRefreshingRooms.delete(roomId);
+      if (this.realtimeDirtyRooms.delete(roomId)) this.scheduleRealtimeRefresh(roomId);
+    }
   }
 
   renderFrame() {
@@ -301,12 +506,14 @@ export class ChatWorkspace {
       const result = await this.request('rooms');
       if (this.destroyed) return;
       this.rooms = Array.isArray(result.rooms) ? result.rooms : [];
+      this.actor = result.actor || this.actor;
       if (this.activeRoom) {
         this.activeRoom = this.rooms.find((room) => room.roomId === this.activeRoom.roomId) || this.activeRoom;
       }
       this.renderSidebarContent();
       this.onUnreadChange?.(Number(result.unreadCount || 0));
       if (!this.rooms.length && this.panelMode === 'rooms') this.renderNoRooms();
+      this.syncRealtimeChannels().catch(() => {});
     } catch (error) {
       if (!quiet) this.renderRoomError(error);
     }
@@ -453,6 +660,10 @@ export class ChatWorkspace {
     this.mount.querySelector('.chat-workspace')?.classList.add('has-active-room');
     this.renderRooms();
     this.renderConversationLoading();
+    this.syncRealtimeChannels().catch((error) => {
+      console.warn('Não foi possível acompanhar esta conversa em tempo real.', error);
+      this.usePollingFallback();
+    });
     if (updateAddress && this.mode === 'student') {
       history.replaceState(null, '', `#/chat/${encodeURIComponent(roomId)}`);
     }
@@ -549,14 +760,15 @@ export class ChatWorkspace {
     const avatar = photo
       ? `<img src="${escapeHtml(photo)}" alt="" data-chat-avatar-fallback="${escapeHtml(initials(message.sender?.name))}">`
       : `<span>${escapeHtml(initials(message.sender?.name))}</span>`;
-    const canEdit = message.isMine && !message.isDeleted;
-    const canDelete = !message.isDeleted && (message.isMine || this.mode === 'admin');
-    const canReport = !message.isDeleted && !message.isMine && this.mode === 'student';
+    const isTransient = Boolean(message.isPending || message.isFailed);
+    const canEdit = message.isMine && !message.isDeleted && !isTransient;
+    const canDelete = !message.isDeleted && !isTransient && (message.isMine || this.mode === 'admin');
+    const canReport = !message.isDeleted && !message.isMine && !isTransient && this.mode === 'student';
     const receiptStatus = ['SENT', 'DELIVERED', 'READ'].includes(message.deliveryStatus) ? message.deliveryStatus : 'SENT';
     const receiptCount = receiptStatus === 'READ' ? Number(message.readCount || 0) : Number(message.deliveredCount || 0);
-    const receiptLabel = deliveryLabel(receiptStatus, receiptCount);
+    const receiptLabel = message.isFailed ? 'Não enviada' : (message.isPending ? 'A enviar' : deliveryLabel(receiptStatus, receiptCount));
     return `
-      <article class="chat-message ${message.isMine ? 'is-mine' : ''} ${message.isDeleted ? 'is-deleted' : ''}" data-message-id="${escapeHtml(message.messageId)}">
+      <article class="chat-message ${message.isMine ? 'is-mine' : ''} ${message.isDeleted ? 'is-deleted' : ''} ${message.isPending ? 'is-pending' : ''} ${message.isFailed ? 'is-failed' : ''}" data-message-id="${escapeHtml(message.messageId)}">
         <div class="chat-message-avatar">${avatar}</div>
         <div class="chat-message-content">
           <div class="chat-message-author">
@@ -565,8 +777,8 @@ export class ChatWorkspace {
             <time>${escapeHtml(chatTime(message.createdAt))}</time>
             ${message.editedAt && !message.isDeleted ? '<small>Editada</small>' : ''}
             ${message.isMine && !message.isDeleted ? `
-              <span class="chat-delivery-status is-${receiptStatus.toLowerCase()}" title="${escapeHtml(receiptLabel)}" aria-label="${escapeHtml(receiptLabel)}">
-                <img src="${icon(receiptStatus === 'SENT' ? 'check' : 'check-check')}" alt=""><small>${escapeHtml(receiptLabel)}</small>
+              <span class="chat-delivery-status is-${message.isFailed ? 'failed' : (message.isPending ? 'pending' : receiptStatus.toLowerCase())}" title="${escapeHtml(receiptLabel)}" aria-label="${escapeHtml(receiptLabel)}">
+                <img src="${icon(message.isFailed ? 'circle-alert' : (message.isPending ? 'clock-3' : (receiptStatus === 'SENT' ? 'check' : 'check-check')))}" alt=""><small>${escapeHtml(receiptLabel)}</small>
               </span>
             ` : ''}
             ${this.mode === 'admin' && message.reportCount ? `<span class="chat-report-badge"><img src="${icon('flag', 'b42318')}" alt="">${message.reportCount}</span>` : ''}
@@ -578,10 +790,11 @@ export class ChatWorkspace {
         </div>
         ${!message.isDeleted ? `
           <div class="chat-message-actions">
-            <button type="button" data-chat-action="reply" aria-label="Responder" title="Responder"><img src="${icon('reply')}" alt=""></button>
+            ${!isTransient ? `<button type="button" data-chat-action="reply" aria-label="Responder" title="Responder"><img src="${icon('reply')}" alt=""></button>` : ''}
             ${canEdit ? `<button type="button" data-chat-action="edit" aria-label="Editar" title="Editar"><img src="${icon('pencil')}" alt=""></button>` : ''}
             ${canReport ? `<button type="button" data-chat-action="report" aria-label="Denunciar" title="Denunciar"><img src="${icon('flag')}" alt=""></button>` : ''}
             ${canDelete ? `<button type="button" data-chat-action="delete" aria-label="Remover" title="Remover"><img src="${icon('trash-2')}" alt=""></button>` : ''}
+            ${message.isFailed ? `<button type="button" data-chat-action="retry" aria-label="Tentar novamente" title="Tentar novamente"><img src="${icon('rotate-cw')}" alt=""></button>` : ''}
           </div>
         ` : ''}
       </article>
@@ -667,7 +880,20 @@ export class ChatWorkspace {
       this.deleteMessage(message);
     } else if (action === 'report') {
       this.openReportDialog(message);
+    } else if (action === 'retry') {
+      this.restoreFailedMessage(message);
     }
+  }
+
+  restoreFailedMessage(message) {
+    this.messages = this.messages.filter((item) => item.messageId !== message.messageId);
+    const list = this.mount.querySelector('.chat-message-list');
+    if (list) list.innerHTML = this.messagesTemplate();
+    const textarea = this.mount.querySelector('.chat-composer textarea');
+    if (!textarea) return;
+    textarea.value = message.body || '';
+    textarea.dispatchEvent(new Event('input'));
+    textarea.focus();
   }
 
   renderDraftContext() {
@@ -706,28 +932,82 @@ export class ChatWorkspace {
     const button = form.querySelector('.chat-send-button');
     const body = textarea.value.trim();
     if (!body || !this.activeRoom) return;
-    button.disabled = true;
-    button.classList.add('is-busy');
+    const editingMessage = this.editingMessage;
+    const replyTo = this.replyingTo;
+    const temporaryId = editingMessage ? '' : `pending-${crypto.randomUUID?.() || Date.now().toString(36)}`;
+    if (!editingMessage) {
+      this.messages.push({
+        messageId: temporaryId,
+        roomId: this.activeRoom.roomId,
+        body,
+        isMine: true,
+        isDeleted: false,
+        isPending: true,
+        sender: {
+          type: this.actor?.type || (this.mode === 'admin' ? 'ADMIN' : 'STUDENT'),
+          name: this.actor?.name || 'Você',
+          profilePhotoUrl: ''
+        },
+        replyTo: replyTo ? {
+          messageId: replyTo.messageId,
+          senderName: replyTo.sender?.name || 'Participante',
+          body: replyTo.body || ''
+        } : null,
+        deliveryStatus: 'SENT',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      textarea.value = '';
+      textarea.dispatchEvent(new Event('input'));
+      this.replyingTo = null;
+      this.editingMessage = null;
+      this.renderDraftContext();
+      const list = this.mount.querySelector('.chat-message-list');
+      if (list) list.innerHTML = this.messagesTemplate();
+      this.scrollToBottom();
+    } else {
+      button.disabled = true;
+      button.classList.add('is-busy');
+    }
     try {
-      const result = this.editingMessage
-        ? await this.request('edit', this.editingMessage.messageId, body)
-        : await this.request('send', this.activeRoom.roomId, body, this.replyingTo?.messageId || '');
+      const result = editingMessage
+        ? await this.request('edit', editingMessage.messageId, body)
+        : await this.request('send', this.activeRoom.roomId, body, replyTo?.messageId || '');
       const message = result.message;
+      const temporaryIndex = temporaryId ? this.messages.findIndex((item) => item.messageId === temporaryId) : -1;
       const existingIndex = this.messages.findIndex((item) => item.messageId === message.messageId);
-      if (existingIndex >= 0) this.messages[existingIndex] = message;
+      if (existingIndex >= 0) {
+        this.messages[existingIndex] = message;
+        if (temporaryIndex >= 0 && temporaryIndex !== existingIndex) this.messages.splice(temporaryIndex, 1);
+      } else if (temporaryIndex >= 0) this.messages[temporaryIndex] = message;
       else this.messages.push(message);
       textarea.value = '';
       textarea.dispatchEvent(new Event('input'));
       this.editingMessage = null;
       this.replyingTo = null;
-      this.renderConversation();
+      if (editingMessage) this.renderConversation();
+      else {
+        const list = this.mount.querySelector('.chat-message-list');
+        if (list) list.innerHTML = this.messagesTemplate();
+      }
       this.scrollToBottom();
       this.loadRooms({ quiet: true });
     } catch (error) {
+      if (temporaryId) {
+        const temporary = this.messages.find((item) => item.messageId === temporaryId);
+        if (temporary) {
+          temporary.isPending = false;
+          temporary.isFailed = true;
+          const list = this.mount.querySelector('.chat-message-list');
+          if (list) list.innerHTML = this.messagesTemplate();
+        }
+      }
       showToast(error.message || 'Não foi possível enviar a mensagem.', 'error');
     } finally {
-      button.disabled = false;
-      button.classList.remove('is-busy');
+      if (editingMessage) {
+        button.disabled = false;
+        button.classList.remove('is-busy');
+      }
       this.mount.querySelector('.chat-composer textarea')?.focus();
     }
   }
@@ -759,9 +1039,13 @@ export class ChatWorkspace {
     if (this.polling || this.destroyed) return;
     this.polling = true;
     try {
+      const realtimeExpiry = new Date(this.realtimeConfiguration?.expiresAt || '').getTime();
+      if (this.realtimeClient && Number.isFinite(realtimeExpiry) && realtimeExpiry - Date.now() < 120000) {
+        await this.initializeRealtime({ refreshToken: true });
+      }
       await this.request('presence', this.activeRoom?.roomId || '');
       if (this.activeRoom) {
-        const latest = this.messages.reduce((value, message) => {
+        const latest = this.messages.filter((message) => !message.isPending && !message.isFailed).reduce((value, message) => {
           const candidate = message.updatedAt || message.createdAt || '';
           return !value || candidate > value ? candidate : value;
         }, '');

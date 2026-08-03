@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 import ipaddress
 import json
 import mimetypes
@@ -168,6 +170,7 @@ ATTEMPT_STATUSES = EVALUATION_STATUSES - {"NOT_STARTED"}
 _ASSESSMENT_SCHEMA_READY = False
 _NOTIFICATION_SCHEMA_READY = False
 _CHAT_SCHEMA_READY = False
+_CHAT_REALTIME_SCHEMA_READY = False
 
 
 def progress_access_status(row: dict[str, Any] | None) -> str:
@@ -1931,6 +1934,7 @@ def send_web_push_notification(delivery: dict[str, Any], configuration: dict[str
         "tag": f"courseplatform-{str_value(delivery.get('notification_id'))[:80]}",
         "notificationId": str_value(delivery.get("notification_id")),
         "priority": str_value(delivery.get("priority") or "NORMAL"),
+        "badgeCount": student_unread_badge_count(student_id),
     }, ensure_ascii=False)
     delivered = 0
     failures: list[str] = []
@@ -1961,6 +1965,76 @@ def send_web_push_notification(delivery: dict[str, Any], configuration: dict[str
     if not delivered:
         raise RuntimeError(failures[-1] if failures else "A notificação Push não foi entregue.")
     return f"{delivered} dispositivo(s)"
+
+
+def student_unread_badge_count(student_id: str) -> int:
+    """Return the exact application badge without exposing private content."""
+    try:
+        with connection() as conn:
+            notifications = conn.execute(
+                """
+                select count(*) as count
+                from courseplatform.notifications
+                where student_id = %s and read_at is null
+                """,
+                (student_id,),
+            ).fetchone() or {}
+            messages = conn.execute(
+                """
+                select count(*) as count
+                from courseplatform.chat_messages message
+                join courseplatform.chat_rooms room on room.room_id = message.room_id
+                left join courseplatform.chat_reads room_read
+                  on room_read.room_id = room.room_id and room_read.student_id = %s
+                where message.status = 'ACTIVE'
+                  and room.status = 'ACTIVE'
+                  and message.sender_student_id is distinct from %s
+                  and message.created_at > coalesce(room_read.last_read_at, 'epoch'::timestamptz)
+                  and (
+                    room.room_type = 'COMMUNITY'
+                    or (room.room_type = 'SUPPORT' and room.owner_student_id = %s)
+                    or (
+                      room.room_type = 'DIRECT'
+                      and (room.direct_student_one_id = %s or room.direct_student_two_id = %s)
+                    )
+                    or (
+                      room.room_type = 'COURSE'
+                      and exists (
+                        select 1 from courseplatform.enrollments enrollment
+                        where enrollment.student_id = %s
+                          and enrollment.course_id = room.course_id
+                          and enrollment.status in ('ACTIVE', 'COMPLETED')
+                      )
+                    )
+                    or (
+                      room.room_type = 'GROUP'
+                      and (
+                        exists (
+                          select 1 from courseplatform.group_members member
+                          where member.student_id = %s
+                            and member.group_id = room.group_id
+                            and member.status = 'ACTIVE'
+                        )
+                        or exists (
+                          select 1 from courseplatform.enrollments enrollment
+                          where enrollment.student_id = %s
+                            and enrollment.group_id = room.group_id
+                            and enrollment.status in ('ACTIVE', 'COMPLETED')
+                        )
+                      )
+                    )
+                  )
+                """,
+                (
+                    student_id, student_id, student_id, student_id,
+                    student_id, student_id, student_id, student_id,
+                ),
+            ).fetchone() or {}
+        return max(0, int(notifications.get("count") or 0) + int(messages.get("count") or 0))
+    except Exception:
+        # An older schema must not prevent delivery while the application is
+        # being upgraded. The open client reconciles the exact value.
+        return 0
 
 
 def telegram_get_updates(configuration: dict[str, Any], offset: int = 0) -> list[dict[str, Any]]:
@@ -2399,6 +2473,289 @@ def prepare_chat_feature_schema() -> None:
         ensure_chat_feature_schema(conn)
         conn.commit()
     _CHAT_SCHEMA_READY = True
+
+
+CHAT_REALTIME_ACCESS_SQL = """
+create or replace function courseplatform.chat_realtime_topic_allowed(
+  requested_topic text,
+  jwt_claims jsonb
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select case
+    when requested_topic = (
+      'chat:actor:' || lower(coalesce(jwt_claims ->> 'actor_type', '')) || ':'
+      || coalesce(jwt_claims ->> 'actor_id', '') || ':inbox'
+    ) then (
+      (
+        upper(coalesce(jwt_claims ->> 'actor_type', '')) = 'ADMIN'
+        and exists (
+          select 1 from courseplatform.admins admin_user
+          where admin_user.admin_id = jwt_claims ->> 'actor_id'
+            and admin_user.status = 'ACTIVE'
+            and admin_user.role in ('OWNER', 'ADMIN', 'REVIEWER')
+        )
+      )
+      or (
+        upper(coalesce(jwt_claims ->> 'actor_type', '')) = 'STUDENT'
+        and exists (
+          select 1 from courseplatform.students student
+          where student.student_id = jwt_claims ->> 'actor_id'
+            and student.status = 'ACTIVE'
+        )
+      )
+    )
+    when requested_topic ~ '^chat:room:[^:]+:messages$' then exists (
+      select 1
+      from courseplatform.chat_rooms room
+      where room.room_id = substring(requested_topic from '^chat:room:([^:]+):messages$')
+        and room.status = 'ACTIVE'
+        and (
+        (
+          upper(coalesce(jwt_claims ->> 'actor_type', '')) = 'ADMIN'
+          and room.room_type <> 'DIRECT'
+          and exists (
+            select 1 from courseplatform.admins admin_user
+            where admin_user.admin_id = jwt_claims ->> 'actor_id'
+              and admin_user.status = 'ACTIVE'
+              and admin_user.role in ('OWNER', 'ADMIN', 'REVIEWER')
+          )
+        )
+        or
+        (
+          upper(coalesce(jwt_claims ->> 'actor_type', '')) = 'STUDENT'
+          and exists (
+            select 1 from courseplatform.students student
+            where student.student_id = jwt_claims ->> 'actor_id'
+              and student.status = 'ACTIVE'
+          )
+          and (
+            room.room_type = 'COMMUNITY'
+            or (room.room_type = 'SUPPORT' and room.owner_student_id = jwt_claims ->> 'actor_id')
+            or (
+              room.room_type = 'DIRECT'
+              and (room.direct_student_one_id = jwt_claims ->> 'actor_id'
+                   or room.direct_student_two_id = jwt_claims ->> 'actor_id')
+            )
+            or (
+              room.room_type = 'COURSE'
+              and exists (
+                select 1 from courseplatform.enrollments enrollment
+                where enrollment.student_id = jwt_claims ->> 'actor_id'
+                  and enrollment.course_id = room.course_id
+                  and enrollment.status in ('ACTIVE', 'COMPLETED')
+              )
+            )
+            or (
+              room.room_type = 'GROUP'
+              and exists (
+                select 1 from courseplatform.groups active_group
+                where active_group.group_id = room.group_id
+                  and active_group.status = 'ACTIVE'
+              )
+              and (
+                exists (
+                  select 1 from courseplatform.group_members member
+                  where member.student_id = jwt_claims ->> 'actor_id'
+                    and member.group_id = room.group_id
+                    and member.status = 'ACTIVE'
+                )
+                or exists (
+                  select 1 from courseplatform.enrollments enrollment
+                  where enrollment.student_id = jwt_claims ->> 'actor_id'
+                    and enrollment.group_id = room.group_id
+                    and enrollment.status in ('ACTIVE', 'COMPLETED')
+                )
+              )
+            )
+          )
+        )
+        )
+    )
+    else false
+  end
+$$
+"""
+
+CHAT_REALTIME_TRIGGER_SQL = """
+create or replace function courseplatform.broadcast_chat_message_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  room record;
+  admin_user record;
+  changed_room_id text := coalesce(new.room_id, old.room_id)::text;
+  changed_message_id text := coalesce(new.message_id, old.message_id)::text;
+  change_payload jsonb;
+begin
+  change_payload := jsonb_build_object(
+    'room_id', changed_room_id,
+    'message_id', changed_message_id,
+    'operation', tg_op
+  );
+  perform realtime.send(
+    change_payload,
+    tg_op,
+    'chat:room:' || changed_room_id || ':messages',
+    true
+  );
+
+  select * into room
+  from courseplatform.chat_rooms
+  where room_id = changed_room_id;
+
+  if room.room_type = 'DIRECT' then
+    if room.direct_student_one_id is not null then
+      perform realtime.send(
+        change_payload, 'ROOMS_CHANGED',
+        'chat:actor:student:' || room.direct_student_one_id || ':inbox', true
+      );
+    end if;
+    if room.direct_student_two_id is not null then
+      perform realtime.send(
+        change_payload, 'ROOMS_CHANGED',
+        'chat:actor:student:' || room.direct_student_two_id || ':inbox', true
+      );
+    end if;
+  elsif room.room_type = 'SUPPORT' then
+    if room.owner_student_id is not null then
+      perform realtime.send(
+        change_payload, 'ROOMS_CHANGED',
+        'chat:actor:student:' || room.owner_student_id || ':inbox', true
+      );
+    end if;
+    for admin_user in
+      select admin_id from courseplatform.admins
+      where status = 'ACTIVE' and role in ('OWNER', 'ADMIN', 'REVIEWER')
+    loop
+      perform realtime.send(
+        change_payload, 'ROOMS_CHANGED',
+        'chat:actor:admin:' || admin_user.admin_id || ':inbox', true
+      );
+    end loop;
+  end if;
+
+  return coalesce(new, old);
+end;
+$$
+"""
+
+
+def ensure_chat_realtime_schema(conn) -> bool:
+    if _CHAT_REALTIME_SCHEMA_READY:
+        return True
+    capabilities = conn.execute(
+        """
+        select
+          to_regclass('realtime.messages') is not null as messages_ready,
+          exists (
+            select 1 from pg_proc procedure
+            join pg_namespace namespace on namespace.oid = procedure.pronamespace
+            where namespace.nspname = 'realtime' and procedure.proname = 'send'
+          ) as broadcast_ready,
+          exists (
+            select 1 from pg_proc procedure
+            join pg_namespace namespace on namespace.oid = procedure.pronamespace
+            where namespace.nspname = 'realtime' and procedure.proname = 'topic'
+          ) as topic_ready,
+          exists (
+            select 1 from pg_proc procedure
+            join pg_namespace namespace on namespace.oid = procedure.pronamespace
+            where namespace.nspname = 'courseplatform'
+              and procedure.proname = 'chat_realtime_topic_allowed'
+              and pg_get_functiondef(procedure.oid) like '%chat:actor:%'
+              and pg_get_functiondef(procedure.oid) like '%active_group.status%'
+          ) as access_policy_function_ready,
+          exists (
+            select 1 from pg_proc procedure
+            join pg_namespace namespace on namespace.oid = procedure.pronamespace
+            where namespace.nspname = 'courseplatform'
+              and procedure.proname = 'broadcast_chat_message_change'
+              and pg_get_functiondef(procedure.oid) like '%ROOMS_CHANGED%'
+              and pg_get_functiondef(procedure.oid) like '%realtime.send%'
+          ) as broadcast_function_ready,
+          exists (
+            select 1 from pg_trigger trigger_row
+            where trigger_row.tgrelid = 'courseplatform.chat_messages'::regclass
+              and trigger_row.tgname = 'chat_messages_realtime_broadcast'
+              and not trigger_row.tgisinternal
+          ) as trigger_ready,
+          exists (
+            select 1 from pg_policies
+            where schemaname = 'realtime'
+              and tablename = 'messages'
+              and policyname = 'courseplatform_chat_broadcast_select'
+          ) as rls_policy_ready
+        """
+    ).fetchone() or {}
+    if not all(capabilities.get(key) for key in ("messages_ready", "broadcast_ready", "topic_ready")):
+        return False
+    if all(capabilities.get(key) for key in (
+        "access_policy_function_ready", "broadcast_function_ready", "trigger_ready", "rls_policy_ready",
+    )):
+        return True
+    conn.execute(CHAT_REALTIME_ACCESS_SQL)
+    conn.execute("revoke all on function courseplatform.chat_realtime_topic_allowed(text, jsonb) from public, anon")
+    conn.execute("grant execute on function courseplatform.chat_realtime_topic_allowed(text, jsonb) to authenticated")
+    conn.execute("drop policy if exists courseplatform_chat_broadcast_select on realtime.messages")
+    conn.execute(
+        """
+        create policy courseplatform_chat_broadcast_select
+        on realtime.messages
+        for select
+        to authenticated
+        using (
+          extension = 'broadcast'
+          and private
+          and courseplatform.chat_realtime_topic_allowed(
+            realtime.topic(),
+            nullif(current_setting('request.jwt.claims', true), '')::jsonb
+          )
+        )
+        """
+    )
+    conn.execute(CHAT_REALTIME_TRIGGER_SQL)
+    conn.execute("drop trigger if exists chat_messages_realtime_broadcast on courseplatform.chat_messages")
+    conn.execute(
+        """
+        create trigger chat_messages_realtime_broadcast
+        after insert or update or delete on courseplatform.chat_messages
+        for each row execute function courseplatform.broadcast_chat_message_change()
+        """
+    )
+    return True
+
+
+def _jwt_segment(value: dict[str, Any]) -> str:
+    encoded = json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+
+def chat_realtime_token(actor: dict[str, Any], secret: str, lifetime_minutes: int) -> tuple[str, datetime]:
+    issued_at = utc_now()
+    expires_at = issued_at + timedelta(minutes=max(5, min(int(lifetime_minutes or 30), 120)))
+    header = _jwt_segment({"alg": "HS256", "typ": "JWT"})
+    claims = _jwt_segment({
+        "sub": f"{actor['type'].lower()}:{actor['id']}",
+        "role": "authenticated",
+        "aud": "authenticated",
+        "iat": int(issued_at.timestamp()),
+        "exp": int(expires_at.timestamp()),
+        "actor_type": actor["type"],
+        "actor_id": actor["id"],
+    })
+    signing_input = f"{header}.{claims}".encode("ascii")
+    signature = base64.urlsafe_b64encode(
+        hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    ).decode("ascii").rstrip("=")
+    return f"{header}.{claims}.{signature}", expires_at
 
 
 ASSESSMENT_FEATURE_SQL = """
@@ -7977,6 +8334,50 @@ def accessible_chat_room(conn, room_id: str, actor: dict[str, Any]) -> dict[str,
     return room
 
 
+def chat_realtime_configuration(payload: dict[str, Any]):
+    global _CHAT_REALTIME_SCHEMA_READY
+    prepare_chat_feature_schema()
+    settings = get_settings()
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        conn.commit()
+        environment_ready = bool(
+            settings.chat_realtime_enabled
+            and settings.supabase_url.startswith("https://")
+            and settings.supabase_publishable_key
+            and len(settings.supabase_realtime_jwt_secret) >= 32
+        )
+        schema_ready = False
+        if environment_ready:
+            try:
+                schema_ready = ensure_chat_realtime_schema(conn)
+                conn.commit()
+                _CHAT_REALTIME_SCHEMA_READY = schema_ready
+            except Exception:
+                conn.rollback()
+                schema_ready = False
+    configured = environment_ready and schema_ready
+    result: dict[str, Any] = {
+        "enabled": configured,
+        "transport": "SUPABASE_BROADCAST" if configured else "POLLING",
+        "pollIntervalMs": 15000 if configured else 4000,
+    }
+    if configured:
+        token, expires_at = chat_realtime_token(
+            actor,
+            settings.supabase_realtime_jwt_secret,
+            settings.chat_realtime_token_minutes,
+        )
+        result.update({
+            "url": settings.supabase_url,
+            "publishableKey": settings.supabase_publishable_key,
+            "accessToken": token,
+            "expiresAt": iso(expires_at),
+            "inboxTopic": f"chat:actor:{actor['type'].lower()}:{actor['id']}:inbox",
+        })
+    return success({"realtime": result})
+
+
 def chat_message_row(conn, message_id: str) -> dict[str, Any] | None:
     return conn.execute(
         """
@@ -8128,6 +8529,10 @@ def mark_chat_room_read_with_conn(conn, room_id: str, actor: dict[str, Any]) -> 
         actor,
         mark_read=True,
     )
+    upsert_chat_room_read_cursor(conn, room_id, actor)
+
+
+def upsert_chat_room_read_cursor(conn, room_id: str, actor: dict[str, Any]) -> None:
     if actor["type"] == "STUDENT":
         conn.execute(
             """
@@ -8543,7 +8948,10 @@ def chat_send_message(payload: dict[str, Any]):
             "update courseplatform.chat_rooms set updated_at = now() where room_id = %s",
             (room["room_id"],),
         )
-        mark_chat_room_read_with_conn(conn, room["room_id"], actor)
+        # The sender already has this room open. Advancing the cursor is enough
+        # here and avoids rewriting up to 200 historical delivery receipts
+        # before the API acknowledges the new message.
+        upsert_chat_room_read_cursor(conn, room["room_id"], actor)
         if actor["type"] == "ADMIN" and room.get("room_type") == "SUPPORT" and room.get("owner_student_id"):
             notification_id = create_student_notification(
                 conn,
@@ -8588,8 +8996,10 @@ def chat_send_message(payload: dict[str, Any]):
                 notification_ids.append(notification_id)
         message = public_chat_message(chat_message_row(conn, message_id), actor)
         conn.commit()
-    dispatch_notification_deliveries(notification_ids)
-    return success({"message": message})
+    response = success({"message": message})
+    if notification_ids:
+        response["_backgroundNotificationIds"] = notification_ids
+    return response
 
 
 def chat_edit_message(payload: dict[str, Any]):
@@ -8758,6 +9168,7 @@ ACTIONS = {
     "updateMyProfile": update_my_profile,
     "getMyNotifications": my_notifications,
     "markNotificationRead": mark_notification_read,
+    "getChatRealtimeConfiguration": chat_realtime_configuration,
     "getChatRooms": chat_list_rooms,
     "getChatContacts": chat_list_contacts,
     "startDirectChat": chat_start_direct,
@@ -8805,6 +9216,7 @@ ACTIONS = {
     "adminUploadBrandLogo": admin_upload_brand_logo,
     "adminListNotifications": admin_list_notifications,
     "adminListChatRooms": chat_list_rooms,
+    "adminGetChatRealtimeConfiguration": chat_realtime_configuration,
     "adminUpdatePresence": chat_presence_heartbeat,
     "adminGetChatMessages": chat_list_messages,
     "adminSendChatMessage": chat_send_message,

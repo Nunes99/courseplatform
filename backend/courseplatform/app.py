@@ -1,10 +1,18 @@
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from .actions import ApiError, admin_certificate_pdf_payload, certificate_pdf_payload, dispatch, public_error, record_certificate_download
+from .actions import (
+    ApiError,
+    admin_certificate_pdf_payload,
+    certificate_pdf_payload,
+    dispatch,
+    dispatch_notification_deliveries,
+    public_error,
+    record_certificate_download,
+)
 from .certificate_pdf import build_course_certificate_pdf
 from .config import get_settings
 
@@ -36,7 +44,7 @@ async def handle_get_action(request: Request):
         return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)
 
 
-async def handle_post_action(request: Request):
+async def handle_post_action(request: Request, background_tasks: BackgroundTasks):
     try:
         payload = await request.json()
     except Exception:
@@ -47,7 +55,11 @@ async def handle_post_action(request: Request):
         return JSONResponse(public_error(ApiError("ACTION_REQUIRED", "O campo action e obrigatorio.")), status_code=400)
 
     try:
-        return JSONResponse(dispatch(action, payload))
+        result = dispatch(action, payload)
+        notification_ids = result.pop("_backgroundNotificationIds", []) if isinstance(result, dict) else []
+        if notification_ids:
+            background_tasks.add_task(dispatch_notification_deliveries, notification_ids)
+        return JSONResponse(result)
     except Exception as error:
         return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)
 

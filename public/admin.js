@@ -19,6 +19,8 @@ const adminIdentity = document.querySelector('#adminIdentity');
 const logoutButton = document.querySelector('#adminLogoutButton');
 const themeToggle = document.querySelector('#themeToggle');
 const adminMobileMenuButton = document.querySelector('#adminMobileMenuButton');
+const adminMobileNotificationButton = document.querySelector('#adminMobileNotificationButton');
+const adminMobileChatButton = document.querySelector('#adminMobileChatButton');
 const lucideIconsBase = 'https://api.iconify.design/lucide';
 const lucideIconAliases = Object.freeze({
   'admin-settings-male': 'settings',
@@ -150,6 +152,12 @@ async function initialize() {
     adminMobileMenuButton.setAttribute('aria-expanded', String(isOpen));
     adminMobileMenuButton.setAttribute('aria-label', isOpen ? 'Fechar menu' : 'Abrir menu');
   });
+  adminMobileNotificationButton?.addEventListener('click', () => {
+    root.querySelector('[data-admin-view="notifications"]')?.click();
+  });
+  adminMobileChatButton?.addEventListener('click', () => {
+    root.querySelector('[data-admin-view="chat"]')?.click();
+  });
   document.addEventListener('click', (event) => {
     if (
       !document.body.classList.contains('admin-menu-open')
@@ -200,6 +208,8 @@ async function initialize() {
 function renderAdminLogin() {
   logoutButton.hidden = true;
   if (adminMobileMenuButton) adminMobileMenuButton.hidden = true;
+  if (adminMobileNotificationButton) adminMobileNotificationButton.hidden = true;
+  if (adminMobileChatButton) adminMobileChatButton.hidden = true;
   document.body.classList.remove('admin-menu-open');
   adminIdentity.textContent = '';
   adminIdentity.hidden = true;
@@ -415,6 +425,8 @@ function warmAdminCache() {
 function renderAdminShell() {
   logoutButton.hidden = false;
   if (adminMobileMenuButton) adminMobileMenuButton.hidden = false;
+  if (adminMobileNotificationButton) adminMobileNotificationButton.hidden = false;
+  if (adminMobileChatButton) adminMobileChatButton.hidden = false;
   adminIdentity.hidden = false;
   const sidebarCollapsed = document.body.classList.contains('sidebar-collapsed');
   if (state.admin) {
@@ -565,10 +577,11 @@ function setActiveAdminView(view) {
 
 function updateAdminChatUnread(unreadCount) {
   const count = Math.max(0, Number(unreadCount || 0));
-  root.querySelectorAll('[data-admin-chat-badge]').forEach((badge) => {
+  document.querySelectorAll('[data-admin-chat-badge]').forEach((badge) => {
     badge.hidden = count === 0;
     badge.textContent = String(Math.min(count, 99));
   });
+  adminMobileChatButton?.setAttribute('aria-label', count ? `Mensagens: ${count} não lidas` : 'Mensagens');
 }
 
 async function loadPlatformStatistics(options = {}) {

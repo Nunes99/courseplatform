@@ -13309,6 +13309,90 @@ pre,
   position: relative;
 }
 
+.mobile-header-action {
+  display: none;
+  position: relative;
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.mobile-header-action > img {
+  width: 18px;
+  height: 18px;
+}
+
+:root[data-theme="dark"] .mobile-header-action > img {
+  filter: brightness(0) saturate(100%) invert(94%) sepia(17%) saturate(399%) hue-rotate(342deg) brightness(106%) contrast(102%);
+}
+
+.chat-live-indicator:not(.is-connected) i {
+  background: #8798a4;
+  box-shadow: none;
+}
+
+.chat-live-indicator.is-connected {
+  color: #168764;
+}
+
+.chat-message.is-pending {
+  opacity: .72;
+}
+
+.chat-message.is-failed .chat-message-bubble {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+}
+
+.chat-delivery-status.is-failed {
+  color: var(--danger);
+}
+
+.chat-delivery-status.is-pending img {
+  animation: chat-pending-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes chat-pending-pulse {
+  50% { opacity: .35; }
+}
+
+@media (max-width: 1024px) {
+  .mobile-header-action:not([hidden]) {
+    display: inline-grid;
+  }
+
+  body:has(.student-app-shell) .site-header .header-user,
+  body:has(.student-app-shell) .site-header .theme-toggle,
+  body:has(.lesson-layout) .site-header .header-user,
+  body:has(.lesson-layout) .site-header .theme-toggle,
+  body:has(.certifications-shell) .site-header .header-user,
+  body:has(.certifications-shell) .site-header .theme-toggle {
+    display: none;
+  }
+
+  .student-topbar-actions .notification-button {
+    display: none !important;
+  }
+
+  .admin-sidebar .admin-nav[data-admin-view="notifications"],
+  .admin-sidebar .admin-nav[data-admin-view="chat"] {
+    display: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  body:has(.admin-layout) .site-header .admin-identity,
+  body:has(.admin-layout) .site-header .theme-toggle {
+    display: none;
+  }
+}
+
 .notification-badge {
   position: absolute;
   top: -5px;

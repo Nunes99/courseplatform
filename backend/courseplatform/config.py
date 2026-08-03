@@ -174,6 +174,19 @@ class Settings:
         self.admin_recovery_key_hash = os.getenv("ADMIN_RECOVERY_KEY_HASH", "").strip()
         self.supabase_url = os.getenv("SUPABASE_URL", os.getenv("NEXT_PUBLIC_SUPABASE_URL", "")).strip().rstrip("/")
         self.supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        self.supabase_publishable_key = (
+            os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
+            or os.getenv("SUPABASE_ANON_KEY", "").strip()
+            or os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "").strip()
+        )
+        self.supabase_realtime_jwt_secret = (
+            os.getenv("SUPABASE_REALTIME_JWT_SECRET", "").strip()
+            or os.getenv("SUPABASE_JWT_SECRET", "").strip()
+        )
+        self.chat_realtime_enabled = os.getenv("CHAT_REALTIME_ENABLED", "true").strip().lower() in {
+            "1", "true", "yes", "sim"
+        }
+        self.chat_realtime_token_minutes = _int_env("CHAT_REALTIME_TOKEN_MINUTES", 30)
         self.supabase_storage_bucket = os.getenv("SUPABASE_CERTIFICATE_BUCKET", "courseplatform-certificate-assets").strip()
         self.whatsapp_enabled = os.getenv("WHATSAPP_ENABLED", "false").strip().lower() in {"1", "true", "yes", "sim"}
         self.whatsapp_access_token = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()

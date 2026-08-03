@@ -26,6 +26,8 @@ const mobileMenuButton = document.querySelector('#mobileMenuButton');
 const mobileMenu = document.querySelector('#mobileMenu');
 const mobileThemeButton = document.querySelector('#mobileThemeButton');
 const mobileLogoutButton = document.querySelector('#mobileLogoutButton');
+const mobileNotificationButton = document.querySelector('#mobileNotificationButton');
+const mobileChatButton = document.querySelector('#mobileChatButton');
 const platformName = config.appName || 'LMTWEBNAIRS Summer School 2026';
 const platformYear = 'Summer School 2026';
 const lucideIconsBase = 'https://api.iconify.design/lucide';
@@ -163,6 +165,11 @@ async function initialize() {
       reportHeight();
     }
   });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && api?.hasStudentSession()) {
+      refreshAllUnreadIndicators();
+    }
+  });
   if (window.ResizeObserver) {
     new ResizeObserver(reportHeight).observe(document.body);
   }
@@ -191,6 +198,31 @@ function isStandaloneApp() {
   return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 }
 
+function setMobileHeaderActionsVisible(visible) {
+  if (mobileNotificationButton) mobileNotificationButton.hidden = !visible;
+  if (mobileChatButton) mobileChatButton.hidden = !visible;
+}
+
+function unifiedUnreadCount() {
+  return Math.max(0, Number(state.notifications.unreadCount || 0))
+    + Math.max(0, Number(state.chat.unreadCount || 0));
+}
+
+async function syncApplicationBadge() {
+  const count = unifiedUnreadCount();
+  try {
+    if (count && 'setAppBadge' in navigator) await navigator.setAppBadge(Math.min(count, 999));
+    else if (!count && 'clearAppBadge' in navigator) await navigator.clearAppBadge();
+  } catch {
+    // Some systems expose the API before the application is installed.
+  }
+  try {
+    navigator.serviceWorker?.controller?.postMessage({ type: 'SET_APP_BADGE', count });
+  } catch {
+    // The page-level API above remains the primary path.
+  }
+}
+
 function isAppInstallationKnown() {
   return isStandaloneApp() || localStorage.getItem('coursePlatformAppInstalled') === 'true';
 }
@@ -211,7 +243,13 @@ function supportsWebPush() {
 async function initializePwa() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return null;
   try {
-    return await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data?.type === 'PUSH_RECEIVED' && api?.hasStudentSession()) {
+        refreshAllUnreadIndicators();
+      }
+    });
+    return registration;
   } catch (error) {
     console.warn('Não foi possível registar o service worker.', error);
     return null;
@@ -600,6 +638,8 @@ async function route() {
     return;
   }
 
+  setMobileHeaderActionsVisible(true);
+
   if (routeName !== 'chat') refreshChatUnread();
 
   try {
@@ -641,12 +681,16 @@ async function route() {
 
 function renderLogin() {
   clearTimers();
+  state.notifications = { items: [], unreadCount: 0, total: 0 };
+  state.chat.unreadCount = 0;
+  syncApplicationBadge();
   document.querySelector('#pushRecommendation')?.remove();
   headerUser.innerHTML = '';
   headerUser.title = '';
   headerUser.removeAttribute('aria-label');
   headerUser.hidden = true;
   if (mobileMenuButton) mobileMenuButton.hidden = true;
+  setMobileHeaderActionsVisible(false);
   closeMobileMenu();
   logoutButton.hidden = true;
 
@@ -787,6 +831,7 @@ async function login(event) {
   try {
     await api.login(data.get('email'), data.get('accessCode'));
     startPresenceHeartbeat();
+    setMobileHeaderActionsVisible(true);
     location.hash = '#/';
     await renderDashboard();
   } catch (error) {
@@ -924,9 +969,12 @@ async function logout() {
   state.dashboard = null;
   state.lesson = null;
   state.attempt = null;
+  state.notifications = { items: [], unreadCount: 0, total: 0 };
+  state.chat.unreadCount = 0;
   state.push.configuration = null;
   state.push.subscriptionCount = 0;
   state.push.subscribedOnDevice = false;
+  syncApplicationBadge();
   location.hash = '';
   renderLogin();
 }
@@ -1003,12 +1051,12 @@ function studentAppShell(activeView, content, page = {}) {
             <a class="icon-button" href="#/certifications" aria-label="Certificados">
               <img src="${iconUrl('diploma', blueIcon)}" alt="">
             </a>
-            <a class="icon-button notification-button" href="#/notifications"
+            <a class="icon-button notification-button" href="#/notifications" data-notification-button
               aria-label="Notificações${state.notifications.unreadCount ? `: ${state.notifications.unreadCount} não lidas` : ''}">
               <img src="${iconUrl('bell', blueIcon)}" alt="">
-              ${state.notifications.unreadCount ? `<span class="notification-badge">${Math.min(state.notifications.unreadCount, 99)}</span>` : ''}
+              <span class="notification-badge" data-notification-nav-badge ${state.notifications.unreadCount ? '' : 'hidden'}>${Math.min(state.notifications.unreadCount, 99)}</span>
             </a>
-            <a class="icon-button notification-button" href="#/chat"
+            <a class="icon-button notification-button" href="#/chat" data-chat-button
               aria-label="Mensagens${state.chat.unreadCount ? `: ${state.chat.unreadCount} não lidas` : ''}">
               <img src="${iconUrl('message-square', blueIcon)}" alt="">
               <span class="notification-badge" data-chat-nav-badge ${state.chat.unreadCount ? '' : 'hidden'}>${Math.min(state.chat.unreadCount, 99)}</span>
@@ -1590,6 +1638,8 @@ function setNotificationState(data = {}) {
     unreadCount: Number(data.unreadCount || 0),
     total: Number(data.total || 0)
   };
+  updateNotificationBadge();
+  syncApplicationBadge();
 }
 
 function notificationCategoryMeta(category) {
@@ -1721,6 +1771,12 @@ function updateChatUnreadIndicators(unreadCount) {
     badge.hidden = state.chat.unreadCount === 0;
     badge.textContent = String(Math.min(state.chat.unreadCount, 99));
   });
+  document.querySelectorAll('[data-chat-button]').forEach((button) => {
+    button.setAttribute('aria-label', state.chat.unreadCount
+      ? `Mensagens: ${state.chat.unreadCount} não lidas`
+      : 'Mensagens');
+  });
+  syncApplicationBadge();
 }
 
 function refreshChatUnread() {
@@ -1728,6 +1784,20 @@ function refreshChatUnread() {
   api.chatRooms()
     .then((result) => updateChatUnreadIndicators(result.unreadCount))
     .catch(() => {});
+}
+
+async function refreshAllUnreadIndicators() {
+  if (!api?.hasStudentSession()) return;
+  try {
+    const [notificationData, chatData] = await Promise.all([
+      api.notifications({ limit: 6 }),
+      api.chatRooms()
+    ]);
+    setNotificationState(notificationData);
+    updateChatUnreadIndicators(chatData.unreadCount);
+  } catch {
+    // The regular reconciliation cycle will retry automatically.
+  }
 }
 
 async function renderChat(initialRoomId = '') {
@@ -3076,19 +3146,14 @@ async function unlinkTelegram(event) {
 }
 
 function updateNotificationBadge() {
-  const button = document.querySelector('.notification-button');
-  if (!button) return;
   const unreadCount = Number(state.notifications.unreadCount || 0);
-  button.setAttribute('aria-label', unreadCount ? `Notificações: ${unreadCount} não lidas` : 'Notificações');
-  const currentBadge = button.querySelector('.notification-badge');
-  if (!unreadCount) {
-    currentBadge?.remove();
-    return;
-  }
-  const badge = currentBadge || document.createElement('span');
-  badge.className = 'notification-badge';
-  badge.textContent = String(Math.min(unreadCount, 99));
-  if (!currentBadge) button.appendChild(badge);
+  document.querySelectorAll('[data-notification-button]').forEach((button) => {
+    button.setAttribute('aria-label', unreadCount ? `Notificações: ${unreadCount} não lidas` : 'Notificações');
+  });
+  document.querySelectorAll('[data-notification-nav-badge]').forEach((badge) => {
+    badge.hidden = unreadCount === 0;
+    badge.textContent = String(Math.min(unreadCount, 99));
+  });
 }
 
 function startNotificationPolling() {

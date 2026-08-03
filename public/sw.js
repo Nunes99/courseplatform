@@ -1,4 +1,4 @@
-const SW_VERSION = 'courseplatform-push-v1';
+const SW_VERSION = 'courseplatform-push-v2';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -19,6 +19,31 @@ function notificationTarget(rawUrl) {
   }
 }
 
+async function setApplicationBadge(rawCount) {
+  const count = Math.max(0, Number(rawCount || 0));
+  try {
+    if (count && 'setAppBadge' in self.navigator) await self.navigator.setAppBadge(Math.min(count, 999));
+    else if (!count && 'clearAppBadge' in self.navigator) await self.navigator.clearAppBadge();
+  } catch {
+    // Badge support depends on the browser and operating system.
+  }
+}
+
+async function notifyOpenClients(data) {
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  await Promise.all(clients.map((client) => client.postMessage({
+    type: 'PUSH_RECEIVED',
+    badgeCount: Math.max(0, Number(data.badgeCount || 0)),
+    notificationId: String(data.notificationId || '')
+  })));
+}
+
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SET_APP_BADGE') {
+    event.waitUntil(setApplicationBadge(event.data.count));
+  }
+});
+
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -30,19 +55,23 @@ self.addEventListener('push', (event) => {
   const body = String(data.body || 'Consulte a plataforma para ver os detalhes.').slice(0, 300);
   const defaultIcon = new URL('assets/app-icon-192.png', self.registration.scope).href;
   const badgeIcon = new URL('assets/app-icon-192.png', self.registration.scope).href;
-  event.waitUntil(self.registration.showNotification(title, {
-    body,
-    icon: defaultIcon,
-    badge: badgeIcon,
-    tag: String(data.tag || data.notificationId || SW_VERSION),
-    renotify: Boolean(data.notificationId),
-    requireInteraction: String(data.priority || '').toUpperCase() === 'HIGH',
-    data: {
-      url: notificationTarget(data.url),
-      notificationId: String(data.notificationId || '')
-    },
-    actions: [{ action: 'open', title: 'Abrir' }]
-  }));
+  event.waitUntil(Promise.all([
+    self.registration.showNotification(title, {
+      body,
+      icon: defaultIcon,
+      badge: badgeIcon,
+      tag: String(data.tag || data.notificationId || SW_VERSION),
+      renotify: Boolean(data.notificationId),
+      requireInteraction: String(data.priority || '').toUpperCase() === 'HIGH',
+      data: {
+        url: notificationTarget(data.url),
+        notificationId: String(data.notificationId || '')
+      },
+      actions: [{ action: 'open', title: 'Abrir' }]
+    }),
+    setApplicationBadge(data.badgeCount),
+    notifyOpenClients(data)
+  ]));
 });
 
 self.addEventListener('notificationclick', (event) => {

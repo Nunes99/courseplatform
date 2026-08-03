@@ -119,6 +119,7 @@ class WebPushBackendTests(unittest.TestCase):
             patch.object(actions, "webpush", webpush),
             patch.object(actions, "push_subscriptions_for_student", return_value=subscriptions),
             patch.object(actions, "update_push_subscription_delivery") as update,
+            patch.object(actions, "student_unread_badge_count", return_value=7),
         ):
             provider_id = actions.send_web_push_notification(delivery, configuration)
         self.assertEqual(provider_id, "1 dispositivo(s)")
@@ -127,6 +128,7 @@ class WebPushBackendTests(unittest.TestCase):
         self.assertEqual(payload["title"], "Título Push")
         self.assertEqual(payload["body"], "Mensagem Push")
         self.assertEqual(payload["url"], "https://formacao.example.org/#/notifications")
+        self.assertEqual(payload["badgeCount"], 7)
         self.assertEqual(call["vapid_private_key"], "private-vapid-key")
         self.assertEqual(call["vapid_claims"], {"sub": "mailto:suporte@example.org"})
         self.assertEqual(call["ttl"], 86400)

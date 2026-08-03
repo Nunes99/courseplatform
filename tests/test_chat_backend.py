@@ -1,3 +1,7 @@
+import base64
+import hashlib
+import hmac
+import json
 import unittest
 
 from backend.courseplatform import actions
@@ -98,6 +102,7 @@ class ChatBackendTests(unittest.TestCase):
 
     def test_chat_actions_are_registered_for_students_and_admins(self):
         expected = {
+            "getChatRealtimeConfiguration",
             "getChatRooms",
             "getChatContacts",
             "startDirectChat",
@@ -109,6 +114,7 @@ class ChatBackendTests(unittest.TestCase):
             "markChatRoomRead",
             "reportChatMessage",
             "adminListChatRooms",
+            "adminGetChatRealtimeConfiguration",
             "adminGetChatMessages",
             "adminSendChatMessage",
             "adminEditChatMessage",
@@ -118,6 +124,41 @@ class ChatBackendTests(unittest.TestCase):
             "adminGetPlatformStatistics",
         }
         self.assertTrue(expected.issubset(actions.ACTIONS))
+
+    def test_realtime_token_is_scoped_signed_and_short_lived(self):
+        secret = "realtime-test-secret-with-at-least-32-bytes"
+        token, expires_at = actions.chat_realtime_token(
+            {"type": "STUDENT", "id": "STU-PRIVATE-1"},
+            secret,
+            30,
+        )
+        header_segment, claims_segment, signature = token.split(".")
+
+        def decode(segment):
+            padded = segment + "=" * ((4 - len(segment) % 4) % 4)
+            return json.loads(base64.urlsafe_b64decode(padded))
+
+        claims = decode(claims_segment)
+        expected_signature = base64.urlsafe_b64encode(
+            hmac.new(secret.encode(), f"{header_segment}.{claims_segment}".encode(), hashlib.sha256).digest()
+        ).decode().rstrip("=")
+        self.assertEqual(signature, expected_signature)
+        self.assertEqual(claims["role"], "authenticated")
+        self.assertEqual(claims["actor_type"], "STUDENT")
+        self.assertEqual(claims["actor_id"], "STU-PRIVATE-1")
+        self.assertLessEqual(claims["exp"] - claims["iat"], 30 * 60)
+        self.assertEqual(int(expires_at.timestamp()), claims["exp"])
+
+    def test_realtime_transport_broadcasts_only_minimal_invalidations(self):
+        trigger_sql = actions.CHAT_REALTIME_TRIGGER_SQL
+        policy_sql = actions.CHAT_REALTIME_ACCESS_SQL
+        self.assertIn("realtime.send", trigger_sql)
+        self.assertIn("ROOMS_CHANGED", trigger_sql)
+        self.assertIn("chat:actor:student:", trigger_sql)
+        self.assertNotIn("realtime.broadcast_changes", trigger_sql)
+        self.assertNotIn("new,\n    old", trigger_sql.lower())
+        self.assertIn("chat:actor:", policy_sql)
+        self.assertIn("active_group.status = 'ACTIVE'", policy_sql)
 
 
 if __name__ == "__main__":

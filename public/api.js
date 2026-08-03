@@ -240,6 +240,10 @@ export class CoursePlatformApi {
     return this.studentRequest('getChatRooms');
   }
 
+  chatRealtimeConfiguration() {
+    return this.studentRequest('getChatRealtimeConfiguration');
+  }
+
   chatContacts() {
     return this.studentRequest('getChatContacts');
   }
@@ -628,6 +632,10 @@ export class CoursePlatformApi {
 
   adminChatRooms() {
     return this.adminRequest('adminListChatRooms');
+  }
+
+  adminChatRealtimeConfiguration() {
+    return this.adminRequest('adminGetChatRealtimeConfiguration');
   }
 
   adminUpdatePresence(currentRoomId = '') {
