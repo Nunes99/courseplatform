@@ -1322,10 +1322,14 @@ async function renderProfile() {
               <span>Nome completo</span>
               <input name="fullName" value="${escapeHtml(student.fullName || '')}" required>
             </label>
-            <label>
-              <span>Email</span>
-              <input value="${escapeHtml(student.email || '')}" disabled>
-            </label>
+            <div class="profile-email-control">
+              <label>
+                <span>Email de acesso</span>
+                <input value="${escapeHtml(student.email || '')}" readonly aria-describedby="profileEmailHint">
+              </label>
+              <button class="button button-secondary button-small" id="changeProfileEmailButton" type="button">Alterar email</button>
+              <small id="profileEmailHint">A alteração exige a palavra-passe atual e encerra todas as sessões.</small>
+            </div>
             <label>
               <span>País</span>
               <input name="country" value="${escapeHtml(student.country || '')}">
@@ -1468,6 +1472,7 @@ async function renderProfile() {
   document.querySelector('#profileForm').addEventListener('submit', saveProfile);
   document.querySelector('#passwordForm').addEventListener('submit', changePassword);
   document.querySelector('#profileLogoutButton').addEventListener('click', logout);
+  document.querySelector('#changeProfileEmailButton')?.addEventListener('click', () => showEmailChangeDialog(student));
   document.querySelector('#telegramLinkButton')?.addEventListener('click', startTelegramLink);
   document.querySelector('#telegramConfirmButton')?.addEventListener('click', confirmTelegramLink);
   document.querySelector('#telegramUnlinkButton')?.addEventListener('click', unlinkTelegram);
@@ -1543,6 +1548,97 @@ async function changePassword(event) {
   } finally {
     setBusy(button, false);
   }
+}
+
+function showEmailChangeDialog(student) {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card email-change-dialog" role="dialog" aria-modal="true" aria-labelledby="emailChangeTitle">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <p class="eyebrow">Segurança da conta</p>
+      <h2 id="emailChangeTitle">Alterar email de acesso</h2>
+      <p class="recovery-note">Confirme cuidadosamente o novo endereço. Depois da alteração terá de iniciar sessão novamente.</p>
+      <form id="studentEmailChangeForm" class="form-stack">
+        <label>
+          <span>Email atual</span>
+          <input type="email" value="${escapeHtml(student.email || '')}" readonly>
+        </label>
+        <label>
+          <span>Novo email</span>
+          <input type="email" name="newEmail" autocomplete="email" maxlength="254" required>
+        </label>
+        <label>
+          <span>Confirmar novo email</span>
+          <input type="email" name="confirmEmail" autocomplete="off" maxlength="254" required>
+        </label>
+        <label>
+          <span>Palavra-passe atual</span>
+          <input type="password" name="currentAccessCode" autocomplete="current-password" required>
+        </label>
+        <label class="checkbox-line email-change-confirmation">
+          <input type="checkbox" name="acknowledge" value="true" required>
+          <span>Compreendo que todas as sessões serão encerradas e que as notificações por email terão de ser novamente autorizadas.</span>
+        </label>
+        <div class="form-message form-message-error" id="studentEmailChangeError" role="alert" hidden></div>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-email-change>Cancelar</button>
+          <button class="button button-primary" type="submit">Alterar email</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('.dialog-close')?.addEventListener('click', close);
+  overlay.querySelector('[data-cancel-email-change]')?.addEventListener('click', close);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) close();
+  });
+  overlay.querySelector('#studentEmailChangeForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = Object.fromEntries(new FormData(form));
+    const errorBox = form.querySelector('#studentEmailChangeError');
+    const button = form.querySelector('button[type="submit"]');
+    const newEmail = String(values.newEmail || '').trim().toLowerCase();
+    const confirmEmail = String(values.confirmEmail || '').trim().toLowerCase();
+    if (newEmail !== confirmEmail) {
+      errorBox.textContent = 'A confirmação do novo email não corresponde.';
+      errorBox.hidden = false;
+      form.elements.confirmEmail.focus();
+      return;
+    }
+    errorBox.hidden = true;
+    setBusy(button, true, 'A alterar...');
+    try {
+      const result = await api.changeMyEmail(
+        values.currentAccessCode,
+        newEmail,
+        confirmEmail,
+        values.acknowledge === 'true'
+      );
+      close();
+      state.dashboard = null;
+      state.myCourses = [];
+      state.notificationChannelInfo = null;
+      location.hash = '';
+      renderLogin();
+      const loginEmail = document.querySelector('#loginForm [name="email"]');
+      if (loginEmail) loginEmail.value = result.email || newEmail;
+      showToast('Email alterado com segurança. Inicie sessão com o novo endereço.', 'success');
+    } catch (error) {
+      errorBox.textContent = error.message || 'Não foi possível alterar o email.';
+      errorBox.hidden = false;
+      form.elements.currentAccessCode.value = '';
+      form.elements.currentAccessCode.focus();
+    } finally {
+      setBusy(button, false);
+      reportHeight();
+    }
+  });
+  overlay.querySelector('[name="newEmail"]')?.focus();
+  reportHeight();
 }
 
 function bindProfilePhotoPreview(student) {

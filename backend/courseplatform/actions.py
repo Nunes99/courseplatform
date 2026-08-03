@@ -738,6 +738,116 @@ def normalize_email_recipient(value: Any) -> str:
     return text
 
 
+def validated_email_change(payload: dict[str, Any]) -> str:
+    """Validate the new account identifier and its explicit confirmation."""
+    require_fields(payload, ["newEmail", "confirmEmail"])
+    new_email = normalize_email_recipient(payload.get("newEmail"))
+    confirmed_email = normalize_email_recipient(payload.get("confirmEmail"))
+    if not new_email:
+        raise ApiError("INVALID_ACCOUNT_EMAIL", "Informe um endereço de email válido.")
+    if not confirmed_email or new_email != confirmed_email:
+        raise ApiError("EMAIL_CONFIRMATION_MISMATCH", "A confirmação do novo email não corresponde.")
+    return new_email
+
+
+def verify_password_with_conn(conn, password: str, password_hash: str | None) -> bool:
+    if not password_hash:
+        return False
+    row = conn.execute(
+        "select %s = crypt(%s, %s) as ok",
+        (password_hash, password, password_hash),
+    ).fetchone()
+    return bool(row and row.get("ok"))
+
+
+def secure_student_email_update(
+    conn,
+    student: dict[str, Any],
+    new_email: str,
+    *,
+    actor_type: str,
+    actor_id: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Change a login email atomically and retire every unsafe old destination."""
+    student_id = student["student_id"]
+    old_email = normalize_email(student.get("email"))
+    if new_email == old_email:
+        raise ApiError("EMAIL_UNCHANGED", "O novo email deve ser diferente do email atual.")
+    conflict = conn.execute(
+        """
+        select student_id
+        from courseplatform.students
+        where lower(email) = %s and student_id <> %s
+        limit 1
+        """,
+        (new_email, student_id),
+    ).fetchone()
+    if conflict:
+        raise ApiError("EMAIL_ALREADY_IN_USE", "Este endereço de email já está associado a outro estudante.")
+
+    row = conn.execute(
+        """
+        update courseplatform.students
+        set email = %s,
+            email_opt_in = false,
+            email_opt_in_at = null,
+            updated_at = now()
+        where student_id = %s
+        returning *
+        """,
+        (new_email, student_id),
+    ).fetchone()
+    if not row:
+        raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
+
+    conn.execute(
+        """
+        update courseplatform.notification_deliveries d
+        set status = 'SKIPPED',
+            last_error = 'Endereço de email alterado; entrega cancelada por segurança.',
+            updated_at = now()
+        from courseplatform.notifications n
+        where n.notification_id = d.notification_id
+          and n.student_id = %s
+          and d.channel = 'EMAIL'
+          and d.status in ('PENDING', 'FAILED', 'PROCESSING')
+        """,
+        (student_id,),
+    )
+    revoke_sessions(conn, student_id)
+    create_student_notification(
+        conn,
+        student_id,
+        "GENERAL",
+        "Email de acesso alterado",
+        "O email de acesso foi atualizado. As notificações por email permanecem suspensas até nova autorização no perfil.",
+        action_url="#/profile",
+        entity_type="ACCOUNT_SECURITY",
+        entity_id=student_id,
+        priority="HIGH",
+        send_whatsapp=False,
+        send_email=False,
+        send_telegram=False,
+    )
+    audit(
+        conn,
+        actor_type,
+        actor_id,
+        "STUDENT_EMAIL_CHANGED",
+        "STUDENT",
+        student_id,
+        {
+            "oldEmail": mask_email(old_email),
+            "newEmail": mask_email(new_email),
+            "reason": str_value(reason)[:300],
+            "sessionsRevoked": True,
+            "emailConsentReset": True,
+        },
+    )
+    return row
+
+
 def normalize_telegram_recipient(value: Any) -> str:
     text = str_value(value)
     # Student accounts are linked only to private chats. Negative IDs identify
@@ -3272,6 +3382,59 @@ def change_my_access_code(payload: dict[str, Any]):
     return success({"requiresLogin": True})
 
 
+def change_my_email(payload: dict[str, Any]):
+    prepare_notification_feature_schema()
+    require_fields(payload, ["currentAccessCode", "newEmail", "confirmEmail"])
+    if not as_bool(payload.get("acknowledgeSecurityImpact")):
+        raise ApiError(
+            "EMAIL_CHANGE_ACKNOWLEDGEMENT_REQUIRED",
+            "Confirme que compreende o encerramento das sessões e a suspensão das notificações por email.",
+        )
+    new_email = validated_email_change(payload)
+    current_password = str_value(payload.get("currentAccessCode"))
+    if len(current_password) > 1024:
+        raise ApiError("INVALID_CURRENT_ACCESS_CODE", "A palavra-passe atual não está correta.")
+    try:
+        with connection() as conn:
+            _, session_student = student_context_with_conn(conn, payload)
+            student = conn.execute(
+                "select * from courseplatform.students where student_id = %s for update",
+                (session_student["student_id"],),
+            ).fetchone()
+            if not student or student.get("status") != "ACTIVE":
+                raise ApiError("STUDENT_NOT_ACTIVE", "A conta do estudante não está ativa.")
+            if not verify_password_with_conn(
+                conn,
+                current_password,
+                student.get("password_hash"),
+            ):
+                raise ApiError("INVALID_CURRENT_ACCESS_CODE", "A palavra-passe atual não está correta.")
+            row = secure_student_email_update(
+                conn,
+                student,
+                new_email,
+                actor_type="STUDENT",
+                actor_id=student["student_id"],
+                reason="Alteração solicitada no perfil pessoal.",
+            )
+            conn.commit()
+    except ApiError:
+        raise
+    except Exception as error:
+        text = str(error).lower()
+        if "unique" in text or "duplicate" in text:
+            raise ApiError(
+                "EMAIL_ALREADY_IN_USE",
+                "Este endereço de email já está associado a outro estudante.",
+            ) from error
+        raise database_api_error(error) from error
+    return success({
+        "student": public_student(row),
+        "email": new_email,
+        "requiresLogin": True,
+    })
+
+
 def start_attempt(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["lessonId"])
@@ -4531,6 +4694,76 @@ def admin_create_student(payload: dict[str, Any]):
         audit(conn, "ADMIN", admin["admin_id"], "STUDENT_CREATED", "STUDENT", student_id)
         conn.commit()
     return success({"student": public_student(row), "accessCode": access_code})
+
+
+def admin_change_student_email(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_notification_feature_schema()
+    require_fields(
+        payload,
+        ["studentId", "newEmail", "confirmEmail", "adminPassword", "reason"],
+    )
+    if not as_bool(payload.get("verifiedWithStudent")):
+        raise ApiError(
+            "EMAIL_VERIFICATION_CONFIRMATION_REQUIRED",
+            "Confirme que verificou o novo endereço com o estudante.",
+        )
+    new_email = validated_email_change(payload)
+    reason = str_value(payload.get("reason"))
+    if len(reason) < 5:
+        raise ApiError("EMAIL_CHANGE_REASON_REQUIRED", "Indique brevemente o motivo da correção do email.")
+    if len(reason) > 300:
+        raise ApiError("EMAIL_CHANGE_REASON_TOO_LONG", "O motivo deve ter no máximo 300 caracteres.")
+    admin_password = str_value(payload.get("adminPassword"))
+    if len(admin_password) > 1024:
+        raise ApiError("INVALID_ADMIN_PASSWORD", "A palavra-passe administrativa não está correta.")
+    try:
+        with connection() as conn:
+            current_admin = conn.execute(
+                "select * from courseplatform.admins where admin_id = %s for update",
+                (admin["admin_id"],),
+            ).fetchone()
+            if not current_admin or current_admin.get("status") != "ACTIVE":
+                raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
+            if not verify_password_with_conn(
+                conn,
+                admin_password,
+                current_admin.get("password_hash"),
+            ):
+                raise ApiError(
+                    "INVALID_ADMIN_PASSWORD",
+                    "A palavra-passe administrativa não está correta.",
+                )
+            student = conn.execute(
+                "select * from courseplatform.students where student_id = %s for update",
+                (str_value(payload.get("studentId")),),
+            ).fetchone()
+            if not student:
+                raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
+            row = secure_student_email_update(
+                conn,
+                student,
+                new_email,
+                actor_type="ADMIN",
+                actor_id=admin["admin_id"],
+                reason=reason,
+            )
+            conn.commit()
+    except ApiError:
+        raise
+    except Exception as error:
+        text = str(error).lower()
+        if "unique" in text or "duplicate" in text:
+            raise ApiError(
+                "EMAIL_ALREADY_IN_USE",
+                "Este endereço de email já está associado a outro estudante.",
+            ) from error
+        raise database_api_error(error) from error
+    return success({
+        "student": public_student(row),
+        "studentSessionsRevoked": True,
+        "emailConsentReset": True,
+    })
 
 
 def admin_set_student_status(payload: dict[str, Any]):
@@ -6338,6 +6571,7 @@ ACTIONS = {
     "getMyNotifications": my_notifications,
     "markNotificationRead": mark_notification_read,
     "changeMyAccessCode": change_my_access_code,
+    "changeMyEmail": change_my_email,
     "getMyCertifications": my_certifications,
     "requestProfessionalCertificate": request_professional_certificate,
     "submitProfessionalCertificatePayment": submit_professional_certificate_payment,
@@ -6379,6 +6613,7 @@ ACTIONS = {
     "adminSaveStaff": admin_save_staff,
     "adminSetStaffStatus": admin_set_staff_status,
     "adminCreateStudent": admin_create_student,
+    "adminChangeStudentEmail": admin_change_student_email,
     "adminSetStudentStatus": admin_set_student_status,
     "adminResetStudentAccessCode": admin_reset_student_access_code,
     "adminRestoreCredentials": admin_restore_credentials,

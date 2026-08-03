@@ -1323,6 +1323,27 @@ input[type="search"] {
   gap: 14px;
 }
 
+.profile-email-control {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  align-content: start;
+}
+
+.profile-email-control > label {
+  min-width: 0;
+}
+
+.profile-email-control .button {
+  width: fit-content;
+}
+
+.profile-email-control small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .profile-side-column {
   display: grid;
   grid-column: 2;
@@ -3177,6 +3198,31 @@ input[type="search"] {
 
 .recovery-dialog {
   width: min(100%, 620px);
+}
+
+.email-change-dialog {
+  width: min(100%, 620px);
+}
+
+.dialog-overlay-elevated {
+  z-index: 560;
+}
+
+.email-change-confirmation {
+  grid-column: 1 !important;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.email-change-confirmation input {
+  flex: 0 0 16px;
+  margin-top: 2px;
 }
 
 .recovery-note {

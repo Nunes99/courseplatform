@@ -4,7 +4,7 @@ import types
 import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 try:
     from psycopg.rows import dict_row as _dict_row  # noqa: F401
@@ -65,7 +65,192 @@ class _SmtpClient:
         self.message = message
 
 
+class _EmailChangeResult:
+    def __init__(self, row=None):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
+
+
+class _EmailChangeConnection:
+    def __init__(self, updated_student, conflict=None):
+        self.updated_student = updated_student
+        self.conflict = conflict
+        self.queries = []
+
+    def execute(self, query, params=()):
+        normalized = " ".join(query.split()).lower()
+        self.queries.append((normalized, params))
+        if "select student_id from courseplatform.students" in normalized:
+            return _EmailChangeResult(self.conflict)
+        if "update courseplatform.students" in normalized and "returning" in normalized:
+            return _EmailChangeResult(self.updated_student)
+        return _EmailChangeResult()
+
+
 class NotificationChannelBackendTests(unittest.TestCase):
+    def test_email_change_acknowledgements_are_enforced_server_side(self):
+        with patch.object(actions, "prepare_notification_feature_schema"):
+            with self.assertRaises(actions.ApiError) as student_ack:
+                actions.change_my_email({
+                    "sessionToken": "session",
+                    "currentAccessCode": "password",
+                    "newEmail": "new@example.org",
+                    "confirmEmail": "new@example.org",
+                })
+        self.assertEqual(student_ack.exception.code, "EMAIL_CHANGE_ACKNOWLEDGEMENT_REQUIRED")
+
+        admin = {"admin_id": "ADM-1", "role": "ADMIN", "status": "ACTIVE"}
+        with (
+            patch.object(actions, "admin_context", return_value=({}, admin)),
+            patch.object(actions, "prepare_notification_feature_schema"),
+        ):
+            with self.assertRaises(actions.ApiError) as admin_ack:
+                actions.admin_change_student_email({
+                    "adminToken": "admin-session",
+                    "studentId": "STU-1",
+                    "newEmail": "new@example.org",
+                    "confirmEmail": "new@example.org",
+                    "adminPassword": "password",
+                    "reason": "Correção solicitada pelo estudante.",
+                })
+        self.assertEqual(admin_ack.exception.code, "EMAIL_VERIFICATION_CONFIRMATION_REQUIRED")
+
+    def test_student_email_change_requires_current_password(self):
+        student = {
+            "student_id": "STU-1",
+            "email": "old@example.org",
+            "status": "ACTIVE",
+            "password_hash": "hash",
+        }
+        conn = MagicMock()
+        conn.execute.return_value.fetchone.return_value = student
+
+        @contextmanager
+        def fake_connection():
+            yield conn
+
+        with (
+            patch.object(actions, "prepare_notification_feature_schema"),
+            patch.object(actions, "connection", fake_connection),
+            patch.object(actions, "student_context_with_conn", return_value=({}, student)),
+            patch.object(actions, "verify_password_with_conn", return_value=False),
+            patch.object(actions, "secure_student_email_update") as secure_update,
+        ):
+            with self.assertRaises(actions.ApiError) as invalid_password:
+                actions.change_my_email({
+                    "sessionToken": "session",
+                    "currentAccessCode": "incorrecta",
+                    "newEmail": "new@example.org",
+                    "confirmEmail": "new@example.org",
+                    "acknowledgeSecurityImpact": True,
+                })
+        self.assertEqual(invalid_password.exception.code, "INVALID_CURRENT_ACCESS_CODE")
+        secure_update.assert_not_called()
+
+    def test_admin_email_change_requires_role_password_and_reason(self):
+        admin = {
+            "admin_id": "ADM-1",
+            "role": "ADMIN",
+            "status": "ACTIVE",
+            "password_hash": "hash",
+        }
+        conn = MagicMock()
+        conn.execute.return_value.fetchone.return_value = admin
+
+        @contextmanager
+        def fake_connection():
+            yield conn
+
+        with (
+            patch.object(actions, "admin_context", return_value=({}, admin)) as context,
+            patch.object(actions, "prepare_notification_feature_schema"),
+            patch.object(actions, "connection", fake_connection),
+            patch.object(actions, "verify_password_with_conn", return_value=False),
+            patch.object(actions, "secure_student_email_update") as secure_update,
+        ):
+            with self.assertRaises(actions.ApiError) as invalid_password:
+                actions.admin_change_student_email({
+                    "adminToken": "admin-session",
+                    "studentId": "STU-1",
+                    "newEmail": "new@example.org",
+                    "confirmEmail": "new@example.org",
+                    "adminPassword": "incorrecta",
+                    "reason": "Correção solicitada pelo estudante.",
+                    "verifiedWithStudent": True,
+                })
+        self.assertEqual(invalid_password.exception.code, "INVALID_ADMIN_PASSWORD")
+        context.assert_called_once()
+        self.assertEqual(context.call_args.args[1], {"OWNER", "ADMIN"})
+        secure_update.assert_not_called()
+
+    def test_email_change_requires_valid_matching_confirmation(self):
+        self.assertEqual(
+            actions.validated_email_change({
+                "newEmail": "  Nova.Conta@Example.org ",
+                "confirmEmail": "nova.conta@example.org",
+            }),
+            "nova.conta@example.org",
+        )
+        with self.assertRaises(actions.ApiError) as mismatch:
+            actions.validated_email_change({
+                "newEmail": "primeiro@example.org",
+                "confirmEmail": "outro@example.org",
+            })
+        self.assertEqual(mismatch.exception.code, "EMAIL_CONFIRMATION_MISMATCH")
+        with self.assertRaises(actions.ApiError) as invalid:
+            actions.validated_email_change({
+                "newEmail": "email-invalido",
+                "confirmEmail": "email-invalido",
+            })
+        self.assertEqual(invalid.exception.code, "INVALID_ACCOUNT_EMAIL")
+
+    def test_secure_email_change_revokes_sessions_consent_and_pending_deliveries(self):
+        student = {
+            "student_id": "STU-1",
+            "email": "old@example.org",
+            "email_opt_in": True,
+        }
+        updated = {**student, "email": "new@example.org", "email_opt_in": False}
+        conn = _EmailChangeConnection(updated)
+        with (
+            patch.object(actions, "revoke_sessions") as revoke,
+            patch.object(actions, "create_student_notification") as notify,
+            patch.object(actions, "audit") as audit_log,
+        ):
+            result = actions.secure_student_email_update(
+                conn,
+                student,
+                "new@example.org",
+                actor_type="STUDENT",
+                actor_id="STU-1",
+                reason="Correção no perfil.",
+            )
+        self.assertEqual(result["email"], "new@example.org")
+        self.assertTrue(any("email_opt_in = false" in query for query, _ in conn.queries))
+        self.assertTrue(any("notification_deliveries" in query and "status = 'skipped'" in query for query, _ in conn.queries))
+        revoke.assert_called_once_with(conn, "STU-1")
+        notify.assert_called_once()
+        audit_log.assert_called_once()
+        details = audit_log.call_args.args[-1]
+        self.assertTrue(details["sessionsRevoked"])
+        self.assertTrue(details["emailConsentReset"])
+        self.assertNotEqual(details["oldEmail"], student["email"])
+
+    def test_secure_email_change_rejects_another_students_address(self):
+        student = {"student_id": "STU-1", "email": "old@example.org"}
+        conn = _EmailChangeConnection(student, conflict={"student_id": "STU-2"})
+        with self.assertRaises(actions.ApiError) as conflict:
+            actions.secure_student_email_update(
+                conn,
+                student,
+                "existing@example.org",
+                actor_type="ADMIN",
+                actor_id="ADM-1",
+            )
+        self.assertEqual(conflict.exception.code, "EMAIL_ALREADY_IN_USE")
+
     def test_smtp_host_rejects_local_and_private_ip_targets(self):
         self.assertTrue(actions.valid_notification_host("smtp.example.org"))
         self.assertTrue(actions.valid_notification_host("8.8.8.8"))

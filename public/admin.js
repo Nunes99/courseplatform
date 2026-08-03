@@ -4485,6 +4485,11 @@ function renderStudentDetailsOverlay(overlay, details) {
       <button class="button button-secondary" type="button" data-copy-email="${escapeHtml(student.email)}">
         Copiar email
       </button>
+      ${canManageCredentials() ? `
+        <button class="button button-secondary" type="button" data-change-student-email>
+          Alterar email
+        </button>
+      ` : ''}
       <button class="button button-secondary" type="button" data-reset-access="${escapeHtml(student.studentId)}">
         Nova palavra-passe
       </button>
@@ -4499,6 +4504,9 @@ function renderStudentDetailsOverlay(overlay, details) {
   bindDialogClose(overlay);
   overlay.querySelector('[data-copy-email]')?.addEventListener('click', (event) => {
     copyText(event.currentTarget.dataset.copyEmail, 'Email copiado.');
+  });
+  overlay.querySelector('[data-change-student-email]')?.addEventListener('click', () => {
+    showAdminStudentEmailChangeDialog(student, details, overlay);
   });
   overlay.querySelector('[data-reset-access]')?.addEventListener('click', () => resetAccess(student.studentId));
   overlay.querySelector('[data-toggle-student]')?.addEventListener('click', async () => {
@@ -4526,6 +4534,102 @@ function renderStudentDetailsOverlay(overlay, details) {
   overlay.querySelectorAll('[data-delete-certificate]').forEach((button) => {
     button.addEventListener('click', () => deleteCertificateFromButton(button));
   });
+  reportHeight();
+}
+
+function showAdminStudentEmailChangeDialog(student, studentDetails, detailOverlay) {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay dialog-overlay-elevated';
+  overlay.innerHTML = `
+    <div class="dialog-card email-change-dialog" role="dialog" aria-modal="true" aria-labelledby="adminEmailChangeTitle">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <p class="eyebrow">Operação protegida</p>
+      <h2 id="adminEmailChangeTitle">Corrigir email do estudante</h2>
+      <p class="recovery-note">A alteração encerra as sessões do estudante, cancela entregas pendentes para o endereço antigo e suspende o consentimento de email.</p>
+      <form id="adminStudentEmailChangeForm" class="form-stack">
+        <label>
+          <span>Estudante</span>
+          <input value="${escapeHtml(student.fullName || '')} · ${escapeHtml(studentPublicIdLabel(student.publicStudentId))}" readonly>
+        </label>
+        <label>
+          <span>Email atual</span>
+          <input type="email" value="${escapeHtml(student.email || '')}" readonly>
+        </label>
+        <label>
+          <span>Novo email</span>
+          <input type="email" name="newEmail" autocomplete="off" maxlength="254" required>
+        </label>
+        <label>
+          <span>Confirmar novo email</span>
+          <input type="email" name="confirmEmail" autocomplete="off" maxlength="254" required>
+        </label>
+        <label>
+          <span>Motivo da correção</span>
+          <textarea name="reason" rows="3" minlength="5" maxlength="300" required placeholder="Ex.: endereço introduzido incorretamente no registo"></textarea>
+        </label>
+        <label>
+          <span>Confirmar com a sua palavra-passe administrativa</span>
+          <input type="password" name="adminPassword" autocomplete="current-password" required>
+        </label>
+        <label class="checkbox-line email-change-confirmation">
+          <input type="checkbox" name="acknowledge" value="true" required>
+          <span>Confirmo que verifiquei o novo endereço com o estudante.</span>
+        </label>
+        <div class="form-message form-message-error" id="adminStudentEmailChangeError" role="alert" hidden></div>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Guardar novo email</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  bindDialogClose(overlay);
+  overlay.querySelector('#adminStudentEmailChangeForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = Object.fromEntries(new FormData(form));
+    const errorBox = form.querySelector('#adminStudentEmailChangeError');
+    const button = form.querySelector('button[type="submit"]');
+    const newEmail = String(values.newEmail || '').trim().toLowerCase();
+    const confirmEmail = String(values.confirmEmail || '').trim().toLowerCase();
+    if (newEmail !== confirmEmail) {
+      errorBox.textContent = 'A confirmação do novo email não corresponde.';
+      errorBox.hidden = false;
+      form.elements.confirmEmail.focus();
+      return;
+    }
+    errorBox.hidden = true;
+    setBusy(button, true, 'A guardar...');
+    try {
+      const result = await api.adminChangeStudentEmail({
+        studentId: student.studentId,
+        newEmail,
+        confirmEmail,
+        reason: values.reason,
+        adminPassword: values.adminPassword,
+        verifiedWithStudent: values.acknowledge === 'true'
+      });
+      state.students = state.students.map((record) => record.student?.studentId === student.studentId
+        ? { ...record, student: result.student }
+        : record);
+      renderStudentsV2();
+      overlay.remove();
+      if (detailOverlay?.isConnected) {
+        renderStudentDetailsOverlay(detailOverlay, { ...studentDetails, student: result.student });
+      }
+      showToast('Email corrigido. As sessões do estudante foram encerradas.', 'success');
+    } catch (error) {
+      errorBox.textContent = error.message || 'Não foi possível alterar o email.';
+      errorBox.hidden = false;
+      form.elements.adminPassword.value = '';
+      form.elements.adminPassword.focus();
+    } finally {
+      setBusy(button, false);
+      reportHeight();
+    }
+  });
+  overlay.querySelector('[name="newEmail"]')?.focus();
   reportHeight();
 }
 

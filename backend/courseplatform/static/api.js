@@ -233,6 +233,21 @@ export class CoursePlatformApi {
     return result;
   }
 
+  async changeMyEmail(currentAccessCode, newEmail, confirmEmail, acknowledgeSecurityImpact = false) {
+    const result = await this.studentRequest('changeMyEmail', {
+      currentAccessCode,
+      newEmail,
+      confirmEmail,
+      acknowledgeSecurityImpact
+    });
+
+    if (result.requiresLogin) {
+      localStorage.removeItem('courseSessionToken');
+    }
+
+    return result;
+  }
+
   getLesson(lessonId) {
     return this.studentRequest('getLesson', { lessonId });
   }
@@ -468,6 +483,10 @@ export class CoursePlatformApi {
 
   adminCreateStudent(payload) {
     return this.mutateAdmin('adminCreateStudent', payload);
+  }
+
+  adminChangeStudentEmail(payload) {
+    return this.mutateAdmin('adminChangeStudentEmail', payload);
   }
 
   adminSetStudentStatus(studentId, status) {
