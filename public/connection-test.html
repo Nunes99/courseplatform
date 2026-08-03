@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>Teste da API</title>
+  <link rel="icon" href="./assets/app-icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./assets/css/styles.css">
   <script defer src="./config.js"></script>
 </head>
@@ -20,15 +21,20 @@
 
   <script type="module">
     import { CoursePlatformApi } from './api.js';
+    import { applyBrandFavicon } from './utils.js';
 
     const result = document.querySelector('#result');
     const button = document.querySelector('#testButton');
+    const api = new CoursePlatformApi(window.COURSE_PLATFORM_CONFIG);
+
+    api.publicMediaConfig()
+      .then((response) => applyBrandFavicon(response.mediaConfig?.logoUrl || response.logoUrl || ''))
+      .catch(() => applyBrandFavicon(localStorage.getItem('lssLogoUrl') || ''));
 
     button.addEventListener('click', async () => {
       result.textContent = 'A testar…';
 
       try {
-        const api = new CoursePlatformApi(window.COURSE_PLATFORM_CONFIG);
         const health = await api.health();
         const course = await api.publicCourseConfig();
         result.textContent = JSON.stringify({ health, course }, null, 2);

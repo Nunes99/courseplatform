@@ -1,6 +1,7 @@
 import { CoursePlatformApi, ApiError } from './api.js';
 import { ChatWorkspace } from './chat.js';
 import {
+  applyBrandFavicon,
   debounce,
   escapeHtml,
   formatBytes,
@@ -3940,8 +3941,9 @@ function brandSymbolTemplate(className) {
 }
 
 function applyBrandLogo() {
+  const logo = brandLogoUrl();
+  applyBrandFavicon(logo);
   document.querySelectorAll('.site-brand-symbol, .brand-mark, .admin-sidebar-symbol').forEach((symbol) => {
-    const logo = brandLogoUrl();
     symbol.classList.toggle('has-brand-logo', Boolean(logo));
     symbol.innerHTML = logo ? `<img src="${escapeHtml(logo)}" alt="LMTWEBNAIRS">` : 'LSS';
   });

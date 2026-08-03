@@ -1,10 +1,12 @@
 import { CoursePlatformApi } from './api.js';
-import { escapeHtml, formatDate, reportHeight, setBusy } from './utils.js';
+import { applyBrandFavicon, escapeHtml, formatDate, reportHeight, setBusy } from './utils.js';
 
 const config = window.COURSE_PLATFORM_CONFIG;
 const api = new CoursePlatformApi(config);
 const root = document.querySelector('#verificationResult');
 const form = document.querySelector('#verificationForm');
+
+loadBrandFavicon();
 
 form.addEventListener('submit', verify);
 
@@ -12,6 +14,15 @@ const codeFromUrl = new URLSearchParams(location.search).get('code');
 if (codeFromUrl) {
   form.elements.code.value = codeFromUrl;
   form.requestSubmit();
+}
+
+async function loadBrandFavicon() {
+  try {
+    const result = await api.publicMediaConfig();
+    applyBrandFavicon(result.mediaConfig?.logoUrl || result.logoUrl || '');
+  } catch {
+    applyBrandFavicon(localStorage.getItem('lssLogoUrl') || '');
+  }
 }
 
 async function verify(event) {

@@ -81,6 +81,74 @@ export function safeHtml(value) {
   return escapeHtml(value);
 }
 
+const DEFAULT_FAVICON_URL = './assets/app-icon.svg';
+const DEFAULT_TOUCH_ICON_URL = './assets/app-icon-180.png';
+
+export function applyBrandFavicon(rawLogoUrl = '') {
+  if (!document?.head) return;
+
+  let favicon = document.head.querySelector('link[rel="icon"]');
+  if (!favicon) {
+    favicon = document.createElement('link');
+    favicon.rel = 'icon';
+    document.head.appendChild(favicon);
+  }
+
+  const touchIcon = document.head.querySelector('link[rel="apple-touch-icon"]');
+  const logoUrl = normalizeFaviconUrl(rawLogoUrl);
+
+  const applyFallback = () => {
+    favicon.href = DEFAULT_FAVICON_URL;
+    favicon.type = 'image/svg+xml';
+    favicon.dataset.brandFavicon = '';
+    if (touchIcon) touchIcon.href = DEFAULT_TOUCH_ICON_URL;
+  };
+
+  if (!logoUrl) {
+    applyFallback();
+    return;
+  }
+
+  favicon.dataset.brandFavicon = logoUrl;
+  const probe = new Image();
+  probe.decoding = 'async';
+  probe.addEventListener('load', () => {
+    if (favicon.dataset.brandFavicon !== logoUrl) return;
+    favicon.removeAttribute('type');
+    favicon.href = logoUrl;
+    if (touchIcon) touchIcon.href = logoUrl;
+  }, { once: true });
+  probe.addEventListener('error', () => {
+    if (favicon.dataset.brandFavicon !== logoUrl) return;
+    applyFallback();
+  }, { once: true });
+  probe.src = logoUrl;
+}
+
+function normalizeFaviconUrl(rawLogoUrl) {
+  const value = String(rawLogoUrl || '').trim();
+  if (!value) return '';
+
+  try {
+    const url = new URL(value, document.baseURI);
+    const protocol = url.protocol.toLowerCase();
+    if (!['http:', 'https:', 'blob:', 'data:'].includes(protocol)) return '';
+    if (protocol === 'data:' && !value.toLowerCase().startsWith('data:image/')) return '';
+
+    const host = url.hostname.replace(/^www\./, '');
+    if (host === 'drive.google.com') {
+      const queryId = url.searchParams.get('id');
+      const pathId = url.pathname.match(/\/file\/d\/([^/]+)/)?.[1];
+      const id = queryId || pathId;
+      return id ? `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w256` : '';
+    }
+
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
 export function debounce(callback, wait = 600) {
   let timer;
   return (...args) => {
