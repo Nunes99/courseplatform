@@ -180,11 +180,21 @@ create table if not exists courseplatform.chat_rooms (
   course_id text references courseplatform.courses(course_id) on delete cascade,
   group_id text references courseplatform.groups(group_id) on delete cascade,
   owner_student_id text references courseplatform.students(student_id) on delete cascade,
+  direct_student_one_id text references courseplatform.students(student_id) on delete cascade,
+  direct_student_two_id text references courseplatform.students(student_id) on delete cascade,
   created_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
   status text not null default 'ACTIVE',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  check (room_type in ('COMMUNITY', 'COURSE', 'GROUP', 'SUPPORT'))
+  check (room_type in ('COMMUNITY', 'COURSE', 'GROUP', 'SUPPORT', 'DIRECT')),
+  check (
+    room_type <> 'DIRECT'
+    or (
+      direct_student_one_id is not null
+      and direct_student_two_id is not null
+      and direct_student_one_id < direct_student_two_id
+    )
+  )
 );
 
 create table if not exists courseplatform.chat_messages (
@@ -566,6 +576,9 @@ create index if not exists idx_files_attempt on courseplatform.files(attempt_id,
 create index if not exists idx_certificate_requests_student_course on courseplatform.certificate_requests(student_id, course_id, status);
 create index if not exists idx_group_members_group on courseplatform.group_members(group_id, status);
 create index if not exists idx_chat_rooms_context on courseplatform.chat_rooms(room_type, course_id, group_id, status);
+create unique index if not exists idx_chat_rooms_direct_students
+  on courseplatform.chat_rooms(direct_student_one_id, direct_student_two_id)
+  where room_type = 'DIRECT' and status = 'ACTIVE';
 create index if not exists idx_chat_messages_room_created on courseplatform.chat_messages(room_id, created_at desc);
 create index if not exists idx_chat_reports_status on courseplatform.chat_message_reports(status, created_at desc);
 create unique index if not exists idx_chat_reports_open_student

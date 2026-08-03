@@ -2267,12 +2267,22 @@ create table if not exists courseplatform.chat_rooms (
   course_id text references courseplatform.courses(course_id) on delete cascade,
   group_id text references courseplatform.groups(group_id) on delete cascade,
   owner_student_id text references courseplatform.students(student_id) on delete cascade,
+  direct_student_one_id text references courseplatform.students(student_id) on delete cascade,
+  direct_student_two_id text references courseplatform.students(student_id) on delete cascade,
   created_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
   status text not null default 'ACTIVE',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  check (room_type in ('COMMUNITY', 'COURSE', 'GROUP', 'SUPPORT'))
+  check (room_type in ('COMMUNITY', 'COURSE', 'GROUP', 'SUPPORT', 'DIRECT'))
 );
+alter table courseplatform.chat_rooms
+  add column if not exists direct_student_one_id text references courseplatform.students(student_id) on delete cascade;
+alter table courseplatform.chat_rooms
+  add column if not exists direct_student_two_id text references courseplatform.students(student_id) on delete cascade;
+alter table courseplatform.chat_rooms drop constraint if exists chat_rooms_room_type_check;
+alter table courseplatform.chat_rooms
+  add constraint chat_rooms_room_type_check
+  check (room_type in ('COMMUNITY', 'COURSE', 'GROUP', 'SUPPORT', 'DIRECT'));
 create table if not exists courseplatform.chat_messages (
   message_id text primary key,
   room_id text not null references courseplatform.chat_rooms(room_id) on delete cascade,
@@ -2323,6 +2333,9 @@ create table if not exists courseplatform.chat_message_reports (
 );
 create index if not exists idx_chat_rooms_context
   on courseplatform.chat_rooms(room_type, course_id, group_id, status);
+create unique index if not exists idx_chat_rooms_direct_students
+  on courseplatform.chat_rooms(direct_student_one_id, direct_student_two_id)
+  where room_type = 'DIRECT' and status = 'ACTIVE';
 create index if not exists idx_chat_messages_room_created
   on courseplatform.chat_messages(room_id, created_at desc);
 create index if not exists idx_chat_reports_status
@@ -7438,40 +7451,57 @@ def upsert_chat_room(
     course_id: str | None = None,
     group_id: str | None = None,
     owner_student_id: str | None = None,
+    direct_student_one_id: str | None = None,
+    direct_student_two_id: str | None = None,
 ) -> dict[str, Any] | None:
     return conn.execute(
         """
         insert into courseplatform.chat_rooms
           (room_id, room_key, room_type, name, description, course_id, group_id,
-           owner_student_id, status, created_at, updated_at)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', now(), now())
+           owner_student_id, direct_student_one_id, direct_student_two_id,
+           status, created_at, updated_at)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', now(), now())
         on conflict (room_key) do update set
           name = excluded.name,
           description = excluded.description,
           course_id = excluded.course_id,
           group_id = excluded.group_id,
           owner_student_id = excluded.owner_student_id,
+          direct_student_one_id = excluded.direct_student_one_id,
+          direct_student_two_id = excluded.direct_student_two_id,
           updated_at = now()
         where (
           courseplatform.chat_rooms.name,
           courseplatform.chat_rooms.description,
           courseplatform.chat_rooms.course_id,
           courseplatform.chat_rooms.group_id,
-          courseplatform.chat_rooms.owner_student_id
+          courseplatform.chat_rooms.owner_student_id,
+          courseplatform.chat_rooms.direct_student_one_id,
+          courseplatform.chat_rooms.direct_student_two_id
         ) is distinct from (
           excluded.name,
           excluded.description,
           excluded.course_id,
           excluded.group_id,
-          excluded.owner_student_id
+          excluded.owner_student_id,
+          excluded.direct_student_one_id,
+          excluded.direct_student_two_id
         )
         returning *
         """,
         (
             generate_id("CRM"), room_key, room_type, name[:160], description[:500],
             course_id, group_id, owner_student_id,
+            direct_student_one_id, direct_student_two_id,
         ),
     ).fetchone()
+
+
+def chat_direct_pair(student_a: str, student_b: str) -> tuple[str, str]:
+    first, second = sorted((str(student_a), str(student_b)))
+    if not first or first == second:
+        raise ApiError("INVALID_CHAT_CONTACT", "Selecione outro estudante para iniciar a conversa.")
+    return first, second
 
 
 def sync_chat_rooms(conn, actor: dict[str, Any]) -> None:
@@ -7573,6 +7603,11 @@ def student_can_access_chat_room(conn, student_id: str, room: dict[str, Any]) ->
         return True
     if room_type == "SUPPORT":
         return room.get("owner_student_id") == student_id
+    if room_type == "DIRECT":
+        return student_id in {
+            room.get("direct_student_one_id"),
+            room.get("direct_student_two_id"),
+        }
     if room_type == "COURSE":
         row = conn.execute(
             """
@@ -7609,6 +7644,8 @@ def accessible_chat_room(conn, room_id: str, actor: dict[str, Any]) -> dict[str,
     ).fetchone()
     if not room:
         raise ApiError("CHAT_ROOM_NOT_FOUND", "A conversa não foi encontrada.")
+    if actor["type"] == "ADMIN" and room.get("room_type") == "DIRECT":
+        raise ApiError("CHAT_ROOM_FORBIDDEN", "As conversas privadas entre estudantes são reservadas aos participantes.")
     if actor["type"] == "STUDENT" and not student_can_access_chat_room(conn, actor["id"], room):
         raise ApiError("CHAT_ROOM_FORBIDDEN", "Não possui acesso a esta conversa.")
     return room
@@ -7697,6 +7734,8 @@ def mark_chat_room_read_with_conn(conn, room_id: str, actor: dict[str, Any]) -> 
 
 
 def chat_room_participant_count(conn, room: dict[str, Any], active_admin_count: int | None = None) -> int:
+    if room.get("room_type") == "DIRECT":
+        return 2
     if active_admin_count is None:
         active_admins = conn.execute(
             "select count(*) as count from courseplatform.admins where status = 'ACTIVE'"
@@ -7767,6 +7806,28 @@ def public_chat_room(
         (room["room_id"], actor["id"], room["room_id"], actor["id"]),
     ).fetchone() or {}
     display_name = room.get("name") or "Conversa"
+    peer_payload = None
+    if room.get("room_type") == "DIRECT" and actor["type"] == "STUDENT":
+        peer_id = (
+            room.get("direct_student_two_id")
+            if room.get("direct_student_one_id") == actor["id"]
+            else room.get("direct_student_one_id")
+        )
+        peer = conn.execute(
+            """
+            select public_student_id, full_name, profile_photo_url, organization
+            from courseplatform.students
+            where student_id = %s and status = 'ACTIVE'
+            """,
+            (peer_id,),
+        ).fetchone() or {}
+        display_name = peer.get("full_name") or "Colega de curso"
+        peer_payload = {
+            "publicStudentId": peer.get("public_student_id") or "",
+            "fullName": peer.get("full_name") or "Colega de curso",
+            "profilePhotoUrl": peer.get("profile_photo_url") or "",
+            "organization": peer.get("organization") or "",
+        }
     if room.get("room_type") == "SUPPORT" and actor["type"] == "ADMIN":
         owner = conn.execute(
             "select full_name from courseplatform.students where student_id = %s",
@@ -7780,11 +7841,121 @@ def public_chat_room(
         "description": room.get("description") or "",
         "courseId": room.get("course_id") or "",
         "groupId": room.get("group_id") or "",
+        "peer": peer_payload,
         "participantCount": chat_room_participant_count(conn, room, active_admin_count),
         "unreadCount": int(unread.get("count") or 0),
         "lastMessage": public_chat_message(chat_message_row(conn, last_message["message_id"]), actor) if last_message else None,
         "updatedAt": iso(room.get("updated_at")),
     }
+
+
+def chat_list_contacts(payload: dict[str, Any]):
+    prepare_chat_feature_schema()
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        if actor["type"] != "STUDENT":
+            raise ApiError("CHAT_CONTACTS_FORBIDDEN", "A lista de colegas está disponível apenas para estudantes.")
+        rows = conn.execute(
+            """
+            select peer.student_id, peer.public_student_id, peer.full_name,
+                   peer.profile_photo_url, peer.organization,
+                   c.course_id, c.title,
+                   direct_room.room_id
+            from courseplatform.enrollments mine
+            join courseplatform.enrollments shared
+              on shared.course_id = mine.course_id
+             and shared.student_id <> mine.student_id
+             and shared.status in ('ACTIVE', 'COMPLETED')
+            join courseplatform.students peer
+              on peer.student_id = shared.student_id
+             and peer.status = 'ACTIVE'
+             and nullif(trim(peer.public_student_id), '') is not null
+            join courseplatform.courses c
+              on c.course_id = mine.course_id and c.status = 'ACTIVE'
+            left join courseplatform.chat_rooms direct_room
+              on direct_room.room_type = 'DIRECT'
+             and direct_room.status = 'ACTIVE'
+             and direct_room.direct_student_one_id = least(mine.student_id, peer.student_id)
+             and direct_room.direct_student_two_id = greatest(mine.student_id, peer.student_id)
+            where mine.student_id = %s
+              and mine.status in ('ACTIVE', 'COMPLETED')
+            order by peer.full_name, c.title
+            """,
+            (actor["id"],),
+        ).fetchall()
+        contacts: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            contact = contacts.setdefault(row["student_id"], {
+                "publicStudentId": row.get("public_student_id") or "",
+                "fullName": row.get("full_name") or "Colega de curso",
+                "profilePhotoUrl": row.get("profile_photo_url") or "",
+                "organization": row.get("organization") or "",
+                "roomId": row.get("room_id") or "",
+                "sharedCourses": [],
+            })
+            course = {"courseId": row.get("course_id") or "", "title": row.get("title") or "Curso"}
+            if course not in contact["sharedCourses"]:
+                contact["sharedCourses"].append(course)
+        conn.commit()
+    return success({"contacts": list(contacts.values())})
+
+
+def chat_start_direct(payload: dict[str, Any]):
+    require_fields(payload, ["publicStudentId"])
+    prepare_chat_feature_schema()
+    with connection() as conn:
+        actor = chat_actor_with_conn(conn, payload)
+        if actor["type"] != "STUDENT":
+            raise ApiError("CHAT_DIRECT_FORBIDDEN", "Apenas estudantes podem iniciar esta conversa privada.")
+        peer = conn.execute(
+            """
+            select student_id, public_student_id, full_name
+            from courseplatform.students
+            where public_student_id = %s and status = 'ACTIVE'
+            """,
+            (str_value(payload["publicStudentId"]),),
+        ).fetchone()
+        if not peer:
+            raise ApiError("CHAT_CONTACT_NOT_FOUND", "O colega selecionado não está disponível.")
+        first_id, second_id = chat_direct_pair(actor["id"], peer["student_id"])
+        shared_course = conn.execute(
+            """
+            select 1
+            from courseplatform.enrollments mine
+            join courseplatform.enrollments shared
+              on shared.course_id = mine.course_id
+             and shared.student_id = %s
+             and shared.status in ('ACTIVE', 'COMPLETED')
+            join courseplatform.courses c
+              on c.course_id = mine.course_id and c.status = 'ACTIVE'
+            where mine.student_id = %s
+              and mine.status in ('ACTIVE', 'COMPLETED')
+            limit 1
+            """,
+            (peer["student_id"], actor["id"]),
+        ).fetchone()
+        if not shared_course:
+            raise ApiError("CHAT_CONTACT_FORBIDDEN", "Só pode conversar em privado com colegas dos seus cursos.")
+        room_key = f"DIRECT:{first_id}:{second_id}"
+        room = upsert_chat_room(
+            conn,
+            room_key,
+            "DIRECT",
+            "Conversa privada",
+            "Conversa privada entre colegas de curso.",
+            direct_student_one_id=first_id,
+            direct_student_two_id=second_id,
+        )
+        if not room:
+            room = conn.execute(
+                "select * from courseplatform.chat_rooms where room_key = %s and status = 'ACTIVE'",
+                (room_key,),
+            ).fetchone()
+        if not room:
+            raise ApiError("CHAT_ROOM_NOT_FOUND", "Não foi possível preparar a conversa privada.")
+        room_payload = public_chat_room(conn, room, actor)
+        conn.commit()
+    return success({"room": room_payload})
 
 
 def chat_list_rooms(payload: dict[str, Any]):
@@ -7805,6 +7976,8 @@ def chat_list_rooms(payload: dict[str, Any]):
         ).fetchall()
         if actor["type"] == "STUDENT":
             rooms = [room for room in rooms if student_can_access_chat_room(conn, actor["id"], room)]
+        else:
+            rooms = [room for room in rooms if room.get("room_type") != "DIRECT"]
         active_admins = conn.execute(
             "select count(*) as count from courseplatform.admins where status = 'ACTIVE'"
         ).fetchone() or {}
@@ -7911,6 +8084,29 @@ def chat_send_message(payload: dict[str, Any]):
                 "Nova mensagem do formador",
                 f"{actor['record'].get('full_name') or 'A equipa de formação'} respondeu à sua conversa de apoio.",
                 admin_id=actor["id"],
+                action_url=f"#/chat/{room['room_id']}",
+                entity_type="CHAT_ROOM",
+                entity_id=room["room_id"],
+                priority="NORMAL",
+                send_whatsapp=False,
+                send_email=False,
+                send_telegram=False,
+                send_push=True,
+            )
+            if notification_id:
+                notification_ids.append(notification_id)
+        elif actor["type"] == "STUDENT" and room.get("room_type") == "DIRECT":
+            recipient_id = (
+                room.get("direct_student_two_id")
+                if room.get("direct_student_one_id") == actor["id"]
+                else room.get("direct_student_one_id")
+            )
+            notification_id = create_student_notification(
+                conn,
+                recipient_id,
+                "GENERAL",
+                "Nova mensagem privada",
+                f"{actor['record'].get('full_name') or 'Um colega'} enviou-lhe uma mensagem.",
                 action_url=f"#/chat/{room['room_id']}",
                 entity_type="CHAT_ROOM",
                 entity_id=room["room_id"],
@@ -8095,6 +8291,8 @@ ACTIONS = {
     "getMyNotifications": my_notifications,
     "markNotificationRead": mark_notification_read,
     "getChatRooms": chat_list_rooms,
+    "getChatContacts": chat_list_contacts,
+    "startDirectChat": chat_start_direct,
     "getChatMessages": chat_list_messages,
     "sendChatMessage": chat_send_message,
     "editChatMessage": chat_edit_message,

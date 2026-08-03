@@ -240,6 +240,14 @@ export class CoursePlatformApi {
     return this.studentRequest('getChatRooms');
   }
 
+  chatContacts() {
+    return this.studentRequest('getChatContacts');
+  }
+
+  startDirectChat(publicStudentId) {
+    return this.studentRequest('startDirectChat', { publicStudentId });
+  }
+
   chatMessages(roomId, options = {}) {
     return this.studentRequest('getChatMessages', {
       roomId,

@@ -44,6 +44,22 @@ class ChatBackendTests(unittest.TestCase):
             conn, "STU-1", {"room_type": "COURSE", "course_id": "COURSE-1"}
         ))
         self.assertIn("courseplatform.enrollments", conn.queries[-1][0])
+        self.assertTrue(actions.student_can_access_chat_room(
+            conn,
+            "STU-1",
+            {"room_type": "DIRECT", "direct_student_one_id": "STU-1", "direct_student_two_id": "STU-2"},
+        ))
+        self.assertFalse(actions.student_can_access_chat_room(
+            conn,
+            "STU-3",
+            {"room_type": "DIRECT", "direct_student_one_id": "STU-1", "direct_student_two_id": "STU-2"},
+        ))
+
+    def test_direct_chat_pair_is_stable_and_rejects_self_chat(self):
+        self.assertEqual(actions.chat_direct_pair("STU-9", "STU-2"), ("STU-2", "STU-9"))
+        with self.assertRaises(actions.ApiError) as invalid:
+            actions.chat_direct_pair("STU-2", "STU-2")
+        self.assertEqual(invalid.exception.code, "INVALID_CHAT_CONTACT")
 
     def test_public_message_hides_removed_content_and_marks_ownership(self):
         actor = {"type": "STUDENT", "id": "STU-1"}
@@ -67,6 +83,8 @@ class ChatBackendTests(unittest.TestCase):
     def test_chat_actions_are_registered_for_students_and_admins(self):
         expected = {
             "getChatRooms",
+            "getChatContacts",
+            "startDirectChat",
             "getChatMessages",
             "sendChatMessage",
             "editChatMessage",

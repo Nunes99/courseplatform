@@ -1,6 +1,11 @@
 import { escapeHtml, showToast } from './utils.js';
 
 const ICONS = 'https://api.iconify.design/lucide';
+const CHAT_EMOJIS = [
+  '😀', '😃', '😂', '😊', '😍', '🤝', '👏', '👍',
+  '🙏', '🎉', '✅', '📚', '💡', '✍️', '🚀', '🔥',
+  '💬', '❤️', '🙌', '🤔', '👀', '⭐', '📌', '🎓'
+];
 
 function icon(name, color = '00365b') {
   return `${ICONS}/${encodeURIComponent(name)}.svg?color=%23${color}`;
@@ -57,7 +62,8 @@ function roomTypeLabel(type) {
     COMMUNITY: 'Comunidade',
     COURSE: 'Curso',
     GROUP: 'Grupo',
-    SUPPORT: 'Apoio privado'
+    SUPPORT: 'Apoio privado',
+    DIRECT: 'Conversa privada'
   }[type] || 'Conversa';
 }
 
@@ -66,7 +72,8 @@ function roomIcon(type) {
     COMMUNITY: 'messages-square',
     COURSE: 'book-open',
     GROUP: 'users-round',
-    SUPPORT: 'headset'
+    SUPPORT: 'headset',
+    DIRECT: 'user-round'
   }[type] || 'message-square';
 }
 
@@ -78,9 +85,11 @@ export class ChatWorkspace {
     this.initialRoomId = initialRoomId;
     this.onUnreadChange = onUnreadChange;
     this.rooms = [];
+    this.contacts = [];
     this.messages = [];
     this.activeRoom = null;
     this.filter = 'ALL';
+    this.panelMode = 'rooms';
     this.search = '';
     this.replyingTo = null;
     this.editingMessage = null;
@@ -93,7 +102,10 @@ export class ChatWorkspace {
   async start() {
     this.renderFrame();
     this.bindEvents();
-    await this.loadRooms();
+    await Promise.all([
+      this.loadRooms(),
+      this.mode === 'student' ? this.loadContacts({ quiet: true }) : Promise.resolve()
+    ]);
     if (this.destroyed || !this.rooms.length) return;
     const preferred = this.rooms.find((room) => room.roomId === this.initialRoomId);
     if (preferred || window.matchMedia('(min-width: 761px)').matches) {
@@ -125,7 +137,9 @@ export class ChatWorkspace {
           edit: 'editChatMessage',
           delete: 'deleteChatMessage',
           read: 'markChatRoomRead',
-          report: 'reportChatMessage'
+          report: 'reportChatMessage',
+          contacts: 'chatContacts',
+          startDirect: 'startDirectChat'
         };
     const method = this.api[methods[name]];
     if (typeof method !== 'function') throw new Error('O módulo de mensagens não está disponível nesta versão.');
@@ -143,6 +157,16 @@ export class ChatWorkspace {
             </div>
             <span class="chat-live-indicator"><i></i> Atualização automática</span>
           </div>
+          ${this.mode === 'student' ? `
+            <div class="chat-panel-tabs" role="tablist" aria-label="Conteúdo da coluna lateral">
+              <button type="button" class="is-active" role="tab" aria-selected="true" data-chat-panel="rooms">
+                <img src="${icon('messages-square')}" alt=""><span>Conversas</span>
+              </button>
+              <button type="button" role="tab" aria-selected="false" data-chat-panel="contacts">
+                <img src="${icon('users-round')}" alt=""><span>Colegas</span>
+              </button>
+            </div>
+          ` : ''}
           <label class="chat-search">
             <img src="${icon('search')}" alt="">
             <input type="search" placeholder="Pesquisar conversas" aria-label="Pesquisar conversas">
@@ -151,6 +175,7 @@ export class ChatWorkspace {
             ${[
               ['ALL', 'Todas'],
               ['SUPPORT', 'Apoio'],
+              ['DIRECT', 'Privadas'],
               ['COURSE', 'Cursos'],
               ['GROUP', 'Grupos']
             ].map(([value, label]) => `
@@ -191,19 +216,47 @@ export class ChatWorkspace {
   bindEvents() {
     this.mount.querySelector('.chat-search input')?.addEventListener('input', (event) => {
       this.search = event.currentTarget.value.trim().toLowerCase();
-      this.renderRooms();
+      this.renderSidebarContent();
+    });
+    this.mount.querySelector('.chat-panel-tabs')?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-chat-panel]');
+      if (!button) return;
+      this.panelMode = button.dataset.chatPanel;
+      this.search = '';
+      const searchInput = this.mount.querySelector('.chat-search input');
+      if (searchInput) {
+        searchInput.value = '';
+        searchInput.placeholder = this.panelMode === 'contacts' ? 'Pesquisar colegas' : 'Pesquisar conversas';
+        searchInput.setAttribute('aria-label', searchInput.placeholder);
+      }
+      this.mount.querySelectorAll('[data-chat-panel]').forEach((item) => {
+        const active = item === button;
+        item.classList.toggle('is-active', active);
+        item.setAttribute('aria-selected', String(active));
+      });
+      this.mount.querySelector('.chat-room-filters')?.toggleAttribute('hidden', this.panelMode === 'contacts');
+      this.renderSidebarContent();
     });
     this.mount.querySelector('.chat-room-filters')?.addEventListener('click', (event) => {
       const button = event.target.closest('[data-chat-filter]');
       if (!button) return;
       this.filter = button.dataset.chatFilter;
       this.mount.querySelectorAll('[data-chat-filter]').forEach((item) => item.classList.toggle('is-active', item === button));
-      this.renderRooms();
+      this.renderSidebarContent();
     });
     this.mount.querySelector('.chat-room-list')?.addEventListener('click', (event) => {
       const button = event.target.closest('[data-chat-room]');
       if (button) this.selectRoom(button.dataset.chatRoom);
+      const contact = event.target.closest('[data-chat-contact]');
+      if (contact) this.startDirectConversation(contact.dataset.chatContact);
     });
+    this.mount.addEventListener('error', (event) => {
+      const image = event.target.closest?.('img[data-chat-avatar-fallback]');
+      if (!image) return;
+      const fallback = document.createElement('span');
+      fallback.textContent = image.dataset.chatAvatarFallback || 'U';
+      image.replaceWith(fallback);
+    }, true);
     const dialog = this.mount.querySelector('.chat-report-dialog');
     dialog?.addEventListener('close', async () => {
       if (dialog.returnValue !== 'submit') return;
@@ -227,12 +280,29 @@ export class ChatWorkspace {
       if (this.activeRoom) {
         this.activeRoom = this.rooms.find((room) => room.roomId === this.activeRoom.roomId) || this.activeRoom;
       }
-      this.renderRooms();
+      this.renderSidebarContent();
       this.onUnreadChange?.(Number(result.unreadCount || 0));
-      if (!this.rooms.length) this.renderNoRooms();
+      if (!this.rooms.length && this.panelMode === 'rooms') this.renderNoRooms();
     } catch (error) {
       if (!quiet) this.renderRoomError(error);
     }
+  }
+
+  async loadContacts({ quiet = false } = {}) {
+    if (this.mode !== 'student') return;
+    try {
+      const result = await this.request('contacts');
+      if (this.destroyed) return;
+      this.contacts = Array.isArray(result.contacts) ? result.contacts : [];
+      if (this.panelMode === 'contacts') this.renderContacts();
+    } catch (error) {
+      if (!quiet && this.panelMode === 'contacts') this.renderContactError(error);
+    }
+  }
+
+  renderSidebarContent() {
+    if (this.panelMode === 'contacts' && this.mode === 'student') this.renderContacts();
+    else this.renderRooms();
   }
 
   renderRooms() {
@@ -248,11 +318,15 @@ export class ChatWorkspace {
       const preview = lastMessage
         ? `${lastMessage.isMine ? 'Você: ' : ''}${lastMessage.isDeleted ? 'Mensagem removida' : compactText(lastMessage.body)}`
         : room.description;
+      const peerPhoto = room.roomType === 'DIRECT' ? safeImageUrl(room.peer?.profilePhotoUrl) : '';
+      const roomAvatar = peerPhoto
+        ? `<img src="${escapeHtml(peerPhoto)}" alt="" data-chat-avatar-fallback="${escapeHtml(initials(room.name))}">`
+        : `<img src="${icon(roomIcon(room.roomType), room.roomId === this.activeRoom?.roomId ? 'ffffff' : '00365b')}" alt="">`;
       return `
         <button type="button" role="option" aria-selected="${String(room.roomId === this.activeRoom?.roomId)}"
           class="chat-room-item ${room.roomId === this.activeRoom?.roomId ? 'is-active' : ''}"
           data-chat-room="${escapeHtml(room.roomId)}">
-          <span class="chat-room-avatar"><img src="${icon(roomIcon(room.roomType), room.roomId === this.activeRoom?.roomId ? 'ffffff' : '00365b')}" alt=""></span>
+          <span class="chat-room-avatar">${roomAvatar}</span>
           <span class="chat-room-copy">
             <span class="chat-room-title-row"><strong>${escapeHtml(room.name)}</strong><time>${escapeHtml(chatTime(lastMessage?.createdAt))}</time></span>
             <span class="chat-room-preview">${escapeHtml(preview || 'Sem mensagens')}</span>
@@ -268,6 +342,67 @@ export class ChatWorkspace {
         <span>Altere a pesquisa ou o filtro selecionado.</span>
       </div>
     `;
+  }
+
+  renderContacts() {
+    const list = this.mount.querySelector('.chat-room-list');
+    if (!list) return;
+    const contacts = this.contacts.filter((contact) => {
+      const courses = (contact.sharedCourses || []).map((course) => course.title).join(' ');
+      return !this.search || `${contact.fullName} ${contact.publicStudentId} ${contact.organization} ${courses}`.toLowerCase().includes(this.search);
+    });
+    list.innerHTML = contacts.length ? contacts.map((contact) => {
+      const photo = safeImageUrl(contact.profilePhotoUrl);
+      const avatar = photo
+        ? `<img src="${escapeHtml(photo)}" alt="" data-chat-avatar-fallback="${escapeHtml(initials(contact.fullName))}">`
+        : `<span>${escapeHtml(initials(contact.fullName))}</span>`;
+      const courses = (contact.sharedCourses || []).map((course) => course.title).join(', ');
+      return `
+        <button type="button" class="chat-contact-item" data-chat-contact="${escapeHtml(contact.publicStudentId)}">
+          <span class="chat-contact-avatar">${avatar}</span>
+          <span class="chat-contact-copy">
+            <strong>${escapeHtml(contact.fullName)}</strong>
+            <span>${escapeHtml(compactText(courses || 'Colega do seu curso', 64))}</span>
+            <small>${escapeHtml(contact.publicStudentId || '')}</small>
+          </span>
+          <span class="chat-contact-action" aria-hidden="true"><img src="${icon(contact.roomId ? 'message-circle' : 'message-circle-plus')}" alt=""></span>
+        </button>
+      `;
+    }).join('') : `
+      <div class="chat-list-empty">
+        <img src="${icon(this.search ? 'search-x' : 'users-round')}" alt="">
+        <strong>${this.search ? 'Nenhum colega encontrado' : 'Sem colegas disponíveis'}</strong>
+        <span>${this.search ? 'Altere os termos da pesquisa.' : 'Os estudantes dos seus cursos aparecerão aqui.'}</span>
+      </div>
+    `;
+  }
+
+  renderContactError(error) {
+    const list = this.mount.querySelector('.chat-room-list');
+    if (!list) return;
+    list.innerHTML = `<div class="chat-list-empty is-error"><strong>Não foi possível carregar os colegas</strong><span>${escapeHtml(error.message || 'Tente novamente.')}</span><button class="button button-secondary button-small" type="button">Repetir</button></div>`;
+    list.querySelector('button')?.addEventListener('click', () => this.loadContacts());
+  }
+
+  async startDirectConversation(publicStudentId) {
+    const contact = this.contacts.find((item) => item.publicStudentId === publicStudentId);
+    if (!contact) return;
+    try {
+      let roomId = contact.roomId;
+      if (!roomId) {
+        const result = await this.request('startDirect', publicStudentId);
+        roomId = result.room?.roomId;
+        contact.roomId = roomId || '';
+        await this.loadRooms({ quiet: true });
+      }
+      if (!roomId) throw new Error('Não foi possível abrir a conversa privada.');
+      this.panelMode = 'rooms';
+      const roomsTab = this.mount.querySelector('[data-chat-panel="rooms"]');
+      roomsTab?.click();
+      await this.selectRoom(roomId);
+    } catch (error) {
+      showToast(error.message || 'Não foi possível iniciar a conversa.', 'error');
+    }
   }
 
   renderNoRooms() {
@@ -326,10 +461,14 @@ export class ChatWorkspace {
     const panel = this.mount.querySelector('.chat-conversation-panel');
     const room = this.activeRoom;
     if (!panel || !room) return;
+    const peerPhoto = room.roomType === 'DIRECT' ? safeImageUrl(room.peer?.profilePhotoUrl) : '';
+    const activeAvatar = peerPhoto
+      ? `<img src="${escapeHtml(peerPhoto)}" alt="" data-chat-avatar-fallback="${escapeHtml(initials(room.name))}">`
+      : `<img src="${icon(roomIcon(room.roomType), 'ffffff')}" alt="">`;
     panel.innerHTML = `
       <header class="chat-conversation-header">
         <button class="chat-mobile-back" type="button" aria-label="Voltar às conversas"><img src="${icon('arrow-left')}" alt=""></button>
-        <span class="chat-active-avatar"><img src="${icon(roomIcon(room.roomType), 'ffffff')}" alt=""></span>
+        <span class="chat-active-avatar">${activeAvatar}</span>
         <div class="chat-active-copy">
           <h2>${escapeHtml(room.name)}</h2>
           <p><span class="chat-presence-dot"></span>${escapeHtml(roomTypeLabel(room.roomType))} · ${Number(room.participantCount || 0)} participantes</p>
@@ -341,6 +480,17 @@ export class ChatWorkspace {
       <form class="chat-composer">
         <div class="chat-draft-context" hidden></div>
         <div class="chat-composer-row">
+          <div class="chat-emoji-control">
+            <button class="chat-emoji-button" type="button" aria-label="Adicionar emoji" title="Adicionar emoji" aria-expanded="false">
+              <img src="${icon('smile')}" alt="">
+            </button>
+            <div class="chat-emoji-picker" role="dialog" aria-label="Escolher emoji" hidden>
+              <strong>Escolha um emoji</strong>
+              <div class="chat-emoji-grid">
+                ${CHAT_EMOJIS.map((emoji) => `<button type="button" data-chat-emoji="${emoji}" aria-label="Adicionar ${emoji}">${emoji}</button>`).join('')}
+              </div>
+            </div>
+          </div>
           <textarea name="message" rows="1" maxlength="2000" placeholder="Escreva uma mensagem" aria-label="Mensagem" required></textarea>
           <button class="chat-send-button" type="submit" aria-label="Enviar mensagem" title="Enviar mensagem"><img src="${icon('send', 'ffffff')}" alt=""></button>
         </div>
@@ -366,7 +516,7 @@ export class ChatWorkspace {
   messageTemplate(message) {
     const photo = safeImageUrl(message.sender?.profilePhotoUrl);
     const avatar = photo
-      ? `<img src="${escapeHtml(photo)}" alt="">`
+      ? `<img src="${escapeHtml(photo)}" alt="" data-chat-avatar-fallback="${escapeHtml(initials(message.sender?.name))}">`
       : `<span>${escapeHtml(initials(message.sender?.name))}</span>`;
     const canEdit = message.isMine && !message.isDeleted;
     const canDelete = !message.isDeleted && (message.isMine || this.mode === 'admin');
@@ -403,12 +553,40 @@ export class ChatWorkspace {
     const panel = this.mount.querySelector('.chat-conversation-panel');
     const form = panel?.querySelector('.chat-composer');
     const textarea = form?.elements.message;
+    const emojiButton = form?.querySelector('.chat-emoji-button');
+    const emojiPicker = form?.querySelector('.chat-emoji-picker');
     panel?.querySelector('.chat-mobile-back')?.addEventListener('click', () => {
       this.mount.querySelector('.chat-workspace')?.classList.remove('has-active-room');
       if (this.mode === 'student') history.replaceState(null, '', '#/chat');
     });
     panel?.querySelector('.chat-message-list')?.addEventListener('click', (event) => this.handleMessageAction(event));
     form?.addEventListener('submit', (event) => this.submitMessage(event));
+    emojiButton?.addEventListener('click', () => {
+      const willOpen = emojiPicker.hasAttribute('hidden');
+      emojiPicker.toggleAttribute('hidden', !willOpen);
+      emojiButton.setAttribute('aria-expanded', String(willOpen));
+    });
+    emojiPicker?.addEventListener('click', (event) => {
+      const option = event.target.closest('[data-chat-emoji]');
+      if (!option || !textarea) return;
+      const emoji = option.dataset.chatEmoji;
+      const start = textarea.selectionStart ?? textarea.value.length;
+      const end = textarea.selectionEnd ?? textarea.value.length;
+      if (textarea.value.length - (end - start) + emoji.length > 2000) {
+        showToast('A mensagem não pode exceder 2 000 caracteres.', 'error');
+        return;
+      }
+      textarea.setRangeText(emoji, start, end, 'end');
+      textarea.dispatchEvent(new Event('input'));
+      emojiPicker.hidden = true;
+      emojiButton.setAttribute('aria-expanded', 'false');
+      textarea.focus();
+    });
+    panel?.addEventListener('click', (event) => {
+      if (!emojiPicker || emojiPicker.hidden || event.target.closest('.chat-emoji-control')) return;
+      emojiPicker.hidden = true;
+      emojiButton?.setAttribute('aria-expanded', 'false');
+    });
     textarea?.addEventListener('input', () => {
       textarea.style.height = 'auto';
       textarea.style.height = `${Math.min(textarea.scrollHeight, 132)}px`;
@@ -416,6 +594,11 @@ export class ChatWorkspace {
       if (counter) counter.textContent = `${textarea.value.length}/2000`;
     });
     textarea?.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && emojiPicker && !emojiPicker.hidden) {
+        emojiPicker.hidden = true;
+        emojiButton?.setAttribute('aria-expanded', 'false');
+        return;
+      }
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         form.requestSubmit();
