@@ -4289,6 +4289,15 @@ input[type="search"] {
   padding: 8px;
 }
 
+.brand-preview-empty {
+  max-width: 62px;
+  color: #fff8e4;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+}
+
 :root[data-theme="dark"] .brand-preview-symbol {
   color: #082033;
 }
@@ -4301,6 +4310,21 @@ input[type="search"] {
 .brand-preview-card p {
   margin: 0;
   color: var(--muted);
+}
+
+.brand-storage-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.brand-storage-status small {
+  max-width: 68ch;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .brand-logo-form {
@@ -4316,6 +4340,48 @@ input[type="search"] {
 .brand-logo-form label > span {
   font-size: 14px;
   font-weight: 750;
+}
+
+.brand-logo-file-field {
+  padding: 16px;
+  border: 1px dashed rgba(201, 165, 91, .58);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.brand-logo-file-field input[type="file"] {
+  width: 100%;
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+.brand-logo-file-field input[type="file"]::file-selector-button {
+  min-height: 34px;
+  margin-right: 10px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: var(--primary);
+  color: var(--surface);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.brand-logo-file-field small,
+.brand-logo-file-selection {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.brand-logo-file-selection {
+  min-height: 18px;
+  margin: -4px 0 0;
 }
 
 .brand-logo-actions {
@@ -4997,6 +5063,10 @@ input[type="search"] {
     height: 42px;
   }
   .brand-preview-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .brand-storage-status {
     align-items: flex-start;
     flex-direction: column;
   }

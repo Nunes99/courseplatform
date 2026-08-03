@@ -53,6 +53,9 @@ const lucideIconAliases = Object.freeze({
 });
 const blueIcon = '00365b';
 const goldIcon = 'c9a55b';
+const BRAND_LOGO_ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const BRAND_LOGO_SOURCE_MAX_BYTES = 8 * 1024 * 1024;
+const BRAND_LOGO_STORED_MAX_BYTES = 900 * 1024;
 
 let api;
 let submissionSearchTimer;
@@ -6526,6 +6529,7 @@ async function renderBrandSettings() {
 
   const rawLogoUrl = state.media.logoUrl || '';
   const displayLogo = brandLogoUrl();
+  const storedInPlatform = rawLogoUrl.startsWith('data:image/');
 
   main.innerHTML = `
     <div class="admin-page-heading">
@@ -6537,23 +6541,33 @@ async function renderBrandSettings() {
 
     <section class="brand-settings-panel">
       <div class="brand-preview-card">
-        <div class="brand-preview-symbol${displayLogo ? ' has-brand-logo' : ''}">
-          ${displayLogo ? `<img src="${escapeHtml(displayLogo)}" alt="Logotipo">` : 'LSS'}
+        <div class="brand-preview-symbol${displayLogo ? ' has-brand-logo' : ''}" id="brandLogoPreviewFrame">
+          <img id="brandLogoPreview" src="${escapeHtml(displayLogo || '')}" alt="Pré-visualização do logotipo" ${displayLogo ? '' : 'hidden'}>
+          <span class="brand-preview-empty" id="brandLogoPreviewEmpty" ${displayLogo ? 'hidden' : ''}>Sem logótipo</span>
         </div>
         <div>
           <h2>Logotipo da plataforma</h2>
-          <p>Este logotipo substitui o monograma LSS no cabeçalho, nos cartões de início de sessão, no painel administrativo e nos certificados.</p>
+          <p>Este ficheiro é usado no cabeçalho, no painel administrativo, nos certificados e no favicon com fundo azul-marinho.</p>
+          <div class="brand-storage-status">
+            <span class="status-pill ${storedInPlatform ? 'status-active' : (rawLogoUrl ? 'status-under-review' : 'status-inactive')}">
+              ${storedInPlatform ? 'Guardado na plataforma' : (rawLogoUrl ? 'Ligação externa legada' : 'Não configurado')}
+            </span>
+            ${rawLogoUrl && !storedInPlatform
+              ? '<small>Carregue o ficheiro abaixo para eliminar a dependência externa e ativar corretamente o favicon.</small>'
+              : ''}
+          </div>
         </div>
       </div>
 
       <form id="brandLogoForm" class="brand-logo-form">
-        <label>
-          <span>Link da imagem</span>
-          <input type="url" name="logoUrl" value="${escapeHtml(rawLogoUrl)}"
-            placeholder="https://drive.google.com/file/d/.../view ou https://.../logo.png">
+        <label class="brand-logo-file-field">
+          <span>Ficheiro do logotipo</span>
+          <input type="file" name="logoFile" accept="image/png,image/jpeg,image/webp">
+          <small>Use PNG, JPEG ou WebP até 8 MB. A plataforma otimiza e guarda uma cópia segura; PNG transparente oferece o melhor resultado.</small>
         </label>
+        <p class="brand-logo-file-selection" id="brandLogoFileSelection">Nenhum novo ficheiro selecionado.</p>
         <div class="brand-logo-actions">
-          <button class="button button-primary" type="submit">Guardar logotipo</button>
+          <button class="button button-primary" type="submit">Carregar logotipo</button>
           <button class="button button-secondary" type="button" id="removeBrandLogo"
             ${rawLogoUrl ? '' : 'disabled'}>Remover</button>
         </div>
@@ -6562,6 +6576,7 @@ async function renderBrandSettings() {
   `;
 
   document.querySelector('#brandLogoForm').addEventListener('submit', saveBrandLogo);
+  document.querySelector('#brandLogoForm').elements.logoFile.addEventListener('change', previewBrandLogoSelection);
   document.querySelector('#removeBrandLogo').addEventListener('click', removeBrandLogo);
   reportHeight();
 }
@@ -6571,20 +6586,20 @@ async function saveBrandLogo(event) {
 
   const form = event.currentTarget;
   const button = form.querySelector('button[type="submit"]');
-  const rawUrl = String(new FormData(form).get('logoUrl') || '').trim();
-
-  if (!imageDisplayUrl(rawUrl)) {
-    showToast('Adicione um link válido para a imagem do logotipo.', 'warning');
-    form.elements.logoUrl.focus();
+  const file = form.elements.logoFile.files?.[0];
+  if (!validateBrandLogoFile(file)) {
+    form.elements.logoFile.focus();
     return;
   }
 
-  setBusy(button, true, 'A guardar…');
+  setBusy(button, true, 'A carregar…');
   try {
-    state.media.logoUrl = rawUrl;
-    await saveMediaConfig();
+    const prepared = await prepareBrandLogoFile(file);
+    const result = await api.adminUploadBrandLogo(prepared);
+    setMediaConfig(result.mediaConfig || {});
+    cacheMediaConfig();
     applyBrandLogo();
-    showToast('Logotipo atualizado.', 'success');
+    showToast('Logotipo carregado e guardado na plataforma.', 'success');
     await renderBrandSettings();
   } catch (error) {
     handleAdminError(error);
@@ -6593,7 +6608,115 @@ async function saveBrandLogo(event) {
   }
 }
 
+function previewBrandLogoSelection(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  const selection = document.querySelector('#brandLogoFileSelection');
+  if (!file) {
+    if (selection) selection.textContent = 'Nenhum novo ficheiro selecionado.';
+    return;
+  }
+  if (!validateBrandLogoFile(file)) {
+    input.value = '';
+    if (selection) selection.textContent = 'Nenhum novo ficheiro selecionado.';
+    return;
+  }
+
+  if (selection) selection.textContent = `${file.name} · ${formatBytes(file.size)}`;
+  const preview = document.querySelector('#brandLogoPreview');
+  const empty = document.querySelector('#brandLogoPreviewEmpty');
+  const frame = document.querySelector('#brandLogoPreviewFrame');
+  if (!preview) return;
+  const objectUrl = URL.createObjectURL(file);
+  preview.addEventListener('load', () => URL.revokeObjectURL(objectUrl), { once: true });
+  preview.addEventListener('error', () => URL.revokeObjectURL(objectUrl), { once: true });
+  preview.src = objectUrl;
+  preview.hidden = false;
+  if (empty) empty.hidden = true;
+  frame?.classList.add('has-brand-logo');
+}
+
+function validateBrandLogoFile(file) {
+  if (!file) {
+    showToast('Selecione o ficheiro do logotipo.', 'warning');
+    return false;
+  }
+  if (!BRAND_LOGO_ALLOWED_TYPES.has(file.type)) {
+    showToast('Use um logotipo em PNG, JPEG ou WebP.', 'error');
+    return false;
+  }
+  if (!file.size || file.size > BRAND_LOGO_SOURCE_MAX_BYTES) {
+    showToast('O ficheiro original deve ter até 8 MB.', 'error');
+    return false;
+  }
+  return true;
+}
+
+async function prepareBrandLogoFile(file) {
+  const image = await loadBrandLogoImage(file);
+  const sourceMaxDimension = Math.max(image.naturalWidth, image.naturalHeight);
+  const targetDimensions = [...new Set([1024, 768, 512].map((size) => Math.min(size, sourceMaxDimension)))];
+
+  for (const maxDimension of targetDimensions) {
+    const png = await renderBrandLogoBlob(image, maxDimension, 'image/png');
+    if (png?.size && png.size <= BRAND_LOGO_STORED_MAX_BYTES) {
+      return brandLogoUploadPayload(png, 'png');
+    }
+
+    const webp = await renderBrandLogoBlob(image, maxDimension, 'image/webp', 0.9);
+    if (webp?.size && webp.type === 'image/webp' && webp.size <= BRAND_LOGO_STORED_MAX_BYTES) {
+      return brandLogoUploadPayload(webp, 'webp');
+    }
+  }
+
+  throw new ApiError(
+    'Não foi possível otimizar o logotipo para o limite seguro. Use uma imagem menos complexa.',
+    'BRAND_LOGO_OPTIMIZATION_FAILED'
+  );
+}
+
+async function brandLogoUploadPayload(blob, extension) {
+  return {
+    fileName: `institutional-logo.${extension}`,
+    mimeType: blob.type,
+    dataUrl: await fileToDataUrl(blob)
+  };
+}
+
+function loadBrandLogoImage(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    image.addEventListener('load', () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    }, { once: true });
+    image.addEventListener('error', () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new ApiError('O ficheiro selecionado não contém uma imagem válida.', 'INVALID_BRAND_LOGO'));
+    }, { once: true });
+    image.src = objectUrl;
+  });
+}
+
+function renderBrandLogoBlob(image, maxDimension, mimeType, quality) {
+  const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { alpha: true });
+  if (!context) return Promise.resolve(null);
+  context.clearRect(0, 0, width, height);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(image, 0, 0, width, height);
+  return new Promise((resolve) => canvas.toBlob(resolve, mimeType, quality));
+}
+
 async function removeBrandLogo() {
+  const previousLogoUrl = state.media.logoUrl;
   try {
     state.media.logoUrl = '';
     await saveMediaConfig();
@@ -6601,6 +6724,7 @@ async function removeBrandLogo() {
     showToast('Logotipo removido.', 'success');
     await renderBrandSettings();
   } catch (error) {
+    state.media.logoUrl = previousLogoUrl;
     handleAdminError(error);
   }
 }
@@ -6935,8 +7059,28 @@ async function saveMediaConfig() {
 
   const result = await api.adminSaveMediaConfig(mediaConfig);
   setMediaConfig(result.mediaConfig || mediaConfig);
-  localStorage.setItem('lssLogoUrl', state.media.logoUrl || '');
-  localStorage.setItem('lssVideoGallery', JSON.stringify(state.media.videos));
+  cacheMediaConfig();
+}
+
+function cacheMediaConfig() {
+  try {
+    localStorage.setItem('lssLogoUrl', state.media.logoUrl || '');
+  } catch {
+    try {
+      localStorage.removeItem('lssLogoUrl');
+    } catch {
+      // A configuração persistida no backend continua a ser a fonte principal.
+    }
+  }
+  try {
+    localStorage.setItem('lssVideoGallery', JSON.stringify(state.media.videos));
+  } catch {
+    try {
+      localStorage.removeItem('lssVideoGallery');
+    } catch {
+      // A configuração persistida no backend continua a ser a fonte principal.
+    }
+  }
 }
 
 function setMediaConfig(mediaConfig = {}) {

@@ -43,6 +43,10 @@ class ApiError(Exception):
         self.details = details
 
 
+RASTER_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
+BRAND_LOGO_MAX_BYTES = 1024 * 1024
+
+
 def success(data: dict[str, Any]) -> dict[str, Any]:
     return {"success": True, "data": data}
 
@@ -3144,6 +3148,96 @@ def read_media_config_with_conn(conn, course_id: str):
         return {"logoUrl": "", "videos": []}
 
 
+def persist_media_config(conn, media: dict[str, Any]):
+    conn.execute(
+        """
+        insert into courseplatform.settings (key, value, value_type, description, updated_at)
+        values ('MEDIA_CONFIG', %s, 'JSON', 'Logotipo e galeria de vídeos da plataforma.', now())
+        on conflict (key) do update
+        set value = excluded.value, value_type = excluded.value_type,
+            description = excluded.description, updated_at = excluded.updated_at
+        """,
+        (json.dumps(media),),
+    )
+
+
+def decode_raster_data_url(data_url: Any, mime_type: Any, max_bytes: int) -> tuple[str, str, bytes]:
+    normalized_mime = str_value(mime_type).lower()
+    if normalized_mime not in RASTER_IMAGE_MIME_TYPES:
+        raise ApiError("INVALID_FILE_TYPE", "Use PNG, JPEG ou WebP.")
+
+    normalized_data_url = str_value(data_url)
+    prefix = f"data:{normalized_mime};base64,"
+    if not normalized_data_url.startswith(prefix):
+        raise ApiError("INVALID_FILE_DATA", "O conteúdo da imagem não corresponde ao formato indicado.")
+
+    encoded = normalized_data_url[len(prefix):]
+    if not encoded or len(encoded) > ((max_bytes + 2) // 3) * 4 + 8:
+        raise ApiError("FILE_TOO_LARGE", f"O ficheiro deve ter até {max_bytes // (1024 * 1024)} MB.")
+    try:
+        file_bytes = base64.b64decode(encoded, validate=True)
+    except Exception as exc:
+        raise ApiError("INVALID_FILE_DATA", "O ficheiro de imagem é inválido.") from exc
+    if not file_bytes:
+        raise ApiError("INVALID_FILE_DATA", "O ficheiro de imagem está vazio.")
+    if len(file_bytes) > max_bytes:
+        raise ApiError("FILE_TOO_LARGE", f"O ficheiro deve ter até {max_bytes // (1024 * 1024)} MB.")
+    if not raster_signature_matches(normalized_mime, file_bytes):
+        raise ApiError("INVALID_FILE_DATA", "A assinatura do ficheiro não corresponde a PNG, JPEG ou WebP.")
+
+    canonical_data = base64.b64encode(file_bytes).decode("ascii")
+    return normalized_mime, f"data:{normalized_mime};base64,{canonical_data}", file_bytes
+
+
+def raster_signature_matches(mime_type: str, file_bytes: bytes) -> bool:
+    if mime_type == "image/png":
+        return file_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return file_bytes.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/webp":
+        return len(file_bytes) >= 12 and file_bytes[:4] == b"RIFF" and file_bytes[8:12] == b"WEBP"
+    return False
+
+
+def normalize_brand_logo_url(value: Any) -> str:
+    logo_url = str_value(value)
+    if not logo_url:
+        return ""
+    if logo_url.startswith("data:image/"):
+        match = re.match(r"^data:(image/(?:png|jpeg|webp));base64,", logo_url, flags=re.IGNORECASE)
+        if not match:
+            raise ApiError("INVALID_BRAND_LOGO", "O logotipo guardado possui um formato inválido.")
+        _, normalized_data_url, _ = decode_raster_data_url(logo_url, match.group(1), BRAND_LOGO_MAX_BYTES)
+        return normalized_data_url
+
+    parsed = urlsplit(logo_url)
+    if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
+        return logo_url
+    raise ApiError("INVALID_BRAND_LOGO", "O logotipo deve ser um ficheiro carregado ou um link HTTPS legado válido.")
+
+
+def upload_raster_asset_to_storage(file_bytes: bytes, mime_type: str, object_path: str) -> tuple[bool, str]:
+    settings = get_settings()
+    if not settings.supabase_url or not settings.supabase_service_role_key:
+        return False, ""
+    try:
+        request = urllib.request.Request(
+            f"{settings.supabase_url}/storage/v1/object/{settings.supabase_storage_bucket}/{object_path}",
+            data=file_bytes,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {settings.supabase_service_role_key}",
+                "apikey": settings.supabase_service_role_key,
+                "Content-Type": mime_type,
+                "x-upsert": "true",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return 200 <= response.status < 300, ""
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        return False, str(exc)
+
+
 def student_visible_media(media: dict[str, Any], student: dict[str, Any]):
     email = normalize_email(student.get("email") or "")
     videos = []
@@ -5529,19 +5623,10 @@ def admin_save_media_config(payload: dict[str, Any]):
     media = payload.get("mediaConfig") or {"logoUrl": payload.get("logoUrl"), "videos": payload.get("videos", [])}
     if not isinstance(media, dict):
         raise ApiError("INVALID_MEDIA_CONFIG", "Configuração de media inválida.")
-    media.setdefault("logoUrl", "")
+    media["logoUrl"] = normalize_brand_logo_url(media.get("logoUrl"))
     media.setdefault("videos", [])
     with connection() as conn:
-        conn.execute(
-            """
-            insert into courseplatform.settings (key, value, value_type, description, updated_at)
-            values ('MEDIA_CONFIG', %s, 'JSON', 'Logotipo e galeria de vídeos da plataforma.', now())
-            on conflict (key) do update
-            set value = excluded.value, value_type = excluded.value_type,
-                description = excluded.description, updated_at = excluded.updated_at
-            """,
-            (json.dumps(media),),
-        )
+        persist_media_config(conn, media)
         audit(conn, "ADMIN", admin["admin_id"], "MEDIA_CONFIG_SAVED", "SETTING", "MEDIA_CONFIG")
         conn.commit()
     return success({"mediaConfig": media})
@@ -6973,49 +7058,66 @@ def admin_upload_certificate_asset(payload: dict[str, Any]):
     allowed_keys = set(default_certificate_profile().get("assets", {}).keys())
     if asset_key not in allowed_keys:
         raise ApiError("INVALID_ASSET_KEY", "Tipo de elemento gráfico inválido.")
-    mime_type = str_value(payload.get("mimeType"))
-    if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
-        raise ApiError("INVALID_FILE_TYPE", "Use PNG, JPEG ou WebP.")
-    data_url = str_value(payload.get("dataUrl"))
-    marker = ";base64,"
-    if marker not in data_url:
-        raise ApiError("INVALID_FILE_DATA", "Ficheiro inválido.")
-    encoded = data_url.split(marker, 1)[1]
-    try:
-        file_bytes = base64.b64decode(encoded, validate=True)
-    except Exception as exc:
-        raise ApiError("INVALID_FILE_DATA", "Ficheiro inválido.") from exc
-    if len(file_bytes) > 3 * 1024 * 1024:
-        raise ApiError("FILE_TOO_LARGE", "O ficheiro deve ter até 3 MB.")
+    mime_type, data_url, file_bytes = decode_raster_data_url(
+        payload.get("dataUrl"),
+        payload.get("mimeType"),
+        3 * 1024 * 1024,
+    )
 
-    settings = get_settings()
     extension = mimetypes.guess_extension(mime_type) or ".png"
     object_path = f"{course_id}/{asset_key}-{certificate_token(8)}{extension}"
-    storage_saved = False
-    storage_error = ""
-    if settings.supabase_url and settings.supabase_service_role_key:
-        try:
-            request = urllib.request.Request(
-                f"{settings.supabase_url}/storage/v1/object/{settings.supabase_storage_bucket}/{object_path}",
-                data=file_bytes,
-                method="POST",
-                headers={
-                    "Authorization": f"Bearer {settings.supabase_service_role_key}",
-                    "apikey": settings.supabase_service_role_key,
-                    "Content-Type": mime_type,
-                    "x-upsert": "true",
-                },
-            )
-            with urllib.request.urlopen(request, timeout=15) as response:
-                storage_saved = 200 <= response.status < 300
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
-            storage_error = str(exc)
+    storage_saved, storage_error = upload_raster_asset_to_storage(file_bytes, mime_type, object_path)
 
     return success({
         "assetKey": asset_key,
         "assetUrl": data_url,
         "storagePath": object_path if storage_saved else "",
         "storageSaved": storage_saved,
+        "storageError": storage_error,
+    })
+
+
+def admin_upload_brand_logo(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["fileName", "mimeType", "dataUrl"])
+    course_id = str_value(payload.get("courseId") or get_settings().default_course_id)
+    mime_type, data_url, file_bytes = decode_raster_data_url(
+        payload.get("dataUrl"),
+        payload.get("mimeType"),
+        BRAND_LOGO_MAX_BYTES,
+    )
+    extension = mimetypes.guess_extension(mime_type) or ".png"
+    object_path = f"{course_id}/branding/institutional-logo-{certificate_token(8)}{extension}"
+    storage_saved, storage_error = upload_raster_asset_to_storage(file_bytes, mime_type, object_path)
+
+    media = read_media_config(course_id)
+    if not isinstance(media, dict):
+        media = {"logoUrl": "", "videos": []}
+    media["logoUrl"] = data_url
+    media.setdefault("videos", [])
+    with connection() as conn:
+        persist_media_config(conn, media)
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "BRAND_LOGO_UPLOADED",
+            "SETTING",
+            "MEDIA_CONFIG",
+            {
+                "fileName": str_value(payload.get("fileName"))[:180],
+                "mimeType": mime_type,
+                "sizeBytes": len(file_bytes),
+                "storageSaved": storage_saved,
+                "storagePath": object_path if storage_saved else "",
+            },
+        )
+        conn.commit()
+
+    return success({
+        "mediaConfig": media,
+        "storageSaved": storage_saved,
+        "storagePath": object_path if storage_saved else "",
         "storageError": storage_error,
     })
 
@@ -8700,6 +8802,7 @@ ACTIONS = {
     "adminListCertificateSurveys": admin_list_certificate_surveys,
     "adminSaveCertificateSurvey": admin_save_certificate_survey,
     "adminUploadCertificateAsset": admin_upload_certificate_asset,
+    "adminUploadBrandLogo": admin_upload_brand_logo,
     "adminListNotifications": admin_list_notifications,
     "adminListChatRooms": chat_list_rooms,
     "adminUpdatePresence": chat_presence_heartbeat,

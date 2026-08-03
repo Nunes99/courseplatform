@@ -730,6 +730,13 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminUploadCertificateAsset', payload);
   }
 
+  adminUploadBrandLogo(payload) {
+    return this.mutateAdmin('adminUploadBrandLogo', {
+      courseId: this.courseId,
+      ...payload
+    });
+  }
+
   adminMediaConfig(options = {}) {
     return this.cachedAdminRequest('adminGetMediaConfig', {
       courseId: this.courseId
