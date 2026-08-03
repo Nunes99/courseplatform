@@ -11336,3 +11336,14 @@ pre,
     overflow: visible;
   }
 }
+
+/* Lesson copy follows the full card width before wrapping. */
+.lesson-main .lesson-header h1,
+.lesson-main .lesson-header > p,
+.lesson-main .content-section .rich-content,
+.lesson-main .content-section .rich-content p,
+.lesson-main .content-section .rich-content ul,
+.lesson-main .content-section .rich-content ol,
+.lesson-main .content-section .rich-content blockquote {
+  max-width: 100%;
+}
