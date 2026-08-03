@@ -11293,3 +11293,46 @@ pre,
     grid-column: 1 / -1;
   }
 }
+
+/* Keep lesson navigation available while the lesson content scrolls. */
+@media (min-width: 1001px) {
+  html:has(.lesson-layout),
+  body:has(.lesson-layout) {
+    overflow-x: clip;
+  }
+
+  .lesson-layout {
+    align-items: start;
+  }
+
+  .lesson-sidebar {
+    position: -webkit-sticky;
+    position: sticky !important;
+    z-index: 20;
+    top: calc(var(--app-header-height) + 16px);
+    display: flex;
+    max-height: calc(100vh - var(--app-header-height) - 32px);
+    max-height: calc(100dvh - var(--app-header-height) - 32px);
+    flex-direction: column;
+    align-self: start;
+    overflow: hidden;
+  }
+
+  .lesson-navigation {
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+}
+
+@media (max-width: 1000px) {
+  .lesson-sidebar {
+    position: static !important;
+    max-height: none;
+    overflow: visible;
+  }
+}
