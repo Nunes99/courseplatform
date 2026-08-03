@@ -1323,13 +1323,21 @@ input[type="search"] {
   gap: 14px;
 }
 
-.profile-security {
+.profile-side-column {
+  display: grid;
+  grid-column: 2;
+  gap: 16px;
+  align-content: start;
   position: sticky;
   top: 86px;
 }
 
+.profile-security {
+  position: static;
+}
+
 .profile-exit {
-  grid-column: 2;
+  grid-column: auto;
 }
 
 .profile-exit p {
@@ -4888,9 +4896,11 @@ input[type="search"] {
     align-items: flex-start;
     flex-direction: column;
   }
+  .profile-side-column,
   .profile-security {
     position: static;
   }
+  .profile-side-column,
   .profile-exit {
     grid-column: 1;
   }
@@ -10560,6 +10570,11 @@ pre,
   .certificate-model-grid,
   .credential-dialog-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-side-column {
+    grid-column: 1;
+    position: static;
   }
 
   .certificate-asset-grid {

@@ -1418,43 +1418,45 @@ async function renderProfile() {
           </div>
         </form>
 
-        <form id="passwordForm" class="profile-card profile-security form-stack">
-          <div class="profile-section-heading">
-            <div>
-              <p class="eyebrow">Segurança</p>
-              <h2>Alterar palavra-passe de acesso</h2>
+        <div class="profile-side-column">
+          <form id="passwordForm" class="profile-card profile-security form-stack">
+            <div class="profile-section-heading">
+              <div>
+                <p class="eyebrow">Segurança</p>
+                <h2>Alterar palavra-passe de acesso</h2>
+              </div>
             </div>
-          </div>
-          <label>
-            <span>Palavra-passe atual</span>
-            <input type="password" name="currentAccessCode" autocomplete="current-password" required>
-          </label>
-          <label>
-            <span>Nova palavra-passe</span>
-            <input type="password" name="newAccessCode" autocomplete="new-password" minlength="8" required>
-          </label>
-          <label>
-            <span>Confirmar a nova palavra-passe</span>
-            <input type="password" name="confirmAccessCode" autocomplete="new-password" minlength="8" required>
-          </label>
-          <div class="profile-security-note">
-            Ao alterar a palavra-passe, será necessário iniciar sessão novamente.
-          </div>
-          <div class="profile-actions">
-            <button class="button button-primary" type="submit">Alterar palavra-passe</button>
-          </div>
-        </form>
+            <label>
+              <span>Palavra-passe atual</span>
+              <input type="password" name="currentAccessCode" autocomplete="current-password" required>
+            </label>
+            <label>
+              <span>Nova palavra-passe</span>
+              <input type="password" name="newAccessCode" autocomplete="new-password" minlength="8" required>
+            </label>
+            <label>
+              <span>Confirmar a nova palavra-passe</span>
+              <input type="password" name="confirmAccessCode" autocomplete="new-password" minlength="8" required>
+            </label>
+            <div class="profile-security-note">
+              Ao alterar a palavra-passe, será necessário iniciar sessão novamente.
+            </div>
+            <div class="profile-actions">
+              <button class="button button-primary" type="submit">Alterar palavra-passe</button>
+            </div>
+          </form>
 
-        <section class="profile-card profile-exit">
-          <div class="profile-section-heading">
-            <div>
-              <p class="eyebrow">Sessão</p>
-              <h2>Terminar acesso</h2>
+          <section class="profile-card profile-exit">
+            <div class="profile-section-heading">
+              <div>
+                <p class="eyebrow">Sessão</p>
+                <h2>Terminar acesso</h2>
+              </div>
             </div>
-          </div>
-          <p>Saia da plataforma quando terminar de usar este dispositivo.</p>
-          <button class="button button-secondary" id="profileLogoutButton" type="button">Sair da conta</button>
-        </section>
+            <p>Saia da plataforma quando terminar de usar este dispositivo.</p>
+            <button class="button button-secondary" id="profileLogoutButton" type="button">Sair da conta</button>
+          </section>
+        </div>
       </div>
     </section>
   `, {
