@@ -273,6 +273,19 @@ create table if not exists courseplatform.notification_deliveries (
   unique(notification_id, channel)
 );
 
+create table if not exists courseplatform.notification_channel_settings (
+  channel text primary key,
+  enabled boolean not null default false,
+  phone_number_id text,
+  graph_api_version text,
+  template_name text,
+  template_language text,
+  platform_url text,
+  access_token_encrypted bytea,
+  updated_by text references courseplatform.admins(admin_id) on delete set null,
+  updated_at timestamptz
+);
+
 -- Independent module access and assessment state. These statements also migrate
 -- installations created before the two states were separated.
 alter table courseplatform.lessons
@@ -476,6 +489,7 @@ alter table courseplatform.files enable row level security;
 alter table courseplatform.reviews enable row level security;
 alter table courseplatform.notifications enable row level security;
 alter table courseplatform.notification_deliveries enable row level security;
+alter table courseplatform.notification_channel_settings enable row level security;
 alter table courseplatform.certificates enable row level security;
 alter table courseplatform.audit_log enable row level security;
 alter table courseplatform.settings enable row level security;
@@ -511,6 +525,11 @@ create or replace view public.files as select * from courseplatform.files;
 create or replace view public.reviews as select * from courseplatform.reviews;
 create or replace view public.notifications as select * from courseplatform.notifications;
 create or replace view public.notification_deliveries as select * from courseplatform.notification_deliveries;
+create or replace view public.notification_channel_settings as
+  select channel, enabled, phone_number_id, graph_api_version, template_name,
+         template_language, platform_url, access_token_encrypted is not null as token_configured,
+         updated_by, updated_at
+  from courseplatform.notification_channel_settings;
 create or replace view public.certificates as select * from courseplatform.certificates;
 create or replace view public.audit_log as select * from courseplatform.audit_log;
 create or replace view public.settings as select * from courseplatform.settings;

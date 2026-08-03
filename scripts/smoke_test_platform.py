@@ -144,7 +144,9 @@ def main():
                 submissions = call("adminListSubmissions", {"adminToken": admin_token, "limit": 5})
                 notification_log = call("adminListNotifications", {"adminToken": admin_token, "limit": 5})
                 assert isinstance(notification_log.get("notifications"), list), notification_log
-                assert "configured" in (notification_log.get("whatsappConfiguration") or {}), notification_log
+                whatsapp_configuration = notification_log.get("whatsappConfiguration") or {}
+                assert "configured" in whatsapp_configuration, notification_log
+                assert "accessToken" not in whatsapp_configuration, "O token do WhatsApp não pode chegar ao navegador"
                 if submissions.get("submissions"):
                     progress = submissions["submissions"][0].get("progress") or {}
                     assert progress.get("contentAccessStatus") in {"AVAILABLE", "LOCKED"}, progress

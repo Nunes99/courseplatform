@@ -531,6 +531,10 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminCreateNotification', payload);
   }
 
+  adminSaveWhatsAppConfiguration(whatsappConfiguration) {
+    return this.mutateAdmin('adminSaveWhatsAppConfiguration', { whatsappConfiguration });
+  }
+
   adminRetryNotificationDeliveries(limit = 20) {
     return this.mutateAdmin('adminRetryNotificationDeliveries', { limit });
   }

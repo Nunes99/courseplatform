@@ -98,7 +98,8 @@ const state = {
     videos: []
   },
   staff: [],
-  notificationLog: null
+  notificationLog: null,
+  notificationStudentTotal: 0
 };
 
 initialize();
@@ -524,7 +525,7 @@ function canManageNotifications() {
 
 function notificationDeliveryLabel(status) {
   const labels = {
-    SENT: 'Enviado',
+    SENT: 'Aceite pela Meta',
     PENDING: 'Pendente',
     FAILED: 'Falhou',
     SKIPPED: 'Não solicitado',
@@ -533,16 +534,51 @@ function notificationDeliveryLabel(status) {
   return labels[status] || status || 'Apenas interna';
 }
 
+function notificationSearchText(...values) {
+  return values.join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+function notificationRecipientTemplate(student) {
+  const phone = String(student.phone || '').trim();
+  const phoneDigits = phone.replace(/\D/g, '');
+  const hasValidPhone = phoneDigits.length >= 8 && phoneDigits.length <= 15;
+  const whatsappReady = Boolean(student.whatsappOptIn && hasValidPhone);
+  const whatsappLabel = whatsappReady
+    ? 'WhatsApp autorizado'
+    : student.whatsappOptIn
+      ? (phone ? 'Telefone inválido' : 'Telefone em falta')
+      : 'Sem autorização';
+  const whatsappClass = whatsappReady ? 'is-ready' : 'is-unavailable';
+  const publicId = studentPublicIdLabel(student.publicStudentId);
+  const searchText = notificationSearchText(student.fullName, publicId, student.email, phone);
+  return `
+    <label class="notification-recipient-row" data-recipient-row data-search="${escapeHtml(searchText)}">
+      <input type="checkbox" name="studentIds" value="${escapeHtml(student.studentId)}">
+      <span class="notification-recipient-avatar" aria-hidden="true">${escapeHtml(studentInitials(student.fullName))}</span>
+      <span class="notification-recipient-copy">
+        <strong>${escapeHtml(student.fullName || 'Estudante')}</strong>
+        <span>${escapeHtml(publicId)} · ${escapeHtml(student.email || 'Sem email')}</span>
+        <small>${escapeHtml(phone || 'Sem telefone registado')}</small>
+      </span>
+      <span class="notification-recipient-channels">
+        <span class="status-pill status-approved"><span class="sr-only">Canal </span>Interna</span>
+        <span class="status-pill notification-whatsapp-state ${whatsappClass}">${escapeHtml(whatsappLabel)}</span>
+      </span>
+    </label>
+  `;
+}
+
 async function loadNotificationManagement(options = {}) {
   const main = document.querySelector('#adminMain');
   main.innerHTML = loadingTemplate('A carregar notificações...');
   try {
     const [notificationLog, studentResult] = await Promise.all([
       api.adminNotifications({ limit: 120 }, options),
-      api.adminStudents({ limit: 500 }, options)
+      api.adminStudents({ status: 'ACTIVE', limit: 2000 }, options)
     ]);
     state.notificationLog = notificationLog;
     state.students = studentResult.students || [];
+    state.notificationStudentTotal = Number(studentResult.total ?? state.students.length);
     renderNotificationManagement();
   } catch (error) {
     handleAdminError(error);
@@ -555,6 +591,7 @@ function renderNotificationManagement() {
   const summary = data.summary || {};
   const whatsapp = data.whatsappConfiguration || {};
   const activeStudents = state.students.filter(({ student }) => student?.status === 'ACTIVE');
+  const activeStudentTotal = Math.max(activeStudents.length, state.notificationStudentTotal || 0);
 
   main.innerHTML = `
     <div class="admin-page-heading">
@@ -572,7 +609,7 @@ function renderNotificationManagement() {
 
     <section class="admin-summary-grid">
       <article class="insight-card"><img src="${iconUrl('bell', goldIcon)}" alt=""><div><span>Internas</span><strong>${Number(summary.internalTotal || 0)}</strong></div></article>
-      <article class="insight-card"><img src="${iconUrl('message-circle-check', goldIcon)}" alt=""><div><span>WhatsApp enviados</span><strong>${Number(summary.whatsappSent || 0)}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('message-circle-check', goldIcon)}" alt=""><div><span>Aceites pela Meta</span><strong>${Number(summary.whatsappSent || 0)}</strong></div></article>
       <article class="insight-card"><img src="${iconUrl('clock-3', goldIcon)}" alt=""><div><span>Pendentes</span><strong>${Number(summary.whatsappPending || 0)}</strong></div></article>
       <article class="insight-card"><img src="${iconUrl('circle-alert', goldIcon)}" alt=""><div><span>Falharam</span><strong>${Number(summary.whatsappFailed || 0)}</strong></div></article>
     </section>
@@ -583,20 +620,42 @@ function renderNotificationManagement() {
           <div class="section-heading">
             <div><p class="eyebrow">Nova atualização</p><h2>Enviar aos estudantes</h2></div>
           </div>
-          <form id="notificationComposer" class="form-stack">
-            <label>
-              <span>Destinatários</span>
-              <select name="studentIds" multiple size="7" aria-describedby="notificationRecipientHelp">
-                ${activeStudents.map(({ student }) => `
-                  <option value="${escapeHtml(student.studentId)}">${escapeHtml(student.fullName)} · ${escapeHtml(student.publicStudentId || student.email)}</option>
-                `).join('')}
-              </select>
-              <small id="notificationRecipientHelp">Use Ctrl/Cmd para selecionar vários estudantes.</small>
-            </label>
-            <label class="checkbox-line">
-              <input type="checkbox" name="notifyAll" value="true">
-              Enviar a todos os estudantes ativos
-            </label>
+          <form id="notificationComposer" class="form-stack" data-recipient-total="${activeStudentTotal}">
+            <fieldset class="notification-recipient-picker" aria-describedby="notificationRecipientHelp notificationRecipientStatus">
+              <legend>Destinatários</legend>
+              <div class="notification-recipient-toolbar">
+                <label class="notification-recipient-search">
+                  <span class="sr-only">Pesquisar estudantes</span>
+                  <img src="${iconUrl('search', goldIcon)}" alt="">
+                  <input id="notificationStudentSearch" type="search"
+                    placeholder="Pesquisar por nome, ID público, email ou telefone"
+                    aria-controls="notificationRecipientList" autocomplete="off" spellcheck="false">
+                </label>
+                <div class="notification-recipient-actions">
+                  <button class="button button-secondary button-small" type="button" data-select-visible>Selecionar visíveis</button>
+                  <button class="button button-secondary button-small" type="button" data-clear-recipients>Limpar seleção</button>
+                </div>
+              </div>
+              <div class="notification-recipient-summary">
+                <label class="checkbox-line">
+                  <input type="checkbox" name="notifyAll" value="true">
+                  Enviar a todos os estudantes ativos
+                </label>
+                <span id="notificationRecipientStatus" role="status" aria-live="polite" aria-atomic="true">
+                  <strong id="notificationSelectedCount">0</strong> de ${activeStudentTotal} selecionados ·
+                  <span id="notificationVisibleCount">${activeStudents.length}</span> visíveis
+                </span>
+              </div>
+              <div class="notification-recipient-list" id="notificationRecipientList" role="group" aria-label="Seleção de estudantes ativos">
+                ${activeStudents.length
+                  ? activeStudents.map(({ student }) => notificationRecipientTemplate(student)).join('')
+                  : '<p class="empty-state compact">Não existem estudantes ativos.</p>'}
+              </div>
+              <p class="notification-recipient-empty" id="notificationRecipientEmpty" hidden>Nenhum estudante corresponde à pesquisa.</p>
+              <p class="notification-recipient-help" id="notificationRecipientHelp">${activeStudents.length < activeStudentTotal
+                ? `A lista apresenta ${activeStudents.length} de ${activeStudentTotal} estudantes ativos. Use “Enviar a todos” para incluir todos.`
+                : 'Pesquise e marque os destinatários individualmente ou selecione todos os estudantes ativos.'}</p>
+            </fieldset>
             <div class="profile-form-grid">
               <label>
                 <span>Tipo</span>
@@ -629,13 +688,68 @@ function renderNotificationManagement() {
           <div><p class="eyebrow">Canal externo</p><h2>WhatsApp Business</h2></div>
           <span class="status-pill ${whatsapp.configured ? 'status-approved' : 'status-pending'}">${whatsapp.configured ? 'Configurado' : 'Configuração pendente'}</span>
         </div>
-        <dl class="notification-config-list">
-          <div><dt>Integração ativa</dt><dd>${whatsapp.enabled ? 'Sim' : 'Não'}</dd></div>
-          <div><dt>Número empresarial</dt><dd>${whatsapp.phoneNumberConfigured ? 'Configurado' : 'Em falta'}</dd></div>
-          <div><dt>Modelo aprovado</dt><dd>${escapeHtml(whatsapp.templateName || 'Em falta')}</dd></div>
-          <div><dt>Idioma</dt><dd>${escapeHtml(whatsapp.templateLanguage || 'pt_PT')}</dd></div>
-        </dl>
-        <p class="management-field-hint">As credenciais ficam protegidas nas variáveis do servidor. O modelo deve conter quatro campos: nome, título, mensagem e link.</p>
+        ${canManageNotifications() ? `
+          <form id="whatsappConfigurationForm" class="form-stack whatsapp-configuration-form">
+            <label class="checkbox-line notification-channel-option">
+              <input type="checkbox" name="enabled" value="true" ${whatsapp.enabled ? 'checked' : ''}>
+              <span><strong>Ativar o envio pelo WhatsApp</strong><small>As notificações internas continuam disponíveis mesmo quando este canal está desativado.</small></span>
+            </label>
+            <div class="profile-form-grid">
+              <label>
+                <span>Phone Number ID</span>
+                <input name="phoneNumberId" inputmode="numeric" pattern="[0-9]{6,30}" value="${escapeHtml(whatsapp.phoneNumberId || '')}" placeholder="Ex.: 104567890123456">
+              </label>
+              <label>
+                <span>Versão da Graph API</span>
+                <input name="graphApiVersion" pattern="v[0-9]+[.][0-9]+" value="${escapeHtml(whatsapp.graphApiVersion || 'v23.0')}" placeholder="v23.0">
+              </label>
+              <label>
+                <span>Modelo aprovado</span>
+                <input name="templateName" pattern="[a-z0-9_]+" value="${escapeHtml(whatsapp.templateName || '')}" placeholder="atualizacao_academica">
+              </label>
+              <label>
+                <span>Idioma do modelo</span>
+                <input name="templateLanguage" pattern="[a-z]{2,3}(_[A-Z]{2})?" value="${escapeHtml(whatsapp.templateLanguage || 'pt_PT')}" placeholder="pt_PT">
+              </label>
+            </div>
+            <label>
+              <span>Endereço público da plataforma</span>
+              <input name="platformUrl" type="url" value="${escapeHtml(whatsapp.platformUrl || '')}" placeholder="https://formacao.exemplo.org">
+            </label>
+            <label>
+              <span>Token de acesso permanente</span>
+              <input name="accessToken" type="password" autocomplete="new-password" maxlength="8192"
+                placeholder="${whatsapp.tokenConfigured ? 'Token configurado — deixe vazio para manter' : 'Cole o token da Meta'}"
+                ${whatsapp.encryptionKeyConfigured ? '' : 'disabled'}>
+            </label>
+            ${whatsapp.storedTokenConfigured ? `
+              <label class="checkbox-line whatsapp-remove-token">
+                <input type="checkbox" name="removeAccessToken" value="true">
+                Remover o token guardado no painel
+              </label>
+            ` : ''}
+            <div class="whatsapp-security-note ${whatsapp.encryptionKeyConfigured ? 'is-secure' : 'is-warning'}">
+              <img src="${iconUrl(whatsapp.encryptionKeyConfigured ? 'shield-check' : 'triangle-alert', whatsapp.encryptionKeyConfigured ? blueIcon : goldIcon)}" alt="">
+              <span>${whatsapp.encryptionKeyConfigured
+                ? 'O token é encriptado antes de ser guardado e nunca é apresentado novamente.'
+                : 'Defina WHATSAPP_CONFIG_ENCRYPTION_KEY no servidor para guardar ou substituir o token por este painel.'}</span>
+            </div>
+            ${whatsapp.tokenError ? `<p class="field-error">${escapeHtml(whatsapp.tokenError)}</p>` : ''}
+            <div class="whatsapp-configuration-meta">
+              <span>Origem: <strong>${whatsapp.source === 'ADMIN' ? 'Painel administrativo' : 'Servidor'}</strong></span>
+              <span>Token: <strong>${whatsapp.tokenConfigured ? 'Protegido' : 'Em falta'}</strong></span>
+            </div>
+            <p class="management-field-hint">O modelo aprovado deve conter quatro campos no corpo: nome, título, mensagem e link.</p>
+            <button class="button button-primary" type="submit">Guardar configuração</button>
+          </form>
+        ` : `
+          <dl class="notification-config-list">
+            <div><dt>Integração ativa</dt><dd>${whatsapp.enabled ? 'Sim' : 'Não'}</dd></div>
+            <div><dt>Número empresarial</dt><dd>${whatsapp.phoneNumberConfigured ? 'Configurado' : 'Em falta'}</dd></div>
+            <div><dt>Modelo aprovado</dt><dd>${escapeHtml(whatsapp.templateName || 'Em falta')}</dd></div>
+            <div><dt>Idioma</dt><dd>${escapeHtml(whatsapp.templateLanguage || 'pt_PT')}</dd></div>
+          </dl>
+        `}
       </article>
     </section>
 
@@ -661,12 +775,94 @@ function renderNotificationManagement() {
   `;
 
   const form = document.querySelector('#notificationComposer');
-  form?.elements.notifyAll.addEventListener('change', () => {
-    form.elements.studentIds.disabled = form.elements.notifyAll.checked;
-  });
+  bindNotificationRecipientPicker(form);
   form?.addEventListener('submit', submitAdminNotification);
+  document.querySelector('#whatsappConfigurationForm')?.addEventListener('submit', saveWhatsAppConfiguration);
   document.querySelector('#retryWhatsAppDeliveries')?.addEventListener('click', retryWhatsAppDeliveries);
   reportHeight();
+}
+
+function bindNotificationRecipientPicker(form) {
+  if (!form) return;
+  const search = form.querySelector('#notificationStudentSearch');
+  const list = form.querySelector('#notificationRecipientList');
+  const rows = [...form.querySelectorAll('[data-recipient-row]')];
+  const recipientTotal = Math.max(rows.length, Number(form.dataset.recipientTotal || 0));
+  const notifyAll = form.elements.notifyAll;
+  const selectedCount = form.querySelector('#notificationSelectedCount');
+  const visibleCount = form.querySelector('#notificationVisibleCount');
+  const status = form.querySelector('#notificationRecipientStatus');
+  const emptyMessage = form.querySelector('#notificationRecipientEmpty');
+  const selectVisibleButton = form.querySelector('[data-select-visible]');
+  const clearButton = form.querySelector('[data-clear-recipients]');
+
+  const update = () => {
+    const useAllStudents = Boolean(notifyAll?.checked);
+    let selected = 0;
+    let visible = 0;
+    let visibleSelected = 0;
+    rows.forEach((row) => {
+      const checkbox = row.querySelector('input[name="studentIds"]');
+      checkbox.disabled = useAllStudents;
+      row.classList.toggle('is-selected', checkbox.checked);
+      if (checkbox.checked) selected += 1;
+      if (!row.hidden) {
+        visible += 1;
+        if (checkbox.checked) visibleSelected += 1;
+      }
+    });
+    list?.classList.toggle('is-disabled', useAllStudents);
+    list?.setAttribute('aria-disabled', String(useAllStudents));
+    if (search) search.disabled = useAllStudents;
+    if (selectVisibleButton) selectVisibleButton.disabled = useAllStudents || visible === 0;
+    if (clearButton) clearButton.disabled = useAllStudents || selected === 0;
+    if (selectedCount) selectedCount.textContent = String(useAllStudents ? recipientTotal : selected);
+    if (visibleCount) visibleCount.textContent = String(visible);
+    if (status) {
+      status.setAttribute('aria-label', useAllStudents
+        ? `Todos os ${recipientTotal} estudantes ativos selecionados. ${visible} visíveis.`
+        : `${selected} de ${recipientTotal} estudantes selecionados. ${visible} visíveis.`);
+    }
+    if (selectVisibleButton) {
+      const allVisibleSelected = visible > 0 && visibleSelected === visible;
+      selectVisibleButton.textContent = allVisibleSelected ? 'Desmarcar visíveis' : 'Selecionar visíveis';
+      selectVisibleButton.setAttribute('aria-pressed', String(allVisibleSelected));
+    }
+    if (emptyMessage) {
+      emptyMessage.hidden = rows.length === 0 || visible > 0 || !search?.value.trim();
+    }
+  };
+
+  search?.addEventListener('input', () => {
+    const query = notificationSearchText(search.value.trim());
+    rows.forEach((row) => {
+      row.hidden = Boolean(query && !row.dataset.search.includes(query));
+    });
+    update();
+  });
+  search?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !search.value) return;
+    search.value = '';
+    rows.forEach((row) => { row.hidden = false; });
+    update();
+  });
+  rows.forEach((row) => row.querySelector('input')?.addEventListener('change', update));
+  notifyAll?.addEventListener('change', update);
+  selectVisibleButton?.addEventListener('click', () => {
+    const visibleRows = rows.filter((row) => !row.hidden);
+    const shouldSelect = visibleRows.some((row) => !row.querySelector('input[name="studentIds"]').checked);
+    visibleRows.forEach((row) => {
+      row.querySelector('input[name="studentIds"]').checked = shouldSelect;
+    });
+    update();
+  });
+  clearButton?.addEventListener('click', () => {
+    rows.forEach((row) => {
+      row.querySelector('input[name="studentIds"]').checked = false;
+    });
+    update();
+  });
+  update();
 }
 
 async function submitAdminNotification(event) {
@@ -680,7 +876,7 @@ async function submitAdminNotification(event) {
     showToast('Selecione pelo menos um estudante.', 'warning');
     return;
   }
-  if (notifyAll && !confirmAdminAction(`Enviar esta atualização aos ${state.students.filter(({ student }) => student?.status === 'ACTIVE').length} estudantes ativos?`)) return;
+  if (notifyAll && !confirmAdminAction(`Enviar esta atualização aos ${state.notificationStudentTotal || state.students.length} estudantes ativos?`)) return;
   setBusy(button, true, 'A enviar...');
   try {
     const result = await api.adminCreateNotification({
@@ -694,6 +890,32 @@ async function submitAdminNotification(event) {
       sendWhatsApp: values.get('sendWhatsApp') === 'true'
     });
     showToast(`${result.notificationCount} notificação${result.notificationCount === 1 ? '' : 'ões'} criada${result.notificationCount === 1 ? '' : 's'}.`, 'success');
+    await loadNotificationManagement({ force: true });
+  } catch (error) {
+    handleAdminError(error);
+    setBusy(button, false);
+  }
+}
+
+async function saveWhatsAppConfiguration(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = new FormData(form);
+  setBusy(button, true, 'A guardar...');
+  try {
+    const result = await api.adminSaveWhatsAppConfiguration({
+      enabled: values.get('enabled') === 'true',
+      phoneNumberId: values.get('phoneNumberId') || '',
+      graphApiVersion: values.get('graphApiVersion') || 'v23.0',
+      templateName: values.get('templateName') || '',
+      templateLanguage: values.get('templateLanguage') || 'pt_PT',
+      platformUrl: values.get('platformUrl') || '',
+      accessToken: values.get('accessToken') || '',
+      removeAccessToken: values.get('removeAccessToken') === 'true'
+    });
+    state.notificationLog.whatsappConfiguration = result.whatsappConfiguration;
+    showToast('Configuração do WhatsApp guardada.', 'success');
     await loadNotificationManagement({ force: true });
   } catch (error) {
     handleAdminError(error);

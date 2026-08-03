@@ -7,6 +7,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 from .config import get_settings
 from .db import connection, ensure_schema, fetch_all, fetch_one, schema_exists
@@ -602,6 +603,18 @@ create table if not exists courseplatform.notification_deliveries (
   updated_at timestamptz,
   unique(notification_id, channel)
 );
+create table if not exists courseplatform.notification_channel_settings (
+  channel text primary key,
+  enabled boolean not null default false,
+  phone_number_id text,
+  graph_api_version text,
+  template_name text,
+  template_language text,
+  platform_url text,
+  access_token_encrypted bytea,
+  updated_by text references courseplatform.admins(admin_id) on delete set null,
+  updated_at timestamptz
+);
 create index if not exists idx_notifications_student_created on courseplatform.notifications(student_id, created_at desc);
 create index if not exists idx_notifications_student_unread on courseplatform.notifications(student_id, read_at, created_at desc);
 create index if not exists idx_notification_deliveries_status on courseplatform.notification_deliveries(channel, status, created_at);
@@ -625,6 +638,9 @@ def prepare_notification_feature_schema() -> None:
 def public_notification(row: dict[str, Any] | None):
     if not row:
         return None
+    delivery_status = row.get("delivery_status") or "NOT_REQUESTED"
+    if delivery_status == "PROCESSING":
+        delivery_status = "PENDING"
     return {
         "notificationId": row.get("notification_id"),
         "studentId": row.get("student_id"),
@@ -639,7 +655,7 @@ def public_notification(row: dict[str, Any] | None):
         "readAt": iso(row.get("read_at")),
         "createdAt": iso(row.get("created_at")),
         "whatsapp": {
-            "status": row.get("delivery_status") or "NOT_REQUESTED",
+            "status": delivery_status,
             "recipient": row.get("delivery_recipient"),
             "providerMessageId": row.get("provider_message_id"),
             "attemptCount": int(row.get("attempt_count") or 0),
@@ -657,6 +673,22 @@ def normalize_whatsapp_recipient(value: Any) -> str:
     return digits if 8 <= len(digits) <= 15 else ""
 
 
+def valid_whatsapp_platform_url(value: Any) -> bool:
+    text = str_value(value)
+    if not text or len(text) > 1000:
+        return False
+    try:
+        parsed = urlsplit(text)
+        return bool(
+            parsed.scheme in {"https", "http"}
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+        )
+    except ValueError:
+        return False
+
+
 def safe_notification_action_url(value: Any) -> str:
     text = str_value(value)
     if text.startswith("#/") or text.startswith("https://") or text.startswith("http://"):
@@ -664,23 +696,89 @@ def safe_notification_action_url(value: Any) -> str:
     return "#/notifications"
 
 
-def whatsapp_configuration() -> dict[str, Any]:
+def whatsapp_runtime_configuration() -> dict[str, Any]:
+    """Resolve the admin-managed WhatsApp configuration without exposing its token."""
+    prepare_notification_feature_schema()
     settings = get_settings()
+    row = fetch_one(
+        """
+        select channel, enabled, phone_number_id, graph_api_version, template_name,
+               template_language, platform_url,
+               access_token_encrypted is not null as stored_token_configured,
+               updated_at
+        from courseplatform.notification_channel_settings
+        where channel = 'WHATSAPP'
+        """
+    )
+    managed_by_admin = bool(row)
+    source = row or {}
+    enabled = as_bool(source.get("enabled")) if managed_by_admin else settings.whatsapp_enabled
+    phone_number_id = str_value(source.get("phone_number_id")) if managed_by_admin else settings.whatsapp_phone_number_id
+    graph_api_version = str_value(source.get("graph_api_version")) if managed_by_admin else settings.whatsapp_graph_api_version
+    template_name = str_value(source.get("template_name")) if managed_by_admin else settings.whatsapp_template_name
+    template_language = str_value(source.get("template_language")) if managed_by_admin else settings.whatsapp_template_language
+    platform_url = str_value(source.get("platform_url")) if managed_by_admin else settings.whatsapp_platform_url
+    stored_token_configured = as_bool(source.get("stored_token_configured"))
+    encryption_key_configured = len(settings.whatsapp_config_encryption_key.encode("utf-8")) >= 32
+    access_token = settings.whatsapp_access_token
+    token_source = "ENV" if access_token else "NONE"
+    token_error = ""
+
+    if stored_token_configured:
+        if encryption_key_configured:
+            try:
+                token_row = fetch_one(
+                    """
+                    select pgp_sym_decrypt(access_token_encrypted, %s)::text as access_token
+                    from courseplatform.notification_channel_settings
+                    where channel = 'WHATSAPP'
+                    """,
+                    (settings.whatsapp_config_encryption_key,),
+                ) or {}
+                decrypted_token = str_value(token_row.get("access_token"))
+                if decrypted_token:
+                    access_token = decrypted_token
+                    token_source = "ADMIN"
+            except Exception:
+                token_error = "O token guardado não pôde ser desencriptado. Confirme a chave do servidor."
+        elif not access_token:
+            token_error = "Defina WHATSAPP_CONFIG_ENCRYPTION_KEY com pelo menos 32 bytes para utilizar o token guardado."
+
     configured = bool(
-        settings.whatsapp_enabled
-        and settings.whatsapp_access_token
-        and settings.whatsapp_phone_number_id
-        and settings.whatsapp_template_name
-        and settings.whatsapp_platform_url
+        enabled
+        and access_token
+        and phone_number_id
+        and template_name
+        and valid_whatsapp_platform_url(platform_url)
     )
     return {
-        "enabled": settings.whatsapp_enabled,
+        "enabled": enabled,
         "configured": configured,
-        "phoneNumberConfigured": bool(settings.whatsapp_phone_number_id),
-        "templateConfigured": bool(settings.whatsapp_template_name),
-        "templateName": settings.whatsapp_template_name,
-        "templateLanguage": settings.whatsapp_template_language,
-        "platformUrl": settings.whatsapp_platform_url,
+        "phoneNumberId": phone_number_id,
+        "phoneNumberConfigured": bool(phone_number_id),
+        "graphApiVersion": graph_api_version or "v23.0",
+        "templateConfigured": bool(template_name),
+        "templateName": template_name,
+        "templateLanguage": template_language or "pt_PT",
+        "platformUrl": platform_url,
+        "accessToken": access_token,
+        "tokenConfigured": bool(access_token),
+        "storedTokenConfigured": stored_token_configured,
+        "tokenSource": token_source,
+        "tokenError": token_error,
+        "encryptionKeyConfigured": encryption_key_configured,
+        "source": "ADMIN" if managed_by_admin else "ENV",
+        "updatedAt": iso(source.get("updated_at")),
+        "timeoutSeconds": settings.whatsapp_timeout_seconds,
+    }
+
+
+def whatsapp_configuration() -> dict[str, Any]:
+    configuration = whatsapp_runtime_configuration()
+    return {
+        key: value
+        for key, value in configuration.items()
+        if key not in {"accessToken", "timeoutSeconds"}
     }
 
 
@@ -748,18 +846,17 @@ def create_student_notification(
     return notification_id
 
 
-def send_whatsapp_template(delivery: dict[str, Any]) -> str:
-    settings = get_settings()
-    configuration = whatsapp_configuration()
+def send_whatsapp_template(delivery: dict[str, Any], configuration: dict[str, Any] | None = None) -> str:
+    configuration = configuration or whatsapp_runtime_configuration()
     if not configuration["configured"]:
         raise RuntimeError("Integração WhatsApp ainda não configurada no servidor.")
     endpoint = (
-        f"https://graph.facebook.com/{settings.whatsapp_graph_api_version}/"
-        f"{settings.whatsapp_phone_number_id}/messages"
+        f"https://graph.facebook.com/{configuration['graphApiVersion']}/"
+        f"{configuration['phoneNumberId']}/messages"
     )
     action_url = str_value(delivery.get("action_url"))
     if not action_url.startswith(("https://", "http://")):
-        base = settings.whatsapp_platform_url.rstrip("/")
+        base = str_value(configuration.get("platformUrl")).rstrip("/")
         action_url = f"{base}/{action_url}" if action_url.startswith("#/") else base
     body = {
         "messaging_product": "whatsapp",
@@ -767,8 +864,8 @@ def send_whatsapp_template(delivery: dict[str, Any]) -> str:
         "to": delivery["recipient"],
         "type": "template",
         "template": {
-            "name": settings.whatsapp_template_name,
-            "language": {"code": settings.whatsapp_template_language},
+            "name": configuration["templateName"],
+            "language": {"code": configuration["templateLanguage"]},
             "components": [{
                 "type": "body",
                 "parameters": [
@@ -784,46 +881,82 @@ def send_whatsapp_template(delivery: dict[str, Any]) -> str:
         endpoint,
         data=json.dumps(body).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {settings.whatsapp_access_token}",
+            "Authorization": f"Bearer {configuration['accessToken']}",
             "Content-Type": "application/json",
         },
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=max(3, settings.whatsapp_timeout_seconds)) as response:
+        with urllib.request.urlopen(request, timeout=max(3, int(configuration.get("timeoutSeconds") or 12))) as response:
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         response_text = error.read().decode("utf-8", errors="replace")[:700]
         raise RuntimeError(f"WhatsApp Cloud API HTTP {error.code}: {response_text}") from error
     messages = result.get("messages") if isinstance(result, dict) else []
-    return str_value(messages[0].get("id")) if messages else ""
+    provider_message_id = str_value(messages[0].get("id")) if messages else ""
+    if not provider_message_id:
+        raise RuntimeError("A API do WhatsApp não devolveu o identificador da mensagem.")
+    return provider_message_id
+
+
+def claim_whatsapp_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
+    """Atomically lease queued deliveries so concurrent workers cannot send duplicates."""
+    notification_filter = ""
+    params: list[Any] = []
+    if notification_ids:
+        notification_filter = " and d.notification_id = any(%s)"
+        params.append(notification_ids)
+    params.append(max(1, min(int(limit), 200)))
+    query = f"""
+        with candidates as (
+          select d.delivery_id
+          from courseplatform.notification_deliveries d
+          where d.channel = 'WHATSAPP'
+            and (
+              d.status in ('PENDING', 'FAILED')
+              or (
+                d.status = 'PROCESSING'
+                and coalesce(d.updated_at, d.created_at) < now() - interval '5 minutes'
+              )
+            )
+            and d.attempt_count < 3
+            {notification_filter}
+          order by d.created_at
+          limit %s
+          for update of d skip locked
+        ), claimed as (
+          update courseplatform.notification_deliveries d
+          set status = 'PROCESSING',
+              attempt_count = d.attempt_count + 1,
+              last_error = null,
+              updated_at = now()
+          from candidates c
+          where d.delivery_id = c.delivery_id
+          returning d.*
+        )
+        select claimed.*, n.title, n.message, n.action_url, s.full_name as student_name
+        from claimed
+        join courseplatform.notifications n on n.notification_id = claimed.notification_id
+        join courseplatform.students s on s.student_id = n.student_id
+        order by claimed.created_at
+    """
+    with connection() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+        conn.commit()
+    return rows
 
 
 def deliver_pending_whatsapp(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
-    configuration = whatsapp_configuration()
+    configuration = whatsapp_runtime_configuration()
     if not configuration["configured"]:
         return {"sent": 0, "failed": 0, "pending": 0}
     prepare_notification_feature_schema()
-    query = """
-        select d.*, n.title, n.message, n.action_url, s.full_name as student_name
-        from courseplatform.notification_deliveries d
-        join courseplatform.notifications n on n.notification_id = d.notification_id
-        join courseplatform.students s on s.student_id = n.student_id
-        where d.channel = 'WHATSAPP' and d.status in ('PENDING', 'FAILED')
-          and d.attempt_count < 3
-    """
-    params: list[Any] = []
-    if notification_ids:
-        query += " and d.notification_id = any(%s)"
-        params.append(notification_ids)
-    query += " order by d.created_at limit %s"
-    params.append(max(1, min(int(limit), 200)))
-    rows = fetch_all(query, tuple(params))
+    rows = claim_whatsapp_deliveries(notification_ids, limit)
     delivery_results: list[tuple[dict[str, Any], str, str]] = []
     if rows:
         worker_count = min(5, len(rows))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {executor.submit(send_whatsapp_template, delivery): delivery for delivery in rows}
+            futures = {executor.submit(send_whatsapp_template, delivery, configuration): delivery for delivery in rows}
             for future in as_completed(futures):
                 delivery = futures[future]
                 try:
@@ -839,9 +972,9 @@ def deliver_pending_whatsapp(notification_ids: list[str] | None = None, limit: i
                 conn.execute(
                     """
                     update courseplatform.notification_deliveries
-                    set status = 'SENT', provider_message_id = %s, attempt_count = attempt_count + 1,
+                    set status = 'SENT', provider_message_id = %s,
                         last_error = null, sent_at = now(), updated_at = now()
-                    where delivery_id = %s
+                    where delivery_id = %s and status = 'PROCESSING'
                     """,
                     (result_value or None, delivery["delivery_id"]),
                 )
@@ -850,9 +983,8 @@ def deliver_pending_whatsapp(notification_ids: list[str] | None = None, limit: i
                 conn.execute(
                     """
                     update courseplatform.notification_deliveries
-                    set status = 'FAILED', attempt_count = attempt_count + 1,
-                        last_error = %s, updated_at = now()
-                    where delivery_id = %s
+                    set status = 'FAILED', last_error = %s, updated_at = now()
+                    where delivery_id = %s and status = 'PROCESSING'
                     """,
                     (result_value, delivery["delivery_id"]),
                 )
@@ -2921,6 +3053,9 @@ def admin_list_groups(payload: dict[str, Any]):
 
 def admin_list_students(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    status = (payload.get("status") or "ALL").upper()
+    query = str_value(payload.get("query"))
+    limit = max(1, min(int_value(payload.get("limit"), 500), 2000))
     rows = fetch_all(
         """
         select s.*,
@@ -2935,9 +3070,29 @@ def admin_list_students(payload: dict[str, Any]):
         order by s.full_name
         limit %s
         """,
-        ((payload.get("status") or "ALL").upper(), (payload.get("status") or "ALL").upper(), payload.get("query") or "", f"%{(payload.get('query') or '').lower()}%", int(payload.get("limit") or 500)),
+        (status, status, query, f"%{query.lower()}%", limit),
     )
-    return success({"students": [{"student": public_student(row), "enrollments": [public_enrollment(item) for item in row.get("enrollments", [])], "memberships": [public_group_member(item) for item in row.get("memberships", [])]} for row in rows]})
+    total = fetch_one(
+        """
+        select count(*) as total
+        from courseplatform.students s
+        where (%s = 'ALL' or s.status = %s)
+          and (%s = '' or lower(s.full_name || ' ' || s.email || ' ' || coalesce(s.organization,'')) like %s)
+        """,
+        (status, status, query, f"%{query.lower()}%"),
+    ) or {}
+    return success({
+        "students": [
+            {
+                "student": public_student(row),
+                "enrollments": [public_enrollment(item) for item in row.get("enrollments", [])],
+                "memberships": [public_group_member(item) for item in row.get("memberships", [])],
+            }
+            for row in rows
+        ],
+        "total": int(total.get("total") or 0),
+        "limit": limit,
+    })
 
 
 def admin_list_staff(payload: dict[str, Any]):
@@ -4856,7 +5011,8 @@ def admin_list_notifications(payload: dict[str, Any]):
     rows = fetch_all(
         """
         select n.*, s.full_name as student_name,
-               d.status as delivery_status, d.recipient as delivery_recipient,
+               case when d.status = 'PROCESSING' then 'PENDING' else d.status end as delivery_status,
+               d.recipient as delivery_recipient,
                d.provider_message_id, d.attempt_count, d.last_error, d.sent_at
         from courseplatform.notifications n
         join courseplatform.students s on s.student_id = n.student_id
@@ -4872,7 +5028,7 @@ def admin_list_notifications(payload: dict[str, Any]):
         select
           (select count(*) from courseplatform.notifications) as internal_total,
           count(*) filter (where d.status = 'SENT') as whatsapp_sent,
-          count(*) filter (where d.status = 'PENDING') as whatsapp_pending,
+          count(*) filter (where d.status in ('PENDING', 'PROCESSING')) as whatsapp_pending,
           count(*) filter (where d.status = 'FAILED') as whatsapp_failed,
           count(*) filter (where d.status = 'SKIPPED') as whatsapp_skipped
         from courseplatform.notification_deliveries d
@@ -4937,6 +5093,125 @@ def admin_create_notification(payload: dict[str, Any]):
         conn.commit()
     dispatch_notification_deliveries(notification_ids)
     return success({"notificationCount": len(notification_ids), "notificationIds": notification_ids})
+
+
+def admin_save_whatsapp_configuration(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_notification_feature_schema()
+    settings = get_settings()
+    configuration = payload.get("whatsappConfiguration")
+    if not isinstance(configuration, dict):
+        configuration = payload
+
+    enabled = as_bool(configuration.get("enabled"))
+    phone_number_id = str_value(configuration.get("phoneNumberId"))
+    graph_api_version = str_value(configuration.get("graphApiVersion")) or "v23.0"
+    template_name = str_value(configuration.get("templateName"))
+    template_language = str_value(configuration.get("templateLanguage")) or "pt_PT"
+    platform_url = str_value(configuration.get("platformUrl")).rstrip("/")
+    access_token = str_value(configuration.get("accessToken"))
+    remove_access_token = as_bool(configuration.get("removeAccessToken"))
+
+    if access_token and remove_access_token:
+        raise ApiError(
+            "AMBIGUOUS_WHATSAPP_TOKEN_UPDATE",
+            "Escolha entre substituir ou remover o token de acesso.",
+        )
+    if len(access_token) > 8192:
+        raise ApiError("INVALID_WHATSAPP_ACCESS_TOKEN", "O token de acesso excede o tamanho permitido.")
+    if phone_number_id and not re.fullmatch(r"\d{6,30}", phone_number_id):
+        raise ApiError("INVALID_WHATSAPP_PHONE_ID", "O Phone Number ID deve conter apenas números.")
+    if not re.fullmatch(r"v\d+\.\d+", graph_api_version):
+        raise ApiError("INVALID_WHATSAPP_API_VERSION", "Utilize uma versão da Graph API no formato v23.0.")
+    if template_name and not re.fullmatch(r"[a-z0-9_]{1,512}", template_name):
+        raise ApiError("INVALID_WHATSAPP_TEMPLATE", "O nome do modelo deve usar letras minúsculas, números e underscores.")
+    if not re.fullmatch(r"[a-z]{2,3}(?:_[A-Z]{2})?", template_language):
+        raise ApiError("INVALID_WHATSAPP_LANGUAGE", "Utilize um idioma no formato pt_PT.")
+    if platform_url and not valid_whatsapp_platform_url(platform_url):
+        raise ApiError("INVALID_WHATSAPP_PLATFORM_URL", "Informe um endereço http:// ou https:// completo e válido.")
+    if access_token and not settings.whatsapp_config_encryption_key:
+        raise ApiError(
+            "WHATSAPP_ENCRYPTION_KEY_REQUIRED",
+            "Defina WHATSAPP_CONFIG_ENCRYPTION_KEY no servidor antes de guardar o token pelo painel.",
+        )
+    if access_token and len(settings.whatsapp_config_encryption_key.encode("utf-8")) < 32:
+        raise ApiError(
+            "WEAK_WHATSAPP_ENCRYPTION_KEY",
+            "WHATSAPP_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
+        )
+
+    with connection() as conn:
+        existing = conn.execute(
+            """
+            select access_token_encrypted,
+                   access_token_encrypted is not null as token_configured
+            from courseplatform.notification_channel_settings
+            where channel = 'WHATSAPP'
+            """
+        ).fetchone() or {}
+        encrypted_token = None if remove_access_token else existing.get("access_token_encrypted")
+        if access_token:
+            encrypted_token = conn.execute(
+                "select pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256') as encrypted_token",
+                (access_token, settings.whatsapp_config_encryption_key),
+            ).fetchone()["encrypted_token"]
+
+        encryption_key_configured = len(settings.whatsapp_config_encryption_key.encode("utf-8")) >= 32
+        token_available = bool(
+            access_token
+            or (encrypted_token is not None and encryption_key_configured)
+            or settings.whatsapp_access_token
+        )
+        if enabled and not (phone_number_id and template_name and platform_url and token_available):
+            raise ApiError(
+                "INCOMPLETE_WHATSAPP_CONFIGURATION",
+                "Preencha o Phone Number ID, o modelo, o endereço da plataforma e um token antes de ativar o WhatsApp.",
+            )
+
+        conn.execute(
+            """
+            insert into courseplatform.notification_channel_settings
+              (channel, enabled, phone_number_id, graph_api_version, template_name,
+               template_language, platform_url, access_token_encrypted, updated_by, updated_at)
+            values ('WHATSAPP', %s, %s, %s, %s, %s, %s, %s, %s, now())
+            on conflict (channel) do update set
+              enabled = excluded.enabled,
+              phone_number_id = excluded.phone_number_id,
+              graph_api_version = excluded.graph_api_version,
+              template_name = excluded.template_name,
+              template_language = excluded.template_language,
+              platform_url = excluded.platform_url,
+              access_token_encrypted = excluded.access_token_encrypted,
+              updated_by = excluded.updated_by,
+              updated_at = now()
+            """,
+            (
+                enabled,
+                phone_number_id or None,
+                graph_api_version,
+                template_name or None,
+                template_language,
+                platform_url or None,
+                encrypted_token,
+                admin["admin_id"],
+            ),
+        )
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "WHATSAPP_CONFIGURATION_UPDATED",
+            "NOTIFICATION_CHANNEL",
+            "WHATSAPP",
+            {
+                "enabled": enabled,
+                "phoneNumberConfigured": bool(phone_number_id),
+                "templateName": template_name,
+                "tokenChanged": bool(access_token or remove_access_token),
+            },
+        )
+        conn.commit()
+    return success({"whatsappConfiguration": whatsapp_configuration()})
 
 
 def admin_retry_notification_deliveries(payload: dict[str, Any]):
@@ -5012,6 +5287,7 @@ ACTIONS = {
     "adminUploadCertificateAsset": admin_upload_certificate_asset,
     "adminListNotifications": admin_list_notifications,
     "adminCreateNotification": admin_create_notification,
+    "adminSaveWhatsAppConfiguration": admin_save_whatsapp_configuration,
     "adminRetryNotificationDeliveries": admin_retry_notification_deliveries,
     "adminSaveMediaConfig": admin_save_media_config,
     "adminSaveStaff": admin_save_staff,

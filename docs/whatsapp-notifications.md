@@ -33,6 +33,7 @@ Referências oficiais: [WhatsApp Cloud API](https://developers.facebook.com/docs
 ```env
 WHATSAPP_ENABLED=true
 WHATSAPP_ACCESS_TOKEN=token_protegido
+WHATSAPP_CONFIG_ENCRYPTION_KEY=chave_aleatoria_longa_e_exclusiva
 WHATSAPP_PHONE_NUMBER_ID=identificador_do_numero
 WHATSAPP_GRAPH_API_VERSION=v23.0
 WHATSAPP_TEMPLATE_NAME=nome_do_modelo_aprovado
@@ -41,7 +42,9 @@ WHATSAPP_PLATFORM_URL=https://endereco-da-plataforma/
 WHATSAPP_TIMEOUT_SECONDS=12
 ```
 
-O token nunca deve ser colocado no frontend, em `config.js` ou no repositório.
+Depois de definir `WHATSAPP_CONFIG_ENCRYPTION_KEY` com uma chave aleatória de pelo menos 32 bytes, os administradores com função `OWNER` ou `ADMIN` podem gerir a integração diretamente em **Notificações > WhatsApp Business**. O token submetido pelo painel é encriptado com AES-256 no Postgres e nunca é devolvido ao navegador.
+
+As restantes variáveis `WHATSAPP_*` continuam a funcionar como configuração inicial ou alternativa. A chave de encriptação e o token nunca devem ser colocados no frontend, em `config.js` ou no repositório. Guarde a chave num gestor de segredos e não a altere enquanto existir um token encriptado com ela.
 
 ## Consentimento
 
@@ -54,4 +57,6 @@ O estudante ativa o canal no próprio perfil e informa o telefone com indicativo
 - `FAILED`: a tentativa falhou e pode ser repetida no painel.
 - `SKIPPED`: o estudante não autorizou o canal, desativou a categoria ou não possui telefone válido.
 
-O painel administrativo mostra apenas o estado da configuração; nunca devolve o token ao navegador.
+As entregas são reclamadas de forma atómica antes do envio para impedir duplicações entre processos concorrentes. Se um processo for interrompido durante o envio, o estado interno `PROCESSING` expira após cinco minutos e a entrega volta a ficar disponível para uma tentativa controlada.
+
+O painel administrativo permite alterar a configuração, mas mostra apenas se existe um token protegido; nunca devolve o seu conteúdo ao navegador.
