@@ -135,6 +135,41 @@ def iso(value: Any) -> str | None:
     return str(value)
 
 
+CONTENT_ACCESS_STATUSES = {"LOCKED", "AVAILABLE"}
+EVALUATION_STATUSES = {
+    "NOT_STARTED",
+    "IN_PROGRESS",
+    "UNDER_REVIEW",
+    "CORRECTION_REQUIRED",
+    "APPROVED",
+    "FAILED",
+    "TIME_EXCEEDED",
+}
+ATTEMPT_STATUSES = EVALUATION_STATUSES - {"NOT_STARTED"}
+_ASSESSMENT_SCHEMA_READY = False
+
+
+def progress_access_status(row: dict[str, Any] | None) -> str:
+    source = row or {}
+    explicit = str_value(source.get("content_access_status")).upper()
+    if explicit in CONTENT_ACCESS_STATUSES:
+        return explicit
+    return "LOCKED" if str_value(source.get("status")).upper() == "LOCKED" else "AVAILABLE"
+
+
+def progress_evaluation_status(row: dict[str, Any] | None) -> str:
+    source = row or {}
+    explicit = str_value(source.get("evaluation_status")).upper()
+    if explicit in EVALUATION_STATUSES:
+        return explicit
+    legacy = str_value(source.get("status")).upper()
+    return legacy if legacy in EVALUATION_STATUSES else "NOT_STARTED"
+
+
+def legacy_progress_status(access_status: str, evaluation_status: str) -> str:
+    return evaluation_status if evaluation_status != "NOT_STARTED" else access_status
+
+
 def audit(conn, actor_type: str, actor_id: str, action: str, entity_type: str, entity_id: str, details: dict[str, Any] | None = None):
     conn.execute(
         """
@@ -225,6 +260,9 @@ def public_course(row: dict[str, Any] | None):
 def public_lesson(row: dict[str, Any] | None):
     if not row:
         return None
+    configured_duration = int_value(row.get("submission_duration_minutes"))
+    fallback_duration = int_value(row.get("exercise_minutes")) + int_value(row.get("individual_minutes"))
+    submission_duration = configured_duration or fallback_duration or 180
     return {
         "lessonId": row["lesson_id"],
         "courseId": row.get("course_id"),
@@ -235,6 +273,7 @@ def public_lesson(row: dict[str, Any] | None):
         "theoryMinutes": float(row.get("theory_minutes") or 0),
         "exerciseMinutes": float(row.get("exercise_minutes") or 0),
         "individualMinutes": float(row.get("individual_minutes") or 0),
+        "submissionDurationMinutes": submission_duration,
         "passingScore": float(row.get("passing_score") or 0),
         "prerequisiteLessonId": row.get("prerequisite_lesson_id"),
         "status": row.get("status"),
@@ -322,10 +361,14 @@ def public_option(row: dict[str, Any] | None):
 def public_progress(row: dict[str, Any] | None):
     if not row:
         return None
+    access_status = progress_access_status(row)
+    evaluation_status = progress_evaluation_status(row)
     return {
         "progressId": row["progress_id"],
         "lessonId": row.get("lesson_id"),
-        "status": row.get("status"),
+        "status": legacy_progress_status(access_status, evaluation_status),
+        "contentAccessStatus": access_status,
+        "evaluationStatus": evaluation_status,
         "unlockedAt": iso(row.get("unlocked_at")),
         "startedAt": iso(row.get("started_at")),
         "submittedAt": iso(row.get("submitted_at")),
@@ -359,6 +402,75 @@ def public_attempt(row: dict[str, Any] | None):
         "createdAt": iso(row.get("created_at")),
         "updatedAt": iso(row.get("updated_at")),
     }
+
+
+def expire_attempt_if_needed(attempt: dict[str, Any] | None):
+    if not attempt or attempt.get("status") != "IN_PROGRESS" or not attempt.get("deadline_at"):
+        return attempt
+    deadline = parse_datetime(attempt.get("deadline_at"))
+    if not deadline:
+        return attempt
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    if deadline >= utc_now():
+        return attempt
+    prepare_assessment_feature_schema()
+    with connection() as conn:
+        updated = conn.execute(
+            """
+            update courseplatform.attempts
+            set status = 'TIME_EXCEEDED', updated_at = now()
+            where attempt_id = %s and status = 'IN_PROGRESS'
+            returning *
+            """,
+            (attempt["attempt_id"],),
+        ).fetchone()
+        if updated:
+            conn.execute(
+                """
+                update courseplatform.lesson_progress
+                set status = 'TIME_EXCEEDED', evaluation_status = 'TIME_EXCEEDED', updated_at = now()
+                where progress_id = %s
+                """,
+                (updated.get("progress_id"),),
+            )
+            audit(
+                conn,
+                "SYSTEM",
+                updated.get("student_id") or "",
+                "ATTEMPT_TIME_EXCEEDED",
+                "ATTEMPT",
+                updated["attempt_id"],
+            )
+            conn.commit()
+            return updated
+        conn.commit()
+    return fetch_one("select * from courseplatform.attempts where attempt_id = %s", (attempt["attempt_id"],))
+
+
+def expire_overdue_attempts() -> int:
+    prepare_assessment_feature_schema()
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            update courseplatform.attempts
+            set status = 'TIME_EXCEEDED', updated_at = now()
+            where status = 'IN_PROGRESS' and deadline_at is not null and deadline_at < now()
+            returning attempt_id, progress_id
+            """
+        ).fetchall()
+        progress_ids = [row["progress_id"] for row in rows if row.get("progress_id")]
+        if progress_ids:
+            conn.execute(
+                """
+                update courseplatform.lesson_progress
+                set status = 'TIME_EXCEEDED', evaluation_status = 'TIME_EXCEEDED', updated_at = now()
+                where progress_id = any(%s)
+                """,
+                (progress_ids,),
+            )
+        conn.commit()
+    return len(rows)
 
 
 def public_review(row: dict[str, Any] | None):
@@ -409,6 +521,26 @@ def public_file(row: dict[str, Any] | None):
         "uploadedAt": iso(row.get("uploaded_at")),
         "status": row.get("status"),
     }
+
+
+ASSESSMENT_FEATURE_SQL = """
+alter table courseplatform.lessons add column if not exists submission_duration_minutes integer;
+alter table courseplatform.lesson_progress add column if not exists content_access_status text;
+alter table courseplatform.lesson_progress add column if not exists evaluation_status text;
+update courseplatform.lesson_progress
+set content_access_status = case when status = 'LOCKED' then 'LOCKED' else 'AVAILABLE' end
+where content_access_status is null;
+update courseplatform.lesson_progress
+set evaluation_status = case
+  when status in ('IN_PROGRESS', 'UNDER_REVIEW', 'CORRECTION_REQUIRED', 'APPROVED', 'FAILED', 'TIME_EXCEEDED') then status
+  else 'NOT_STARTED'
+end
+where evaluation_status is null;
+alter table courseplatform.lesson_progress alter column content_access_status set default 'LOCKED';
+alter table courseplatform.lesson_progress alter column evaluation_status set default 'NOT_STARTED';
+create index if not exists idx_progress_access_evaluation
+  on courseplatform.lesson_progress(content_access_status, evaluation_status);
+"""
 
 
 CERTIFICATE_FEATURE_SQL = """
@@ -465,6 +597,20 @@ create index if not exists idx_certificate_requests_student_course
 def execute_statements(conn, sql: str) -> None:
     for statement in [part.strip() for part in sql.split(";") if part.strip()]:
         conn.execute(statement)
+
+
+def ensure_assessment_feature_schema(conn) -> None:
+    execute_statements(conn, ASSESSMENT_FEATURE_SQL)
+
+
+def prepare_assessment_feature_schema() -> None:
+    global _ASSESSMENT_SCHEMA_READY
+    if _ASSESSMENT_SCHEMA_READY:
+        return
+    with connection() as conn:
+        ensure_assessment_feature_schema(conn)
+        conn.commit()
+    _ASSESSMENT_SCHEMA_READY = True
 
 
 def ensure_certificate_feature_schema(conn) -> None:
@@ -725,6 +871,7 @@ def certificate_content_summary(conn, course_id: str) -> str:
 
 
 def course_completion_snapshot(conn, student_id: str, course_id: str):
+    ensure_assessment_feature_schema(conn)
     enrollment = conn.execute(
         "select * from courseplatform.enrollments where student_id = %s and course_id = %s",
         (student_id, course_id),
@@ -744,7 +891,8 @@ def course_completion_snapshot(conn, student_id: str, course_id: str):
         from courseplatform.lesson_progress p
         join courseplatform.lessons l on l.lesson_id = p.lesson_id
         where p.student_id = %s and l.course_id = %s
-          and p.status = 'APPROVED' and coalesce(l.status, 'ACTIVE') = 'ACTIVE'
+          and coalesce(p.evaluation_status, p.status) = 'APPROVED'
+          and coalesce(l.status, 'ACTIVE') = 'ACTIVE'
         """,
         (student_id, course_id),
     ).fetchone()
@@ -774,6 +922,63 @@ def sync_enrollment_completion(conn, enrollment: dict[str, Any] | None, complete
         returning *
         """,
         (final_score, enrollment["enrollment_id"]),
+    ).fetchone()
+
+
+def refresh_enrollment_progress(conn, progress_id: str | None):
+    if not progress_id:
+        return None
+    progress = conn.execute(
+        "select enrollment_id from courseplatform.lesson_progress where progress_id = %s",
+        (progress_id,),
+    ).fetchone()
+    if not progress:
+        return None
+    summary = conn.execute(
+        """
+        select
+          count(*) filter (where coalesce(l.status, 'ACTIVE') = 'ACTIVE') as lesson_total,
+          count(*) filter (
+            where coalesce(l.status, 'ACTIVE') = 'ACTIVE'
+              and coalesce(p.evaluation_status, p.status) = 'APPROVED'
+          ) as approved_total,
+          avg(p.score) filter (
+            where coalesce(l.status, 'ACTIVE') = 'ACTIVE' and p.score is not null
+          ) as average_score
+        from courseplatform.enrollments e
+        join courseplatform.lessons l on l.course_id = e.course_id
+        left join courseplatform.lesson_progress p
+          on p.enrollment_id = e.enrollment_id and p.lesson_id = l.lesson_id
+        where e.enrollment_id = %s
+        """,
+        (progress["enrollment_id"],),
+    ).fetchone()
+    total = int((summary or {}).get("lesson_total") or 0)
+    approved = int((summary or {}).get("approved_total") or 0)
+    percent = round((approved / total) * 100, 2) if total else 0
+    completed = total > 0 and approved >= total
+    return conn.execute(
+        """
+        update courseplatform.enrollments
+        set progress_percent = %s,
+            final_score = %s,
+            status = case
+              when status in ('BLOCKED', 'INACTIVE') then status
+              when %s then 'COMPLETED'
+              else 'ACTIVE'
+            end,
+            completed_at = case when %s then coalesce(completed_at, now()) else null end,
+            updated_at = now()
+        where enrollment_id = %s
+        returning *
+        """,
+        (
+            percent,
+            None if (summary or {}).get("average_score") is None else float(summary["average_score"]),
+            completed,
+            completed,
+            progress["enrollment_id"],
+        ),
     ).fetchone()
 
 
@@ -1387,7 +1592,8 @@ def dashboard_payload(conn, student: dict[str, Any], course_id: str):
     course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
     lessons = conn.execute(
         """
-        select l.*, p.progress_id, p.status as progress_status, p.score, p.attempt_count,
+        select l.*, p.progress_id, p.status as progress_status,
+               p.content_access_status, p.evaluation_status, p.score, p.attempt_count,
                p.unlocked_at, p.started_at, p.submitted_at, p.approved_at,
                a.attempt_id, a.attempt_number, a.started_at as attempt_started_at,
                a.deadline_at, a.submitted_at as attempt_submitted_at,
@@ -1419,6 +1625,8 @@ def dashboard_payload(conn, student: dict[str, Any], course_id: str):
                     "progress_id": row.get("progress_id"),
                     "lesson_id": row.get("lesson_id"),
                     "status": row.get("progress_status") or "LOCKED",
+                    "content_access_status": row.get("content_access_status"),
+                    "evaluation_status": row.get("evaluation_status"),
                     "score": row.get("score"),
                     "attempt_count": row.get("attempt_count"),
                     "unlocked_at": row.get("unlocked_at"),
@@ -1448,6 +1656,7 @@ def dashboard_payload(conn, student: dict[str, Any], course_id: str):
 
 def student_home(payload: dict[str, Any]):
     require_session_token(payload)
+    prepare_assessment_feature_schema()
     with connection() as conn:
         _, student = student_context_with_conn(conn, payload)
         course_rows = student_courses_rows(conn, student["student_id"])
@@ -1469,6 +1678,7 @@ def student_home(payload: dict[str, Any]):
 def dashboard(payload: dict[str, Any]):
     _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
+    prepare_assessment_feature_schema()
     with connection() as conn:
         return success(dashboard_payload(conn, student, course_id))
 
@@ -1476,6 +1686,7 @@ def dashboard(payload: dict[str, Any]):
 def get_lesson(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["lessonId"])
+    prepare_assessment_feature_schema()
     lesson_id = payload["lessonId"]
     lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (lesson_id,))
     if not lesson:
@@ -1488,6 +1699,8 @@ def get_lesson(payload: dict[str, Any]):
         """,
         (student["student_id"], lesson_id),
     )
+    if not progress or progress_access_status(progress) != "AVAILABLE":
+        raise ApiError("LESSON_LOCKED", "Este módulo ainda não está disponível para leitura.")
     content = fetch_all(
         """
         select *
@@ -1537,6 +1750,7 @@ def get_lesson(payload: dict[str, Any]):
 def attempt_status(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["attemptId"])
+    prepare_assessment_feature_schema()
     attempt = fetch_one(
         """
         select *
@@ -1545,6 +1759,7 @@ def attempt_status(payload: dict[str, Any]):
         """,
         (payload["attemptId"], student["student_id"]),
     )
+    attempt = expire_attempt_if_needed(attempt)
     if not attempt:
         raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
     answers = fetch_all(
@@ -1655,19 +1870,20 @@ def change_my_access_code(payload: dict[str, Any]):
 def start_attempt(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["lessonId"])
+    prepare_assessment_feature_schema()
     lesson_id = payload["lessonId"]
     progress = fetch_one(
         """
-        select p.*, l.exercise_minutes, l.individual_minutes
+        select p.*, l.exercise_minutes, l.individual_minutes, l.submission_duration_minutes
         from courseplatform.lesson_progress p
         join courseplatform.lessons l on l.lesson_id = p.lesson_id
         where p.student_id = %s and p.lesson_id = %s
         """,
         (student["student_id"], lesson_id),
     )
-    if not progress:
+    if not progress or progress_access_status(progress) != "AVAILABLE":
         raise ApiError("LESSON_LOCKED", "Este módulo ainda não está disponível.")
-    if progress.get("status") not in {"AVAILABLE", "IN_PROGRESS", "CORRECTION_REQUIRED", "FAILED", "TIME_EXCEEDED"}:
+    if progress_evaluation_status(progress) not in {"NOT_STARTED", "IN_PROGRESS", "CORRECTION_REQUIRED", "FAILED", "TIME_EXCEEDED"}:
         raise ApiError("ATTEMPT_NOT_AVAILABLE", "Não e possível iniciar uma tentativa neste estado.")
 
     existing = fetch_one(
@@ -1681,10 +1897,14 @@ def start_attempt(payload: dict[str, Any]):
         (student["student_id"], lesson_id),
     )
     if existing:
-        return success({"attempt": public_attempt(existing)})
+        existing = expire_attempt_if_needed(existing)
+        if existing and existing.get("status") == "IN_PROGRESS":
+            return success({"attempt": public_attempt(existing)})
 
     now = utc_now()
-    minutes = int_value(progress.get("exercise_minutes")) + int_value(progress.get("individual_minutes"))
+    minutes = int_value(progress.get("submission_duration_minutes"))
+    if minutes <= 0:
+        minutes = int_value(progress.get("exercise_minutes")) + int_value(progress.get("individual_minutes"))
     if minutes <= 0:
         minutes = 180
     attempt_number = int_value(progress.get("attempt_count")) + 1
@@ -1712,7 +1932,9 @@ def start_attempt(payload: dict[str, Any]):
         conn.execute(
             """
             update courseplatform.lesson_progress
-            set status = 'IN_PROGRESS', started_at = coalesce(started_at, %s),
+            set status = 'IN_PROGRESS', evaluation_status = 'IN_PROGRESS',
+                content_access_status = coalesce(content_access_status, 'AVAILABLE'),
+                started_at = coalesce(started_at, %s),
                 attempt_count = %s, updated_at = %s
             where progress_id = %s
             """,
@@ -1726,10 +1948,12 @@ def start_attempt(payload: dict[str, Any]):
 def save_answer(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["attemptId", "questionId"])
+    prepare_assessment_feature_schema()
     attempt = fetch_one(
         "select * from courseplatform.attempts where attempt_id = %s and student_id = %s",
         (payload["attemptId"], student["student_id"]),
     )
+    attempt = expire_attempt_if_needed(attempt)
     if not attempt or attempt.get("status") != "IN_PROGRESS":
         raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa já não pode ser editada.")
     with connection() as conn:
@@ -1752,9 +1976,6 @@ def save_answer(payload: dict[str, Any]):
                 str_value(payload.get("selectedOptionId")),
             ),
         ).fetchone()
-        snapshot = cert.get("template_snapshot_json") if cert else None
-        if cert and not snapshot:
-            snapshot = certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
         conn.commit()
     return success({"answer": public_answer(answer)})
 
@@ -1762,10 +1983,12 @@ def save_answer(payload: dict[str, Any]):
 def upload_file(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["attemptId", "fileName"])
+    prepare_assessment_feature_schema()
     attempt = fetch_one(
         "select * from courseplatform.attempts where attempt_id = %s and student_id = %s",
         (payload["attemptId"], student["student_id"]),
     )
+    attempt = expire_attempt_if_needed(attempt)
     if not attempt or attempt.get("status") != "IN_PROGRESS":
         raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa já não pode receber ficheiros.")
     mime_type = str_value(payload.get("mimeType") or "application/octet-stream")
@@ -1818,10 +2041,12 @@ def delete_uploaded_file(payload: dict[str, Any]):
 def submit_attempt(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["attemptId"])
+    prepare_assessment_feature_schema()
     attempt = fetch_one(
         "select * from courseplatform.attempts where attempt_id = %s and student_id = %s",
         (payload["attemptId"], student["student_id"]),
     )
+    attempt = expire_attempt_if_needed(attempt)
     if not attempt or attempt.get("status") != "IN_PROGRESS":
         raise ApiError("ATTEMPT_NOT_SUBMITTABLE", "Esta tentativa não pode ser submetida.")
     now = utc_now()
@@ -1839,10 +2064,10 @@ def submit_attempt(payload: dict[str, Any]):
         conn.execute(
             """
             update courseplatform.lesson_progress
-            set status = %s, submitted_at = %s, updated_at = %s
+            set status = %s, evaluation_status = %s, submitted_at = %s, updated_at = %s
             where progress_id = %s
             """,
-            (status, now, now, attempt.get("progress_id")),
+            (status, status, now, now, attempt.get("progress_id")),
         )
         audit(conn, "STUDENT", student["student_id"], "ATTEMPT_SUBMITTED", "ATTEMPT", attempt["attempt_id"], {"status": status})
         conn.commit()
@@ -2349,6 +2574,15 @@ def submission_item(row: dict[str, Any]):
     return {
         "student": public_student(student),
         "lesson": public_lesson(lesson),
+        "progress": public_progress({
+            "progress_id": row.get("progress_id") or "",
+            "lesson_id": row.get("attempt_lesson_id") or row.get("lesson_id"),
+            "status": row.get("progress_status") or row.get("status"),
+            "content_access_status": row.get("content_access_status"),
+            "evaluation_status": row.get("evaluation_status"),
+            "score": row.get("progress_score"),
+            "attempt_count": row.get("progress_attempt_count"),
+        }),
         "attempt": public_attempt(row),
         "latestReview": public_review(review),
         "fileCount": int(row.get("file_count") or 0),
@@ -2357,6 +2591,7 @@ def submission_item(row: dict[str, Any]):
 
 def admin_list_submissions(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    expire_overdue_attempts()
     status = (payload.get("status") or "ALL").upper()
     query = (payload.get("query") or "").strip().lower()
     limit = min(int(payload.get("limit") or 300), 500)
@@ -2383,12 +2618,15 @@ def admin_list_submissions(payload: dict[str, Any]):
           l.lesson_id, l.course_id, l.lesson_number, l.title, l.slug, l.summary,
           l.theory_minutes, l.exercise_minutes, l.individual_minutes, l.passing_score,
           l.prerequisite_lesson_id, l.status as lesson_status,
+          p.progress_id, p.status as progress_status, p.content_access_status,
+          p.evaluation_status, p.score as progress_score, p.attempt_count as progress_attempt_count,
           lr.review_id, lr.reviewer_id, lr.decision, lr.score as review_score,
           lr.comments, lr.correction_deadline, lr.unlock_next_lesson, lr.reviewed_at as review_reviewed_at,
           coalesce(fc.file_count, 0) as file_count
         from courseplatform.attempts a
         left join courseplatform.students s on s.student_id = a.student_id
         left join courseplatform.lessons l on l.lesson_id = a.lesson_id
+        left join courseplatform.lesson_progress p on p.progress_id = a.progress_id
         left join latest_reviews lr on lr.attempt_id = a.attempt_id
         left join file_counts fc on fc.attempt_id = a.attempt_id
         where
@@ -2414,11 +2652,16 @@ def admin_list_submissions(payload: dict[str, Any]):
 def admin_get_submission(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     require_fields(payload, ["attemptId"])
+    prepare_assessment_feature_schema()
     attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
     if not attempt:
         raise ApiError("ATTEMPT_NOT_FOUND", "Submissão não encontrada.")
     student = fetch_one("select * from courseplatform.students where student_id = %s", (attempt["student_id"],))
     lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (attempt["lesson_id"],))
+    progress = fetch_one(
+        "select * from courseplatform.lesson_progress where progress_id = %s",
+        (attempt.get("progress_id"),),
+    )
     questions = fetch_all(
         """
         select *
@@ -2447,6 +2690,7 @@ def admin_get_submission(payload: dict[str, Any]):
     return success({
         "student": public_student(student or {"student_id": attempt["student_id"], "full_name": "Estudante sem cadastro", "email": "", "status": "UNKNOWN"}),
         "lesson": public_lesson(lesson or {"lesson_id": attempt["lesson_id"], "title": attempt["lesson_id"]}),
+        "progress": public_progress(progress) if progress else None,
         "attempt": public_attempt(attempt),
         "answers": [
             {
@@ -2476,6 +2720,7 @@ def admin_get_submission(payload: dict[str, Any]):
 def admin_review_submission(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     require_fields(payload, ["attemptId", "decision", "score"])
+    prepare_assessment_feature_schema()
     decision = str_value(payload.get("decision")).upper()
     if decision not in {"APPROVED", "APPROVED_WITH_NOTES", "CORRECTION_REQUIRED", "FAILED"}:
         raise ApiError("INVALID_DECISION", "Decisão inválida.")
@@ -2519,12 +2764,15 @@ def admin_review_submission(payload: dict[str, Any]):
         conn.execute(
             """
             update courseplatform.lesson_progress
-            set status = %s, approved_at = case when %s = 'APPROVED' then %s else approved_at end,
+            set status = %s, evaluation_status = %s,
+                content_access_status = coalesce(content_access_status, 'AVAILABLE'),
+                approved_at = case when %s = 'APPROVED' then %s else approved_at end,
                 score = %s, updated_at = %s
             where progress_id = %s
             """,
-            (status, status, now, score, now, attempt.get("progress_id")),
+            (status, status, status, now, score, now, attempt.get("progress_id")),
         )
+        refresh_enrollment_progress(conn, attempt.get("progress_id"))
         audit(conn, "ADMIN", admin["admin_id"], "SUBMISSION_REVIEWED", "ATTEMPT", attempt["attempt_id"], {"decision": decision, "score": score})
         conn.commit()
     return success({"attempt": public_attempt(updated), "review": public_review(review)})
@@ -2533,6 +2781,7 @@ def admin_review_submission(payload: dict[str, Any]):
 def admin_authorize_retry(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     require_fields(payload, ["attemptId"])
+    prepare_assessment_feature_schema()
     with connection() as conn:
         attempt = conn.execute(
             """
@@ -2546,12 +2795,118 @@ def admin_authorize_retry(payload: dict[str, Any]):
         if not attempt:
             raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
         conn.execute(
-            "update courseplatform.lesson_progress set status = 'AVAILABLE', updated_at = now() where progress_id = %s",
+            """
+            update courseplatform.lesson_progress
+            set status = 'CORRECTION_REQUIRED', evaluation_status = 'CORRECTION_REQUIRED',
+                content_access_status = 'AVAILABLE', updated_at = now()
+            where progress_id = %s
+            """,
             (attempt.get("progress_id"),),
         )
         audit(conn, "ADMIN", admin["admin_id"], "RETRY_AUTHORIZED", "ATTEMPT", attempt["attempt_id"])
         conn.commit()
     return success({"attempt": public_attempt(attempt)})
+
+
+def admin_update_attempt(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    require_fields(payload, ["attemptId", "status"])
+    prepare_assessment_feature_schema()
+    status = str_value(payload.get("status")).upper()
+    if status not in ATTEMPT_STATUSES:
+        raise ApiError("INVALID_ATTEMPT_STATUS", "Estado da tentativa inválido.")
+    access_status = str_value(payload.get("contentAccessStatus")).upper()
+    if access_status and access_status not in CONTENT_ACCESS_STATUSES:
+        raise ApiError("INVALID_ACCESS_STATUS", "Estado de acesso ao conteúdo inválido.")
+    deadline_supplied = "deadlineAt" in payload
+    deadline = parse_datetime(payload.get("deadlineAt")) if deadline_supplied else None
+    if deadline_supplied and payload.get("deadlineAt") not in (None, "") and not deadline:
+        raise ApiError("INVALID_DEADLINE", "O prazo indicado não é válido.")
+    if deadline and deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    if status == "IN_PROGRESS" and deadline and deadline <= utc_now():
+        raise ApiError("INVALID_DEADLINE", "Uma tentativa em curso precisa de um prazo futuro.")
+
+    with connection() as conn:
+        attempt = conn.execute(
+            "select * from courseplatform.attempts where attempt_id = %s",
+            (payload["attemptId"],),
+        ).fetchone()
+        if not attempt:
+            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
+        progress = conn.execute(
+            "select * from courseplatform.lesson_progress where progress_id = %s",
+            (attempt.get("progress_id"),),
+        ).fetchone()
+        resolved_access = access_status or progress_access_status(progress)
+        updated = conn.execute(
+            """
+            update courseplatform.attempts
+            set status = %s,
+                deadline_at = case when %s then %s else deadline_at end,
+                submitted_at = case
+                  when %s = 'IN_PROGRESS' then null
+                  when %s = 'UNDER_REVIEW' then coalesce(submitted_at, now())
+                  else submitted_at
+                end,
+                reviewed_at = case
+                  when %s in ('APPROVED', 'CORRECTION_REQUIRED', 'FAILED', 'TIME_EXCEEDED')
+                    then coalesce(reviewed_at, now())
+                  when %s = 'IN_PROGRESS' then null
+                  else reviewed_at
+                end,
+                retry_authorized = case when %s = 'IN_PROGRESS' then false else retry_authorized end,
+                updated_at = now()
+            where attempt_id = %s
+            returning *
+            """,
+            (
+                status,
+                deadline_supplied,
+                deadline,
+                status,
+                status,
+                status,
+                status,
+                status,
+                attempt["attempt_id"],
+            ),
+        ).fetchone()
+        updated_progress = None
+        if progress:
+            updated_progress = conn.execute(
+                """
+                update courseplatform.lesson_progress
+                set status = %s, evaluation_status = %s, content_access_status = %s,
+                    approved_at = case when %s = 'APPROVED' then coalesce(approved_at, now()) else approved_at end,
+                    updated_at = now()
+                where progress_id = %s
+                returning *
+                """,
+                (
+                    legacy_progress_status(resolved_access, status),
+                    status,
+                    resolved_access,
+                    status,
+                    progress["progress_id"],
+                ),
+            ).fetchone()
+            refresh_enrollment_progress(conn, progress["progress_id"])
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "ATTEMPT_MANAGED",
+            "ATTEMPT",
+            attempt["attempt_id"],
+            {
+                "status": status,
+                "deadlineAt": iso(deadline) if deadline_supplied else iso(attempt.get("deadline_at")),
+                "contentAccessStatus": resolved_access,
+            },
+        )
+        conn.commit()
+    return success({"attempt": public_attempt(updated), "progress": public_progress(updated_progress) if updated_progress else None})
 
 
 def admin_save_media_config(payload: dict[str, Any]):
@@ -2878,22 +3233,29 @@ def admin_save_course(payload: dict[str, Any]):
 def admin_save_lesson(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["courseId", "title"])
+    prepare_assessment_feature_schema()
     lesson_id = str_value(payload.get("lessonId")) or generate_id("LESSON")
     status = str_value(payload.get("status") or "ACTIVE").upper()
+    submission_duration = int_value(payload.get("submissionDurationMinutes"))
+    if submission_duration <= 0:
+        submission_duration = int_value(payload.get("exerciseMinutes")) + int_value(payload.get("individualMinutes"))
+    submission_duration = max(1, min(submission_duration or 180, 43200))
     with connection() as conn:
         row = conn.execute(
             """
             insert into courseplatform.lessons
               (lesson_id, course_id, lesson_number, title, slug, summary, theory_minutes,
                exercise_minutes, individual_minutes, passing_score, prerequisite_lesson_id,
-               status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+               submission_duration_minutes, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
             on conflict (lesson_id) do update
             set course_id = excluded.course_id, lesson_number = excluded.lesson_number,
                 title = excluded.title, slug = excluded.slug, summary = excluded.summary,
                 theory_minutes = excluded.theory_minutes, exercise_minutes = excluded.exercise_minutes,
                 individual_minutes = excluded.individual_minutes, passing_score = excluded.passing_score,
-                prerequisite_lesson_id = excluded.prerequisite_lesson_id, status = excluded.status,
+                prerequisite_lesson_id = excluded.prerequisite_lesson_id,
+                submission_duration_minutes = excluded.submission_duration_minutes,
+                status = excluded.status,
                 updated_at = now()
             returning *
             """,
@@ -2909,6 +3271,7 @@ def admin_save_lesson(payload: dict[str, Any]):
                 float_value(payload.get("individualMinutes")),
                 float_value(payload.get("passingScore"), 60),
                 str_value(payload.get("prerequisiteLessonId")) or None,
+                submission_duration,
                 status,
             ),
         ).fetchone()
@@ -3018,8 +3381,9 @@ def admin_assign_students_to_group(payload: dict[str, Any]):
 
 def admin_set_lesson_access(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_assessment_feature_schema()
     status = str_value(payload.get("status") or "AVAILABLE").upper()
-    if status not in {"AVAILABLE", "LOCKED", "IN_PROGRESS", "UNDER_REVIEW", "APPROVED", "TIME_EXCEEDED"}:
+    if status not in CONTENT_ACCESS_STATUSES:
         raise ApiError("INVALID_STATUS", "Estado de acesso inválido.")
     lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
     student_ids = set(payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else [])
@@ -3062,14 +3426,21 @@ def admin_set_lesson_access(payload: dict[str, Any]):
                 conn.execute(
                     """
                     insert into courseplatform.lesson_progress
-                      (progress_id, enrollment_id, student_id, lesson_id, status, unlocked_at, attempt_count, updated_at)
-                    values (%s, %s, %s, %s, %s, case when %s <> 'LOCKED' then now() else null end, 0, now())
+                      (progress_id, enrollment_id, student_id, lesson_id, status,
+                       content_access_status, evaluation_status, unlocked_at, attempt_count, updated_at)
+                    values (%s, %s, %s, %s, %s, %s, 'NOT_STARTED',
+                            case when %s <> 'LOCKED' then now() else null end, 0, now())
                     on conflict (enrollment_id, lesson_id) do update
-                    set status = excluded.status,
-                        unlocked_at = case when excluded.status <> 'LOCKED' then coalesce(courseplatform.lesson_progress.unlocked_at, now()) else courseplatform.lesson_progress.unlocked_at end,
+                    set content_access_status = excluded.content_access_status,
+                        status = case
+                          when coalesce(courseplatform.lesson_progress.evaluation_status, 'NOT_STARTED') = 'NOT_STARTED'
+                            then excluded.content_access_status
+                          else courseplatform.lesson_progress.evaluation_status
+                        end,
+                        unlocked_at = case when excluded.content_access_status <> 'LOCKED' then coalesce(courseplatform.lesson_progress.unlocked_at, now()) else courseplatform.lesson_progress.unlocked_at end,
                         updated_at = now()
                     """,
-                    (generate_id("PRG"), enrollment["enrollment_id"], student_id, lesson_id, status, status),
+                    (generate_id("PRG"), enrollment["enrollment_id"], student_id, lesson_id, status, status, status),
                 )
                 updated += 1
         audit(conn, "ADMIN", admin["admin_id"], "LESSON_ACCESS_CHANGED", "LESSON_PROGRESS", "", {"lessonCount": len(lesson_ids), "studentCount": len(student_ids), "status": status})
@@ -3077,9 +3448,211 @@ def admin_set_lesson_access(payload: dict[str, Any]):
     return success({"studentCount": len(student_ids), "lessonCount": len(lesson_ids), "updatedCount": updated})
 
 
+def admin_manage_lesson_progress(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    prepare_assessment_feature_schema()
+    lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
+    student_ids = set(payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else [])
+    group_ids = payload.get("groupIds") if isinstance(payload.get("groupIds"), list) else []
+    access_status = str_value(payload.get("contentAccessStatus")).upper()
+    evaluation_status = str_value(payload.get("evaluationStatus")).upper()
+    if access_status in {"UNCHANGED", "KEEP"}:
+        access_status = ""
+    if evaluation_status in {"UNCHANGED", "KEEP"}:
+        evaluation_status = ""
+    if access_status and access_status not in CONTENT_ACCESS_STATUSES:
+        raise ApiError("INVALID_ACCESS_STATUS", "Estado de acesso ao conteúdo inválido.")
+    if evaluation_status and evaluation_status not in EVALUATION_STATUSES:
+        raise ApiError("INVALID_EVALUATION_STATUS", "Estado de avaliação inválido.")
+    duration_supplied = payload.get("submissionDurationMinutes") not in (None, "")
+    submission_duration = int_value(payload.get("submissionDurationMinutes")) if duration_supplied else None
+    if duration_supplied and (submission_duration < 1 or submission_duration > 43200):
+        raise ApiError("INVALID_SUBMISSION_DURATION", "O tempo de submissão deve estar entre 1 e 43200 minutos.")
+    if not lesson_ids:
+        raise ApiError("EMPTY_LESSON_TARGET", "Selecione pelo menos um módulo.")
+    if not access_status and not evaluation_status and not duration_supplied:
+        raise ApiError("EMPTY_MANAGEMENT_CHANGE", "Selecione pelo menos uma alteração para aplicar.")
+
+    updated = 0
+    enrollment_ids: set[str] = set()
+    with connection() as conn:
+        if group_ids:
+            rows = conn.execute(
+                "select student_id from courseplatform.group_members where group_id = any(%s) and status = 'ACTIVE'",
+                (group_ids,),
+            ).fetchall()
+            student_ids.update(row["student_id"] for row in rows)
+        if (access_status or evaluation_status) and not student_ids:
+            raise ApiError("EMPTY_PROGRESS_TARGET", "Selecione pelo menos uma turma ou estudante.")
+
+        if duration_supplied:
+            conn.execute(
+                """
+                update courseplatform.lessons
+                set submission_duration_minutes = %s, updated_at = now()
+                where lesson_id = any(%s)
+                """,
+                (submission_duration, lesson_ids),
+            )
+
+        for student_id in student_ids:
+            for lesson_id in lesson_ids:
+                lesson = conn.execute(
+                    "select * from courseplatform.lessons where lesson_id = %s",
+                    (lesson_id,),
+                ).fetchone()
+                if not lesson:
+                    continue
+                enrollment = conn.execute(
+                    """
+                    select * from courseplatform.enrollments
+                    where student_id = %s and course_id = %s
+                    order by enrolled_at desc nulls last
+                    limit 1
+                    """,
+                    (student_id, lesson["course_id"]),
+                ).fetchone()
+                if not enrollment:
+                    enrollment = conn.execute(
+                        """
+                        insert into courseplatform.enrollments
+                          (enrollment_id, student_id, course_id, status, enrolled_at, progress_percent, updated_at)
+                        values (%s, %s, %s, 'ACTIVE', now(), 0, now())
+                        returning *
+                        """,
+                        (generate_id("ENR"), student_id, lesson["course_id"]),
+                    ).fetchone()
+                progress = conn.execute(
+                    """
+                    select * from courseplatform.lesson_progress
+                    where enrollment_id = %s and lesson_id = %s
+                    """,
+                    (enrollment["enrollment_id"], lesson_id),
+                ).fetchone()
+                resolved_access = access_status or progress_access_status(progress)
+                resolved_evaluation = evaluation_status or progress_evaluation_status(progress)
+                resolved_legacy = legacy_progress_status(resolved_access, resolved_evaluation)
+                if progress:
+                    progress = conn.execute(
+                        """
+                        update courseplatform.lesson_progress
+                        set status = %s, content_access_status = %s, evaluation_status = %s,
+                            unlocked_at = case
+                              when %s = 'AVAILABLE' then coalesce(unlocked_at, now())
+                              else unlocked_at
+                            end,
+                            approved_at = case
+                              when %s = 'APPROVED' then coalesce(approved_at, now())
+                              else approved_at
+                            end,
+                            updated_at = now()
+                        where progress_id = %s
+                        returning *
+                        """,
+                        (
+                            resolved_legacy,
+                            resolved_access,
+                            resolved_evaluation,
+                            resolved_access,
+                            resolved_evaluation,
+                            progress["progress_id"],
+                        ),
+                    ).fetchone()
+                else:
+                    progress = conn.execute(
+                        """
+                        insert into courseplatform.lesson_progress
+                          (progress_id, enrollment_id, student_id, lesson_id, status,
+                           content_access_status, evaluation_status, unlocked_at,
+                           approved_at, attempt_count, updated_at)
+                        values (%s, %s, %s, %s, %s, %s, %s,
+                                case when %s = 'AVAILABLE' then now() else null end,
+                                case when %s = 'APPROVED' then now() else null end, 0, now())
+                        returning *
+                        """,
+                        (
+                            generate_id("PRG"),
+                            enrollment["enrollment_id"],
+                            student_id,
+                            lesson_id,
+                            resolved_legacy,
+                            resolved_access,
+                            resolved_evaluation,
+                            resolved_access,
+                            resolved_evaluation,
+                        ),
+                    ).fetchone()
+                if evaluation_status in ATTEMPT_STATUSES:
+                    conn.execute(
+                        """
+                        update courseplatform.attempts
+                        set status = %s,
+                            submitted_at = case
+                              when %s = 'IN_PROGRESS' then null
+                              when %s = 'UNDER_REVIEW' then coalesce(submitted_at, now())
+                              else submitted_at
+                            end,
+                            reviewed_at = case
+                              when %s in ('APPROVED', 'CORRECTION_REQUIRED', 'FAILED', 'TIME_EXCEEDED')
+                                then coalesce(reviewed_at, now())
+                              when %s = 'IN_PROGRESS' then null
+                              else reviewed_at
+                            end,
+                            updated_at = now()
+                        where attempt_id = (
+                          select attempt_id from courseplatform.attempts
+                          where student_id = %s and lesson_id = %s
+                          order by coalesce(updated_at, created_at) desc nulls last
+                          limit 1
+                        )
+                        """,
+                        (
+                            evaluation_status,
+                            evaluation_status,
+                            evaluation_status,
+                            evaluation_status,
+                            evaluation_status,
+                            student_id,
+                            lesson_id,
+                        ),
+                    )
+                enrollment_ids.add(enrollment["enrollment_id"])
+                updated += 1
+
+        for enrollment_id in enrollment_ids:
+            progress = conn.execute(
+                "select progress_id from courseplatform.lesson_progress where enrollment_id = %s limit 1",
+                (enrollment_id,),
+            ).fetchone()
+            refresh_enrollment_progress(conn, progress.get("progress_id") if progress else None)
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "LESSON_PROGRESS_MANAGED",
+            "LESSON_PROGRESS",
+            "",
+            {
+                "lessonCount": len(lesson_ids),
+                "studentCount": len(student_ids),
+                "contentAccessStatus": access_status or "UNCHANGED",
+                "evaluationStatus": evaluation_status or "UNCHANGED",
+                "submissionDurationMinutes": submission_duration if duration_supplied else None,
+            },
+        )
+        conn.commit()
+    return success({
+        "studentCount": len(student_ids),
+        "lessonCount": len(lesson_ids),
+        "updatedCount": updated,
+        "submissionDurationMinutes": submission_duration if duration_supplied else None,
+    })
+
+
 def admin_student_details(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     require_fields(payload, ["studentId"])
+    prepare_assessment_feature_schema()
     student_id = payload["studentId"]
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
@@ -3753,6 +4326,7 @@ ACTIONS = {
     "adminGetSubmission": admin_get_submission,
     "adminReviewSubmission": admin_review_submission,
     "adminAuthorizeRetry": admin_authorize_retry,
+    "adminUpdateAttempt": admin_update_attempt,
     "adminListCertificateRequests": admin_list_certificate_requests,
     "adminListCertificates": admin_list_certificates,
     "adminSetCertificateStatus": admin_set_certificate_status,
@@ -3778,6 +4352,7 @@ ACTIONS = {
     "adminSaveGroup": admin_save_group,
     "adminAssignStudentsToGroup": admin_assign_students_to_group,
     "adminSetLessonAccess": admin_set_lesson_access,
+    "adminManageLessonProgress": admin_manage_lesson_progress,
 }
 
 

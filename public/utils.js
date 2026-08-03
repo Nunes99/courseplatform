@@ -1,4 +1,5 @@
 export const STATUS_LABELS = Object.freeze({
+  NOT_STARTED: 'Não iniciada',
   LOCKED: 'Bloqueada',
   AVAILABLE: 'Disponível',
   IN_PROGRESS: 'Em curso',

@@ -111,9 +111,17 @@ def main():
                 call("getMediaConfig", {"sessionToken": student_token, "courseId": course_id})
             lessons = dashboard.get("lessons") or []
             if lessons:
+                progress = lessons[0].get("progress") or {}
+                assert progress.get("contentAccessStatus") in {"AVAILABLE", "LOCKED"}, progress
+                assert progress.get("evaluationStatus") in {
+                    "NOT_STARTED", "IN_PROGRESS", "UNDER_REVIEW", "CORRECTION_REQUIRED",
+                    "APPROVED", "FAILED", "TIME_EXCEEDED",
+                }, progress
                 lesson_id = (lessons[0].get("lesson") or {}).get("lessonId")
                 if lesson_id:
-                    call("getLesson", {"sessionToken": student_token, "lessonId": lesson_id})
+                    if progress.get("contentAccessStatus") == "AVAILABLE":
+                        lesson_data = call("getLesson", {"sessionToken": student_token, "lessonId": lesson_id})
+                        assert int((lesson_data.get("lesson") or {}).get("submissionDurationMinutes") or 0) > 0
         else:
             print("skip student authenticated smoke: SMOKE_STUDENT_EMAIL/SMOKE_STUDENT_CODE missing")
 
@@ -130,12 +138,20 @@ def main():
                 call("adminMe", {"adminToken": admin_token})
                 call("adminListStudents", {"adminToken": admin_token, "limit": 5})
                 call("adminListStaff", {"adminToken": admin_token})
-                call("adminListSubmissions", {"adminToken": admin_token, "limit": 5})
+                submissions = call("adminListSubmissions", {"adminToken": admin_token, "limit": 5})
+                if submissions.get("submissions"):
+                    progress = submissions["submissions"][0].get("progress") or {}
+                    assert progress.get("contentAccessStatus") in {"AVAILABLE", "LOCKED"}, progress
+                    assert progress.get("evaluationStatus"), progress
                 call("adminGetMediaConfig", {"adminToken": admin_token})
                 call("adminListGroups", {"adminToken": admin_token})
-                first_course = (courses.get("courses") or [{}])[0].get("courseId")
+                first_course_item = (courses.get("courses") or [{}])[0]
+                first_course = (first_course_item.get("course") or first_course_item).get("courseId")
                 if first_course:
-                    call("adminGetCourseStructure", {"adminToken": admin_token, "courseId": first_course})
+                    structure = call("adminGetCourseStructure", {"adminToken": admin_token, "courseId": first_course})
+                    if structure.get("lessons"):
+                        lesson = (structure["lessons"][0].get("lesson") or {})
+                        assert int(lesson.get("submissionDurationMinutes") or 0) > 0, lesson
         else:
             print("skip admin authenticated smoke: SMOKE_ADMIN_KEY missing")
 

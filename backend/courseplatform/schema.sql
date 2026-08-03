@@ -79,6 +79,7 @@ create table if not exists courseplatform.lessons (
   theory_minutes numeric default 0,
   exercise_minutes numeric default 0,
   individual_minutes numeric default 0,
+  submission_duration_minutes integer,
   passing_score numeric default 60,
   prerequisite_lesson_id text,
   status text default 'ACTIVE',
@@ -168,6 +169,8 @@ create table if not exists courseplatform.lesson_progress (
   student_id text not null,
   lesson_id text not null references courseplatform.lessons(lesson_id) on delete cascade,
   status text not null default 'LOCKED',
+  content_access_status text not null default 'LOCKED',
+  evaluation_status text not null default 'NOT_STARTED',
   unlocked_at timestamptz,
   started_at timestamptz,
   submitted_at timestamptz,
@@ -235,6 +238,28 @@ create table if not exists courseplatform.reviews (
   unlock_next_lesson boolean,
   reviewed_at timestamptz
 );
+
+-- Independent module access and assessment state. These statements also migrate
+-- installations created before the two states were separated.
+alter table courseplatform.lessons
+  add column if not exists submission_duration_minutes integer;
+alter table courseplatform.lesson_progress
+  add column if not exists content_access_status text;
+alter table courseplatform.lesson_progress
+  add column if not exists evaluation_status text;
+update courseplatform.lesson_progress
+set content_access_status = case when status = 'LOCKED' then 'LOCKED' else 'AVAILABLE' end
+where content_access_status is null;
+update courseplatform.lesson_progress
+set evaluation_status = case
+  when status in ('IN_PROGRESS', 'UNDER_REVIEW', 'CORRECTION_REQUIRED', 'APPROVED', 'FAILED', 'TIME_EXCEEDED') then status
+  else 'NOT_STARTED'
+end
+where evaluation_status is null;
+alter table courseplatform.lesson_progress
+  alter column content_access_status set default 'LOCKED';
+alter table courseplatform.lesson_progress
+  alter column evaluation_status set default 'NOT_STARTED';
 
 create table if not exists courseplatform.certificates (
   certificate_id text primary key,
@@ -385,6 +410,7 @@ create index if not exists idx_admins_email on courseplatform.admins(email);
 create index if not exists idx_lessons_course on courseplatform.lessons(course_id, lesson_number);
 create index if not exists idx_enrollments_student_course on courseplatform.enrollments(student_id, course_id);
 create index if not exists idx_progress_student_lesson on courseplatform.lesson_progress(student_id, lesson_id);
+create index if not exists idx_progress_access_evaluation on courseplatform.lesson_progress(content_access_status, evaluation_status);
 create index if not exists idx_attempts_student_lesson on courseplatform.attempts(student_id, lesson_id);
 create index if not exists idx_attempts_status_dates on courseplatform.attempts(status, submitted_at, reviewed_at);
 create index if not exists idx_reviews_attempt on courseplatform.reviews(attempt_id, reviewed_at);

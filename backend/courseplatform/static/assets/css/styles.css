@@ -11198,3 +11198,98 @@ pre,
     min-height: 44px;
   }
 }
+
+/* Independent content access, assessment state and submission management. */
+.module-status-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.module-status-item {
+  display: grid;
+  gap: 4px;
+  min-width: 112px;
+}
+
+.module-status-item > small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.module-status-item .status-pill {
+  width: 100%;
+}
+
+.status-not-started {
+  border-color: color-mix(in srgb, var(--primary) 24%, var(--line));
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+  color: color-mix(in srgb, var(--primary) 72%, var(--muted));
+}
+
+.assessment-management-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.assessment-management-fields label {
+  min-width: 0;
+}
+
+.management-field-hint {
+  max-width: 74ch;
+  margin: 0;
+}
+
+.attempt-management-card {
+  display: grid;
+  gap: 18px;
+}
+
+.attempt-management-card .form-stack {
+  gap: 14px;
+}
+
+.review-retry-action {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+:root[data-theme="dark"] .status-not-started {
+  border-color: rgba(234, 199, 139, 0.32);
+  background: rgba(255, 248, 228, 0.08);
+  color: rgba(255, 248, 228, 0.78);
+}
+
+@media (max-width: 1024px) {
+  .assessment-management-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .assessment-management-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .module-status-pair {
+    width: 100%;
+  }
+
+  .module-status-item {
+    flex: 1 1 120px;
+  }
+
+  .student-status-row .module-status-pair,
+  .lesson-card-topline .module-status-pair {
+    grid-column: 1 / -1;
+  }
+}

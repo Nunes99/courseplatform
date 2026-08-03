@@ -565,12 +565,58 @@ function normalizeStudentDashboard(home = {}) {
       status: enrollment.status || 'ACTIVE',
       progressPercent
     },
-    lessons: lessons.map((item) => ({
-      lesson: item.lesson || {},
-      progress: item.progress || { status: 'LOCKED' },
-      activeAttempt: item.activeAttempt || null
-    }))
+    lessons: lessons.map((item) => {
+      const progress = item.progress || { status: 'LOCKED' };
+      return {
+        lesson: item.lesson || {},
+        progress: {
+          ...progress,
+          contentAccessStatus: moduleContentAccessStatus(progress),
+          evaluationStatus: moduleEvaluationStatus(progress, item.activeAttempt)
+        },
+        activeAttempt: item.activeAttempt || null
+      };
+    })
   };
+}
+
+function moduleContentAccessStatus(progress = {}) {
+  if (['AVAILABLE', 'LOCKED'].includes(progress.contentAccessStatus)) {
+    return progress.contentAccessStatus;
+  }
+  return progress.status === 'LOCKED' ? 'LOCKED' : 'AVAILABLE';
+}
+
+function moduleEvaluationStatus(progress = {}, attempt = null) {
+  const supported = [
+    'NOT_STARTED',
+    'IN_PROGRESS',
+    'UNDER_REVIEW',
+    'CORRECTION_REQUIRED',
+    'APPROVED',
+    'FAILED',
+    'TIME_EXCEEDED'
+  ];
+  if (supported.includes(progress.evaluationStatus)) return progress.evaluationStatus;
+  if (supported.includes(attempt?.status)) return attempt.status;
+  return supported.includes(progress.status) ? progress.status : 'NOT_STARTED';
+}
+
+function moduleStatusPairTemplate(progress = {}, attempt = null) {
+  const accessStatus = moduleContentAccessStatus(progress);
+  const evaluationStatus = moduleEvaluationStatus(progress, attempt);
+  return `
+    <div class="module-status-pair" aria-label="Estados do módulo">
+      <span class="module-status-item">
+        <small>Conteúdo</small>
+        <span class="status-pill ${statusClass(accessStatus)}">${escapeHtml(statusLabel(accessStatus))}</span>
+      </span>
+      <span class="module-status-item">
+        <small>Avaliação</small>
+        <span class="status-pill ${statusClass(evaluationStatus)}">${escapeHtml(statusLabel(evaluationStatus))}</span>
+      </span>
+    </div>
+  `;
 }
 
 async function renderDashboard(view = 'overview') {
@@ -596,14 +642,20 @@ async function renderDashboard(view = 'overview') {
   logoutButton.hidden = false;
 
   const totalLessons = dashboard.lessons.length;
-  const approvedLessons = dashboard.lessons.filter((item) => item.progress.status === 'APPROVED').length;
-  const activeLessons = dashboard.lessons.filter((item) => ['AVAILABLE', 'IN_PROGRESS', 'UNDER_REVIEW'].includes(item.progress.status)).length;
+  const approvedLessons = dashboard.lessons.filter((item) => moduleEvaluationStatus(item.progress, item.activeAttempt) === 'APPROVED').length;
+  const activeLessons = dashboard.lessons.filter((item) => moduleContentAccessStatus(item.progress) === 'AVAILABLE').length;
   const videos = videoGallery();
   const totalHoursLabel = dashboard.course.totalHours ? `${dashboard.course.totalHours} horas` : 'Carga horária por definir';
-  const nextLessonItem = dashboard.lessons.find((item) => ['IN_PROGRESS', 'CORRECTION_REQUIRED', 'AVAILABLE'].includes(item.progress.status))
-    || dashboard.lessons.find((item) => item.progress.status !== 'LOCKED')
+  const nextLessonItem = dashboard.lessons.find((item) => (
+    moduleContentAccessStatus(item.progress) === 'AVAILABLE'
+    && moduleEvaluationStatus(item.progress, item.activeAttempt) !== 'APPROVED'
+  ))
+    || dashboard.lessons.find((item) => moduleContentAccessStatus(item.progress) === 'AVAILABLE')
     || null;
-  const pendingActivities = dashboard.lessons.filter((item) => !['APPROVED', 'LOCKED'].includes(item.progress.status)).length;
+  const pendingActivities = dashboard.lessons.filter((item) => (
+    moduleContentAccessStatus(item.progress) === 'AVAILABLE'
+    && moduleEvaluationStatus(item.progress, item.activeAttempt) !== 'APPROVED'
+  )).length;
   const latestFeedbackItem = dashboard.lessons
     .filter((item) => item.activeAttempt?.reviewComments)
     .sort((left, right) => new Date(right.activeAttempt?.reviewedAt || 0) - new Date(left.activeAttempt?.reviewedAt || 0))[0] || null;
@@ -978,8 +1030,9 @@ function studentSubmissionRowTemplate(item) {
   const lesson = item.lesson || {};
   const progress = item.progress || { status: 'LOCKED' };
   const activeAttempt = item.activeAttempt || null;
-  const reviewable = activeAttempt && ['UNDER_REVIEW', 'CORRECTION_REQUIRED', 'FAILED', 'TIME_EXCEEDED'].includes(progress.status);
-  const locked = progress.status === 'LOCKED';
+  const evaluationStatus = moduleEvaluationStatus(progress, activeAttempt);
+  const locked = moduleContentAccessStatus(progress) === 'LOCKED';
+  const reviewable = locked && activeAttempt && ['UNDER_REVIEW', 'CORRECTION_REQUIRED', 'FAILED', 'TIME_EXCEEDED'].includes(evaluationStatus);
   const lessonId = lesson.lessonId || '';
   const action = reviewable
     ? `<button class="button button-secondary button-small" type="button" data-check-attempt="${escapeHtml(activeAttempt.attemptId)}">Abrir revisão</button>`
@@ -991,7 +1044,7 @@ function studentSubmissionRowTemplate(item) {
         <h3>${escapeHtml(lesson.title || 'Módulo')}</h3>
         <p>${escapeHtml(lesson.summary || 'Atividade associada ao módulo.')}</p>
       </div>
-      <span class="status-pill ${statusClass(progress.status)}">${escapeHtml(statusLabel(progress.status))}</span>
+      ${moduleStatusPairTemplate(progress, activeAttempt)}
       <div class="student-status-actions">${action}</div>
     </article>
   `;
@@ -1000,16 +1053,17 @@ function studentSubmissionRowTemplate(item) {
 function studentGradeRowTemplate(item) {
   const lesson = item.lesson || {};
   const progress = item.progress || { status: 'LOCKED' };
+  const evaluationStatus = moduleEvaluationStatus(progress, item.activeAttempt);
   const score = progress.score === null || progress.score === undefined ? '-' : `${progress.score}%`;
   return `
     <article class="student-status-row student-grade-row">
       <div class="student-status-index">${escapeHtml(String(lesson.lessonNumber || '').padStart(2, '0'))}</div>
       <div>
         <h3>${escapeHtml(lesson.title || 'Módulo')}</h3>
-        <p>${escapeHtml(progress.status === 'APPROVED' ? 'Módulo aprovado.' : 'A aguardar conclusão ou avaliação.')}</p>
+        <p>${escapeHtml(evaluationStatus === 'APPROVED' ? 'Módulo aprovado.' : 'A aguardar conclusão ou avaliação.')}</p>
       </div>
       <strong class="student-score-value">${escapeHtml(score)}</strong>
-      <span class="status-pill ${statusClass(progress.status)}">${escapeHtml(statusLabel(progress.status))}</span>
+      <span class="status-pill ${statusClass(evaluationStatus)}">${escapeHtml(statusLabel(evaluationStatus))}</span>
     </article>
   `;
 }
@@ -1328,17 +1382,18 @@ function handleProfilePhotoError(event) {
 
 function lessonCardTemplate(item) {
   const { lesson, progress, activeAttempt } = item;
-  const locked = progress.status === 'LOCKED';
+  const locked = moduleContentAccessStatus(progress) === 'LOCKED';
+  const evaluationStatus = moduleEvaluationStatus(progress, activeAttempt);
   const reviewState = [
     'UNDER_REVIEW',
     'CORRECTION_REQUIRED',
     'FAILED',
     'TIME_EXCEEDED'
-  ].includes(progress.status);
+  ].includes(evaluationStatus);
 
   let action;
 
-  if (reviewState && activeAttempt) {
+  if (locked && reviewState && activeAttempt) {
     action = `
       <button class="button button-secondary" type="button"
         data-check-attempt="${escapeHtml(activeAttempt.attemptId)}">
@@ -1349,7 +1404,7 @@ function lessonCardTemplate(item) {
     action = `
       <button class="button button-primary" type="button"
         data-open-lesson="${escapeHtml(lesson.lessonId)}">
-        ${progress.status === 'APPROVED' ? 'Rever aula' : 'Abrir aula'}
+        ${evaluationStatus === 'APPROVED' ? 'Rever aula' : reviewState ? 'Ver conteúdo e avaliação' : 'Abrir aula'}
       </button>
     `;
   } else {
@@ -1361,9 +1416,7 @@ function lessonCardTemplate(item) {
       <div class="lesson-number">${lesson.lessonNumber}</div>
       <div class="lesson-card-body">
         <div class="lesson-card-topline">
-          <span class="status-pill ${statusClass(progress.status)}">
-            ${escapeHtml(statusLabel(progress.status))}
-          </span>
+          ${moduleStatusPairTemplate(progress, activeAttempt)}
           <span>${lesson.theoryMinutes + lesson.exerciseMinutes + lesson.individualMinutes} min</span>
         </div>
         <h3>${escapeHtml(lesson.title)}</h3>
@@ -1392,6 +1445,10 @@ async function openLesson(lessonId) {
     (item) => item.lesson.lessonId === lessonId
   )?.activeAttempt || null;
 
+  if (moduleEvaluationStatus(lessonData.progress, activeAttempt) === 'NOT_STARTED') {
+    activeAttempt = null;
+  }
+
   let attemptData = null;
   if (activeAttempt) {
     attemptData = await api.attemptStatus(activeAttempt.attemptId);
@@ -1414,15 +1471,14 @@ async function openLesson(lessonId) {
           <span>Teoria<strong>${lessonData.lesson.theoryMinutes} min</strong></span>
           <span>Exercicios<strong>${lessonData.lesson.exerciseMinutes} min</strong></span>
           <span>Individual<strong>${lessonData.lesson.individualMinutes} min</strong></span>
+          <span>Submissão<strong>${lessonData.lesson.submissionDurationMinutes} min</strong></span>
         </div>
         <nav id="lessonNavigation" class="lesson-navigation"></nav>
       </aside>
 
       <main class="lesson-main">
         <header class="lesson-header">
-          <span class="status-pill ${statusClass(lessonData.progress.status)}">
-            ${escapeHtml(statusLabel(lessonData.progress.status))}
-          </span>
+          ${moduleStatusPairTemplate(lessonData.progress, activeAttempt)}
           <h1>${escapeHtml(lessonData.lesson.title)}</h1>
           <p>${escapeHtml(lessonData.lesson.summary)}</p>
         </header>
@@ -1464,9 +1520,11 @@ function contentSectionTemplate(section) {
 }
 
 function assessmentTemplate(lessonData, attempt, attemptData) {
-  const status = attempt?.status || lessonData.progress.status;
+  const evaluationStatus = moduleEvaluationStatus(lessonData.progress, attempt);
+  const effectiveAttempt = evaluationStatus === 'NOT_STARTED' ? null : attempt;
+  const status = effectiveAttempt?.status || evaluationStatus;
 
-  if (lessonData.progress.status === 'APPROVED') {
+  if (evaluationStatus === 'APPROVED') {
     return `
       <div class="completion-card">
         <div class="completion-icon"><img src="${iconUrl('circle-check', goldIcon)}" alt=""></div>
@@ -1478,11 +1536,13 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
   }
 
   if (['UNDER_REVIEW', 'CORRECTION_REQUIRED', 'FAILED', 'TIME_EXCEEDED'].includes(status)) {
-    return reviewStateTemplate(attempt, attemptData?.latestReview);
+    return reviewStateTemplate(effectiveAttempt, attemptData?.latestReview);
   }
 
-  if (!attempt) {
-    const minutes = lessonData.lesson.exerciseMinutes + lessonData.lesson.individualMinutes;
+  if (!effectiveAttempt) {
+    const minutes = lessonData.lesson.submissionDurationMinutes
+      || lessonData.lesson.exerciseMinutes + lessonData.lesson.individualMinutes
+      || 180;
     return `
       <div class="start-assessment-card">
         <p class="eyebrow">Avaliação prática</p>
@@ -1496,7 +1556,7 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
     `;
   }
 
-  return attemptFormTemplate(lessonData, attempt, attemptData);
+  return attemptFormTemplate(lessonData, effectiveAttempt, attemptData);
 }
 
 function attemptFormTemplate(lessonData, attempt, attemptData) {
@@ -1643,7 +1703,7 @@ function reviewStateTemplate(attempt, review) {
   }
 
   const retry = attempt.retryAuthorized
-    ? '<p class="success-note">Uma nova tentativa foi autorizada. Volte ao curso e abra novamente esta aula.</p>'
+    ? '<div class="review-retry-action"><p class="success-note">Uma nova tentativa foi autorizada.</p><button class="button button-primary" id="startAttempt" type="button">Iniciar nova tentativa</button></div>'
     : '';
 
   return `

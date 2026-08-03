@@ -430,6 +430,10 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminAuthorizeRetry', { attemptId });
   }
 
+  adminUpdateAttempt(payload) {
+    return this.mutateAdmin('adminUpdateAttempt', payload);
+  }
+
   adminStudents(filters = {}, options = {}) {
     const [payload, cacheOptions] = splitPayloadOptions(filters, options);
     return this.cachedAdminRequest('adminListStudents', payload, cacheOptions);
@@ -502,6 +506,10 @@ export class CoursePlatformApi {
 
   adminSetLessonAccess(payload) {
     return this.mutateAdmin('adminSetLessonAccess', payload);
+  }
+
+  adminManageLessonProgress(payload) {
+    return this.mutateAdmin('adminManageLessonProgress', payload);
   }
 
   adminCertificateRequests(filters = {}, options = {}) {

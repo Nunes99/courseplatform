@@ -2535,6 +2535,7 @@ function renderSubmissionsV2() {
         <span>Estado</span>
         <select id="submissionStatusFilter">
           ${submissionStatusOption('ALL', 'Todas', state.submissionFilters.status)}
+          ${submissionStatusOption('IN_PROGRESS', 'Em curso', state.submissionFilters.status)}
           ${submissionStatusOption('UNDER_REVIEW', 'Pendentes', state.submissionFilters.status)}
           ${submissionStatusOption('REVIEWED', 'Já avaliadas', state.submissionFilters.status)}
           ${submissionStatusOption('APPROVED', 'Aprovadas', state.submissionFilters.status)}
@@ -2553,8 +2554,8 @@ function renderSubmissionsV2() {
     <section class="access-control-panel">
       <div class="course-section-heading">
         <div>
-          <p class="eyebrow">Acesso aos módulos</p>
-          <h2>Liberar ou restringir conteúdos</h2>
+          <p class="eyebrow">Gestão de módulos e avaliações</p>
+          <h2>Definir acesso, estado e tempo de submissão</h2>
         </div>
       </div>
       <form id="lessonAccessForm" class="access-control-form">
@@ -2564,13 +2565,37 @@ function renderSubmissionsV2() {
             ${accessCourseOptions()}
           </select>
         </label>
-        <label>
-          <span>Ação</span>
-          <select name="status">
-            <option value="AVAILABLE">Disponibilizar novamente</option>
-            <option value="LOCKED">Restringir acesso</option>
-          </select>
-        </label>
+        <div class="assessment-management-fields">
+          <label>
+            <span>Acesso ao conteúdo</span>
+            <select name="contentAccessStatus">
+              <option value="UNCHANGED">Não alterar</option>
+              <option value="AVAILABLE">Disponível para leitura</option>
+              <option value="LOCKED">Conteúdo bloqueado</option>
+            </select>
+          </label>
+          <label>
+            <span>Estado da avaliação</span>
+            <select name="evaluationStatus">
+              <option value="UNCHANGED">Não alterar</option>
+              <option value="NOT_STARTED">Não iniciada</option>
+              <option value="IN_PROGRESS">Em curso</option>
+              <option value="UNDER_REVIEW">Em avaliação</option>
+              <option value="CORRECTION_REQUIRED">Correção solicitada</option>
+              <option value="APPROVED">Aprovada</option>
+              <option value="FAILED">Não aprovada</option>
+              <option value="TIME_EXCEEDED">Tempo excedido</option>
+            </select>
+          </label>
+          <label>
+            <span>Tempo de submissão (minutos)</span>
+            <input type="number" name="submissionDurationMinutes" min="1" max="43200"
+              placeholder="Não alterar">
+          </label>
+        </div>
+        <p class="field-hint management-field-hint">
+          O acesso ao conteúdo é independente da avaliação. Assim, um módulo pode continuar disponível para leitura enquanto a submissão está em avaliação.
+        </p>
         <fieldset>
           <legend>Módulos</legend>
           ${selectAllToolbar('lessonIds')}
@@ -2592,7 +2617,7 @@ function renderSubmissionsV2() {
             ${accessStudentCheckboxes()}
           </div>
         </fieldset>
-        <button class="button button-primary" type="submit">Aplicar acesso</button>
+        <button class="button button-primary" type="submit">Aplicar alterações</button>
       </form>
     </section>
 
@@ -2602,7 +2627,7 @@ function renderSubmissionsV2() {
           <tr>
             <th>Estudante</th>
             <th>Aula</th>
-            <th>Estado</th>
+            <th>Estados</th>
             <th>Nota</th>
             <th>Última decisão</th>
             <th>Ficheiros</th>
@@ -2692,11 +2717,10 @@ function submissionRowTemplate(item) {
       <td>
         Aula ${escapeHtml(item.lesson?.lessonNumber || '')}
         <small>${escapeHtml(item.lesson?.title || item.attempt.lessonId)}</small>
+        <small>Prazo: ${escapeHtml(formatDate(item.attempt?.deadlineAt))}</small>
       </td>
       <td>
-        <span class="status-pill submission-status-pill ${statusClass(item.attempt.status)}">
-          ${statusLabel(item.attempt.status)}
-        </span>
+        ${adminModuleStatusPairTemplate(item.progress || {}, item.attempt)}
       </td>
       <td>${score === '' || score == null ? '-' : `${escapeHtml(score)}%`}</td>
       <td>
@@ -2833,23 +2857,36 @@ async function applyLessonAccess(event) {
   const values = new FormData(form);
   const payload = {
     courseId: values.get('courseId'),
-    status: values.get('status'),
+    contentAccessStatus: values.get('contentAccessStatus'),
+    evaluationStatus: values.get('evaluationStatus'),
+    submissionDurationMinutes: values.get('submissionDurationMinutes'),
     lessonIds: values.getAll('lessonIds'),
     groupIds: values.getAll('groupIds'),
     studentIds: values.getAll('studentIds')
   };
 
-  if (!payload.groupIds.length && !payload.studentIds.length) {
-    showToast('Selecione pelo menos uma turma ou estudante.', 'warning');
+  if (!payload.lessonIds.length) {
+    showToast('Selecione pelo menos um módulo.', 'warning');
     return;
   }
 
-  if (!confirmAdminAction('Deseja aplicar esta alteração de acesso aos estudantes selecionados?')) return;
+  const changesProgress = payload.contentAccessStatus !== 'UNCHANGED' || payload.evaluationStatus !== 'UNCHANGED';
+  const changesDuration = Boolean(payload.submissionDurationMinutes);
+  if (!changesProgress && !changesDuration) {
+    showToast('Escolha pelo menos uma alteração.', 'warning');
+    return;
+  }
+  if (changesProgress && !payload.groupIds.length && !payload.studentIds.length) {
+    showToast('Selecione pelo menos uma turma ou estudante para alterar os estados.', 'warning');
+    return;
+  }
+
+  if (!confirmAdminAction('Deseja aplicar estas alterações aos módulos e estudantes selecionados?')) return;
 
   setBusy(button, true, 'A aplicar...');
   try {
-    const result = await api.adminSetLessonAccess(payload);
-    showToast(`Acesso atualizado para ${result.studentCount} estudante(s).`, 'success');
+    const result = await api.adminManageLessonProgress(payload);
+    showToast(`Gestão atualizada em ${result.lessonCount} módulo(s) para ${result.studentCount} estudante(s).`, 'success');
     await loadPending();
   } catch (error) {
     handleAdminError(error);
@@ -2880,6 +2917,9 @@ function renderSubmission() {
   const currentDeadline = latestReview?.correctionDeadline
     ? toDatetimeLocalValue(latestReview.correctionDeadline)
     : '';
+  const attemptDeadline = data.attempt.deadlineAt ? toDatetimeLocalValue(data.attempt.deadlineAt) : '';
+  const contentAccessStatus = data.progress?.contentAccessStatus
+    || (data.progress?.status === 'LOCKED' ? 'LOCKED' : 'AVAILABLE');
 
   const answers = data.answers.map(({ question, answer }) => `
     <article class="admin-answer">
@@ -2914,9 +2954,7 @@ function renderSubmission() {
         <p>${escapeHtml(data.lesson.title)}</p>
       </div>
 
-      <span class="status-pill ${statusClass(data.attempt.status)}">
-        ${statusLabel(data.attempt.status)}
-      </span>
+      ${adminModuleStatusPairTemplate(data.progress || {}, data.attempt)}
     </div>
 
     <div class="submission-columns">
@@ -2972,16 +3010,37 @@ function renderSubmission() {
           ${enhancedFiles || '<p class="empty-note">Nenhum ficheiro.</p>'}
         </div>
 
-        <div class="review-files">
-          <h2>Acesso deste estudante</h2>
-          <div class="student-detail-actions">
-            <button class="button button-secondary" type="button" data-student-access="AVAILABLE">
-              Disponibilizar módulo
-            </button>
-            <button class="button button-secondary" type="button" data-student-access="LOCKED">
-              Restringir módulo
-            </button>
+        <div class="review-files attempt-management-card">
+          <div>
+            <p class="eyebrow">Controlo administrativo</p>
+            <h2>Estado, prazo e leitura</h2>
+            <p class="field-hint">O conteúdo pode permanecer disponível mesmo quando a atividade está em avaliação.</p>
           </div>
+          <form id="attemptManagementForm" class="form-stack">
+            <label>
+              <span>Estado da tentativa</span>
+              <select name="status" required>
+                ${submissionStatusOption('IN_PROGRESS', 'Em curso', data.attempt.status)}
+                ${submissionStatusOption('UNDER_REVIEW', 'Em avaliação', data.attempt.status)}
+                ${submissionStatusOption('CORRECTION_REQUIRED', 'Correção solicitada', data.attempt.status)}
+                ${submissionStatusOption('APPROVED', 'Aprovada', data.attempt.status)}
+                ${submissionStatusOption('FAILED', 'Não aprovada', data.attempt.status)}
+                ${submissionStatusOption('TIME_EXCEEDED', 'Tempo excedido', data.attempt.status)}
+              </select>
+            </label>
+            <label>
+              <span>Prazo da submissão</span>
+              <input type="datetime-local" name="deadlineAt" value="${escapeHtml(attemptDeadline)}">
+            </label>
+            <label>
+              <span>Acesso ao conteúdo</span>
+              <select name="contentAccessStatus">
+                ${submissionStatusOption('AVAILABLE', 'Disponível para leitura', contentAccessStatus)}
+                ${submissionStatusOption('LOCKED', 'Conteúdo bloqueado', contentAccessStatus)}
+              </select>
+            </label>
+            <button class="button button-primary button-block" type="submit">Guardar gestão da tentativa</button>
+          </form>
         </div>
       </aside>
     </div>
@@ -2994,6 +3053,7 @@ function renderSubmission() {
   reviewForm.elements.comments.value = currentComments;
   reviewForm.elements.correctionDeadline.value = currentDeadline;
   reviewForm.addEventListener('submit', submitReview);
+  document.querySelector('#attemptManagementForm')?.addEventListener('submit', submitAttemptManagement);
   root.querySelectorAll('[data-student-access]').forEach((button) => {
     button.addEventListener('click', () => applySingleStudentAccess(button.dataset.studentAccess));
   });
@@ -3121,6 +3181,33 @@ function toDatetimeLocalValue(value) {
   if (Number.isNaN(date.getTime())) return '';
   const offset = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+async function submitAttemptManagement(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const values = new FormData(form);
+  const rawDeadline = values.get('deadlineAt');
+  const deadlineAt = rawDeadline ? new Date(rawDeadline).toISOString() : '';
+
+  if (!confirmAdminAction('Deseja guardar o estado, o prazo e o acesso desta tentativa?')) return;
+
+  setBusy(button, true, 'A guardar...');
+  try {
+    await api.adminUpdateAttempt({
+      attemptId: state.selectedSubmission.attempt.attemptId,
+      status: values.get('status'),
+      deadlineAt,
+      contentAccessStatus: values.get('contentAccessStatus')
+    });
+    showToast('Gestão da tentativa atualizada.', 'success');
+    await openSubmission(state.selectedSubmission.attempt.attemptId);
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
 }
 
 async function applySingleStudentAccess(status) {
@@ -3801,6 +3888,29 @@ function studentDetailEnrollmentTemplate(enrollment) {
   `;
 }
 
+function adminContentAccessStatus(progress = {}) {
+  if (['AVAILABLE', 'LOCKED'].includes(progress.contentAccessStatus)) return progress.contentAccessStatus;
+  return progress.status === 'LOCKED' ? 'LOCKED' : 'AVAILABLE';
+}
+
+function adminEvaluationStatus(progress = {}, attempt = null) {
+  const supported = ['NOT_STARTED', 'IN_PROGRESS', 'UNDER_REVIEW', 'CORRECTION_REQUIRED', 'APPROVED', 'FAILED', 'TIME_EXCEEDED'];
+  if (supported.includes(progress.evaluationStatus)) return progress.evaluationStatus;
+  if (supported.includes(attempt?.status)) return attempt.status;
+  return supported.includes(progress.status) ? progress.status : 'NOT_STARTED';
+}
+
+function adminModuleStatusPairTemplate(progress = {}, attempt = null) {
+  const accessStatus = adminContentAccessStatus(progress);
+  const evaluationStatus = adminEvaluationStatus(progress, attempt);
+  return `
+    <div class="module-status-pair" aria-label="Estados do módulo">
+      <span class="module-status-item"><small>Conteúdo</small><span class="status-pill ${statusClass(accessStatus)}">${escapeHtml(statusLabel(accessStatus))}</span></span>
+      <span class="module-status-item"><small>Avaliação</small><span class="status-pill ${statusClass(evaluationStatus)}">${escapeHtml(statusLabel(evaluationStatus))}</span></span>
+    </div>
+  `;
+}
+
 function studentLessonAccessTemplate(item) {
   const lesson = item.lesson || {};
   const progress = item.progress || {};
@@ -3808,7 +3918,7 @@ function studentLessonAccessTemplate(item) {
   return `
     <article class="student-module-access-card">
       <div>
-        <span class="status-pill ${statusClass(progress.status)}">${statusLabel(progress.status)}</span>
+        ${adminModuleStatusPairTemplate(progress, attempt)}
         <h4>Módulo ${escapeHtml(lesson.lessonNumber || '')}: ${escapeHtml(lesson.title || lesson.lessonId || '')}</h4>
         <p>${escapeHtml(item.courseId || '')} &middot; ${item.fileCount || 0} ficheiro(s)</p>
       </div>
@@ -4542,6 +4652,7 @@ function moduleCardTemplate(item) {
         <div><dt>Teoria</dt><dd>${escapeHtml(lesson.theoryMinutes || 0)} min</dd></div>
         <div><dt>Exercicios</dt><dd>${escapeHtml(lesson.exerciseMinutes || 0)} min</dd></div>
         <div><dt>Individual</dt><dd>${escapeHtml(lesson.individualMinutes || 0)} min</dd></div>
+        <div><dt>Submissão</dt><dd>${escapeHtml(lesson.submissionDurationMinutes || 180)} min</dd></div>
         <div><dt>Conteúdos</dt><dd>${contentCount}</dd></div>
         <div><dt>Questões</dt><dd>${questionCount}</dd></div>
       </dl>
@@ -4558,7 +4669,7 @@ function moduleCardTemplate(item) {
         ` : `
           <button class="button button-secondary button-small" type="button"
             data-manage-lesson-access="${escapeHtml(lesson.lessonId)}">
-            Gerir acesso
+            Gerir estados
           </button>
           <button class="button button-secondary button-small" type="button"
             data-edit-lesson="${escapeHtml(lesson.lessonId)}">
@@ -4635,20 +4746,42 @@ async function showLessonAccessDialog(lessonId) {
   overlay.innerHTML = `
     <div class="dialog-card course-lesson-dialog">
       <button class="dialog-close" type="button">x</button>
-      <h2>Acesso do módulo</h2>
+      <h2>Gestão do módulo</h2>
       <p class="dialog-helper-text">
         Aula ${escapeHtml(lesson.lessonNumber)} - ${escapeHtml(lesson.title)}
       </p>
       <form id="lessonAccessDialogForm" class="form-stack">
         <input type="hidden" name="courseId" value="${escapeHtml(courseId)}">
         <input type="hidden" name="lessonId" value="${escapeHtml(lesson.lessonId)}">
-        <label>
-          <span>Ação</span>
-          <select name="status">
-            <option value="AVAILABLE">Disponibilizar este módulo</option>
-            <option value="LOCKED">Restringir este módulo</option>
-          </select>
-        </label>
+        <div class="assessment-management-fields">
+          <label>
+            <span>Acesso ao conteúdo</span>
+            <select name="contentAccessStatus">
+              <option value="UNCHANGED">Não alterar</option>
+              <option value="AVAILABLE">Disponível para leitura</option>
+              <option value="LOCKED">Conteúdo bloqueado</option>
+            </select>
+          </label>
+          <label>
+            <span>Estado da avaliação</span>
+            <select name="evaluationStatus">
+              <option value="UNCHANGED">Não alterar</option>
+              <option value="NOT_STARTED">Não iniciada</option>
+              <option value="IN_PROGRESS">Em curso</option>
+              <option value="UNDER_REVIEW">Em avaliação</option>
+              <option value="CORRECTION_REQUIRED">Correção solicitada</option>
+              <option value="APPROVED">Aprovada</option>
+              <option value="FAILED">Não aprovada</option>
+              <option value="TIME_EXCEEDED">Tempo excedido</option>
+            </select>
+          </label>
+          <label>
+            <span>Tempo de submissão (min)</span>
+            <input type="number" name="submissionDurationMinutes" min="1" max="43200"
+              value="${escapeHtml(lesson.submissionDurationMinutes || 180)}">
+          </label>
+        </div>
+        <p class="field-hint">A leitura e a avaliação são controladas separadamente.</p>
         <fieldset class="group-student-picker">
           <legend>Estudantes</legend>
           ${selectAllToolbar('studentIds')}
@@ -4658,7 +4791,7 @@ async function showLessonAccessDialog(lessonId) {
         </fieldset>
         <div class="dialog-actions">
           <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
-          <button class="button button-primary" type="submit">Aplicar acesso</button>
+          <button class="button button-primary" type="submit">Aplicar alterações</button>
         </div>
       </form>
     </div>
@@ -4673,27 +4806,36 @@ async function showLessonAccessDialog(lessonId) {
     const form = event.currentTarget;
     const values = new FormData(form);
     const studentIds = values.getAll('studentIds');
+    const changesProgress = values.get('contentAccessStatus') !== 'UNCHANGED'
+      || values.get('evaluationStatus') !== 'UNCHANGED';
+    const changesDuration = Boolean(values.get('submissionDurationMinutes'));
 
-    if (!studentIds.length) {
+    if (changesProgress && !studentIds.length) {
       showToast('Selecione pelo menos um estudante.', 'warning');
       return;
     }
+    if (!changesProgress && !changesDuration) {
+      showToast('Escolha pelo menos uma alteração.', 'warning');
+      return;
+    }
 
-    if (!confirmAdminAction('Deseja aplicar esta alteração de acesso ao módulo para os estudantes selecionados?')) {
+    if (!confirmAdminAction('Deseja aplicar estas alterações ao módulo e aos estudantes selecionados?')) {
       return;
     }
 
     const button = form.querySelector('button[type="submit"]');
     setBusy(button, true, 'A aplicar...');
     try {
-      const result = await api.adminSetLessonAccess({
+      const result = await api.adminManageLessonProgress({
         courseId: values.get('courseId'),
-        status: values.get('status'),
+        contentAccessStatus: values.get('contentAccessStatus'),
+        evaluationStatus: values.get('evaluationStatus'),
+        submissionDurationMinutes: values.get('submissionDurationMinutes'),
         lessonIds: [values.get('lessonId')],
         studentIds,
         groupIds: []
       });
-      showToast(`Acesso atualizado para ${result.studentCount || studentIds.length} estudante(s).`, 'success');
+      showToast(`Gestão atualizada para ${result.studentCount || studentIds.length} estudante(s).`, 'success');
       overlay.remove();
     } catch (error) {
       handleAdminError(error);
@@ -5063,6 +5205,7 @@ function showLessonDialog(lessonId = '') {
     theoryMinutes: 0,
     exerciseMinutes: 0,
     individualMinutes: 0,
+    submissionDurationMinutes: 180,
     passingScore: state.courseStructure?.course?.passingScore || 60,
     prerequisiteLessonId: '',
     status: 'ACTIVE'
@@ -5119,6 +5262,11 @@ function showLessonDialog(lessonId = '') {
             <span>Individual (min)</span>
             <input type="number" name="individualMinutes" min="0" value="${escapeHtml(lesson.individualMinutes || 0)}">
           </label>
+          <label>
+            <span>Tempo de submissão (min)</span>
+            <input type="number" name="submissionDurationMinutes" min="1" max="43200"
+              value="${escapeHtml(lesson.submissionDurationMinutes || 180)}" required>
+          </label>
         </div>
         <label>
           <span>Módulo pre-requisito</span>
@@ -5155,7 +5303,7 @@ function showLessonDialog(lessonId = '') {
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const values = Object.fromEntries(new FormData(form));
-    ['lessonNumber', 'passingScore', 'theoryMinutes', 'exerciseMinutes', 'individualMinutes'].forEach((field) => {
+    ['lessonNumber', 'passingScore', 'theoryMinutes', 'exerciseMinutes', 'individualMinutes', 'submissionDurationMinutes'].forEach((field) => {
       values[field] = Number(values[field] || 0);
     });
 
