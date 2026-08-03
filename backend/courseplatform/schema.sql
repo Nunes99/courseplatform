@@ -560,11 +560,11 @@ create or replace view public.notification_deliveries as select * from coursepla
 create or replace view public.notification_channel_settings as
   select channel, enabled, phone_number_id, graph_api_version, template_name,
          template_language, platform_url,
+         access_token_encrypted is not null as token_configured,
+         updated_by, updated_at,
          smtp_host, smtp_port, smtp_username,
          smtp_password_encrypted is not null as smtp_password_configured,
-         from_email, from_name, use_tls, bot_username, parse_mode,
-         access_token_encrypted is not null as token_configured,
-         updated_by, updated_at
+         from_email, from_name, use_tls, bot_username, parse_mode
   from courseplatform.notification_channel_settings;
 create or replace view public.certificates as select * from courseplatform.certificates;
 create or replace view public.audit_log as select * from courseplatform.audit_log;
