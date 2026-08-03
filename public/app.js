@@ -96,11 +96,21 @@ let deferredInstallPrompt = null;
 window.addEventListener('beforeinstallprompt', (event) => {
   event.preventDefault();
   deferredInstallPrompt = event;
+  if (document.querySelector('#installAppDialog')) {
+    document.querySelector('#installAppDialog .dialog-close')?.click();
+    window.setTimeout(showInstallAppDialog, 0);
+  }
 });
 window.addEventListener('appinstalled', () => {
   deferredInstallPrompt = null;
   localStorage.setItem('coursePlatformAppInstalled', 'true');
   document.querySelector('#pushRecommendation')?.remove();
+  document.querySelector('#installAppDialog .dialog-close')?.click();
+  window.setTimeout(() => {
+    if (api?.hasStudentSession() && !state.push.subscribedOnDevice) {
+      showPushActivationDialog({ afterInstall: true });
+    }
+  }, 350);
 });
 
 initialize().catch((error) => {
@@ -161,6 +171,10 @@ async function initialize() {
 
 function isStandaloneApp() {
   return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function isAppInstallationKnown() {
+  return isStandaloneApp() || localStorage.getItem('coursePlatformAppInstalled') === 'true';
 }
 
 function isIosDevice() {
@@ -289,31 +303,233 @@ async function disablePushNotifications(button = null) {
   }
 }
 
-async function installWebApp(button = null) {
+function installGuidanceSteps(hasNativePrompt, iosDevice) {
+  if (hasNativePrompt) {
+    return [
+      ['shield-check', 'Confirme a instalação', 'Toque em “Continuar e instalar” e confirme na janela segura do navegador.'],
+      ['panel-top-open', 'Abra pelo novo ícone', 'A aplicação ficará disponível no ecrã principal ou no menu de aplicações.'],
+      ['bell-ring', 'Ative as notificações', 'Depois de abrir a aplicação, autorize avisos de módulos, prazos e avaliações.']
+    ];
+  }
+  if (iosDevice) {
+    return [
+      ['share-2', 'Abra o menu Partilhar', 'No Safari, toque no ícone de partilha da barra do navegador.'],
+      ['square-plus', 'Adicione ao ecrã principal', 'Deslize as opções e escolha “Adicionar ao ecrã principal”.'],
+      ['app-window', 'Confirme e abra', 'Toque em “Adicionar” e depois abra a plataforma pelo novo ícone.']
+    ];
+  }
+  return [
+    ['menu', 'Abra o menu do navegador', 'Toque no menu ⋮ ou no ícone de instalação junto à barra de endereço.'],
+    ['download', 'Escolha instalar', 'Selecione “Instalar aplicação” ou “Adicionar ao ecrã principal”.'],
+    ['app-window', 'Confirme e abra', 'Conclua a confirmação do navegador e use o novo ícone da plataforma.']
+  ];
+}
+
+function showInstallAppDialog() {
+  document.querySelector('#installAppDialog .dialog-close')?.click();
+  const previousFocus = document.activeElement;
+  const hasNativePrompt = Boolean(deferredInstallPrompt);
+  const iosDevice = isIosDevice();
+  const steps = installGuidanceSteps(hasNativePrompt, iosDevice);
+  const overlay = document.createElement('div');
+  overlay.id = 'installAppDialog';
+  overlay.className = 'dialog-overlay dialog-overlay-elevated install-app-dialog-overlay';
+  overlay.innerHTML = `
+    <section class="dialog-card install-app-dialog" role="dialog" aria-modal="true" aria-labelledby="installAppDialogTitle" aria-describedby="installAppDialogDescription">
+      <button class="dialog-close install-app-dialog-close" type="button" aria-label="Fechar instruções">Fechar</button>
+      <header class="install-app-dialog-header">
+        <span class="install-app-dialog-mark" aria-hidden="true"><img src="./assets/app-icon-192.png" alt=""></span>
+        <div>
+          <p class="eyebrow">Aplicação web</p>
+          <h2 id="installAppDialogTitle">Guarde a plataforma no ecrã principal</h2>
+          <p id="installAppDialogDescription">Tenha acesso rápido aos cursos e prepare este dispositivo para receber notificações importantes.</p>
+        </div>
+      </header>
+      <div class="install-app-benefits" aria-label="Vantagens da instalação">
+        <span><img src="${iconUrl('zap', blueIcon)}" alt=""> Acesso rápido</span>
+        <span><img src="${iconUrl('maximize-2', blueIcon)}" alt=""> Experiência em ecrã completo</span>
+        <span><img src="${iconUrl('bell-ring', blueIcon)}" alt=""> Avisos no dispositivo</span>
+      </div>
+      <ol class="install-app-steps">
+        ${steps.map(([icon, title, description], index) => `
+          <li>
+            <span class="install-app-step-number">${index + 1}</span>
+            <span class="install-app-step-icon" aria-hidden="true"><img src="${iconUrl(icon, goldIcon)}" alt=""></span>
+            <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(description)}</small></span>
+          </li>
+        `).join('')}
+      </ol>
+      <div class="install-app-dialog-note">
+        <img src="${iconUrl(hasNativePrompt ? 'shield-check' : 'info', goldIcon)}" alt="">
+        <span>${hasNativePrompt
+          ? 'A instalação só começa depois da sua confirmação e utiliza a janela oficial do navegador.'
+          : iosDevice
+            ? 'Por segurança, o iPhone e o iPad exigem estes passos no menu do Safari; uma página não pode executá-los automaticamente.'
+            : 'Se a opção não aparecer, confirme que está a utilizar HTTPS e procure o ícone de instalação na barra de endereço.'}</span>
+      </div>
+      <p class="install-app-dialog-status" role="status" aria-live="polite" hidden></p>
+      <div class="dialog-actions install-app-dialog-actions">
+        <button class="button button-secondary" type="button" data-install-app-cancel>Agora não</button>
+        <button class="button button-primary" type="button" data-install-app-confirm>
+          ${hasNativePrompt ? 'Continuar e instalar' : 'Entendi como instalar'}
+        </button>
+      </div>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+
+  const closeDialog = () => {
+    document.removeEventListener('keydown', handleDialogKeydown);
+    overlay.remove();
+    if (previousFocus?.isConnected && typeof previousFocus.focus === 'function') previousFocus.focus();
+  };
+  const handleDialogKeydown = (event) => {
+    if (event.key === 'Escape') closeDialog();
+    if (event.key !== 'Tab') return;
+    const focusable = [...overlay.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])')];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  document.addEventListener('keydown', handleDialogKeydown);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) closeDialog();
+  });
+  overlay.querySelector('.dialog-close')?.addEventListener('click', closeDialog);
+  overlay.querySelector('[data-install-app-cancel]')?.addEventListener('click', closeDialog);
+  const confirmButton = overlay.querySelector('[data-install-app-confirm]');
+  confirmButton?.addEventListener('click', async () => {
+    if (!hasNativePrompt || !deferredInstallPrompt) {
+      closeDialog();
+      return;
+    }
+    const status = overlay.querySelector('.install-app-dialog-status');
+    setBusy(confirmButton, true, 'A abrir confirmação...');
+    try {
+      const prompt = deferredInstallPrompt;
+      await prompt.prompt();
+      const choice = await prompt.userChoice;
+      deferredInstallPrompt = null;
+      if (choice.outcome === 'accepted') {
+        localStorage.setItem('coursePlatformAppInstalled', 'true');
+        closeDialog();
+        showToast('Aplicação instalada. Abra-a pelo novo ícone e ative as notificações.', 'success');
+        return;
+      }
+      if (status) {
+        status.hidden = false;
+        status.textContent = 'A instalação foi cancelada. Pode tentar novamente através do menu do navegador.';
+      }
+    } catch (error) {
+      if (status) {
+        status.hidden = false;
+        status.textContent = 'O navegador não conseguiu abrir a instalação automática. Utilize os passos apresentados acima.';
+      }
+    } finally {
+      if (confirmButton.isConnected) setBusy(confirmButton, false);
+    }
+  });
+  requestAnimationFrame(() => confirmButton?.focus());
+}
+
+function showPushActivationDialog({ afterInstall = false } = {}) {
+  document.querySelector('#pushActivationDialog .dialog-close')?.click();
+  if (!supportsWebPush() || !state.push.configuration?.configured || state.push.subscribedOnDevice) return;
+
+  const previousFocus = document.activeElement;
+  const permissionBlocked = Notification.permission === 'denied';
+  const overlay = document.createElement('div');
+  overlay.id = 'pushActivationDialog';
+  overlay.className = 'dialog-overlay dialog-overlay-elevated push-activation-dialog-overlay';
+  overlay.innerHTML = `
+    <section class="dialog-card push-activation-dialog" role="dialog" aria-modal="true" aria-labelledby="pushActivationDialogTitle" aria-describedby="pushActivationDialogDescription">
+      <button class="dialog-close push-activation-dialog-close" type="button" aria-label="Fechar recomendação">Fechar</button>
+      <header class="push-activation-dialog-header">
+        <span class="push-activation-dialog-icon" aria-hidden="true"><img src="${iconUrl(permissionBlocked ? 'bell-off' : 'bell-ring', goldIcon)}" alt=""></span>
+        <div>
+          <p class="eyebrow">${afterInstall ? 'Aplicação instalada' : 'Não perca atualizações'}</p>
+          <h2 id="pushActivationDialogTitle">${permissionBlocked ? 'Desbloqueie as notificações' : 'Ative notificações neste dispositivo'}</h2>
+          <p id="pushActivationDialogDescription">${permissionBlocked
+            ? 'Este navegador bloqueou os avisos. Altere a permissão do site nas definições do dispositivo para voltar a recebê-los.'
+            : 'Receba avisos importantes mesmo quando não estiver com a plataforma aberta.'}</p>
+        </div>
+      </header>
+      <div class="push-activation-topics" aria-label="Atualizações incluídas">
+        <span><img src="${iconUrl('book-open', blueIcon)}" alt=""><strong>Novos módulos</strong><small>Conteúdos e exercícios disponíveis.</small></span>
+        <span><img src="${iconUrl('clock-3', blueIcon)}" alt=""><strong>Prazos</strong><small>Alterações nos tempos de submissão.</small></span>
+        <span><img src="${iconUrl('clipboard-check', blueIcon)}" alt=""><strong>Avaliações</strong><small>Estados, resultados e comentários.</small></span>
+      </div>
+      <div class="push-activation-privacy">
+        <img src="${iconUrl('shield-check', goldIcon)}" alt="">
+        <span>${permissionBlocked
+          ? 'Abra as definições do navegador ou da aplicação, localize as permissões deste site e selecione “Permitir notificações”. Depois, volte ao perfil.'
+          : 'A autorização é válida apenas para este dispositivo. Pode desativá-la a qualquer momento no perfil ou nas definições do navegador.'}</span>
+      </div>
+      <div class="dialog-actions push-activation-dialog-actions">
+        <button class="button button-secondary" type="button" data-push-dialog-later>${permissionBlocked ? 'Fechar' : 'Agora não'}</button>
+        ${permissionBlocked ? '' : '<button class="button button-primary" type="button" data-push-dialog-enable>Ativar notificações</button>'}
+      </div>
+    </section>
+  `;
+  document.body.appendChild(overlay);
+
+  const closeDialog = () => {
+    document.removeEventListener('keydown', handleDialogKeydown);
+    overlay.remove();
+    if (previousFocus?.isConnected && typeof previousFocus.focus === 'function') previousFocus.focus();
+  };
+  const handleDialogKeydown = (event) => {
+    if (event.key === 'Escape') closeDialog();
+    if (event.key !== 'Tab') return;
+    const focusable = [...overlay.querySelectorAll('button:not([disabled]), a[href]')];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  document.addEventListener('keydown', handleDialogKeydown);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) closeDialog();
+  });
+  overlay.querySelector('.dialog-close')?.addEventListener('click', closeDialog);
+  overlay.querySelector('[data-push-dialog-later]')?.addEventListener('click', closeDialog);
+  const enableButton = overlay.querySelector('[data-push-dialog-enable]');
+  enableButton?.addEventListener('click', async () => {
+    if (!await enablePushNotifications(enableButton)) return;
+    closeDialog();
+    if (location.hash.replace(/^#\/?/, '') === 'profile') await renderProfile();
+  });
+  requestAnimationFrame(() => (enableButton || overlay.querySelector('[data-push-dialog-later]'))?.focus());
+}
+
+function showProfileEngagementPrompt() {
+  document.querySelector('#pushRecommendation')?.remove();
+  if (!isAppInstallationKnown()) {
+    showInstallAppDialog();
+    return;
+  }
+  if (!state.push.subscribedOnDevice) showPushActivationDialog();
+}
+
+async function installWebApp() {
   if (isStandaloneApp()) {
     showToast('A aplicação já está aberta a partir do ecrã principal.', 'success');
     return true;
   }
-  if (deferredInstallPrompt) {
-    setBusy(button, true, 'A abrir...');
-    try {
-      await deferredInstallPrompt.prompt();
-      const choice = await deferredInstallPrompt.userChoice;
-      deferredInstallPrompt = null;
-      if (choice.outcome === 'accepted') {
-        localStorage.setItem('coursePlatformAppInstalled', 'true');
-        showToast('Aplicação guardada no dispositivo.', 'success');
-        return true;
-      }
-      return false;
-    } finally {
-      setBusy(button, false);
-    }
-  }
-  const guidance = isIosDevice()
-    ? 'No Safari, toque em Partilhar e depois em “Adicionar ao ecrã principal”. Abra a aplicação pelo novo ícone para ativar notificações.'
-    : 'Abra o menu do navegador e escolha “Instalar aplicação” ou “Adicionar ao ecrã principal”.';
-  showToast(guidance, 'success');
+  showInstallAppDialog();
   return false;
 }
 
@@ -1746,7 +1962,7 @@ async function renderProfile() {
   });
   bindProfilePhotoPreview(student);
   startNotificationPolling();
-  maybeShowPushRecommendation();
+  showProfileEngagementPrompt();
   reportHeight();
 }
 

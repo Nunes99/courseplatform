@@ -79,6 +79,13 @@ plataforma no ecrã principal e ativar notificações no perfil ou na recomenda�
 apresentada em dispositivos móveis. A autorização só é pedida após uma ação
 explícita do estudante.
 
+Ao abrir o perfil, o assistente de instalação volta a ser apresentado enquanto
+o dispositivo ainda não estiver identificado como instalado. Depois da
+instalação, um segundo diálogo recomenda a ativação do Push; ele continua a ser
+apresentado nos acessos seguintes ao perfil até a subscrição deste dispositivo
+estar ativa. Se o navegador tiver bloqueado a permissão, o diálogo troca a ação
+automática por instruções para rever as definições do site.
+
 Configure no ambiente do servidor:
 
 ```dotenv
