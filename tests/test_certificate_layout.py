@@ -33,7 +33,7 @@ class CertificateLayoutTests(unittest.TestCase):
             self.assertLessEqual(box["y"] + box["h"], self.layout["height"] - 22, key)
         items = list(boxes.items())
         intentional_overlap = {"academicStampUrl", "directorSignatureUrl"}
-        # Reserved label boxes include whitespace beside the centered text.
+        # The fixed stamp can sit behind the centered director labels.
         stamp_label_boxes = (
             {"academicStampUrl", "director"},
             {"academicStampUrl", "directorTitle"},
@@ -58,20 +58,38 @@ class CertificateLayoutTests(unittest.TestCase):
         self.assertEqual((stamp["w"], stamp["h"]), (100, 100))
         self.assertEqual((stamp["x"], stamp["y"]), (232, 412))
         self.assertEqual(signature["x"] + signature["w"] - stamp["x"], 60)
-        for key in ("director", "directorTitle"):
-            text = self.layout["texts"][key]
-            self.assertEqual(text["x"] + text["w"] / 2, 184)
 
-    def test_stamp_clears_rendered_director_labels_in_reference_certificate(self):
-        stamp = self.layout["images"]["academicStampUrl"]
+    def test_director_line_and_labels_share_the_left_column_axis(self):
+        for key in ("issuer", "title", "number", "location", "date", "director", "directorTitle"):
+            box = self.layout["texts"][key]
+            self.assertEqual(box["x"] + box["w"] / 2, 225, key)
+        x1, y1, x2, y2 = self.layout["signatureLines"][0]
+        self.assertEqual((x1 + x2) / 2, 225)
+        self.assertEqual(x2 - x1, 209)
+        self.assertEqual((y1, y2), (459, 459))
+        self.assertEqual(self.layout["signatureLines"][1], [469, 459, 684, 459])
+
+    def test_pdf_director_labels_are_centered_on_the_left_column_axis(self):
+        expected = {}
         for key, value, box in professional_text_blocks(self.data, self.layout):
             if key not in ("director", "directorTitle"):
                 continue
             size, lines = fit_certificate_box(value, box, key)
             font = FONT_BOLD if box.get("bold") else FONT_REGULAR
             for line in lines:
-                right = box["x"] + (box["w"] + stringWidth(line, font, size)) / 2
-                self.assertLess(right, stamp["x"], key)
+                expected[line] = stringWidth(line, font, size)
+        positions = {}
+
+        def visit(text, cm, tm, font, size):
+            label = text.strip()
+            if label in expected and tm[4] < 400 and 464 <= self.layout["height"] - tm[5] <= 511:
+                positions[label] = tm[4] + expected[label] / 2
+
+        page = PdfReader(BytesIO(build_course_certificate_pdf(self.data, "professional"))).pages[0]
+        page.extract_text(visitor_text=visit)
+        self.assertEqual(positions.keys(), expected.keys())
+        for label, center in positions.items():
+            self.assertAlmostEqual(center, 225, places=3, msg=label)
 
     def test_long_text_is_complete_inside_its_reserved_area(self):
         self.data["student_name"] = "Ana Sofia Luís de Almeida e Vasconcelos Chissano"
