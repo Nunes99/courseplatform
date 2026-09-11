@@ -21,7 +21,7 @@ class CertificateLayoutTests(unittest.TestCase):
         self.data = json.loads(FIXTURE.read_text(encoding="utf-8"))
         self.layout = professional_layout()
 
-    def test_all_reserved_text_image_and_qr_areas_are_disjoint(self):
+    def test_only_the_academic_stamp_overlaps_the_director_signature(self):
         boxes = {**self.layout["texts"], **self.layout["images"]}
         qr = self.layout["qr"]
         boxes["qr"] = {**qr, "w": qr["size"], "h": qr["size"]}
@@ -32,11 +32,17 @@ class CertificateLayoutTests(unittest.TestCase):
             self.assertLessEqual(box["x"] + box["w"], self.layout["width"] - 22, key)
             self.assertLessEqual(box["y"] + box["h"], self.layout["height"] - 22, key)
         items = list(boxes.items())
+        intentional_overlap = {"academicStampUrl", "directorSignatureUrl"}
         for index, (name, a) in enumerate(items):
             for other, b in items[index + 1:]:
                 overlap = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"]) > 0
                 overlap &= min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"]) > 0
-                self.assertFalse(overlap, f"{name} overlaps {other}")
+                if {name, other} == intentional_overlap:
+                    self.assertTrue(overlap, "Stamp must overlap the director signature")
+                else:
+                    self.assertFalse(overlap, f"{name} overlaps {other}")
+        image_order = list(self.layout["images"])
+        self.assertGreater(image_order.index("academicStampUrl"), image_order.index("directorSignatureUrl"))
 
     def test_long_text_is_complete_inside_its_reserved_area(self):
         self.data["student_name"] = "Ana Sofia Luís de Almeida e Vasconcelos Chissano"
