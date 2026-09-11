@@ -44,6 +44,18 @@ class CertificateLayoutTests(unittest.TestCase):
         image_order = list(self.layout["images"])
         self.assertGreater(image_order.index("academicStampUrl"), image_order.index("directorSignatureUrl"))
 
+    def test_director_signature_keeps_original_left_and_baseline_anchors(self):
+        signature = self.layout["images"]["directorSignatureUrl"]
+        self.assertEqual(signature["x"], 124)
+        self.assertEqual(signature["y"] + signature["h"], 455)
+        self.assertEqual((signature["w"], signature["h"]), (168, 44))
+        stamp = self.layout["images"]["academicStampUrl"]
+        self.assertEqual((stamp["w"], stamp["h"]), (100, 100))
+        self.assertGreaterEqual(signature["x"] + signature["w"] - stamp["x"], 30)
+        for key in ("director", "directorTitle"):
+            text = self.layout["texts"][key]
+            self.assertEqual(text["x"] + text["w"] / 2, 184)
+
     def test_long_text_is_complete_inside_its_reserved_area(self):
         self.data["student_name"] = "Ana Sofia Luís de Almeida e Vasconcelos Chissano"
         self.data["course_title"] = "Economia Industrial, Análise de Investimentos e Gestão de Projetos Energéticos"
