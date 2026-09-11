@@ -146,6 +146,11 @@ class CertificateLayoutTests(unittest.TestCase):
         self.assertEqual(len(reader.pages[0].images), 6)
         self.assertIn(self.data["student_name"], reader.pages[0].extract_text())
 
+    def test_gold_text_uses_the_same_color_as_the_frame(self):
+        palette = self.layout["colors"]
+        self.assertEqual(palette["gold"], palette["frame"])
+        self.assertEqual(palette["frame"], "#C9A449")
+
     def test_public_and_packaged_layouts_match(self):
         public = Path(__file__).resolve().parents[1] / "public/assets/certificate-layout.json"
         self.assertEqual(json.loads(public.read_text(encoding="utf-8")), self.layout)

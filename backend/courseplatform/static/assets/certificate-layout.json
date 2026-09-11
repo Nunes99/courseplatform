@@ -2,7 +2,7 @@
   "version": 1,
   "width": 841.8897637795277,
   "height": 595.2755905511812,
-  "colors": {"ink": "#143B50", "muted": "#405668", "gold": "#987221", "frame": "#C9A449", "line": "#DCE3E8"},
+  "colors": {"ink": "#143B50", "muted": "#405668", "gold": "#C9A449", "frame": "#C9A449", "line": "#DCE3E8"},
   "texts": {
     "issuer": {"x": 64, "y": 117, "w": 322, "h": 30, "size": 11, "min": 9, "bold": true, "color": "gold"},
     "title": {"x": 64, "y": 157, "w": 322, "h": 44, "size": 18, "min": 13, "bold": true, "color": "gold"},
