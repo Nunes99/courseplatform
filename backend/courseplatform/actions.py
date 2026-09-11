@@ -2873,6 +2873,7 @@ def public_certificate(row: dict[str, Any] | None):
         "paymentStatus": row.get("payment_status") or "NOT_REQUIRED",
         "statusNote": row.get("status_note"),
         "statusUpdatedAt": iso(row.get("status_updated_at")),
+        "approvedAt": iso(row.get("approved_at")),
         "templateSnapshot": row.get("template_snapshot_json") or {},
         "courseTitle": row.get("course_title") or row.get("title"),
         "studentName": row.get("student_name") or row.get("full_name"),
@@ -2963,6 +2964,7 @@ def default_certificate_profile(course: dict[str, Any] | None = None):
         "paymentAccountName": "",
         "paymentAccountNumber": "",
         "paymentInstructions": "Adicione aqui as instruções de pagamento do certificado profissional.",
+        "participation": normalize_participation_policy(),
         "assets": {
             "logoUrl": "",
             "productLogoUrl": "",
@@ -2972,6 +2974,90 @@ def default_certificate_profile(course: dict[str, Any] | None = None):
             "institutionalSealUrl": "",
         },
     }
+
+
+def normalize_participation_policy(value: Any = None) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    mode = source.get("releaseMode", "automatic")
+    if mode not in {"automatic", "approval"}:
+        raise ApiError("INVALID_CERTIFICATE_POLICY", "Condição de disponibilização inválida.")
+    limit = source.get("maxDownloads")
+    if limit not in (None, ""):
+        if isinstance(limit, bool) or not str(limit).isdigit() or not 1 <= int(limit) <= 1000:
+            raise ApiError("INVALID_CERTIFICATE_POLICY", "O limite deve ser um número inteiro entre 1 e 1000.")
+        limit = int(limit)
+    else:
+        limit = None
+    dates = {}
+    for key in ("availableFrom", "availableUntil"):
+        raw = source.get(key)
+        parsed = parse_datetime(raw) if raw else None
+        if raw and (not parsed or parsed.tzinfo is None):
+            raise ApiError("INVALID_CERTIFICATE_POLICY", "Indique uma data válida com fuso horário.")
+        dates[key] = iso(parsed) if parsed else None
+    if dates["availableFrom"] and dates["availableUntil"]:
+        if parse_datetime(dates["availableUntil"]) <= parse_datetime(dates["availableFrom"]):
+            raise ApiError("INVALID_CERTIFICATE_POLICY", "O fim do período deve ser posterior ao início.")
+    return {
+        "enabled": as_bool(source["enabled"]) if "enabled" in source else True,
+        "releaseMode": mode,
+        "maxDownloads": limit,
+        **dates,
+        "instructions": str_value(source.get("instructions"))[:2000],
+    }
+
+
+def participation_policy(conn, course_id: str) -> dict[str, Any]:
+    row = conn.execute(
+        "select * from courseplatform.certificate_settings where course_id = %s", (course_id,),
+    ).fetchone()
+    return normalize_participation_policy(((row or {}).get("certificate_profile_json") or {}).get("participation"))
+
+
+def certificate_download_access(cert: dict[str, Any], policy: dict[str, Any] | None = None):
+    count = int(cert.get("download_count") or 0)
+    limit = cert.get("max_downloads")
+    code, message = "", ""
+    if (cert.get("certificate_type") or "SIMPLE") == "SIMPLE":
+        policy = normalize_participation_policy(policy)
+        limits = [int(value) for value in (limit, policy["maxDownloads"]) if value is not None]
+        limit = min(limits) if limits else None
+        if not policy["enabled"]:
+            code, message = "PARTICIPATION_DISABLED", "Este curso não disponibiliza certificado de participação."
+        elif policy["availableFrom"] and utc_now() < parse_datetime(policy["availableFrom"]):
+            code, message = "CERTIFICATE_NOT_YET_AVAILABLE", "O período de download ainda não começou."
+        elif policy["availableUntil"] and utc_now() >= parse_datetime(policy["availableUntil"]):
+            code, message = "CERTIFICATE_WINDOW_CLOSED", "O período de download terminou. Contacte a administração."
+        elif policy["releaseMode"] == "approval" and not cert.get("approved_at"):
+            code, message = "CERTIFICATE_APPROVAL_REQUIRED", "Solicite a aprovação da administração para baixar o certificado."
+    if not code and cert.get("status") != "ISSUED":
+        code, message = "CERTIFICATE_ACCESS_BLOCKED", "O acesso a este certificado não está disponível."
+    if not code and limit is not None and count >= int(limit):
+        code, message = "DOWNLOAD_LIMIT_REACHED", "O limite de downloads deste certificado foi atingido."
+    return {"allowed": not code, "code": code, "message": message, "maxDownloads": limit,
+            "remainingDownloads": None if limit is None else max(0, int(limit) - count)}
+
+
+def require_certificate_download_access(conn, cert):
+    policy = participation_policy(conn, cert["course_id"]) if (cert.get("certificate_type") or "SIMPLE") == "SIMPLE" else None
+    access = certificate_download_access(cert, policy)
+    if not access["allowed"]:
+        raise ApiError(access["code"], access["message"])
+    return access
+
+
+def student_certificate_payload(cert, policy):
+    if not cert or cert.get("status") == "DELETED":
+        return None
+    if (cert.get("certificate_type") or "SIMPLE") == "SIMPLE" and not policy["enabled"]:
+        return None
+    result = public_certificate(cert)
+    result["downloadAccess"] = certificate_download_access(cert, policy)
+    # Withhold document content when the student is not allowed to obtain it.
+    if not result["downloadAccess"]["allowed"]:
+        result["templateSnapshot"] = {}
+        result["driveUrl"] = ""
+    return result
 
 
 def normalize_certificate_profile(value: Any, course: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -3003,6 +3089,7 @@ def normalize_certificate_profile(value: Any, course: dict[str, Any] | None = No
             normalized[key] = str_value(source.get(key))
     normalized["printAccess"] = normalized["printAccess"] if normalized["printAccess"] in {"free", "paid", "blocked"} else defaults["printAccess"]
     normalized["printCurrency"] = normalized["printCurrency"] or defaults["printCurrency"]
+    normalized["participation"] = normalize_participation_policy(source.get("participation"))
     normalized["assets"] = {
         key: str_value(assets.get(key))
         for key in defaults["assets"].keys()
@@ -3219,10 +3306,17 @@ def refresh_enrollment_progress(conn, progress_id: str | None):
 
 def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
     ensure_certificate_feature_schema(conn)
+    # Serialize issuance and participation requests for this enrollment.
+    conn.execute(
+        "select enrollment_id from courseplatform.enrollments where student_id = %s and course_id = %s for update",
+        (student["student_id"], course_id),
+    ).fetchone()
     enrollment, course, _, _, completed = course_completion_snapshot(conn, student["student_id"], course_id)
     enrollment = sync_enrollment_completion(conn, enrollment, completed, (enrollment or {}).get("final_score"))
     if not completed:
         return None, enrollment, course, False
+    if not participation_policy(conn, course_id)["enabled"]:
+        return None, enrollment, course, True
     existing = conn.execute(
         """
         select cert.*, c.title as course_title, s.full_name as student_name
@@ -3231,7 +3325,6 @@ def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
         join courseplatform.students s on s.student_id = cert.student_id
         where cert.student_id = %s and cert.course_id = %s
           and coalesce(cert.certificate_type, 'SIMPLE') = 'SIMPLE'
-          and coalesce(cert.status, 'ISSUED') <> 'DELETED'
         order by cert.issue_date desc nulls last
         limit 1
         """,
@@ -4952,8 +5045,9 @@ def my_certificate(payload: dict[str, Any]):
     course_id = payload.get("courseId") or get_settings().default_course_id
     with connection() as conn:
         cert, _, _, _ = ensure_simple_certificate(conn, student, course_id)
+        policy = participation_policy(conn, course_id)
         conn.commit()
-    return success({"certificate": public_certificate(cert)})
+    return success({"certificate": student_certificate_payload(cert, policy)})
 
 
 def my_certifications(payload: dict[str, Any]):
@@ -4988,17 +5082,53 @@ def my_certifications(payload: dict[str, Any]):
             """,
             (student["student_id"], course_id),
         ).fetchall()
+        policy = normalize_participation_policy(((settings_row or {}).get("certificate_profile_json") or {}).get("participation"))
         conn.commit()
     return success({
         "student": public_student(student),
         "course": public_course(course),
         "enrollment": public_enrollment(enrollment),
         "completed": completed,
-        "simpleCertificate": public_certificate(simple_cert),
-        "certificates": [public_certificate(row) for row in certificates],
+        "simpleCertificate": student_certificate_payload(simple_cert, policy),
+        "certificates": [item for row in certificates if (item := student_certificate_payload(row, policy))],
         "requests": [public_certificate_request(row) for row in requests],
         "settings": certificate_settings_payload(settings_row, course),
     })
+
+
+def request_participation_certificate(payload: dict[str, Any]):
+    _, student = student_context(payload)
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    with connection() as conn:
+        cert, _, _, completed = ensure_simple_certificate(conn, student, course_id)
+        if not completed:
+            raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado.")
+        policy = participation_policy(conn, course_id)
+        if not policy["enabled"]:
+            raise ApiError("PARTICIPATION_DISABLED", "Este curso não disponibiliza certificado de participação.")
+        access = certificate_download_access(cert, policy)
+        if access["allowed"]:
+            raise ApiError("CERTIFICATE_ALREADY_AVAILABLE", "O certificado já está disponível para download.")
+        request = conn.execute(
+            """
+            select * from courseplatform.certificate_requests
+            where student_id = %s and course_id = %s and request_type = 'PARTICIPATION'
+              and status = 'PAYMENT_SUBMITTED'
+            order by created_at desc limit 1
+            """, (student["student_id"], course_id),
+        ).fetchone()
+        if not request:
+            request = conn.execute(
+                """
+                insert into courseplatform.certificate_requests
+                  (request_id, student_id, course_id, request_type, status, created_at, updated_at)
+                values (%s, %s, %s, 'PARTICIPATION', 'PAYMENT_SUBMITTED', now(), now())
+                returning *
+                """, (generate_id("CREQ"), student["student_id"], course_id),
+            ).fetchone()
+            audit(conn, "STUDENT", student["student_id"], "PARTICIPATION_REQUESTED", "CERTIFICATE_REQUEST", request["request_id"])
+        conn.commit()
+    return success({"request": public_certificate_request(request)})
 
 
 def request_professional_certificate(payload: dict[str, Any]):
@@ -5082,6 +5212,7 @@ def submit_professional_certificate_payment(payload: dict[str, Any]):
                 submitted_at = now(),
                 updated_at = now()
             where request_id = %s and student_id = %s
+              and request_type = 'PROFESSIONAL'
               and status in ('REQUESTED', 'PAYMENT_SUBMITTED')
               and certificate_id is null
             returning *
@@ -5106,17 +5237,12 @@ def record_certificate_download(payload: dict[str, Any]):
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         cert = conn.execute(
-            "select * from courseplatform.certificates where certificate_id = %s and student_id = %s",
+            "select * from courseplatform.certificates where certificate_id = %s and student_id = %s for update",
             (payload["certificateId"], student["student_id"]),
         ).fetchone()
         if not cert:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-        if cert.get("status") != "ISSUED":
-            raise ApiError("CERTIFICATE_ACCESS_BLOCKED", "O acesso a este certificado não está disponível.")
-        max_downloads = cert.get("max_downloads")
-        download_count = int(cert.get("download_count") or 0)
-        if max_downloads is not None and download_count >= int(max_downloads):
-            raise ApiError("DOWNLOAD_LIMIT_REACHED", "O limite de downloads deste certificado foi atingido.")
+        require_certificate_download_access(conn, cert)
         cert = conn.execute(
             """
             update courseplatform.certificates
@@ -5154,12 +5280,7 @@ def certificate_pdf_payload(payload: dict[str, Any]):
         ).fetchone()
         if not cert:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-        if cert.get("status") != "ISSUED":
-            raise ApiError("CERTIFICATE_ACCESS_BLOCKED", "O acesso a este certificado não está disponível.")
-        max_downloads = cert.get("max_downloads")
-        download_count = int(cert.get("download_count") or 0)
-        if max_downloads is not None and download_count >= int(max_downloads):
-            raise ApiError("DOWNLOAD_LIMIT_REACHED", "O limite de downloads deste certificado foi atingido.")
+        require_certificate_download_access(conn, cert)
         snapshot = cert.get("template_snapshot_json") or certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
         media = read_media_config_with_conn(conn, cert.get("course_id")) if cert else {"logoUrl": ""}
         conn.commit()
@@ -7128,10 +7249,12 @@ def admin_list_certificates(payload: dict[str, Any]):
         ensure_certificate_feature_schema(conn)
         rows = conn.execute(
             """
-            select cert.*, s.full_name as student_name, s.email, c.title as course_title
+            select cert.*, s.full_name as student_name, s.email, c.title as course_title,
+                   cs.certificate_profile_json as course_certificate_profile
             from courseplatform.certificates cert
             join courseplatform.students s on s.student_id = cert.student_id
             join courseplatform.courses c on c.course_id = cert.course_id
+            left join courseplatform.certificate_settings cs on cs.course_id = cert.course_id
             where (
                 %s = 'ALL'
                 or (%s = 'ACTIVE' and coalesce(cert.status, 'ISSUED') <> 'DELETED')
@@ -7149,7 +7272,11 @@ def admin_list_certificates(payload: dict[str, Any]):
             (status, status, status, query, f"%{query}%", limit),
         ).fetchall()
         conn.commit()
-    return success({"certificates": [public_certificate(row) for row in rows]})
+    return success({"certificates": [
+        {**public_certificate(row), "downloadAccess": certificate_download_access(
+            row, (row.get("course_certificate_profile") or {}).get("participation"),
+        )} for row in rows
+    ]})
 
 
 def admin_set_certificate_status(payload: dict[str, Any]):
@@ -7160,21 +7287,36 @@ def admin_set_certificate_status(payload: dict[str, Any]):
         raise ApiError("INVALID_CERTIFICATE_STATUS", "Estado de certificado inválido.")
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
+        current = conn.execute(
+            "select * from courseplatform.certificates where certificate_id = %s for update",
+            (payload["certificateId"],),
+        ).fetchone()
+        if not current:
+            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
+        if status == "ISSUED" and (current.get("certificate_type") or "SIMPLE") == "SIMPLE":
+            if not participation_policy(conn, current["course_id"])["enabled"]:
+                raise ApiError("PARTICIPATION_DISABLED", "Ative o certificado de participação na configuração do curso antes de o disponibilizar.")
+        reset_downloads = as_bool(payload.get("resetDownloads")) and status == "ISSUED"
         certificate = conn.execute(
             """
             update courseplatform.certificates
             set status = %s,
                 status_note = %s,
                 status_updated_by = %s,
-                status_updated_at = now()
+                status_updated_at = now(),
+                approved_by = case when %s = 'ISSUED' then %s else approved_by end,
+                approved_at = case when %s = 'ISSUED' then now() else approved_at end,
+                download_count = case when %s then 0 else download_count end
             where certificate_id = %s
             returning *
             """,
-            (status, str_value(payload.get("statusNote")), admin["admin_id"], payload["certificateId"]),
+            (status, str_value(payload.get("statusNote")), admin["admin_id"], status, admin["admin_id"],
+             status, reset_downloads, payload["certificateId"]),
         ).fetchone()
         if not certificate:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_STATUS_CHANGED", "CERTIFICATE", certificate["certificate_id"], {"status": status})
+        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_STATUS_CHANGED", "CERTIFICATE", certificate["certificate_id"],
+              {"status": status, "resetDownloads": reset_downloads, "previousDownloadCount": current.get("download_count")})
         conn.commit()
     return success({"certificate": public_certificate(certificate)})
 
@@ -7263,6 +7405,27 @@ def admin_delete_certificate(payload: dict[str, Any]):
     return success({"certificate": public_certificate(certificate)})
 
 
+def approve_participation_request(conn, request, admin):
+    student = conn.execute("select * from courseplatform.students where student_id = %s", (request["student_id"],)).fetchone()
+    cert, _, _, completed = ensure_simple_certificate(conn, student, request["course_id"])
+    if not completed:
+        raise ApiError("COURSE_NOT_COMPLETED", "O estudante ainda não concluiu este curso.")
+    if not cert:
+        raise ApiError("PARTICIPATION_DISABLED", "Ative o certificado de participação na configuração do curso antes de aprovar o pedido.")
+    updated = conn.execute(
+        """
+        update courseplatform.certificates
+        set status = 'ISSUED', approved_by = %s, approved_at = now(),
+            download_count = 0, status_note = 'Pedido de participação aprovado.',
+            status_updated_by = %s, status_updated_at = now()
+        where certificate_id = %s returning *
+        """, (admin["admin_id"], admin["admin_id"], cert["certificate_id"]),
+    ).fetchone()
+    audit(conn, "ADMIN", admin["admin_id"], "PARTICIPATION_APPROVED", "CERTIFICATE", cert["certificate_id"],
+          {"requestId": request["request_id"], "previousDownloadCount": cert.get("download_count")})
+    return updated
+
+
 def admin_review_certificate_request(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["requestId", "decision"])
@@ -7283,7 +7446,17 @@ def admin_review_certificate_request(payload: dict[str, Any]):
                 "Este pedido já foi revisto ou ainda não está pronto para avaliação.",
             )
         certificate = None
-        if decision == "APPROVED":
+        if decision == "APPROVED" and request.get("request_type") == "PARTICIPATION":
+            certificate = approve_participation_request(conn, request, admin)
+            request = conn.execute(
+                """
+                update courseplatform.certificate_requests
+                set status = 'APPROVED', certificate_id = %s, reviewed_by = %s,
+                    reviewed_at = now(), admin_notes = %s, updated_at = now()
+                where request_id = %s returning *
+                """, (certificate["certificate_id"], admin["admin_id"], str_value(payload.get("adminNotes")), request["request_id"]),
+            ).fetchone()
+        elif decision == "APPROVED":
             student = conn.execute("select * from courseplatform.students where student_id = %s", (request["student_id"],)).fetchone()
             course = conn.execute("select * from courseplatform.courses where course_id = %s", (request["course_id"],)).fetchone()
             certificate = conn.execute(
@@ -7410,7 +7583,8 @@ def admin_save_certificate_settings(payload: dict[str, Any]):
         current = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
         current_payload = certificate_settings_payload(current, course)
         survey_questions = normalize_survey_questions(payload.get("surveyQuestions")) if isinstance(payload.get("surveyQuestions"), list) else current_payload.get("surveyQuestions", [])
-        profile = normalize_certificate_profile(payload.get("certificateProfile") or current_payload.get("certificateProfile"), course)
+        profile_source = {**current_payload.get("certificateProfile", {}), **(payload.get("certificateProfile") or {})}
+        profile = normalize_certificate_profile(profile_source, course)
         row = conn.execute(
             """
             insert into courseplatform.certificate_settings
@@ -9290,6 +9464,7 @@ ACTIONS = {
     "changeMyEmail": change_my_email,
     "getMyCertifications": my_certifications,
     "requestProfessionalCertificate": request_professional_certificate,
+    "requestParticipationCertificate": request_participation_certificate,
     "submitProfessionalCertificatePayment": submit_professional_certificate_payment,
     "recordCertificateDownload": record_certificate_download,
     "startAttempt": start_attempt,

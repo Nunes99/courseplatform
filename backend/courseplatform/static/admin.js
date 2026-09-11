@@ -2235,7 +2235,7 @@ function renderCertifications() {
     <div class="admin-page-heading">
       <div>
         <p class="eyebrow">Certificações</p>
-        <h1>Certificados e pedidos profissionais</h1>
+        <h1>Certificados e pedidos</h1>
       </div>
       <div class="certificate-admin-toolbar">
         <label class="certificate-global-search">
@@ -2307,7 +2307,7 @@ function renderCertifications() {
       <div class="course-section-heading">
         <div>
           <p class="eyebrow">Pagamentos e libertações</p>
-          <h2>Pedidos de certificado profissional</h2>
+          <h2>Pedidos de certificados</h2>
         </div>
         <span>${requests.length} pedidos</span>
       </div>
@@ -2345,10 +2345,11 @@ function renderCertifications() {
               ${certificateCourseOptions()}
             </select>
           </label>
+          ${participationPolicyFields(settings.certificateProfile?.participation || {})}
           ${certificateProfileFormFields(settings.certificateProfile || {})}
           <div class="dialog-actions">
             <button class="button button-secondary" type="reset">Cancelar alterações</button>
-            <button class="button button-primary" type="submit">Guardar identidade do curso</button>
+            <button class="button button-primary" type="submit">Guardar configuração do curso</button>
           </div>
         </form>
       </article>
@@ -2389,8 +2390,10 @@ function renderCertifications() {
   });
   document.querySelector('#certificateSettingsForm').addEventListener('submit', saveCertificateSettings);
   document.querySelector('#certificateSettingsForm').addEventListener('input', updateCertificateModelPreview);
+  document.querySelector('[name="participationEnabled"]').addEventListener('change', syncParticipationFields);
+  syncParticipationFields();
   document.querySelector('#certificateSettingsForm').addEventListener('reset', () => {
-    requestAnimationFrame(updateCertificateModelPreview);
+    requestAnimationFrame(() => { updateCertificateModelPreview(); syncParticipationFields(); });
   });
   root.querySelectorAll('[data-certificate-asset]').forEach((input) => {
     input.addEventListener('change', uploadCertificateAsset);
@@ -2446,6 +2449,44 @@ function certificateCourseOptions() {
   `).join('');
 }
 
+function participationPolicyFields(policy = {}) {
+  return `
+    <section class="participation-policy" aria-labelledby="participationPolicyTitle">
+      <h3 id="participationPolicyTitle">Certificado de participação</h3>
+      <label class="participation-toggle">
+        <input name="participationEnabled" type="checkbox" ${policy.enabled !== false ? 'checked' : ''}>
+        <span>Disponibilizar certificado gratuito neste curso</span>
+      </label>
+      <div class="certificate-template-form-grid" id="participationPolicyOptions">
+        <label><span>Condição de acesso</span>
+          <select name="participationReleaseMode">
+            ${studentFilterOption('automatic', 'Automático após conclusão', policy.releaseMode || 'automatic')}
+            ${studentFilterOption('approval', 'Mediante aprovação administrativa', policy.releaseMode || 'automatic')}
+          </select>
+        </label>
+        <label><span>Limite de downloads por estudante</span>
+          <input name="participationMaxDownloads" type="number" min="1" max="1000" step="1"
+            value="${escapeHtml(policy.maxDownloads ?? '')}" placeholder="Sem limite">
+        </label>
+        <label><span>Downloads disponíveis a partir de</span>
+          <input name="participationAvailableFrom" type="datetime-local" value="${escapeHtml(toDatetimeLocalValue(policy.availableFrom))}">
+        </label>
+        <label><span>Downloads disponíveis até</span>
+          <input name="participationAvailableUntil" type="datetime-local" value="${escapeHtml(toDatetimeLocalValue(policy.availableUntil))}">
+        </label>
+        <label class="form-span-2"><span>Condições adicionais para o estudante</span>
+          <textarea name="participationInstructions" maxlength="2000" rows="3">${escapeHtml(policy.instructions || '')}</textarea>
+        </label>
+      </div>
+    </section>
+  `;
+}
+
+function syncParticipationFields() {
+  const enabled = document.querySelector('[name="participationEnabled"]')?.checked;
+  document.querySelector('#participationPolicyOptions').hidden = !enabled;
+}
+
 function certificateProfileFormFields(profile = {}) {
   const assets = profile.assets || {};
   const standardLogoUrl = brandLogoUrl();
@@ -2494,7 +2535,7 @@ function certificateProfileFormFields(profile = {}) {
     </div>
     <div class="certificate-payment-policy">
       <div class="profile-section-heading">
-        <h3>Política de impressão</h3>
+        <h3>Certificado profissional: pagamento e acesso</h3>
         <p>Defina se o certificado profissional exige pagamento e aprovação administrativa.</p>
       </div>
       <div class="certificate-template-form-grid">
@@ -2585,12 +2626,13 @@ function adminCertificateThumbnailTemplate(certificate) {
 function adminCertificateRowTemplate(certificate) {
   const deleted = certificate.status === 'DELETED';
   const blocked = certificate.status === 'BLOCKED';
-  const accessLabel = deleted ? 'Atribuir novamente' : (blocked ? 'Liberar acesso' : 'Remover acesso');
-  const nextStatus = blocked || deleted ? 'ISSUED' : 'BLOCKED';
+  const awaitingApproval = ['CERTIFICATE_APPROVAL_REQUIRED', 'DOWNLOAD_LIMIT_REACHED'].includes(certificate.downloadAccess?.code);
+  const accessLabel = deleted ? 'Atribuir novamente' : (blocked || awaitingApproval ? 'Liberar acesso' : 'Remover acesso');
+  const nextStatus = blocked || deleted || awaitingApproval ? 'ISSUED' : 'BLOCKED';
   const dataset = adminCertificateActionDataset(certificate);
   const certificateType = certificate.certificateType === 'PROFESSIONAL' ? 'Profissional' : 'Participação';
   const downloads = Number(certificate.downloadCount || 0);
-  const maxDownloads = certificate.maxDownloads || (certificate.certificateType === 'PROFESSIONAL' ? 5 : 'Livre');
+  const maxDownloads = certificate.downloadAccess?.maxDownloads ?? certificate.maxDownloads ?? 'Livre';
   return `
     <div class="certificate-record-row ${deleted ? 'is-deleted' : ''} ${blocked ? 'is-blocked' : ''}">
       <div>
@@ -2604,7 +2646,8 @@ function adminCertificateRowTemplate(certificate) {
       <div>${escapeHtml(certificate.courseTitle || certificate.courseId || 'Curso')}</div>
       <div>${certificate.finalScore == null || certificate.finalScore === '' ? '-' : `${escapeHtml(certificate.finalScore)}%`}</div>
       <div>${escapeHtml(formatDate(certificate.issueDate))}</div>
-      <div><span class="certificate-generation-pill">${escapeHtml(downloads)} / ${escapeHtml(maxDownloads)}</span></div>
+      <div><span class="certificate-generation-pill">${escapeHtml(downloads)} / ${escapeHtml(maxDownloads)}</span>
+        ${certificate.downloadAccess?.message ? `<small>${escapeHtml(certificate.downloadAccess.message)}</small>` : ''}</div>
       <div class="certificate-record-actions">
         ${deleted ? '' : `
           <button class="button button-small button-secondary" type="button" data-open-admin-certificate ${dataset}>Visualizar</button>
@@ -2672,12 +2715,13 @@ function adminCertificateActionDataset(certificate) {
 }
 
 function certificateRequestCardTemplate(request) {
+  const isParticipation = request.requestType === 'PARTICIPATION';
   const receipt = request.paymentReceiptUrl ? adminFileCardTemplate({
     fileName: request.paymentReceiptName || 'Comprovativo',
     driveUrl: request.paymentReceiptUrl,
     mimeType: request.paymentReceiptMimeType,
     uploadedAt: request.submittedAt
-  }) : '<p class="empty-note">Sem comprovativo anexado. Em cursos com emissão livre, o pedido pode ser aprovado sem pagamento.</p>';
+  }) : `<p class="empty-note">${isParticipation ? 'Certificado de participação gratuito. Não requer comprovativo de pagamento.' : 'Sem comprovativo anexado. Em cursos com emissão livre, o pedido pode ser aprovado sem pagamento.'}</p>`;
   const canReview = request.status === 'PAYMENT_SUBMITTED';
   const canDelete = ['REQUESTED', 'REJECTED'].includes(request.status)
     && !request.certificateId
@@ -2711,8 +2755,9 @@ function certificateRequestCardTemplate(request) {
   return `
     <article class="certificate-request-card">
       <div>
-        <span class="status-pill ${statusClass(request.status)}">${statusLabel(request.status)}</span>
+        <span class="status-pill ${statusClass(request.status)}">${isParticipation && canReview ? 'Aguarda aprovação' : statusLabel(request.status)}</span>
         <h3>${escapeHtml(request.studentName || request.studentEmail || 'Estudante')}</h3>
+        <p>${isParticipation ? 'Certificado de participação' : 'Certificado profissional'}</p>
         <p>${escapeHtml(request.courseTitle || request.courseId)} &middot; ${escapeHtml(request.requestId)}</p>
       </div>
       ${receipt}
@@ -3023,6 +3068,14 @@ function updateCertificateModelPreview() {
 function certificateProfileFromForm(form) {
   const values = new FormData(form);
   return {
+    participation: {
+      enabled: values.has('participationEnabled'),
+      releaseMode: values.get('participationReleaseMode') || 'automatic',
+      maxDownloads: values.get('participationMaxDownloads') ? Number(values.get('participationMaxDownloads')) : null,
+      availableFrom: values.get('participationAvailableFrom') ? new Date(values.get('participationAvailableFrom')).toISOString() : null,
+      availableUntil: values.get('participationAvailableUntil') ? new Date(values.get('participationAvailableUntil')).toISOString() : null,
+      instructions: values.get('participationInstructions') || ''
+    },
     issuerName: values.get('issuerName'),
     certificateTitle: values.get('certificateTitle'),
     qualificationType: values.get('qualificationType'),
@@ -3285,9 +3338,10 @@ async function setCertificateStatusFromButton(button) {
   const label = status === 'ISSUED' ? 'liberar/atribuir novamente' : 'remover o acesso de';
   if (!confirmAdminAction(`Deseja ${label} este certificado?`)) return;
   const statusNote = window.prompt('Motivo/observação administrativa (opcional):', '') || '';
+  const resetDownloads = status === 'ISSUED' && confirmAdminAction('Deseja também reiniciar o contador de downloads?');
   setBusy(button, true, 'A guardar...');
   try {
-    await api.adminSetCertificateStatus(certificate.certificateId, status, statusNote);
+    await api.adminSetCertificateStatus(certificate.certificateId, status, statusNote, resetDownloads);
     showToast('Acesso do certificado atualizado.', 'success');
     await loadCertifications({ force: true });
   } catch (error) {

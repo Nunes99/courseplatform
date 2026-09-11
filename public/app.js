@@ -3388,7 +3388,7 @@ async function renderCertifications() {
   const simpleCertificate = result.simpleCertificate;
   const professionalCertificate = certificates.find((item) => item.certificateType === 'PROFESSIONAL' && item.status === 'ISSUED');
   const blockedProfessionalCertificate = certificates.find((item) => item.certificateType === 'PROFESSIONAL' && item.status === 'BLOCKED');
-  const activeRequest = requests.find((item) => ['REQUESTED', 'PAYMENT_SUBMITTED'].includes(item.status));
+  const activeRequest = requests.find((item) => item.requestType !== 'PARTICIPATION' && ['REQUESTED', 'PAYMENT_SUBMITTED'].includes(item.status));
   state.certifications = { ...result, settings, certificates, requests, activeRequest };
 
   if (!result.completed) {
@@ -3424,6 +3424,7 @@ async function renderCertifications() {
         </div>
       </div>
 
+      ${participationConditionsTemplate(settings, simpleCertificate, requests)}
       <div class="certification-list">
         ${certificateList.length ? certificateList.map(certificationListItemTemplate).join('') : `
           <div class="video-empty">Ainda não existem certificados emitidos.</div>
@@ -3451,12 +3452,53 @@ async function renderCertifications() {
   root.querySelectorAll('[data-open-payment-dialog]').forEach((button) => {
     button.addEventListener('click', () => showPaymentDialog(button.dataset.openPaymentDialog));
   });
+  root.querySelector('[data-request-participation]')?.addEventListener('click', requestParticipationCertificate);
   reportHeight();
+}
+
+function participationConditionsTemplate(settings, certificate, requests) {
+  const policy = settings.certificateProfile?.participation || {};
+  if (policy.enabled === false) {
+    return '<p class="certificate-policy-note">Este curso não inclui certificado de participação gratuito. Consulte abaixo as condições do certificado profissional.</p>';
+  }
+  const pending = requests.find(item => item.requestType === 'PARTICIPATION' && item.status === 'PAYMENT_SUBMITTED');
+  const rejected = requests.find(item => item.requestType === 'PARTICIPATION' && item.status === 'REJECTED');
+  const canRequest = !pending && (!certificate || ['CERTIFICATE_APPROVAL_REQUIRED', 'CERTIFICATE_ACCESS_BLOCKED', 'DOWNLOAD_LIMIT_REACHED'].includes(certificate.downloadAccess?.code));
+  return `
+    <section class="participation-conditions" aria-label="Condições do certificado de participação">
+      <h2>Certificado de participação</h2>
+      <dl class="participation-condition-grid">
+        <div><dt>Valor</dt><dd>Gratuito</dd></div>
+        <div><dt>Disponibilização</dt><dd>${policy.releaseMode === 'approval' ? 'Mediante aprovação administrativa' : 'Após conclusão do curso'}</dd></div>
+        <div><dt>Downloads</dt><dd>${policy.maxDownloads == null ? 'Sem limite' : `Até ${escapeHtml(policy.maxDownloads)} por estudante`}</dd></div>
+        ${policy.availableFrom ? `<div><dt>Disponível a partir de</dt><dd>${escapeHtml(formatDate(policy.availableFrom))}</dd></div>` : ''}
+        ${policy.availableUntil ? `<div><dt>Disponível até</dt><dd>${escapeHtml(formatDate(policy.availableUntil))}</dd></div>` : ''}
+      </dl>
+      ${policy.instructions ? `<p class="participation-instructions">${escapeHtml(policy.instructions)}</p>` : ''}
+      ${pending ? '<p role="status">Pedido recebido. Aguarde a aprovação da administração.</p>' : ''}
+      ${canRequest && rejected?.adminNotes ? `<p>Observação da administração: ${escapeHtml(rejected.adminNotes)}</p>` : ''}
+      ${canRequest ? '<button type="button" class="button button-secondary" data-request-participation>Solicitar acesso ao certificado de participação</button>' : ''}
+    </section>
+  `;
+}
+
+async function requestParticipationCertificate(event) {
+  const button = event.currentTarget;
+  setBusy(button, true, 'A enviar...');
+  try {
+    await api.requestParticipationCertificate(state.selectedCourseId);
+    showToast('Pedido de participação enviado para aprovação.', 'success');
+    await renderCertifications();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+  }
 }
 
 function certificationListItemTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
-  const isAvailable = certificate.status === 'ISSUED';
+  const isAvailable = certificate.status === 'ISSUED' && certificate.downloadAccess?.allowed !== false;
   const label = isProfessional ? 'CERTIFICADO PROFISSIONAL' : 'CERTIFICADO DE PARTICIPAÇÃO';
   const title = isProfessional ? 'Certificado profissional personalizado' : 'Certificado de Participação';
   const emittedAt = certificate.issueDate ? `Emitido em ${formatDate(certificate.issueDate)}` : 'Em emissão';
@@ -3469,7 +3511,8 @@ function certificationListItemTemplate(certificate) {
       <div class="certification-list-copy">
         <p class="eyebrow">${label}</p>
         <h2>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || title)}</h2>
-        <p>100% &middot; ${escapeHtml(isAvailable ? emittedAt : 'Acesso temporariamente removido pela administração')}</p>
+        <p>100% &middot; ${escapeHtml(isAvailable ? emittedAt : certificate.downloadAccess?.message || 'Acesso temporariamente removido pela administração')}</p>
+        ${certificate.downloadAccess?.remainingDownloads != null ? `<p>${escapeHtml(certificate.downloadAccess.remainingDownloads)} downloads restantes</p>` : ''}
         <div class="certification-list-actions">
           <code>${escapeHtml(certificateDisplayNumber(certificate) || certificate.certificateId || '')}</code>
           <button class="button button-secondary button-small" type="button"
@@ -3767,6 +3810,10 @@ function showCertificatePreview(certificateId) {
   const certificate = (state.certifications?.certificates || [])
     .find((item) => item.certificateId === certificateId);
   if (!certificate) return;
+  if (certificate.downloadAccess?.allowed === false) {
+    showToast(certificate.downloadAccess.message || 'Certificado indisponível.', 'error');
+    return;
+  }
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `

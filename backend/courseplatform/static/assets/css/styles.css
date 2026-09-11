@@ -13213,6 +13213,50 @@ pre,
   gap: 14px;
 }
 
+.participation-policy,
+.participation-conditions {
+  min-width: 0;
+  padding: 20px 0;
+  border-top: 1px solid var(--border-color, #dce1e5);
+  border-bottom: 1px solid var(--border-color, #dce1e5);
+}
+
+.participation-policy h3,
+.participation-conditions h2 {
+  font-size: 18px;
+  line-height: 1.4;
+  margin: 0 0 16px;
+}
+
+#certificateSettingsForm .participation-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+#certificateSettingsForm .participation-toggle input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+}
+
+#participationPolicyOptions[hidden] { display: none; }
+
+.participation-condition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 16px 24px;
+  margin: 0 0 16px;
+}
+
+.participation-condition-grid dt { font-size: 13px; color: var(--text-muted, #64748b); }
+.participation-condition-grid dd { margin: 4px 0 0; font-size: 14px; font-weight: 600; }
+.participation-instructions { white-space: pre-wrap; overflow-wrap: anywhere; }
+.participation-conditions button { max-width: 100%; white-space: normal; }
+
 .review-retry-action {
   display: grid;
   justify-items: start;

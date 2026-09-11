@@ -362,6 +362,10 @@ export class CoursePlatformApi {
     });
   }
 
+  requestParticipationCertificate(courseId = this.courseId) {
+    return this.studentRequest('requestParticipationCertificate', { courseId });
+  }
+
   async submitProfessionalCertificatePayment(requestId, file) {
     const prepared = await prepareFileForUpload(file, this.config);
     return this.studentRequest('submitProfessionalCertificatePayment', {
@@ -690,8 +694,8 @@ export class CoursePlatformApi {
     return this.cachedAdminRequest('adminListCertificates', filters, options);
   }
 
-  adminSetCertificateStatus(certificateId, status, statusNote = '') {
-    return this.mutateAdmin('adminSetCertificateStatus', { certificateId, status, statusNote });
+  adminSetCertificateStatus(certificateId, status, statusNote = '', resetDownloads = false) {
+    return this.mutateAdmin('adminSetCertificateStatus', { certificateId, status, statusNote, resetDownloads });
   }
 
   adminRefreshCertificateFormat(payload = {}) {
