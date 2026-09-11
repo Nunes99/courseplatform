@@ -4664,39 +4664,93 @@ def change_my_email(payload: dict[str, Any]):
     })
 
 
+def correction_deadline(payload: dict[str, Any]):
+    deadline = parse_datetime(payload.get("correctionDeadline"))
+    if deadline and deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    if not deadline or deadline <= utc_now():
+        raise ApiError("INVALID_CORRECTION_DEADLINE", "Indique um prazo futuro para o novo envio.")
+    return deadline
+
+
+def require_latest_attempt(conn, attempt):
+    newer = conn.execute(
+        """select attempt_id from courseplatform.attempts
+           where progress_id = %s and attempt_number > %s limit 1""",
+        (attempt["progress_id"], attempt["attempt_number"]),
+    ).fetchone()
+    if newer:
+        raise ApiError("ATTEMPT_SUPERSEDED", "Já existe uma tentativa mais recente. Abra essa tentativa para gerir o reenvio.")
+
+
+def editable_attempt(conn, attempt_id, student_id):
+    conn.execute(
+        """select p.progress_id from courseplatform.lesson_progress p
+           join courseplatform.attempts a on a.progress_id = p.progress_id
+           where a.attempt_id = %s and a.student_id = %s for update of p""",
+        (attempt_id, student_id),
+    ).fetchone()
+    attempt = conn.execute(
+        """select a.*, p.content_access_status, p.status as progress_status
+           from courseplatform.attempts a
+           join courseplatform.lesson_progress p on p.progress_id = a.progress_id
+           where a.attempt_id = %s and a.student_id = %s for update of a""",
+        (attempt_id, student_id),
+    ).fetchone()
+    if not attempt or attempt["status"] != "IN_PROGRESS":
+        raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa já não pode ser alterada. Solicite autorização para um novo envio.")
+    deadline = parse_datetime(attempt.get("deadline_at"))
+    if deadline and deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    if deadline and deadline <= utc_now():
+        raise ApiError("ATTEMPT_TIME_EXCEEDED", "O prazo terminou. Solicite à administração autorização para um novo envio.")
+    access = attempt.get("content_access_status") or ("LOCKED" if attempt.get("progress_status") == "LOCKED" else "AVAILABLE")
+    if access != "AVAILABLE":
+        raise ApiError("LESSON_LOCKED", "Este módulo não está disponível para alterações.")
+    require_latest_attempt(conn, attempt)
+    return attempt
+
+
 def start_attempt(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["lessonId"])
     prepare_assessment_feature_schema()
     lesson_id = payload["lessonId"]
-    progress = fetch_one(
+    with connection() as conn:
+        return start_attempt_with_conn(conn, student, lesson_id)
+
+
+def start_attempt_with_conn(conn, student, lesson_id):
+    # Serialize starts and consume each retry permission only once.
+    progress = conn.execute(
         """
         select p.*, l.exercise_minutes, l.individual_minutes, l.submission_duration_minutes
         from courseplatform.lesson_progress p
         join courseplatform.lessons l on l.lesson_id = p.lesson_id
         where p.student_id = %s and p.lesson_id = %s
+        for update of p
         """,
         (student["student_id"], lesson_id),
-    )
+    ).fetchone()
     if not progress or progress_access_status(progress) != "AVAILABLE":
         raise ApiError("LESSON_LOCKED", "Este módulo ainda não está disponível.")
     if progress_evaluation_status(progress) not in {"NOT_STARTED", "IN_PROGRESS", "CORRECTION_REQUIRED", "FAILED", "TIME_EXCEEDED"}:
-        raise ApiError("ATTEMPT_NOT_AVAILABLE", "Não e possível iniciar uma tentativa neste estado.")
+        raise ApiError("ATTEMPT_NOT_AVAILABLE", "Não é possível iniciar uma tentativa neste estado.")
 
-    existing = fetch_one(
+    existing = conn.execute(
         """
         select *
         from courseplatform.attempts
-        where student_id = %s and lesson_id = %s and status = 'IN_PROGRESS'
-        order by started_at desc nulls last
+        where student_id = %s and lesson_id = %s
+        order by attempt_number desc, created_at desc
         limit 1
+        for update
         """,
         (student["student_id"], lesson_id),
-    )
-    if existing:
-        existing = expire_attempt_if_needed(existing)
-        if existing and existing.get("status") == "IN_PROGRESS":
-            return success({"attempt": public_attempt(existing)})
+    ).fetchone()
+    if existing and existing.get("status") == "IN_PROGRESS":
+        editable_attempt(conn, existing["attempt_id"], student["student_id"])
+        return success({"attempt": public_attempt(existing)})
 
     now = utc_now()
     minutes = int_value(progress.get("submission_duration_minutes"))
@@ -4704,41 +4758,67 @@ def start_attempt(payload: dict[str, Any]):
         minutes = int_value(progress.get("exercise_minutes")) + int_value(progress.get("individual_minutes"))
     if minutes <= 0:
         minutes = 180
-    attempt_number = int_value(progress.get("attempt_count")) + 1
-    with connection() as conn:
-        attempt = conn.execute(
-            """
-            insert into courseplatform.attempts
-              (attempt_id, progress_id, student_id, lesson_id, attempt_number, started_at,
-               deadline_at, submitted_at, status, score, retry_authorized, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, null, 'IN_PROGRESS', null, false, %s, %s)
-            returning *
-            """,
-            (
-                generate_id("ATT"),
-                progress["progress_id"],
-                student["student_id"],
-                lesson_id,
-                attempt_number,
-                now,
-                now + timedelta(minutes=minutes),
-                now,
-                now,
-            ),
+    deadline = now + timedelta(minutes=minutes)
+    is_retry = bool(existing and progress_evaluation_status(progress) != "NOT_STARTED")
+    if is_retry:
+        if not as_bool(existing.get("retry_authorized")):
+            raise ApiError("RETRY_NOT_AUTHORIZED", "A administração precisa de autorizar um novo envio.")
+        review = conn.execute(
+            """select correction_deadline from courseplatform.reviews
+               where attempt_id = %s order by reviewed_at desc nulls last limit 1""",
+            (existing["attempt_id"],),
         ).fetchone()
+        if review and review.get("correction_deadline"):
+            deadline = parse_datetime(review["correction_deadline"])
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+        if deadline <= now:
+            raise ApiError("RETRY_DEADLINE_EXPIRED", "O prazo autorizado para o novo envio terminou. Solicite um novo prazo à administração.")
+    attempt_number = int_value(progress.get("attempt_count")) + 1
+    if existing:
+        attempt_number = max(attempt_number, int_value(existing.get("attempt_number")) + 1)
+    attempt = conn.execute(
+        """
+        insert into courseplatform.attempts
+          (attempt_id, progress_id, student_id, lesson_id, attempt_number, started_at,
+           deadline_at, submitted_at, status, score, retry_authorized, created_at, updated_at)
+        values (%s, %s, %s, %s, %s, %s, %s, null, 'IN_PROGRESS', null, false, %s, %s)
+        returning *
+        """,
+        (
+            generate_id("ATT"), progress["progress_id"], student["student_id"], lesson_id,
+            attempt_number, now, deadline, now, now,
+        ),
+    ).fetchone()
+    if is_retry:
         conn.execute(
-            """
-            update courseplatform.lesson_progress
-            set status = 'IN_PROGRESS', evaluation_status = 'IN_PROGRESS',
-                content_access_status = coalesce(content_access_status, 'AVAILABLE'),
-                started_at = coalesce(started_at, %s),
-                attempt_count = %s, updated_at = %s
-            where progress_id = %s
-            """,
-            (now, attempt_number, now, progress["progress_id"]),
+            "update courseplatform.attempts set retry_authorized = false, updated_at = %s where attempt_id = %s",
+            (now, existing["attempt_id"]),
         )
-        audit(conn, "STUDENT", student["student_id"], "ATTEMPT_STARTED", "ATTEMPT", attempt["attempt_id"])
-        conn.commit()
+        conn.execute(
+            """insert into courseplatform.answers
+               (answer_id, attempt_id, question_id, answer_text, selected_option_id, saved_at)
+               select 'ANS-' || %s || '-' || question_id, %s, question_id,
+                      answer_text, selected_option_id, %s
+               from courseplatform.answers where attempt_id = %s""",
+            (attempt["attempt_id"], attempt["attempt_id"], now, existing["attempt_id"]),
+        )
+    conn.execute(
+        """
+        update courseplatform.lesson_progress
+        set status = 'IN_PROGRESS', evaluation_status = 'IN_PROGRESS',
+            content_access_status = coalesce(content_access_status, 'AVAILABLE'),
+            started_at = coalesce(started_at, %s),
+            attempt_count = %s, submitted_at = null, approved_at = null, score = null, updated_at = %s
+        where progress_id = %s
+        """,
+        (now, attempt_number, now, progress["progress_id"]),
+    )
+    audit(conn, "STUDENT", student["student_id"], "ATTEMPT_STARTED", "ATTEMPT", attempt["attempt_id"], {
+        "previousAttemptId": existing["attempt_id"] if is_retry else None,
+        "deadlineAt": iso(deadline),
+    })
+    conn.commit()
     return success({"attempt": public_attempt(attempt)})
 
 
@@ -4746,14 +4826,14 @@ def save_answer(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["attemptId", "questionId"])
     prepare_assessment_feature_schema()
-    attempt = fetch_one(
-        "select * from courseplatform.attempts where attempt_id = %s and student_id = %s",
-        (payload["attemptId"], student["student_id"]),
-    )
-    attempt = expire_attempt_if_needed(attempt)
-    if not attempt or attempt.get("status") != "IN_PROGRESS":
-        raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa já não pode ser editada.")
     with connection() as conn:
+        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
+        question = conn.execute(
+            "select question_id from courseplatform.questions where question_id = %s and lesson_id = %s",
+            (payload["questionId"], attempt["lesson_id"]),
+        ).fetchone()
+        if not question:
+            raise ApiError("QUESTION_NOT_FOUND", "Questão não encontrada neste módulo.")
         answer = conn.execute(
             """
             insert into courseplatform.answers
@@ -4781,17 +4861,11 @@ def upload_file(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["attemptId", "fileName"])
     prepare_assessment_feature_schema()
-    attempt = fetch_one(
-        "select * from courseplatform.attempts where attempt_id = %s and student_id = %s",
-        (payload["attemptId"], student["student_id"]),
-    )
-    attempt = expire_attempt_if_needed(attempt)
-    if not attempt or attempt.get("status") != "IN_PROGRESS":
-        raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa já não pode receber ficheiros.")
     mime_type = str_value(payload.get("mimeType") or "application/octet-stream")
     base64_data = str_value(payload.get("base64Data"))
     drive_url = f"data:{mime_type};base64,{base64_data}" if base64_data else str_value(payload.get("driveUrl"))
     with connection() as conn:
+        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
         row = conn.execute(
             """
             insert into courseplatform.files
@@ -4819,7 +4893,15 @@ def upload_file(payload: dict[str, Any]):
 def delete_uploaded_file(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["fileId"])
+    prepare_assessment_feature_schema()
     with connection() as conn:
+        file = conn.execute(
+            "select attempt_id from courseplatform.files where file_id = %s and student_id = %s",
+            (payload["fileId"], student["student_id"]),
+        ).fetchone()
+        if not file:
+            raise ApiError("FILE_NOT_FOUND", "Ficheiro não encontrado.")
+        editable_attempt(conn, file["attempt_id"], student["student_id"])
         row = conn.execute(
             """
             update courseplatform.files
@@ -4839,16 +4921,10 @@ def submit_attempt(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["attemptId"])
     prepare_assessment_feature_schema()
-    attempt = fetch_one(
-        "select * from courseplatform.attempts where attempt_id = %s and student_id = %s",
-        (payload["attemptId"], student["student_id"]),
-    )
-    attempt = expire_attempt_if_needed(attempt)
-    if not attempt or attempt.get("status") != "IN_PROGRESS":
-        raise ApiError("ATTEMPT_NOT_SUBMITTABLE", "Esta tentativa não pode ser submetida.")
     now = utc_now()
-    status = "TIME_EXCEEDED" if attempt.get("deadline_at") and attempt["deadline_at"] < now else "UNDER_REVIEW"
+    status = "UNDER_REVIEW"
     with connection() as conn:
+        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
         updated = conn.execute(
             """
             update courseplatform.attempts
@@ -5695,20 +5771,31 @@ def admin_get_submission(payload: dict[str, Any]):
 
 def admin_review_submission(payload: dict[str, Any]):
     _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    require_fields(payload, ["attemptId", "decision", "score"])
+    require_fields(payload, ["attemptId", "decision"])
     prepare_assessment_feature_schema()
     prepare_notification_feature_schema()
     decision = str_value(payload.get("decision")).upper()
     if decision not in {"APPROVED", "APPROVED_WITH_NOTES", "CORRECTION_REQUIRED", "FAILED"}:
         raise ApiError("INVALID_DECISION", "Decisão inválida.")
     status = "APPROVED" if decision in {"APPROVED", "APPROVED_WITH_NOTES"} else decision
-    score = float_value(payload.get("score"))
+    authorize_retry = as_bool(payload.get("authorizeRetry", decision == "CORRECTION_REQUIRED"))
+    if authorize_retry and decision not in {"CORRECTION_REQUIRED", "FAILED"}:
+        raise ApiError("INVALID_RETRY_DECISION", "O reenvio só pode ser autorizado para trabalhos devolvidos ou não aprovados.")
+    deadline = correction_deadline(payload) if authorize_retry else None
+    if status != "CORRECTION_REQUIRED":
+        require_fields(payload, ["score"])
+    score = None if payload.get("score") in (None, "") else float_value(payload.get("score"))
+    if score is not None and not 0 <= score <= 100:
+        raise ApiError("INVALID_SCORE", "A classificação deve estar entre 0 e 100.")
     now = utc_now()
     attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
     if not attempt:
         raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
     notification_ids: list[str] = []
     with connection() as conn:
+        conn.execute("select progress_id from courseplatform.lesson_progress where progress_id = %s for update", (attempt["progress_id"],)).fetchone()
+        attempt = conn.execute("select * from courseplatform.attempts where attempt_id = %s for update", (attempt["attempt_id"],)).fetchone()
+        require_latest_attempt(conn, attempt)
         review = conn.execute(
             """
             insert into courseplatform.reviews
@@ -5724,7 +5811,7 @@ def admin_review_submission(payload: dict[str, Any]):
                 decision,
                 score,
                 str_value(payload.get("comments")),
-                parse_datetime(payload.get("correctionDeadline")),
+                deadline,
                 status == "APPROVED",
                 now,
             ),
@@ -5733,22 +5820,22 @@ def admin_review_submission(payload: dict[str, Any]):
             """
             update courseplatform.attempts
             set status = %s, score = %s, reviewer_id = %s, reviewed_at = %s,
-                review_comments = %s, retry_authorized = false, updated_at = %s
+                review_comments = %s, retry_authorized = %s, updated_at = %s
             where attempt_id = %s
             returning *
             """,
-            (status, score, admin["admin_id"], now, str_value(payload.get("comments")), now, attempt["attempt_id"]),
+            (status, score, admin["admin_id"], now, str_value(payload.get("comments")), authorize_retry, now, attempt["attempt_id"]),
         ).fetchone()
         conn.execute(
             """
             update courseplatform.lesson_progress
             set status = %s, evaluation_status = %s,
-                content_access_status = coalesce(content_access_status, 'AVAILABLE'),
-                approved_at = case when %s = 'APPROVED' then %s else approved_at end,
+                content_access_status = case when %s then 'AVAILABLE' else coalesce(content_access_status, 'AVAILABLE') end,
+                approved_at = case when %s = 'APPROVED' then %s else null end,
                 score = %s, updated_at = %s
             where progress_id = %s
             """,
-            (status, status, status, now, score, now, attempt.get("progress_id")),
+            (status, status, authorize_retry, status, now, score, now, attempt.get("progress_id")),
         )
         refresh_enrollment_progress(conn, attempt.get("progress_id"))
         lesson = conn.execute(
@@ -5759,6 +5846,8 @@ def admin_review_submission(payload: dict[str, Any]):
         message = f"{lesson.get('title') or 'Atividade'}: {notification_status_label(decision)}."
         if comments:
             message = f"{message} Comentário do avaliador: {comments}"
+        if authorize_retry:
+            message = f"{message} Novo envio autorizado até {iso(deadline)}. As respostas anteriores serão preservadas; carregue os documentos corrigidos."
         notification_id = create_student_notification(
             conn,
             attempt["student_id"],
@@ -5766,7 +5855,7 @@ def admin_review_submission(payload: dict[str, Any]):
             "Avaliação atualizada",
             message,
             admin_id=admin["admin_id"],
-            action_url="#/grades",
+            action_url=f"#/lesson/{attempt['lesson_id']}" if authorize_retry else "#/grades",
             entity_type="ATTEMPT",
             entity_id=attempt["attempt_id"],
             priority="HIGH" if status == "CORRECTION_REQUIRED" else "NORMAL",
@@ -5780,7 +5869,9 @@ def admin_review_submission(payload: dict[str, Any]):
         )
         if notification_id:
             notification_ids.append(notification_id)
-        audit(conn, "ADMIN", admin["admin_id"], "SUBMISSION_REVIEWED", "ATTEMPT", attempt["attempt_id"], {"decision": decision, "score": score})
+        audit(conn, "ADMIN", admin["admin_id"], "SUBMISSION_REVIEWED", "ATTEMPT", attempt["attempt_id"], {
+            "decision": decision, "score": score, "retryAuthorized": authorize_retry, "correctionDeadline": iso(deadline),
+        })
         conn.commit()
     dispatch_notification_deliveries(notification_ids)
     return success({"attempt": public_attempt(updated), "review": public_review(review)})
@@ -5791,12 +5882,39 @@ def admin_authorize_retry(payload: dict[str, Any]):
     require_fields(payload, ["attemptId"])
     prepare_assessment_feature_schema()
     prepare_notification_feature_schema()
+    if as_bool(payload.get("authorized", True)):
+        correction_deadline(payload)
+        attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
+        if not attempt:
+            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
+        return admin_review_submission({
+            **payload,
+            "decision": "CORRECTION_REQUIRED",
+            "score": attempt.get("score"),
+            "comments": str_value(payload.get("comments")) or "Trabalho devolvido para correção e novo envio dos documentos.",
+            "authorizeRetry": True,
+        })
     notification_ids: list[str] = []
     with connection() as conn:
+        pending = conn.execute(
+            "select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],),
+        ).fetchone()
+        if not pending:
+            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
+        conn.execute(
+            "select progress_id from courseplatform.lesson_progress where progress_id = %s for update",
+            (pending["progress_id"],),
+        ).fetchone()
+        pending = conn.execute(
+            "select * from courseplatform.attempts where attempt_id = %s for update", (payload["attemptId"],),
+        ).fetchone()
+        require_latest_attempt(conn, pending)
+        if not as_bool(pending.get("retry_authorized")):
+            raise ApiError("RETRY_NOT_PENDING", "Não existe uma autorização de reenvio pendente nesta tentativa.")
         attempt = conn.execute(
             """
             update courseplatform.attempts
-            set retry_authorized = true, status = 'CORRECTION_REQUIRED', updated_at = now()
+            set retry_authorized = false, updated_at = now()
             where attempt_id = %s
             returning *
             """,
@@ -5804,15 +5922,6 @@ def admin_authorize_retry(payload: dict[str, Any]):
         ).fetchone()
         if not attempt:
             raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
-        conn.execute(
-            """
-            update courseplatform.lesson_progress
-            set status = 'CORRECTION_REQUIRED', evaluation_status = 'CORRECTION_REQUIRED',
-                content_access_status = 'AVAILABLE', updated_at = now()
-            where progress_id = %s
-            """,
-            (attempt.get("progress_id"),),
-        )
         lesson = conn.execute(
             "select title from courseplatform.lessons where lesson_id = %s",
             (attempt["lesson_id"],),
@@ -5821,19 +5930,17 @@ def admin_authorize_retry(payload: dict[str, Any]):
             conn,
             attempt["student_id"],
             "SUBMISSION_STATUS",
-            "Nova tentativa autorizada",
-            f"Pode realizar uma nova tentativa em {lesson.get('title') or 'atividade'}.",
+            "Autorização de reenvio cancelada",
+            f"A autorização para iniciar um novo envio em {lesson.get('title') or 'atividade'} foi cancelada.",
             admin_id=admin["admin_id"],
             action_url=f"#/lesson/{attempt['lesson_id']}",
             entity_type="ATTEMPT",
             entity_id=attempt["attempt_id"],
             priority="HIGH",
-            template_key="RETRY_AUTHORIZED",
-            template_variables={"activity": lesson.get("title") or "atividade"},
         )
         if notification_id:
             notification_ids.append(notification_id)
-        audit(conn, "ADMIN", admin["admin_id"], "RETRY_AUTHORIZED", "ATTEMPT", attempt["attempt_id"])
+        audit(conn, "ADMIN", admin["admin_id"], "RETRY_REVOKED", "ATTEMPT", attempt["attempt_id"])
         conn.commit()
     dispatch_notification_deliveries(notification_ids)
     return success({"attempt": public_attempt(attempt)})

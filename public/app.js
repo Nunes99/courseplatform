@@ -2560,6 +2560,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
       </div>
     </div>
 
+    ${attempt.attemptNumber > 1 ? '<p class="success-note">Reveja as respostas disponíveis e carregue os documentos corretos para este novo envio.</p>' : ''}
     <div class="question-list">
       ${lessonData.questions.map((question) => {
         return questionTemplate(question, answerMap.get(question.questionId));
@@ -2568,7 +2569,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
 
     <section class="upload-panel">
       <div>
-        <p class="eyebrow">Documentos obrigatorios</p>
+        <p class="eyebrow">Documentos obrigatórios</p>
         <h3>Carregue fotografias ou ficheiros</h3>
         <p>As imagens serão otimizadas antes do envio. Confirme que todos os cálculos estão legíveis.</p>
       </div>
@@ -2686,8 +2687,11 @@ function reviewStateTemplate(attempt, review) {
     `;
   }
 
-  const retry = attempt.retryAuthorized
-    ? '<div class="review-retry-action"><p class="success-note">Uma nova tentativa foi autorizada.</p><button class="button button-primary" id="startAttempt" type="button">Iniciar nova tentativa</button></div>'
+  const retryExpired = review?.correctionDeadline && new Date(review.correctionDeadline) <= new Date();
+  const retry = attempt.retryAuthorized && !retryExpired
+    ? '<div class="review-retry-action"><p class="success-note">Novo envio autorizado. Pode corrigir as respostas e carregar novamente os documentos.</p><button class="button button-primary" id="startAttempt" type="button">Corrigir e reenviar documentos</button></div>'
+    : attempt.retryAuthorized && retryExpired
+      ? '<p class="error-note">O prazo de reenvio terminou. Solicite um novo prazo à administração.</p>'
     : '';
 
   return `
@@ -2710,7 +2714,7 @@ function reviewStateTemplate(attempt, review) {
 function reviewStatusMessage(status) {
   const messages = {
     UNDER_REVIEW: 'A submissão foi recebida e aguarda análise do avaliador.',
-    CORRECTION_REQUIRED: 'Leia os comentários e aguarde ou use a autorização de nova tentativa.',
+    CORRECTION_REQUIRED: 'Consulte as orientações do avaliador. O novo envio de documentos depende de autorização e de um prazo válido.',
     FAILED: 'A atividade não atingiu os critérios de aprovação.',
     TIME_EXCEEDED: 'O prazo da tentativa terminou antes da submissão.'
   };

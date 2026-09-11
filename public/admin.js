@@ -3964,7 +3964,7 @@ function renderSubmission() {
               <select name="decision" required>
                 <option value="APPROVED">Aprovado</option>
                 <option value="APPROVED_WITH_NOTES">Aprovado com observações</option>
-                <option value="CORRECTION_REQUIRED">Correção necessária</option>
+                <option value="CORRECTION_REQUIRED">Devolver para correção</option>
                 <option value="FAILED">Não aprovado</option>
               </select>
             </label>
@@ -3975,18 +3975,41 @@ function renderSubmission() {
             </label>
 
             <label>
-              <span>Comentarios</span>
+              <span>Comentários</span>
               <textarea name="comments" rows="7" required></textarea>
             </label>
 
-            <label>
-              <span>Prazo para correção — opcional</span>
-              <input type="datetime-local" name="correctionDeadline">
+            <label class="checkbox-line" id="reviewRetryOption" hidden>
+              <input type="checkbox" name="authorizeRetry">
+              <span>Autorizar novo envio de respostas e documentos</span>
+            </label>
+
+            <label id="reviewRetryDeadline" hidden>
+              <span>Novo prazo de envio</span>
+              <input type="datetime-local" name="correctionDeadline" disabled>
             </label>
 
             <button class="button button-primary button-block" type="submit">
               Guardar avaliação
             </button>
+          </form>
+        </div>
+
+        <div class="review-files">
+          <h2>Reenvio de documentos</h2>
+          <p class="review-history-note">${data.attempt.retryAuthorized ? 'Novo envio autorizado.' : 'Sem autorização pendente de reenvio.'}</p>
+          <form id="retryForm" class="form-stack">
+            <label>
+              <span>Novo prazo de envio</span>
+              <input type="datetime-local" name="correctionDeadline" required
+                value="${escapeHtml(currentDeadline && new Date(currentDeadline) > new Date() ? currentDeadline : toDatetimeLocalValue(Date.now() + 48 * 60 * 60 * 1000))}">
+            </label>
+            <label>
+              <span>Orientações para o estudante</span>
+              <textarea name="comments" rows="3" required></textarea>
+            </label>
+            <button class="button button-primary button-block" type="submit">Devolver e autorizar novo envio</button>
+            ${data.attempt.retryAuthorized ? '<button class="button button-secondary button-block" id="revokeRetry" type="button">Cancelar autorização de reenvio</button>' : ''}
           </form>
         </div>
 
@@ -4037,7 +4060,29 @@ function renderSubmission() {
   reviewForm.elements.score.value = currentScore === null ? '' : currentScore;
   reviewForm.elements.comments.value = currentComments;
   reviewForm.elements.correctionDeadline.value = currentDeadline;
+  reviewForm.elements.authorizeRetry.checked = Boolean(data.attempt.retryAuthorized) || currentDecision === 'CORRECTION_REQUIRED';
+  const syncReviewRetry = () => {
+    const decision = reviewForm.elements.decision.value;
+    const eligible = ['CORRECTION_REQUIRED', 'FAILED'].includes(decision);
+    const authorized = eligible && reviewForm.elements.authorizeRetry.checked;
+    document.querySelector('#reviewRetryOption').hidden = !eligible;
+    document.querySelector('#reviewRetryDeadline').hidden = !authorized;
+    reviewForm.elements.correctionDeadline.disabled = !authorized;
+    reviewForm.elements.correctionDeadline.required = authorized;
+    reviewForm.elements.score.required = decision !== 'CORRECTION_REQUIRED';
+    if (authorized && (!reviewForm.elements.correctionDeadline.value || new Date(reviewForm.elements.correctionDeadline.value) <= new Date())) {
+      reviewForm.elements.correctionDeadline.value = toDatetimeLocalValue(Date.now() + 48 * 60 * 60 * 1000);
+    }
+  };
+  reviewForm.elements.decision.addEventListener('change', () => {
+    reviewForm.elements.authorizeRetry.checked = reviewForm.elements.decision.value === 'CORRECTION_REQUIRED';
+    syncReviewRetry();
+  });
+  reviewForm.elements.authorizeRetry.addEventListener('change', syncReviewRetry);
+  syncReviewRetry();
   reviewForm.addEventListener('submit', submitReview);
+  document.querySelector('#retryForm').addEventListener('submit', submitRetryAuthorization);
+  document.querySelector('#revokeRetry')?.addEventListener('click', revokeRetryAuthorization);
   document.querySelector('#attemptManagementForm')?.addEventListener('submit', submitAttemptManagement);
   root.querySelectorAll('[data-student-access]').forEach((button) => {
     button.addEventListener('click', () => applySingleStudentAccess(button.dataset.studentAccess));
@@ -4232,13 +4277,54 @@ async function submitReview(event) {
     await api.adminReview({
       attemptId: state.selectedSubmission.attempt.attemptId,
       decision: values.get('decision'),
-      score: Number(values.get('score')),
+      score: values.get('score') === '' ? null : Number(values.get('score')),
       comments: values.get('comments'),
-      correctionDeadline: values.get('correctionDeadline') || ''
+      authorizeRetry: ['CORRECTION_REQUIRED', 'FAILED'].includes(values.get('decision')) && values.get('authorizeRetry') === 'on',
+      correctionDeadline: values.get('correctionDeadline') ? new Date(values.get('correctionDeadline')).toISOString() : ''
     });
 
     showToast('Avaliação guardada.', 'success');
     await loadPending();
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function submitRetryAuthorization(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = new FormData(form);
+  const deadline = new Date(values.get('correctionDeadline'));
+  if (!Number.isFinite(deadline.getTime()) || deadline <= new Date()) {
+    showToast('Indique um prazo futuro para o novo envio.', 'error');
+    return;
+  }
+  if (!confirmAdminAction('Devolver este trabalho e autorizar um novo envio até ao prazo indicado? Os documentos anteriores serão mantidos no histórico.')) return;
+  const button = form.querySelector('button[type="submit"]');
+  setBusy(button, true, 'A autorizar...');
+  try {
+    const attemptId = state.selectedSubmission.attempt.attemptId;
+    await api.adminAuthorizeRetry(attemptId, { correctionDeadline: deadline.toISOString(), comments: values.get('comments') });
+    showToast('Trabalho devolvido. Novo envio autorizado.', 'success');
+    await openSubmission(attemptId);
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function revokeRetryAuthorization(event) {
+  if (!confirmAdminAction('Cancelar a autorização para iniciar um novo envio?')) return;
+  const button = event.currentTarget;
+  setBusy(button, true, 'A cancelar...');
+  try {
+    const attemptId = state.selectedSubmission.attempt.attemptId;
+    await api.adminAuthorizeRetry(attemptId, { authorized: false });
+    showToast('Autorização de reenvio cancelada.', 'success');
+    await openSubmission(attemptId);
   } catch (error) {
     handleAdminError(error);
   } finally {

@@ -13219,6 +13219,39 @@ pre,
   gap: 12px;
 }
 
+#adminMain .submission-columns aside .form-stack {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+#adminMain .submission-columns aside .form-stack > * {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+#adminMain .submission-columns aside h2 {
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+#adminMain #reviewRetryOption:not([hidden]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+#adminMain #reviewRetryOption input {
+  flex: 0 0 18px;
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+}
+
+#adminMain .submission-columns aside .form-stack > button {
+  min-height: 40px;
+}
+
 :root[data-theme="dark"] .status-not-started {
   border-color: rgba(234, 199, 139, 0.32);
   background: rgba(255, 248, 228, 0.08);
