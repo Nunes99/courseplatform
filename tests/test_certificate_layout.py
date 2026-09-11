@@ -21,7 +21,7 @@ class CertificateLayoutTests(unittest.TestCase):
         self.data = json.loads(FIXTURE.read_text(encoding="utf-8"))
         self.layout = professional_layout()
 
-    def test_only_the_academic_stamp_overlaps_the_director_signature(self):
+    def test_stamp_overlay_stays_within_the_director_block(self):
         boxes = {**self.layout["texts"], **self.layout["images"]}
         qr = self.layout["qr"]
         boxes["qr"] = {**qr, "w": qr["size"], "h": qr["size"]}
@@ -33,13 +33,18 @@ class CertificateLayoutTests(unittest.TestCase):
             self.assertLessEqual(box["y"] + box["h"], self.layout["height"] - 22, key)
         items = list(boxes.items())
         intentional_overlap = {"academicStampUrl", "directorSignatureUrl"}
+        # Reserved label boxes include whitespace beside the centered text.
+        stamp_label_boxes = (
+            {"academicStampUrl", "director"},
+            {"academicStampUrl", "directorTitle"},
+        )
         for index, (name, a) in enumerate(items):
             for other, b in items[index + 1:]:
                 overlap = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"]) > 0
                 overlap &= min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"]) > 0
                 if {name, other} == intentional_overlap:
                     self.assertTrue(overlap, "Stamp must overlap the director signature")
-                else:
+                elif {name, other} not in stamp_label_boxes:
                     self.assertFalse(overlap, f"{name} overlaps {other}")
         image_order = list(self.layout["images"])
         self.assertGreater(image_order.index("academicStampUrl"), image_order.index("directorSignatureUrl"))
@@ -51,10 +56,22 @@ class CertificateLayoutTests(unittest.TestCase):
         self.assertEqual((signature["w"], signature["h"]), (168, 44))
         stamp = self.layout["images"]["academicStampUrl"]
         self.assertEqual((stamp["w"], stamp["h"]), (100, 100))
-        self.assertGreaterEqual(signature["x"] + signature["w"] - stamp["x"], 30)
+        self.assertEqual((stamp["x"], stamp["y"]), (232, 412))
+        self.assertEqual(signature["x"] + signature["w"] - stamp["x"], 60)
         for key in ("director", "directorTitle"):
             text = self.layout["texts"][key]
             self.assertEqual(text["x"] + text["w"] / 2, 184)
+
+    def test_stamp_clears_rendered_director_labels_in_reference_certificate(self):
+        stamp = self.layout["images"]["academicStampUrl"]
+        for key, value, box in professional_text_blocks(self.data, self.layout):
+            if key not in ("director", "directorTitle"):
+                continue
+            size, lines = fit_certificate_box(value, box, key)
+            font = FONT_BOLD if box.get("bold") else FONT_REGULAR
+            for line in lines:
+                right = box["x"] + (box["w"] + stringWidth(line, font, size)) / 2
+                self.assertLess(right, stamp["x"], key)
 
     def test_long_text_is_complete_inside_its_reserved_area(self):
         self.data["student_name"] = "Ana Sofia Luís de Almeida e Vasconcelos Chissano"
