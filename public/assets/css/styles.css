@@ -14954,3 +14954,50 @@ pre,
     flex-direction: column;
   }
 }
+
+/* The professional certificate is an isolated A4 vector document. */
+.certificate-preview-sheet:has(professional-certificate) {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.certificate-preview-dialog:has(professional-certificate) {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(1280px, calc(100vw - 32px));
+  max-width: 100%;
+  max-height: calc(100dvh - 24px);
+  padding: 38px 20px 16px;
+  overflow: auto;
+}
+
+.certificate-preview-dialog:has(professional-certificate) .dialog-actions {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.certificate-model-preview-panel:has(professional-certificate) {
+  min-width: 0;
+}
+
+professional-certificate {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 600px) {
+  .certificate-preview-dialog:has(professional-certificate) {
+    width: calc(100vw - 16px);
+    padding: 34px 10px 12px;
+    gap: 10px;
+  }
+}

@@ -13,7 +13,7 @@ from .actions import (
     public_error,
     record_certificate_download,
 )
-from .certificate_pdf import build_course_certificate_pdf
+from .certificate_pdf import CertificateLayoutError, build_course_certificate_pdf
 from .config import get_settings
 
 settings = get_settings()
@@ -90,6 +90,8 @@ async def handle_certificate_pdf(certificate_id: str, request: Request):
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'},
         )
+    except CertificateLayoutError as error:
+        return JSONResponse(public_error(ApiError("CERTIFICATE_LAYOUT_INVALID", str(error))), status_code=400)
     except Exception as error:
         return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)
 
@@ -109,7 +111,8 @@ def static_file_response(raw_path: str):
         static_root = static_dir.resolve()
         candidate = (static_root / path).resolve()
         if str(candidate).startswith(str(static_root)) and candidate.is_file():
-            return FileResponse(candidate)
+            media_type = {".mjs": "text/javascript", ".ttf": "font/ttf"}.get(candidate.suffix.lower())
+            return FileResponse(candidate, media_type=media_type)
 
     for static_dir in STATIC_DIRS:
         fallback = static_dir.resolve() / "404.html"

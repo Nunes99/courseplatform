@@ -1,0 +1,23 @@
+{
+  "issuer_name": "LMTWEBNAIRS Summer School",
+  "student_name": "Nome do Estudante",
+  "course_title": "História da Indústria Petrolífera Moçambicana",
+  "certificate_number": "LSS-2026-F5B649DE76",
+  "verification_code": "LSS2026F5B649DE76",
+  "verification_url": "https://courseplatform-mauve.vercel.app/verify.html?code=LSS2026F5B649DE76",
+  "issue_date": "2026-08-30T12:00:00Z",
+  "final_score": 96,
+  "content_summary": "História da indústria petrolífera em Moçambique\nExploração de gás natural e GNL\nInfraestruturas energéticas\nPolítica e regulação petrolífera\nSustentabilidade e transição energética\nMercado global de energia",
+  "workload": "36 horas",
+  "certificate_profile": {
+    "issuerName": "LMTWEBNAIRS Summer School",
+    "certificateTitle": "Certificado de Qualificação",
+    "qualificationType": "sobre o aumento da qualificação profissional",
+    "issueLocation": "Cidade de Maputo, Moçambique",
+    "directorName": "Diretor Académico",
+    "directorTitle": "LMTWEBNAIRS",
+    "coordinatorName": "Coordenador do Programa",
+    "coordinatorTitle": "LMTWEBNAIRS",
+    "assets": {}
+  }
+}

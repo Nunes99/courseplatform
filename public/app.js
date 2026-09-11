@@ -1,5 +1,6 @@
 import { CoursePlatformApi, ApiError } from './api.js';
 import { ChatWorkspace } from './chat.js';
+import { professionalCertificateTemplate } from './professional-certificate.js';
 import {
   applyBrandFavicon,
   debounce,
@@ -3803,70 +3804,14 @@ function certificatePreviewTemplate(certificate) {
   const professionalHours = Number(certificate.templateSnapshot?.courseHours || 30);
   const finalScoreLabel = certificate.finalScore == null ? '--' : `${certificate.finalScore}%`;
   if (isProfessional) {
-    return `
-      <div class="certificate-preview-inner certificate-document certificate-document-professional">
-        <div class="certificate-professional-layout">
-          <section class="certificate-professional-left">
-            ${logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(logoUrl)}" alt="Logótipo institucional">` : '<div class="certificate-logo-placeholder">Logótipo institucional</div>'}
-            <p class="certificate-institution">${escapeHtml(profile.issuerName || config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
-            <p class="certificate-brand-subtitle">FORMAÇÃO TÉCNICA APLICADA</p>
-            <span class="certificate-column-divider" aria-hidden="true"></span>
-            <h1>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificação')}</h1>
-            <p>${escapeHtml(profile.qualificationType || 'sobre o aumento da qualificação profissional')}</p>
-            <strong>${escapeHtml(certificateDisplayNumber(certificate) || '')}</strong>
-            <span>Documento de qualificação</span>
-            <small>Número de registo</small>
-            <strong>${escapeHtml(certificate.verificationCode || '')}</strong>
-            <div class="certificate-place-date">
-              <b>${escapeHtml(profile.issueLocation || 'Cidade de Maputo, Moçambique')}</b>
-              <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
-            </div>
-            <div class="certificate-signature-block">
-              ${assets.academicStampUrl ? `<img class="certificate-stamp-image" src="${escapeHtml(assets.academicStampUrl)}" alt="">` : ''}
-              ${assets.directorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.directorSignatureUrl)}" alt="">` : ''}
-              <span></span>
-              <b>${escapeHtml(profile.directorName || 'Diretor Académico')}</b>
-              <small>${escapeHtml(profile.directorTitle || 'LMTWEBNAIRS')}</small>
-            </div>
-          </section>
-          <section class="certificate-professional-right">
-            <p class="certificate-preview-lead">O presente documento certifica que</p>
-            <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
-            <p>concluiu com sucesso o programa de aumento de qualificação profissional na ${escapeHtml(profile.issuerName || config.organizationName || 'Summer School')}</p>
-            <span class="certificate-course-label">CURSO / PROGRAMA</span>
-            <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
-            <p>demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.</p>
-            ${summary.length ? `
-              <div class="certificate-content-summary">
-                <strong>O programa abordou:</strong>
-                <ul>${summary.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
-              </div>
-            ` : ''}
-            <div class="certificate-professional-metrics">
-              <strong>Carga horária: ${escapeHtml(professionalHours)} horas</strong>
-              <strong>Resultado final: ${escapeHtml(finalScoreLabel)}</strong>
-            </div>
-            <div class="certificate-professional-footer">
-              <div class="certificate-verification-compact">
-                <span class="certificate-qr-placeholder" aria-hidden="true">QR</span>
-                <small>Verifique o certificado<b>${escapeHtml(certificate.verificationCode || '')}</b></small>
-              </div>
-              <div class="certificate-signature-block">
-                ${assets.coordinatorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.coordinatorSignatureUrl)}" alt="">` : ''}
-                <span></span>
-                <b>${escapeHtml(profile.coordinatorName || 'Coordenador do Programa')}</b>
-                <small>${escapeHtml(profile.coordinatorTitle || 'LMTWEBNAIRS')}</small>
-              </div>
-              ${assets.institutionalSealUrl ? `<img class="certificate-seal-image" src="${escapeHtml(assets.institutionalSealUrl)}" alt="">` : '<div class="certificate-preview-seal">L</div>'}
-              <div class="certificate-product-credit">
-                ${assets.productLogoUrl ? `<img src="${escapeHtml(assets.productLogoUrl)}" alt="Marca do produto">` : ''}
-                <small>${escapeHtml(profile.productCredit || '')}</small>
-              </div>
-            </div>
-          </section>
-        </div>
-      </div>
-    `;
+    return professionalCertificateTemplate({
+      ...certificate,
+      issuerName: config.organizationName,
+      templateSnapshot: {
+        ...certificate.templateSnapshot,
+        profile: { ...profile, assets: { ...assets, logoUrl } }
+      }
+    });
   }
   return `
     <div class="certificate-preview-inner certificate-document ${isProfessional ? 'certificate-document-professional' : 'certificate-document-participation'}">

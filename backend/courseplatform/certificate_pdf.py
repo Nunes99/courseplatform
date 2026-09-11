@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import urllib.request
 from datetime import datetime
 from io import BytesIO
@@ -108,185 +109,126 @@ def draw_participation_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> 
     pdf.showPage()
 
 
+class CertificateLayoutError(ValueError):
+    pass
+
+
+def professional_layout() -> dict[str, Any]:
+    path = Path(__file__).resolve().parent / "static/assets/certificate-layout.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def professional_fields(data: dict[str, Any]) -> dict[str, str]:
+    profile = data.get("certificate_profile") or {}
+    return {
+        "issuer": issuer(data),
+        "title": clean_text(profile.get("certificateTitle") or "Certificado de Qualificação").upper(),
+        "qualification": profile.get("qualificationType") or "sobre o aumento da qualificação profissional",
+        "number": data.get("certificate_number") or "",
+        "documentLabel": "Documento de qualificação",
+        "registerLabel": "Número de registo",
+        "code": data.get("verification_code") or "",
+        "location": profile.get("issueLocation") or "Cidade de Maputo, Moçambique",
+        "date": issue_date_long(data),
+        "lead": "O presente documento certifica que",
+        "student": student_name(data),
+        "statement": f"concluiu com sucesso o programa de qualificação profissional na {issuer(data)}.",
+        "courseLabel": "CURSO / PROGRAMA",
+        "course": course_title(data),
+        "description": "demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.",
+        "topicsLabel": "O programa abordou:" if clean_text(data.get("content_summary")) else "",
+        "workload": f"Carga horária: {data.get('workload') or '30 horas'}",
+        "score": f"Resultado final: {score_percent(data)}",
+        "director": profile.get("directorName") or data.get("director_name") or "Diretor Académico",
+        "directorTitle": profile.get("directorTitle") or "Direção académica",
+        "coordinator": profile.get("coordinatorName") or data.get("coordinator_name") or "Coordenador do Programa",
+        "coordinatorTitle": profile.get("coordinatorTitle") or "Coordenação do programa",
+        "verifyLabel": "Verifique a autenticidade do certificado" if data.get("verification_url") else "",
+        "verifyCode": data.get("verification_code") or "",
+        "credit": profile.get("productCredit") or "",
+    }
+
+
+def professional_text_blocks(data: dict[str, Any], layout: dict[str, Any]):
+    fields = professional_fields(data)
+    blocks = [(key, value, layout["texts"][key]) for key, value in fields.items() if value]
+    topics = [line.strip().strip("-•").strip() for line in clean_text(data.get("content_summary")).splitlines() if line.strip().strip("-•").strip()]
+    area = layout["topics"]
+    if len(topics) > area["limit"]:
+        raise CertificateLayoutError("Use até oito conteúdos resumidos no certificado profissional.")
+    rows = max(1, (len(topics) + 1) // 2)
+    width = (area["w"] - area["gap"]) / 2
+    for index, topic in enumerate(topics):
+        col, row = divmod(index, rows)
+        box = {
+            "x": area["x"] + col * (width + area["gap"]) + 9,
+            "y": area["y"] + row * (area["h"] / rows),
+            "w": width - 9, "h": area["h"] / rows - 1,
+            "size": area["size"], "min": area["min"], "align": "left",
+        }
+        blocks.append((f"topic{index}", topic, box))
+    return blocks
+
+
+def fit_certificate_box(value: str, box: dict[str, Any], key: str = ""):
+    font = FONT_BOLD if box.get("bold") else FONT_REGULAR
+    size = box["size"]
+    while True:
+        lines = wrap_text_to_width(value, font, size, box["w"] - 2)
+        leading = size * 1.22
+        if len(lines) * leading <= box["h"] + 0.01:
+            return size, lines
+        if size <= box["min"]:
+            raise CertificateLayoutError(
+                f'O texto do campo "{key}" é demasiado longo. Resuma-o na configuração do certificado.'
+            )
+        size = max(box["min"], size - 0.25)
+
+
 def draw_professional_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> None:
-    profile = data.get("certificate_profile") if isinstance(data.get("certificate_profile"), dict) else {}
-    assets = profile.get("assets") if isinstance(profile.get("assets"), dict) else {}
-    draw_background(pdf, colors.HexColor("#FFFDF8"), decorated=False)
-    draw_double_frame(pdf, GOLD, NAVY)
-    draw_corner_marks(pdf, NAVY)
-    draw_corner_marks(pdf, GOLD, inset=18)
-
-    left_x = 48
-    split_x = PAGE_WIDTH / 2
-    left_w = split_x - left_x
-    right_x = split_x
-    right_w = PAGE_WIDTH - right_x - 48
-    pdf.setStrokeColor(HAIRLINE)
-    pdf.setLineWidth(0.7)
-    pdf.line(split_x, 45, split_x, PAGE_HEIGHT - 45)
-
-    if not draw_image_fit(pdf, assets.get("logoUrl"), left_x + 72, 468, left_w - 144, 58):
-        centered_in(
-            pdf,
-            "LOGÓTIPO INSTITUCIONAL",
-            left_x + 72,
-            split_x - 72,
-            493,
-            8.2,
-            FONT_BOLD,
-            MUTED,
-        )
-    centered_in(pdf, issuer(data), left_x + 22, split_x - 22, 448, 10.5, FONT_BOLD, GOLD)
-    centered_in(pdf, "FORMAÇÃO TÉCNICA APLICADA", left_x + 22, split_x - 22, 433, 7, FONT_REGULAR, BLUE)
-    pdf.setStrokeColor(colors.HexColor("#DEC993"))
+    layout = professional_layout()
+    profile = data.get("certificate_profile") or {}
+    assets = profile.get("assets") or {}
+    palette = {key: colors.HexColor(value) for key, value in layout["colors"].items()}
+    blocks = professional_text_blocks(data, layout)
+    # Validate every reserved area before drawing: never clip or silently omit credentials.
+    fitted = [(key, box, *fit_certificate_box(value, box, key)) for key, value, box in blocks]
+    draw_background(pdf, colors.white, decorated=False)
+    draw_double_frame(pdf, palette["frame"], palette["ink"])
+    draw_corner_marks(pdf, palette["ink"])
+    draw_corner_marks(pdf, palette["frame"], inset=18)
+    pdf.setStrokeColor(palette["line"])
     pdf.setLineWidth(0.6)
-    pdf.line(left_x + 26, 417, split_x - 26, 417)
-    draw_fitted_center_block(
-        pdf,
-        clean_text(profile.get("certificateTitle") or "Certificado de Qualificação").upper(),
-        left_x + 22,
-        split_x - 22,
-        389,
-        16,
-        11.5,
-        FONT_BOLD,
-        GOLD,
-        2,
-    )
-    draw_fitted_center_block(
-        pdf,
-        profile.get("qualificationType") or "sobre o aumento da qualificação profissional",
-        left_x + 24,
-        split_x - 24,
-        342,
-        9.8,
-        8.2,
-        FONT_REGULAR,
-        BLUE,
-        2,
-    )
-    centered_in(pdf, data.get("certificate_number") or "", left_x + 22, split_x - 22, 299, 10, FONT_BOLD, GOLD)
-    centered_in(pdf, "Documento de qualificação", left_x + 20, split_x - 20, 260, 9.2, FONT_REGULAR, BLUE)
-    centered_in(pdf, "Número de registo", left_x + 24, split_x - 24, 222, 8.6, FONT_REGULAR, BLUE)
-    centered_in(pdf, data.get("verification_code") or "", left_x + 24, split_x - 24, 197, 10, FONT_BOLD, GOLD)
-    centered_in(pdf, profile.get("issueLocation") or "Cidade de Maputo, Moçambique", left_x + 20, split_x - 20, 151, 10, FONT_BOLD, BLUE)
-    centered_in(pdf, issue_date_long(data), left_x + 20, split_x - 20, 128, 9.2, FONT_REGULAR, BLUE)
-    draw_signature(
-        pdf,
-        left_x + 45,
-        54,
-        profile.get("directorName") or data.get("director_name") or "Diretor Académico",
-        profile.get("directorTitle") or "Direção académica",
-        assets.get("directorSignatureUrl"),
-        width=176,
-    )
-    draw_image_fit(pdf, assets.get("academicStampUrl"), left_x + 188, 58, 60, 60)
+    pdf.line(PAGE_WIDTH / 2, 78, PAGE_WIDTH / 2, PAGE_HEIGHT - 60)
 
-    centered_in(pdf, "O presente documento certifica que", right_x + 22, right_x + right_w - 22, 501, 9.5, FONT_REGULAR, GOLD)
-    draw_fitted_center_block(
-        pdf,
-        student_name(data).upper(),
-        right_x + 24,
-        right_x + right_w - 24,
-        471,
-        15.5,
-        10.5,
-        FONT_BOLD,
-        BLUE,
-        2,
-    )
-    draw_wrapped_center(
-        pdf,
-        f"concluiu com sucesso o programa de aumento de qualificação profissional na {issuer(data)}",
-        right_x + 26,
-        right_x + right_w - 26,
-        425,
-        9,
-        FONT_REGULAR,
-        BLUE,
-        2,
-    )
-    centered_in(pdf, "CURSO / PROGRAMA", right_x + 26, right_x + right_w - 26, 386, 8, FONT_BOLD, BLUE)
-    draw_fitted_center_block(
-        pdf,
-        course_title(data),
-        right_x + 24,
-        right_x + right_w - 24,
-        359,
-        14,
-        8.5,
-        FONT_BOLD,
-        BLUE,
-        3,
-    )
-    draw_wrapped_center(
-        pdf,
-        "demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.",
-        right_x + 26,
-        right_x + right_w - 26,
-        307,
-        8.8,
-        FONT_REGULAR,
-        BLUE,
-        2,
-    )
-    draw_program_topics(pdf, data, right_x + 26, 270, right_w - 52)
-    metrics_midpoint = right_x + right_w / 2
-    centered_in(
-        pdf,
-        f"Carga horária: {data.get('workload') or '30 horas'}",
-        right_x + 22,
-        metrics_midpoint - 8,
-        139,
-        9.8,
-        FONT_BOLD,
-        BLUE,
-    )
-    centered_in(
-        pdf,
-        f"Resultado final: {score_percent(data)}",
-        metrics_midpoint + 8,
-        right_x + right_w - 22,
-        139,
-        9.8,
-        FONT_BOLD,
-        BLUE,
-    )
-    draw_signature(
-        pdf,
-        right_x + 114,
-        49,
-        profile.get("coordinatorName") or data.get("coordinator_name") or "Coordenador do Programa",
-        profile.get("coordinatorTitle") or "Coordenação do programa",
-        assets.get("coordinatorSignatureUrl"),
-        width=120,
-    )
-    seal_x = right_x + right_w - 134
-    if not draw_image_fit(pdf, assets.get("institutionalSealUrl"), seal_x, 62, 50, 50):
-        draw_seal(pdf, seal_x + 25, 87, "L", silver=False, radius=24)
-    qr_x = right_x + 14
-    draw_qr(pdf, qr_x, 47, data.get("verification_url") or "", size=40)
-    centered_in(
-        pdf,
-        "VERIFICAR",
-        qr_x + 47,
-        qr_x + 98,
-        72,
-        5.4,
-        FONT_BOLD,
-        MUTED,
-    )
-    centered_in(
-        pdf,
-        "CERTIFICADO",
-        qr_x + 47,
-        qr_x + 98,
-        59,
-        5.8,
-        FONT_BOLD,
-        NAVY,
-    )
-    draw_product_credit(pdf, profile, assets)
+    for key, box in layout["images"].items():
+        draw_image_fit(pdf, assets.get(key), box["x"], PAGE_HEIGHT - box["y"] - box["h"], box["w"], box["h"])
+    for x1, y1, x2, y2 in layout["signatureLines"]:
+        pdf.setStrokeColor(palette["ink"])
+        pdf.setLineWidth(0.6)
+        pdf.line(x1, PAGE_HEIGHT - y1, x2, PAGE_HEIGHT - y2)
+
+    for key, box, size, lines in fitted:
+        font = FONT_BOLD if box.get("bold") else FONT_REGULAR
+        leading = size * 1.22
+        top = box["y"] + (box["h"] - len(lines) * leading) / 2
+        pdf.setFont(font, size)
+        pdf.setFillColor(palette[box.get("color", "ink")])
+        for index, line in enumerate(lines):
+            x = box["x"] + (1 if box.get("align") == "left" else 0)
+            if box.get("align") != "left":
+                x += (box["w"] - stringWidth(line, font, size)) / 2
+            # The baseline and font metrics also drive the browser's vector preview.
+            baseline = top + index * leading + size * 0.93
+            pdf.drawString(x, PAGE_HEIGHT - baseline, line)
+        if key.startswith("topic") and key[5:].isdigit():
+            pdf.circle(box["x"] - 6, PAGE_HEIGHT - (top + size * 0.62), 1.1, stroke=0, fill=1)
+
+    qr_box = layout["qr"]
+    draw_qr(pdf, qr_box["x"], PAGE_HEIGHT - qr_box["y"] - qr_box["size"], data.get("verification_url") or "", qr_box["size"])
+    if data.get("verification_url"):
+        pdf.linkURL(data["verification_url"], (qr_box["x"], PAGE_HEIGHT - qr_box["y"] - qr_box["size"],
+                    780, PAGE_HEIGHT - qr_box["y"]), relative=0, thickness=0)
     pdf.showPage()
 
 
@@ -601,9 +543,9 @@ def draw_metric(pdf: canvas.Canvas, x: float, y: float, label: str, value: str) 
 def draw_qr(pdf: canvas.Canvas, x: float, y: float, value: str, size: float = 54) -> None:
     if not value:
         return
-    qr_code = qr.QrCodeWidget(value)
+    qr_code = qr.QrCodeWidget(value, barLevel="M", barBorder=4)
     bounds = qr_code.getBounds()
-    quiet = size * 0.08
+    quiet = 0
     drawing = Drawing(
         size,
         size,
@@ -618,9 +560,7 @@ def draw_qr(pdf: canvas.Canvas, x: float, y: float, value: str, size: float = 54
     )
     drawing.add(qr_code)
     pdf.setFillColor(colors.white)
-    pdf.setStrokeColor(colors.HexColor("#C8D4DB"))
-    pdf.setLineWidth(0.7)
-    pdf.rect(x, y, size, size, stroke=1, fill=1)
+    pdf.rect(x, y, size, size, stroke=0, fill=1)
     renderPDF.draw(drawing, pdf, x, y)
 
 
@@ -851,7 +791,7 @@ def issue_date_long(data: dict[str, Any]) -> str:
     months = [
         "janeiro",
         "fevereiro",
-        "marco",
+        "março",
         "abril",
         "maio",
         "junho",

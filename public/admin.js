@@ -1,5 +1,6 @@
 import { CoursePlatformApi, ApiError } from './api.js';
 import { ChatWorkspace } from './chat.js';
+import { professionalCertificateTemplate } from './professional-certificate.js';
 import {
   applyBrandFavicon,
   escapeHtml,
@@ -2367,7 +2368,10 @@ function renderCertifications() {
             studentName: 'Nome do Formando',
             courseTitle: (state.courses || []).find(({ course }) => course.courseId === state.selectedCourseId)?.course?.title || 'Curso profissional',
             contentSummary: settings.certificateProfile?.certifiedContents || '',
-            templateSnapshot: { profile: settings.certificateProfile || {} },
+            templateSnapshot: {
+              profile: settings.certificateProfile || {},
+              courseHours: (state.courses || []).find(({ course }) => course.courseId === state.selectedCourseId)?.course?.totalHours || 30
+            },
             issueDate: new Date().toISOString(),
             finalScore: 100
           })}
@@ -2384,6 +2388,10 @@ function renderCertifications() {
     renderCertifications();
   });
   document.querySelector('#certificateSettingsForm').addEventListener('submit', saveCertificateSettings);
+  document.querySelector('#certificateSettingsForm').addEventListener('input', updateCertificateModelPreview);
+  document.querySelector('#certificateSettingsForm').addEventListener('reset', () => {
+    requestAnimationFrame(updateCertificateModelPreview);
+  });
   root.querySelectorAll('[data-certificate-asset]').forEach((input) => {
     input.addEventListener('change', uploadCertificateAsset);
   });
@@ -2564,31 +2572,14 @@ function certificateAssetField(name, label, value = '') {
 
 function adminCertificateThumbnailTemplate(certificate) {
   const profile = certificate.templateSnapshot?.profile || {};
-  const assets = profile.assets || {};
-  const logoUrl = assets.logoUrl || brandLogoUrl();
-  const topics = String(certificate.contentSummary || '')
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, 3);
-  return `
-    <div class="certificate-thumbnail">
-      <div class="certificate-thumbnail-left">
-        ${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logótipo institucional">` : '<span>Marca institucional</span>'}
-        <strong>${escapeHtml(profile.issuerName || config.organizationName || 'Summer School')}</strong>
-        <h3>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificação')}</h3>
-        <small>${escapeHtml(certificate.certificateNumber || '')}</small>
-      </div>
-      <div class="certificate-thumbnail-right">
-        <p>O presente documento certifica que</p>
-        <h2>${escapeHtml(certificate.studentName || 'Nome do Formando')}</h2>
-        <strong>${escapeHtml(certificate.courseTitle || 'Curso profissional')}</strong>
-        <ul>
-          ${topics.map((topic) => `<li>${escapeHtml(topic)}</li>`).join('')}
-        </ul>
-      </div>
-    </div>
-  `;
+  return professionalCertificateTemplate({
+    ...certificate,
+    issuerName: config.organizationName,
+    templateSnapshot: {
+      ...certificate.templateSnapshot,
+      profile: { ...profile, assets: { ...profile.assets, logoUrl: profile.assets?.logoUrl || brandLogoUrl() } }
+    }
+  }, { compact: true });
 }
 
 function adminCertificateRowTemplate(certificate) {
@@ -3016,6 +3007,19 @@ async function saveCertificateSettings(event) {
   }
 }
 
+function updateCertificateModelPreview() {
+  const form = document.querySelector('#certificateSettingsForm');
+  const preview = document.querySelector('.certificate-admin-mini-preview professional-certificate');
+  if (!form || !preview) return;
+  const certificate = JSON.parse(preview.dataset.certificate);
+  const profile = certificateProfileFromForm(form);
+  certificate.templateSnapshot.profile = {
+    ...profile,
+    assets: { ...profile.assets, logoUrl: profile.assets.logoUrl || brandLogoUrl() }
+  };
+  preview.dataset.certificate = JSON.stringify(certificate);
+}
+
 function certificateProfileFromForm(form) {
   const values = new FormData(form);
   return {
@@ -3080,6 +3084,7 @@ async function uploadCertificateAsset(event) {
       preview.hidden = false;
     }
     if (hidden) hidden.value = result.assetUrl || dataUrl;
+    updateCertificateModelPreview();
     showToast(result.storageSaved ? 'Asset carregado no Supabase Storage.' : 'Asset preparado no backend administrativo.', 'success');
   } catch (error) {
     handleAdminError(error);
@@ -3102,6 +3107,7 @@ function useStandardCertificateLogo() {
     preview.hidden = true;
   }
   showToast('O logótipo padrão será aplicado depois de guardar as alterações.', 'success');
+  updateCertificateModelPreview();
 }
 
 function fileToDataUrl(file) {
@@ -3200,70 +3206,14 @@ function adminCertificatePreviewTemplate(certificate) {
   const professionalHours = Number(certificate.templateSnapshot?.courseHours || 30);
   const finalScoreLabel = certificate.finalScore == null ? '--' : `${certificate.finalScore}%`;
   if (isProfessional) {
-    return `
-      <div class="certificate-preview-inner certificate-document certificate-document-professional">
-        <div class="certificate-professional-layout">
-          <section class="certificate-professional-left">
-            ${logoUrl ? `<img class="certificate-logo-image" src="${escapeHtml(logoUrl)}" alt="Logótipo institucional">` : '<div class="certificate-logo-placeholder">Logótipo institucional</div>'}
-            <p class="certificate-institution">${escapeHtml(profile.issuerName || config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
-            <p class="certificate-brand-subtitle">FORMAÇÃO TÉCNICA APLICADA</p>
-            <span class="certificate-column-divider" aria-hidden="true"></span>
-            <h1>${escapeHtml(profile.certificateTitle || 'Certificado de Qualificação')}</h1>
-            <p>${escapeHtml(profile.qualificationType || 'sobre o aumento da qualificação profissional')}</p>
-            <strong>${escapeHtml(adminCertificateDisplayNumber(certificate) || certificate.certificateId)}</strong>
-            <span>Documento de qualificação</span>
-            <small>Número de registo</small>
-            <strong>${escapeHtml(certificate.verificationCode || '')}</strong>
-            <div class="certificate-place-date">
-              <b>${escapeHtml(profile.issueLocation || 'Cidade de Maputo, Moçambique')}</b>
-              <span>${escapeHtml(formatDate(certificate.issueDate))}</span>
-            </div>
-            <div class="certificate-signature-block">
-              ${assets.academicStampUrl ? `<img class="certificate-stamp-image" src="${escapeHtml(assets.academicStampUrl)}" alt="">` : ''}
-              ${assets.directorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.directorSignatureUrl)}" alt="">` : ''}
-              <span></span>
-              <b>${escapeHtml(profile.directorName || 'Diretor Académico')}</b>
-              <small>${escapeHtml(profile.directorTitle || 'LMTWEBNAIRS')}</small>
-            </div>
-          </section>
-          <section class="certificate-professional-right">
-            <p class="certificate-preview-lead">O presente documento certifica que</p>
-            <h2>${escapeHtml(certificate.studentName || 'Nome do Formando')}</h2>
-            <p>concluiu com sucesso o programa de aumento de qualificação profissional na ${escapeHtml(profile.issuerName || config.organizationName || 'Summer School')}</p>
-            <span class="certificate-course-label">CURSO / PROGRAMA</span>
-            <h3>${escapeHtml(certificate.courseTitle || 'Curso profissional')}</h3>
-            <p>demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.</p>
-            ${summary.length ? `
-              <div class="certificate-content-summary">
-                <strong>O programa abordou:</strong>
-                <ul>${summary.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
-              </div>
-            ` : ''}
-            <div class="certificate-professional-metrics">
-              <strong>Carga horária: ${escapeHtml(professionalHours)} horas</strong>
-              <strong>Resultado final: ${escapeHtml(finalScoreLabel)}</strong>
-            </div>
-            <div class="certificate-professional-footer">
-              <div class="certificate-verification-compact">
-                <span class="certificate-qr-placeholder" aria-hidden="true">QR</span>
-                <small>Verifique o certificado<b>${escapeHtml(certificate.verificationCode || '')}</b></small>
-              </div>
-              <div class="certificate-signature-block">
-                ${assets.coordinatorSignatureUrl ? `<img class="certificate-signature-image" src="${escapeHtml(assets.coordinatorSignatureUrl)}" alt="">` : ''}
-                <span></span>
-                <b>${escapeHtml(profile.coordinatorName || 'Coordenador do Programa')}</b>
-                <small>${escapeHtml(profile.coordinatorTitle || 'LMTWEBNAIRS')}</small>
-              </div>
-              ${assets.institutionalSealUrl ? `<img class="certificate-seal-image" src="${escapeHtml(assets.institutionalSealUrl)}" alt="">` : '<div class="certificate-preview-seal">L</div>'}
-              <div class="certificate-product-credit">
-                ${assets.productLogoUrl ? `<img src="${escapeHtml(assets.productLogoUrl)}" alt="Marca do produto">` : ''}
-                <small>${escapeHtml(profile.productCredit || '')}</small>
-              </div>
-            </div>
-          </section>
-        </div>
-      </div>
-    `;
+    return professionalCertificateTemplate({
+      ...certificate,
+      issuerName: config.organizationName,
+      templateSnapshot: {
+        ...certificate.templateSnapshot,
+        profile: { ...profile, assets: { ...assets, logoUrl } }
+      }
+    });
   }
   return `
     <div class="certificate-preview-inner certificate-document ${isProfessional ? 'certificate-document-professional' : 'certificate-document-participation'}">
