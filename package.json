@@ -1,0 +1,18 @@
+{
+  "name": "courseplatform-qa",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local browser QA dependencies for CoursePlatform",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "qa:certificates": "node scripts/verify_certificate_browser.cjs",
+    "qa:password-recovery": "node scripts/verify_password_recovery_browser.cjs",
+    "qa:submission-retry": "node scripts/verify_submission_retry.cjs",
+    "qa:participation-policy": "node scripts/verify_participation_policy.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

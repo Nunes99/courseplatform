@@ -154,10 +154,15 @@ export class CoursePlatformApi {
     return data;
   }
 
-  recoverStudentAccess(email, publicStudentId) {
-    return this.request('recoverStudentAccess', {
-      email,
-      publicStudentId
+  recoverStudentAccess(email) {
+    return this.request('recoverStudentAccess', { email });
+  }
+
+  completeStudentPasswordReset(token, newPassword, confirmPassword) {
+    return this.request('completeStudentPasswordReset', {
+      token,
+      newPassword,
+      confirmPassword
     });
   }
 

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Request
@@ -10,6 +11,7 @@ from .actions import (
     certificate_pdf_payload,
     dispatch,
     dispatch_notification_deliveries,
+    dispatch_student_password_reset,
     public_error,
     record_certificate_download,
 )
@@ -31,6 +33,15 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+def request_source(request: Request) -> str:
+    direct_host = request.client.host if request.client else "unknown"
+    if os.getenv("VERCEL"):
+        forwarded = (request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+        if forwarded:
+            return forwarded[:256]
+    return direct_host[:256]
 
 
 async def handle_get_action(request: Request):
@@ -55,10 +66,21 @@ async def handle_post_action(request: Request, background_tasks: BackgroundTasks
         return JSONResponse(public_error(ApiError("ACTION_REQUIRED", "O campo action e obrigatorio.")), status_code=400)
 
     try:
+        payload.pop("_requestSource", None)
+        if action in {"recoverStudentAccess", "completeStudentPasswordReset"}:
+            payload["_requestSource"] = request_source(request)
         result = dispatch(action, payload)
         notification_ids = result.pop("_backgroundNotificationIds", []) if isinstance(result, dict) else []
+        reset_delivery = result.pop("_passwordResetDelivery", None) if isinstance(result, dict) else None
         if notification_ids:
             background_tasks.add_task(dispatch_notification_deliveries, notification_ids)
+        if reset_delivery:
+            background_tasks.add_task(
+                dispatch_student_password_reset,
+                reset_delivery.get("resetId", ""),
+                reset_delivery.get("token", ""),
+                str(request.base_url).rstrip("/"),
+            )
         return JSONResponse(result)
     except Exception as error:
         return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)

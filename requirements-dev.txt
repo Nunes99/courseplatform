@@ -1,0 +1,10 @@
+-r requirements.txt
+
+# HTTP client used by FastAPI TestClient.
+httpx==0.28.1
+
+# Certificate PDF inspection and image/QR verification.
+pypdf==6.18.0
+Pillow==12.3.0
+pypdfium2==5.13.0
+zxing-cpp==3.1.1

@@ -176,7 +176,7 @@ async function initialize() {
   }
 
   if (!api.hasStudentSession()) {
-    renderLogin();
+    await route();
     loadPublicMediaConfig().then(applyBrandLogo);
     return;
   }
@@ -634,6 +634,13 @@ async function route() {
   const hash = location.hash.replace(/^#\/?/, '');
   const [routeName, routeValue] = hash.split('/');
 
+  const passwordResetToken = consumePasswordResetToken();
+  if (passwordResetToken) {
+    renderLogin();
+    showPasswordResetDialog(passwordResetToken);
+    return;
+  }
+
   if (!api.hasStudentSession()) {
     renderLogin();
     return;
@@ -860,11 +867,11 @@ function showStudentRecoveryDialog(prefilledEmail = '') {
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `
-    <div class="dialog-card recovery-dialog">
+    <div class="dialog-card recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="studentRecoveryTitle">
       <button class="dialog-close" type="button" aria-label="Fechar">x</button>
-      <h2>Recuperar palavra-passe de acesso</h2>
+      <h2 id="studentRecoveryTitle">Recuperar palavra-passe de acesso</h2>
       <p class="recovery-note">
-        Informe o email e o ID público do estudante para gerar uma nova palavra-passe temporária.
+        Informe o email associado à sua conta. Se a conta estiver ativa, enviaremos um link de utilização única.
       </p>
 
       <form id="studentRecoveryForm" class="form-stack">
@@ -873,38 +880,40 @@ function showStudentRecoveryDialog(prefilledEmail = '') {
           <input type="email" name="email" autocomplete="email" required
             value="${escapeHtml(prefilledEmail || '')}" placeholder="estudante@email.com">
         </label>
-        <label>
-          <span>ID do estudante</span>
-          <input name="publicStudentId" required placeholder="STU-00000"
-            autocomplete="off" autocapitalize="characters">
-        </label>
-
         <div id="studentRecoveryResult" class="recovery-result" hidden></div>
 
         <div class="dialog-actions">
           <button class="button button-secondary" type="button" data-cancel-recovery>Cancelar</button>
-          <button class="button button-primary" type="submit">Gerar palavra-passe temporária</button>
+          <button class="button button-primary" type="submit">Enviar instruções</button>
         </div>
       </form>
     </div>
   `;
 
+  const onRecoveryKeydown = (event) => {
+    if (event.key === 'Escape') closeRecovery();
+  };
+  const closeRecovery = () => {
+    document.removeEventListener('keydown', onRecoveryKeydown);
+    overlay.remove();
+  };
   document.body.appendChild(overlay);
-  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
-  overlay.querySelector('[data-cancel-recovery]').addEventListener('click', () => overlay.remove());
+  document.addEventListener('keydown', onRecoveryKeydown);
+  overlay.querySelector('.dialog-close').addEventListener('click', closeRecovery);
+  overlay.querySelector('[data-cancel-recovery]').addEventListener('click', closeRecovery);
   overlay.addEventListener('click', (event) => {
-    if (event.target === overlay) overlay.remove();
+    if (event.target === overlay) closeRecovery();
   });
   overlay.querySelector('#studentRecoveryForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const values = Object.fromEntries(new FormData(form));
-    setBusy(button, true, 'A gerar...');
+    setBusy(button, true, 'A enviar...');
 
     try {
-      const result = await api.recoverStudentAccess(values.email, values.publicStudentId);
-      renderStudentRecoveryResult(overlay, result, values.email);
+      const result = await api.recoverStudentAccess(values.email);
+      renderStudentRecoveryResult(overlay, result);
     } catch (error) {
       const resultBox = overlay.querySelector('#studentRecoveryResult');
       resultBox.hidden = false;
@@ -915,38 +924,90 @@ function showStudentRecoveryDialog(prefilledEmail = '') {
       reportHeight();
     }
   });
-  overlay.querySelector('[name="publicStudentId"]').focus();
+  overlay.querySelector('[name="email"]').focus();
   reportHeight();
 }
 
-function renderStudentRecoveryResult(overlay, result, email) {
+function renderStudentRecoveryResult(overlay, result) {
   const resultBox = overlay.querySelector('#studentRecoveryResult');
   resultBox.hidden = false;
   resultBox.classList.remove('is-error');
-  resultBox.innerHTML = `
-    <span>Palavra-passe temporária criada para ${escapeHtml(result.email || email)}</span>
-    <strong>${escapeHtml(result.temporaryPassword || '')}</strong>
-    <div class="recovery-result-actions">
-      <button class="button button-secondary button-small" type="button" data-copy-temporary-password>
-        Copiar palavra-passe
-      </button>
-      <button class="button button-primary button-small" type="button" data-use-temporary-password>
-        Usar no login
-      </button>
+  resultBox.textContent = result.message || 'Se a conta estiver ativa, receberá as instruções por email.';
+}
+
+function consumePasswordResetToken() {
+  const hash = String(location.hash || '');
+  if (!hash.startsWith('#/reset-access?')) return '';
+  const token = new URLSearchParams(hash.slice(hash.indexOf('?') + 1)).get('token') || '';
+  history.replaceState(null, '', `${location.pathname}${location.search}`);
+  return token;
+}
+
+function showPasswordResetDialog(token) {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="passwordResetTitle">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <h2 id="passwordResetTitle">Definir nova palavra-passe</h2>
+      <p class="recovery-note">Escolha uma palavra-passe com pelo menos 8 caracteres.</p>
+      <form id="studentPasswordResetForm" class="form-stack">
+        <label>
+          <span>Nova palavra-passe</span>
+          <input type="password" name="newPassword" autocomplete="new-password" minlength="8" maxlength="128" required>
+        </label>
+        <label>
+          <span>Confirmar nova palavra-passe</span>
+          <input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" maxlength="128" required>
+        </label>
+        <div id="studentPasswordResetResult" class="recovery-result" role="alert" hidden></div>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-password-reset>Cancelar</button>
+          <button class="button button-primary" type="submit">Guardar nova palavra-passe</button>
+        </div>
+      </form>
     </div>
   `;
-  resultBox.querySelector('[data-copy-temporary-password]').addEventListener('click', () => {
-    copyText(result.temporaryPassword || '', 'Palavra-passe temporária copiada.');
-  });
-  resultBox.querySelector('[data-use-temporary-password]').addEventListener('click', () => {
-    const loginForm = document.querySelector('#loginForm');
-    if (loginForm) {
-      loginForm.elements.email.value = email || '';
-      loginForm.elements.accessCode.value = result.temporaryPassword || '';
-    }
+  const onResetKeydown = (event) => {
+    if (event.key === 'Escape') close();
+  };
+  const close = () => {
+    document.removeEventListener('keydown', onResetKeydown);
     overlay.remove();
-    showToast('Palavra-passe temporária preenchida no início de sessão.', 'success');
+  };
+  document.body.appendChild(overlay);
+  document.addEventListener('keydown', onResetKeydown);
+  overlay.querySelector('.dialog-close').addEventListener('click', close);
+  overlay.querySelector('[data-cancel-password-reset]').addEventListener('click', close);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) close();
   });
+  overlay.querySelector('#studentPasswordResetForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const resultBox = overlay.querySelector('#studentPasswordResetResult');
+    const values = Object.fromEntries(new FormData(form));
+    resultBox.hidden = true;
+    resultBox.classList.remove('is-error');
+    setBusy(button, true, 'A guardar...');
+    try {
+      await api.completeStudentPasswordReset(token, values.newPassword, values.confirmPassword);
+      localStorage.removeItem('courseSessionToken');
+      close();
+      renderLogin();
+      showToast('Palavra-passe alterada. Já pode iniciar sessão.', 'success');
+    } catch (error) {
+      resultBox.textContent = error.message || 'Não foi possível alterar a palavra-passe.';
+      resultBox.classList.add('is-error');
+      resultBox.hidden = false;
+    } finally {
+      setBusy(button, false);
+      reportHeight();
+    }
+  });
+  overlay.querySelector('[name="newPassword"]').focus();
+  reportHeight();
 }
 
 async function copyText(text, successMessage) {

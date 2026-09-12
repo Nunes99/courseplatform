@@ -1275,9 +1275,10 @@ def whatsapp_configuration() -> dict[str, Any]:
     }
 
 
-def email_runtime_configuration() -> dict[str, Any]:
+def email_runtime_configuration(*, prepare_schema: bool = True) -> dict[str, Any]:
     """Resolve SMTP settings while keeping the password server-side."""
-    prepare_notification_feature_schema()
+    if prepare_schema:
+        prepare_notification_feature_schema()
     settings = get_settings()
     row = fetch_one(
         """
@@ -1802,6 +1803,75 @@ def send_email_notification(delivery: dict[str, Any], configuration: dict[str, A
         safe_error = redact_notification_error(error, configuration.get("smtpPassword"))
         raise RuntimeError(f"Falha no envio SMTP: {safe_error}") from error
     return message_id.strip("<>")
+
+
+def dispatch_student_password_reset(reset_id: str, token: str, request_base_url: str = "") -> None:
+    """Deliver one reset link without persisting or returning its plaintext token."""
+    if not reset_id or not token:
+        return
+    token_hash = hash_secret(token)
+    try:
+        row = fetch_one(
+            """
+            select r.reset_id, r.student_id, r.status, r.expires_at,
+                   s.full_name, s.email, s.status as student_status
+            from courseplatform.student_password_resets r
+            join courseplatform.students s on s.student_id = r.student_id
+            where r.reset_id = %s and r.token_hash = %s
+              and r.consumed_at is null and r.invalidated_at is null
+              and r.expires_at > now()
+            """,
+            (reset_id, token_hash),
+        )
+        if not row or row.get("status") not in {"PENDING", "DELIVERED"} or row.get("student_status") != "ACTIVE":
+            return
+        configuration = email_runtime_configuration(prepare_schema=False)
+        base_url = str_value(configuration.get("platformUrl") or request_base_url).rstrip("/")
+        if not base_url.startswith(("https://", "http://")):
+            raise RuntimeError("PLATFORM_URL is not configured for password recovery.")
+        action_url = f"{base_url}/#/reset-access?{urlencode({'token': token})}"
+        send_email_notification(
+            {
+                "recipient": row.get("email"),
+                "student_name": row.get("full_name"),
+                "email_subject": "Definir uma nova palavra-passe",
+                "email_message": (
+                    "Recebemos um pedido para recuperar o acesso à sua conta. "
+                    "Use o botão abaixo para definir uma nova palavra-passe. "
+                    "O link é de utilização única e expira em breve. Se não fez este pedido, ignore esta mensagem."
+                ),
+                "action_url": action_url,
+            },
+            configuration,
+        )
+        with connection() as conn:
+            conn.execute(
+                """
+                update courseplatform.student_password_resets
+                set status = 'DELIVERED', delivery_attempted_at = now(),
+                    delivered_at = now(), delivery_error_code = null
+                where reset_id = %s and token_hash = %s
+                  and consumed_at is null and invalidated_at is null
+                """,
+                (reset_id, token_hash),
+            )
+            conn.commit()
+    except Exception as error:
+        try:
+            with connection() as conn:
+                conn.execute(
+                    """
+                    update courseplatform.student_password_resets
+                    set status = 'DELIVERY_FAILED', delivery_attempted_at = now(),
+                        invalidated_at = coalesce(invalidated_at, now()),
+                        delivery_error_code = %s
+                    where reset_id = %s and token_hash = %s and consumed_at is null
+                    """,
+                    (error.__class__.__name__[:80], reset_id, token_hash),
+                )
+                conn.commit()
+        except Exception:
+            pass
 
 
 def _telegram_markdown_v2(value: Any) -> str:
@@ -3767,63 +3837,273 @@ def mask_email(email: str) -> str:
     return f"{visible}{'*' * max(2, len(local) - len(visible))}@{domain}"
 
 
-def recover_student_access(payload: dict[str, Any]):
-    require_fields(payload, ["email", "publicStudentId"])
-    email = normalize_email(payload["email"])
-    public_id = str_value(payload.get("publicStudentId")).upper()
-    try:
-        student = fetch_one(
-            """
-            select *
-            from courseplatform.students
-            where email = %s and upper(coalesce(public_student_id, '')) = %s
-            """,
-            (email, public_id),
-        )
-    except Exception as error:
-        raise database_api_error(error) from error
-    if not student or student.get("status") != "ACTIVE":
-        raise ApiError(
-            "RECOVERY_DETAILS_NOT_FOUND",
-            "Não encontramos uma conta ativa com esse email e ID de estudante.",
-        )
+PASSWORD_RESET_GENERIC_MESSAGE = (
+    "Se existir uma conta ativa associada a esse email, receberá uma mensagem "
+    "com as instruções para definir uma nova palavra-passe."
+)
 
-    access_code = generate_access_code(12)
+
+def password_reset_private_digest(kind: str, value: str) -> str:
+    key = get_settings().password_reset_hash_key.encode("utf-8")
+    if len(key) < 32:
+        raise RuntimeError("PASSWORD_RESET_HASH_KEY is not configured securely.")
+    return hmac.new(key, f"{kind}:{value}".encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def password_reset_public_result() -> dict[str, Any]:
+    return success({"message": PASSWORD_RESET_GENERIC_MESSAGE})
+
+
+def recover_student_access(payload: dict[str, Any]):
+    require_fields(payload, ["email"])
+    email = normalize_email(payload["email"])
+    settings = get_settings()
+    if len(settings.password_reset_hash_key.encode("utf-8")) < 32:
+        return password_reset_public_result()
+
+    source = str_value(payload.get("_requestSource"))[:256] or "unknown"
+    email_hash = password_reset_private_digest("email", email)
+    source_hash = password_reset_private_digest("source", source)
+    token = secrets.token_urlsafe(48)
+    reset_id = generate_id("PWR")
+    expires_at = utc_now() + timedelta(minutes=max(5, settings.password_reset_ttl_minutes))
+    delivery = None
     try:
         with connection() as conn:
-            row = conn.execute(
+            # Stable lock ordering serializes both account and source limits.
+            for lock_key in sorted({email_hash, source_hash}):
+                conn.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,))
+            source_count = conn.execute(
                 """
-                update courseplatform.students
-                set password_hash = crypt(%s, gen_salt('bf', 12)),
-                    password_changed_at = now(), password_reset_required = true,
-                    access_code = null, updated_at = now()
-                where student_id = %s
-                returning *
+                select count(*) as count
+                from courseplatform.student_password_resets
+                where source_hash = %s
+                  and created_at >= now() - (%s * interval '1 minute')
                 """,
-                (access_code, student["student_id"]),
+                (source_hash, max(1, settings.password_reset_source_window_minutes)),
+            ).fetchone() or {}
+            email_count = conn.execute(
+                """
+                select count(*) as count
+                from courseplatform.student_password_resets
+                where email_hash = %s
+                  and created_at >= now() - (%s * interval '1 minute')
+                """,
+                (email_hash, max(1, settings.password_reset_account_window_minutes)),
+            ).fetchone() or {}
+            throttled = (
+                int(source_count.get("count") or 0) >= max(1, settings.password_reset_source_limit)
+                or int(email_count.get("count") or 0) >= max(1, settings.password_reset_account_limit)
+            )
+            student = None if throttled else conn.execute(
+                """
+                select student_id, full_name, email, status
+                from courseplatform.students
+                where email = %s
+                """,
+                (email,),
             ).fetchone()
-            conn.execute(
-                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                (student["student_id"],),
-            )
-            audit(
-                conn,
-                "SYSTEM",
-                "STUDENT_RECOVERY",
-                "STUDENT_ACCESS_RECOVERED",
-                "STUDENT",
-                student["student_id"],
-                {"publicStudentId": row.get("public_student_id")},
-            )
+            eligible = bool(student and student.get("status") == "ACTIVE")
+            if not throttled:
+                if eligible:
+                    conn.execute(
+                        """
+                        update courseplatform.student_password_resets
+                        set invalidated_at = now(), status = 'INVALIDATED'
+                        where student_id = %s and consumed_at is null
+                          and invalidated_at is null and expires_at > now()
+                        """,
+                        (student["student_id"],),
+                    )
+                conn.execute(
+                    """
+                    insert into courseplatform.student_password_resets
+                      (reset_id, student_id, email_hash, source_hash, token_hash,
+                       status, expires_at, created_at)
+                    values (%s, %s, %s, %s, %s, %s, %s, now())
+                    """,
+                    (
+                        reset_id,
+                        student["student_id"] if eligible else None,
+                        email_hash,
+                        source_hash,
+                        hash_secret(token) if eligible else None,
+                        "PENDING" if eligible else "IGNORED",
+                        expires_at,
+                    ),
+                )
+                if eligible:
+                    audit(
+                        conn,
+                        "SYSTEM",
+                        student["student_id"],
+                        "STUDENT_PASSWORD_RESET_REQUESTED",
+                        "STUDENT",
+                        student["student_id"],
+                        {"resetId": reset_id, "expiresAt": iso(expires_at)},
+                    )
+                    delivery = {"resetId": reset_id, "token": token}
             conn.commit()
     except Exception as error:
         raise database_api_error(error) from error
 
-    return success({
-        "email": mask_email(row.get("email") or email),
-        "publicStudentId": row.get("public_student_id") or public_id,
-        "temporaryPassword": access_code,
-    })
+    result = password_reset_public_result()
+    if delivery:
+        result["_passwordResetDelivery"] = delivery
+    return result
+
+
+def complete_student_password_reset(payload: dict[str, Any]):
+    require_fields(payload, ["token", "newPassword", "confirmPassword"])
+    token = str_value(payload.get("token"))
+    new_password = str(payload.get("newPassword") or "")
+    confirmation = str(payload.get("confirmPassword") or "")
+    if new_password != confirmation:
+        raise ApiError("PASSWORD_CONFIRMATION_MISMATCH", "A confirmação da nova palavra-passe não corresponde.")
+    if not valid_password(new_password) or len(new_password) > 128:
+        raise ApiError("INVALID_NEW_PASSWORD", "A nova palavra-passe deve ter entre 8 e 128 caracteres.")
+    if not token or len(token) > 256:
+        raise ApiError("PASSWORD_RESET_TOKEN_INVALID", "O link de recuperação é inválido ou já expirou.")
+
+    settings = get_settings()
+    if len(settings.password_reset_hash_key.encode("utf-8")) < 32:
+        raise ApiError("PASSWORD_RESET_UNAVAILABLE", "A recuperação de acesso não está disponível neste momento.")
+    source = str_value(payload.get("_requestSource"))[:256] or "unknown"
+    source_hash = password_reset_private_digest("source", source)
+    token_hash = hash_secret(token)
+    reset_error = None
+    student_id = ""
+    try:
+        with connection() as conn:
+            conn.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (source_hash,))
+            attempts = conn.execute(
+                """
+                select count(*) as count
+                from courseplatform.student_password_reset_attempts
+                where source_hash = %s
+                  and created_at >= now() - (%s * interval '1 minute')
+                """,
+                (source_hash, max(1, settings.password_reset_completion_window_minutes)),
+            ).fetchone() or {}
+            if int(attempts.get("count") or 0) >= max(1, settings.password_reset_completion_limit):
+                reset_error = ApiError(
+                    "PASSWORD_RESET_RATE_LIMITED",
+                    "Foram feitas demasiadas tentativas. Aguarde antes de tentar novamente.",
+                )
+            else:
+                attempt_id = generate_id("PWA")
+                conn.execute(
+                    """
+                    insert into courseplatform.student_password_reset_attempts
+                      (attempt_id, source_hash, token_hash, succeeded, created_at)
+                    values (%s, %s, %s, false, now())
+                    """,
+                    (attempt_id, source_hash, token_hash),
+                )
+                reset = conn.execute(
+                    """
+                    select r.*, s.status as student_status
+                    from courseplatform.student_password_resets r
+                    join courseplatform.students s on s.student_id = r.student_id
+                    where r.token_hash = %s
+                    for update of r, s
+                    """,
+                    (token_hash,),
+                ).fetchone()
+                valid_reset = bool(
+                    reset
+                    and reset.get("status") in {"PENDING", "DELIVERED"}
+                    and not reset.get("consumed_at")
+                    and not reset.get("invalidated_at")
+                    and parse_datetime(reset.get("expires_at"))
+                    and parse_datetime(reset.get("expires_at")) > utc_now()
+                    and reset.get("student_status") == "ACTIVE"
+                )
+                if not valid_reset:
+                    if reset and parse_datetime(reset.get("expires_at")) and parse_datetime(reset.get("expires_at")) <= utc_now():
+                        conn.execute(
+                            """
+                            update courseplatform.student_password_resets
+                            set status = 'EXPIRED', invalidated_at = coalesce(invalidated_at, now())
+                            where reset_id = %s
+                            """,
+                            (reset["reset_id"],),
+                        )
+                    reset_error = ApiError(
+                        "PASSWORD_RESET_TOKEN_INVALID",
+                        "O link de recuperação é inválido ou já expirou.",
+                    )
+                else:
+                    student_id = reset["student_id"]
+                    conn.execute(
+                        """
+                        update courseplatform.students
+                        set password_hash = crypt(%s, gen_salt('bf', 12)),
+                            password_changed_at = now(), password_reset_required = false,
+                            access_code = null, updated_at = now()
+                        where student_id = %s
+                        """,
+                        (new_password, student_id),
+                    )
+                    revoke_sessions(conn, student_id)
+                    conn.execute(
+                        """
+                        update courseplatform.student_password_resets
+                        set status = 'CONSUMED', consumed_at = now()
+                        where reset_id = %s
+                        """,
+                        (reset["reset_id"],),
+                    )
+                    conn.execute(
+                        """
+                        update courseplatform.student_password_resets
+                        set status = 'INVALIDATED', invalidated_at = now()
+                        where student_id = %s and reset_id <> %s
+                          and consumed_at is null and invalidated_at is null
+                        """,
+                        (student_id, reset["reset_id"]),
+                    )
+                    conn.execute(
+                        """
+                        update courseplatform.student_password_reset_attempts
+                        set succeeded = true
+                        where attempt_id = %s
+                        """,
+                        (attempt_id,),
+                    )
+                    create_student_notification(
+                        conn,
+                        student_id,
+                        "GENERAL",
+                        "Palavra-passe alterada",
+                        "A palavra-passe da sua conta foi alterada através do processo de recuperação.",
+                        action_url="#/profile",
+                        entity_type="STUDENT",
+                        entity_id=student_id,
+                        priority="HIGH",
+                        send_whatsapp=False,
+                        send_email=False,
+                        send_telegram=False,
+                        send_push=False,
+                    )
+                    audit(
+                        conn,
+                        "SYSTEM",
+                        student_id,
+                        "STUDENT_PASSWORD_RESET_COMPLETED",
+                        "STUDENT",
+                        student_id,
+                        {"resetId": reset["reset_id"], "sessionsRevoked": True},
+                    )
+            conn.commit()
+    except ApiError:
+        raise
+    except Exception as error:
+        raise database_api_error(error) from error
+
+    if reset_error:
+        raise reset_error
+    return success({"passwordChanged": True, "sessionsRevoked": True})
 
 
 def admin_login(payload: dict[str, Any]):
@@ -9426,6 +9706,7 @@ ACTIONS = {
     "verifyCertificate": verify_certificate,
     "login": login,
     "recoverStudentAccess": recover_student_access,
+    "completeStudentPasswordReset": complete_student_password_reset,
     "logout": logout,
     "adminLogin": admin_login,
     "recoverAdminAccess": recover_admin_access,
