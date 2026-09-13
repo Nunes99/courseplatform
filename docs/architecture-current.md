@@ -155,7 +155,13 @@ Pontos ainda desconhecidos: rate limiting/WAF externo, MFA, grants reais, polici
 - Certificação: `certificates`, `certificate_settings`, `certificate_requests`.
 - Operação/importação: `audit_log`, `settings`, `lists`, `student_import`, `student_import_results`, `schema_guide`.
 
-O esquema ativa RLS nas tabelas declaradas e concede acesso ao `service_role`, mas não contém policies de acesso às tabelas de domínio. O acesso normal da aplicação ocorre pela conexão Postgres do backend; o efeito real de RLS depende da role dessa conexão e dos grants do ambiente.
+O esquema ativa RLS nas tabelas declaradas. A migração da role de runtime prepara
+`courseplatform_runtime` (grupo sem login) e `courseplatform_api` (login) com
+DML por tabela/operação e grants explícitos nas funções `pgcrypto` utilizadas
+pela API. A role não recebe acesso automático a objetos futuros, `BYPASSRLS`,
+DDL nem privilégios administrativos.
+Até a troca controlada de `DATABASE_URL`, o ambiente publicado pode continuar a
+usar a ligação anterior; isso deve ser confirmado por ambiente.
 
 ### Views públicas
 
@@ -163,14 +169,18 @@ O esquema ativa RLS nas tabelas declaradas e concede acesso ao `service_role`, m
 
 O SQL concede `SELECT` dessas views ao `service_role`; privilégios reais de `anon` e `authenticated` não foram consultados. A auditoria exige validação no ambiente antes de concluir se existe exposição.
 
-### Esquemas divergentes e DDL em runtime
+### Esquemas divergentes e migrações
 
 Os dois ficheiros SQL não são iguais:
 
 - `supabase/schema.sql`: 40 tabelas e 32 views.
 - `backend/courseplatform/schema.sql`: acrescenta `notification_templates`, `push_subscriptions`, colunas de templates nas notificações, índices/RLS e respetivas views; totaliza 42 tabelas e 34 views.
 
-Além disso, `actions.py` contém SQL de preparação para notificações, chat e certificados. `health` pode chamar `ensure_schema`. Portanto, a linha de base não tem uma única cadeia de migrações nem uma única fonte SQL idêntica para todos os ambientes.
+`actions.py` ainda contém constantes SQL legadas de preparação, mas os caminhos
+de pedido validam apenas a presença das capacidades necessárias. `health` não
+cria nem altera objetos. Novas alterações do banco devem passar exclusivamente
+por `supabase/migrations/`. Os dois snapshots SQL continuam divergentes e ainda
+não são uma fonte única para instalações novas.
 
 ### Storage
 
@@ -186,7 +196,9 @@ Não há criação de bucket ou policies de Storage versionadas no repositório.
 - policy privada em `realtime.messages` para a role `authenticated`;
 - trigger que publica mudanças mínimas de mensagens nos tópicos de sala/inbox.
 
-O backend também possui uma cópia programática desse DDL e pode prepará-lo em runtime.
+O backend mantém uma cópia legada desse DDL para compatibilidade de código, mas
+não a executa durante pedidos. A instalação e alteração do Realtime pertencem a
+migrações ou operações administrativas autorizadas.
 
 ## Fluxos principais
 
@@ -293,7 +305,7 @@ Configurações externas de branch protection, Vercel, Supabase, backups e CI n�
 | Entrega por canal | `notification_deliveries` | Claims/retries na base; execução ligada à API |
 | Chat persistente | Tabelas de chat no Postgres | Realtime transporta invalidações/eventos |
 | Frontend publicado | `public/` no Vercel | Backend possui fallback divergente em `static/` |
-| Esquema | Dois SQL divergentes + DDL em runtime | Não há uma fonte única/migrações versionadas |
+| Esquema | Dois snapshots divergentes + migrações versionadas | Os pedidos validam capacidades; a consolidação dos snapshots permanece pendente |
 
 ## Limites desta verificação
 

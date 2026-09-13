@@ -14,7 +14,7 @@ CoursePlatform é uma plataforma de aprendizagem com áreas de estudante e admin
 - `public/`: frontend usado no deploy estático.
 - `backend/courseplatform/static/`: fallback estático empacotado com o backend.
 - `supabase/schema.sql`: esquema para instalação manual no Supabase.
-- `backend/courseplatform/schema.sql`: esquema que a API atual usa na criação automática.
+- `backend/courseplatform/schema.sql`: snapshot legado do esquema, mantido para compatibilidade; pedidos da API não o executam.
 - `supabase/chat_realtime.sql`: funções, policy e trigger do chat Realtime.
 - `tests/`: testes Python com `unittest`.
 - `scripts/`: smoke test, geração de previews e verificações de browser.
@@ -72,6 +72,23 @@ Suíte Python completa:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 ```
 
+Contrato local de permissões Supabase da Etapa 3:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_supabase_access_hardening -v
+```
+
+Contrato da role Postgres mínima usada pela API:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_runtime_database_role -v
+```
+
+O diagnóstico SQL e o verificador de integração estão documentados em
+[docs/stage3-supabase-hardening.md](docs/stage3-supabase-hardening.md). O
+verificador recusa execução sem uma referência explícita de staging e não deve
+ser apontado para produção.
+
 Na linha de base de 12 de setembro de 2026 foram executados 96 testes, todos aprovados. Estes testes usam mocks e dados sintéticos; o resultado não valida permissões, desempenho, backups ou configuração de produção.
 
 Testes de certificados:
@@ -97,7 +114,7 @@ Páginas e endpoints locais:
 - `http://127.0.0.1:8765/connection-test.html`
 - `http://127.0.0.1:8765/api/index?action=health`
 
-O health check atual pode consultar e criar o esquema quando este está ausente. Por isso, aponte a aplicação apenas para uma base descartável ou staging autorizado.
+O health check apenas consulta a disponibilidade do esquema. Quando faltam tabelas ou colunas, a API devolve `DATABASE_MIGRATION_REQUIRED`; a correção deve ser feita por uma migração versionada, nunca durante um pedido HTTP.
 
 ## Testes de browser
 
@@ -139,6 +156,13 @@ Ligação ao Postgres, por ordem de resolução:
 - `DATABASE_URL`, `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING` ou `POSTGRES_PRISMA_URL`;
 - ou `POSTGRES_HOST`, `POSTGRES_DATABASE`/`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_PORT`;
 - ou `SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_URL` com `POSTGRES_PASSWORD`.
+
+Em ambientes publicados, `DATABASE_URL` deve autenticar como a role mínima
+`courseplatform_api`, não como `postgres`. A criação, ativação, validação e
+reversão estão descritas em
+[docs/runtime-database-role.md](docs/runtime-database-role.md). URLs com a role
+administrativa continuam reservadas à execução controlada de migrações e nunca
+devem ser fornecidas ao processo web.
 
 Aplicação e conexão:
 
@@ -184,6 +208,7 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 
 - [Arquitetura atual](docs/architecture-current.md)
 - [Matriz inicial de acessos](docs/access-control-matrix.md)
+- [Endurecimento Supabase da Etapa 3](docs/stage3-supabase-hardening.md)
 - [Auditoria e roteiro LMS](docs/auditoria-lms-2026-09-12.md)
 - [Instruções de evolução por etapas](docs/instrucoes-agente-evolucao-lms.md)
 - [Certificados](docs/certificate-layout.md)

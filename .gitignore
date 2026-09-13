@@ -2,6 +2,7 @@
 .venv/
 node_modules/
 .pnpm-store/
+supabase/.temp/
 playwright-report/
 test-results/
 __pycache__/

@@ -747,4 +747,59 @@ create or replace view public.new_credentials as select * from courseplatform.ne
 create or replace view public.media_content as select * from courseplatform.media_content;
 create or replace view public.schema_guide as select * from courseplatform.schema_guide;
 
-grant select on all tables in schema public to service_role;
+-- Public compatibility views are server-only. Browser roles use FastAPI and
+-- never query academic data through PostgREST.
+do $$
+declare
+  compatibility_view text;
+begin
+  foreach compatibility_view in array array[
+    'students', 'admins', 'sessions', 'courses', 'lessons',
+    'lesson_content', 'questions', 'question_options', 'groups',
+    'enrollments', 'group_members', 'chat_rooms', 'chat_messages',
+    'chat_reads', 'chat_message_reports', 'lesson_progress', 'attempts',
+    'answers', 'files', 'reviews', 'notifications',
+    'notification_deliveries', 'notification_channel_settings',
+    'notification_templates', 'push_subscriptions', 'certificates',
+    'audit_log', 'settings', 'lists', 'student_import',
+    'student_import_results', 'new_credentials', 'media_content',
+    'schema_guide'
+  ]
+  loop
+    if to_regclass(format('public.%I', compatibility_view)) is not null then
+      execute format('alter view public.%I set (security_invoker = true)', compatibility_view);
+      execute format(
+        'revoke all privileges on table public.%I from public, anon, authenticated, service_role',
+        compatibility_view
+      );
+      execute format('grant select on table public.%I to service_role', compatibility_view);
+    end if;
+  end loop;
+end
+$$;
+
+revoke all privileges on schema courseplatform from public, anon, authenticated;
+revoke all privileges on all tables in schema courseplatform from public, anon, authenticated;
+revoke all privileges on all sequences in schema courseplatform from public, anon, authenticated;
+revoke all privileges on all functions in schema courseplatform from public, anon, authenticated;
+
+grant usage on schema courseplatform to service_role;
+grant all privileges on all tables in schema courseplatform to service_role;
+grant all privileges on all sequences in schema courseplatform to service_role;
+
+alter default privileges in schema courseplatform
+  revoke all privileges on tables from public, anon, authenticated;
+alter default privileges in schema courseplatform
+  revoke all privileges on sequences from public, anon, authenticated;
+alter default privileges in schema courseplatform
+  revoke all privileges on functions from public, anon, authenticated;
+alter default privileges in schema courseplatform
+  grant all privileges on tables to service_role;
+alter default privileges in schema courseplatform
+  grant all privileges on sequences to service_role;
+alter default privileges in schema public
+  revoke all privileges on tables from public, anon, authenticated, service_role;
+alter default privileges in schema public
+  revoke all privileges on sequences from public, anon, authenticated, service_role;
+alter default privileges in schema public
+  revoke all privileges on functions from public, anon, authenticated, service_role;

@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - deployment validation reports this cle
     webpush = None
 
 from .config import get_settings
-from .db import connection, ensure_schema, fetch_all, fetch_one, schema_exists
+from .db import connection, fetch_all, fetch_one, schema_exists
 from .security import (
     constant_time_equals,
     generate_id,
@@ -82,6 +82,12 @@ def database_api_error(error: Exception) -> ApiError:
         return ApiError(
             "DATABASE_AUTH_ERROR",
             "A API não conseguiu autenticar no Postgres. Verifique POSTGRES_URL/POSTGRES_PASSWORD no Vercel.",
+            {"errorType": error_name},
+        )
+    if error_name == "InsufficientPrivilege" or "permission denied" in text:
+        return ApiError(
+            "DATABASE_PERMISSION_ERROR",
+            "A role de execução da API não possui uma permissão necessária.",
             {"errorType": error_name},
         )
     return ApiError(
@@ -171,6 +177,7 @@ _ASSESSMENT_SCHEMA_READY = False
 _NOTIFICATION_SCHEMA_READY = False
 _CHAT_SCHEMA_READY = False
 _CHAT_REALTIME_SCHEMA_READY = False
+_CERTIFICATE_SCHEMA_READY = False
 
 
 def progress_access_status(row: dict[str, Any] | None) -> str:
@@ -937,18 +944,86 @@ create index if not exists idx_push_subscriptions_student on courseplatform.push
 """
 
 
+def require_schema_capabilities(
+    conn,
+    feature: str,
+    relations: tuple[str, ...],
+    columns: tuple[str, ...] = (),
+) -> None:
+    missing_relations = [
+        row["object_name"]
+        for row in conn.execute(
+            """
+            select object_name
+            from unnest(%s::text[]) as requested(object_name)
+            where to_regclass(object_name) is null
+            order by object_name
+            """,
+            (list(relations),),
+        ).fetchall()
+    ]
+    missing_columns = []
+    if columns:
+        missing_columns = [
+            row["object_name"]
+            for row in conn.execute(
+                """
+                select object_name
+                from unnest(%s::text[]) as requested(object_name)
+                where not exists (
+                  select 1
+                  from information_schema.columns available
+                  where available.table_schema = split_part(object_name, '.', 1)
+                    and available.table_name = split_part(object_name, '.', 2)
+                    and available.column_name = split_part(object_name, '.', 3)
+                )
+                order by object_name
+                """,
+                (list(columns),),
+            ).fetchall()
+        ]
+    missing = missing_relations + missing_columns
+    if missing:
+        raise ApiError(
+            "DATABASE_MIGRATION_REQUIRED",
+            f"A migração necessária para {feature} ainda não foi aplicada.",
+            {"feature": feature, "missingObjects": missing},
+        )
+
+
 def ensure_notification_feature_schema(conn) -> None:
-    execute_statements(conn, NOTIFICATION_FEATURE_SQL)
+    global _NOTIFICATION_SCHEMA_READY
+    if _NOTIFICATION_SCHEMA_READY:
+        return
+    require_schema_capabilities(
+        conn,
+        "notificações",
+        (
+            "courseplatform.notifications",
+            "courseplatform.notification_deliveries",
+            "courseplatform.notification_channel_settings",
+            "courseplatform.notification_templates",
+            "courseplatform.push_subscriptions",
+            "courseplatform.telegram_link_tokens",
+            "courseplatform.notification_channel_state",
+        ),
+        (
+            "courseplatform.students.whatsapp_opt_in",
+            "courseplatform.students.email_opt_in",
+            "courseplatform.students.telegram_chat_id",
+            "courseplatform.students.notification_preferences_json",
+            "courseplatform.notifications.template_key",
+            "courseplatform.notifications.template_variables_json",
+        ),
+    )
+    _NOTIFICATION_SCHEMA_READY = True
 
 
 def prepare_notification_feature_schema() -> None:
-    global _NOTIFICATION_SCHEMA_READY
     if _NOTIFICATION_SCHEMA_READY:
         return
     with connection() as conn:
         ensure_notification_feature_schema(conn)
-        conn.commit()
-    _NOTIFICATION_SCHEMA_READY = True
 
 
 _NOTIFICATION_TEMPLATE_COLUMNS = {
@@ -2665,17 +2740,33 @@ alter table courseplatform.chat_message_reports enable row level security;
 
 
 def ensure_chat_feature_schema(conn) -> None:
-    execute_statements(conn, CHAT_FEATURE_SQL)
+    global _CHAT_SCHEMA_READY
+    if _CHAT_SCHEMA_READY:
+        return
+    require_schema_capabilities(
+        conn,
+        "chat",
+        (
+            "courseplatform.chat_rooms",
+            "courseplatform.chat_messages",
+            "courseplatform.chat_reads",
+            "courseplatform.chat_message_receipts",
+            "courseplatform.chat_presence",
+            "courseplatform.chat_message_reports",
+        ),
+        (
+            "courseplatform.chat_rooms.direct_student_one_id",
+            "courseplatform.chat_rooms.direct_student_two_id",
+        ),
+    )
+    _CHAT_SCHEMA_READY = True
 
 
 def prepare_chat_feature_schema() -> None:
-    global _CHAT_SCHEMA_READY
     if _CHAT_SCHEMA_READY:
         return
     with connection() as conn:
         ensure_chat_feature_schema(conn)
-        conn.commit()
-    _CHAT_SCHEMA_READY = True
 
 
 CHAT_REALTIME_ACCESS_SQL = """
@@ -2898,42 +2989,15 @@ def ensure_chat_realtime_schema(conn) -> bool:
           ) as rls_policy_ready
         """
     ).fetchone() or {}
-    if not all(capabilities.get(key) for key in ("messages_ready", "broadcast_ready", "topic_ready")):
-        return False
-    if all(capabilities.get(key) for key in (
-        "access_policy_function_ready", "broadcast_function_ready", "trigger_ready", "rls_policy_ready",
-    )):
-        return True
-    conn.execute(CHAT_REALTIME_ACCESS_SQL)
-    conn.execute("revoke all on function courseplatform.chat_realtime_topic_allowed(text, jsonb) from public, anon")
-    conn.execute("grant execute on function courseplatform.chat_realtime_topic_allowed(text, jsonb) to authenticated")
-    conn.execute("drop policy if exists courseplatform_chat_broadcast_select on realtime.messages")
-    conn.execute(
-        """
-        create policy courseplatform_chat_broadcast_select
-        on realtime.messages
-        for select
-        to authenticated
-        using (
-          extension = 'broadcast'
-          and private
-          and courseplatform.chat_realtime_topic_allowed(
-            realtime.topic(),
-            nullif(current_setting('request.jwt.claims', true), '')::jsonb
-          )
-        )
-        """
-    )
-    conn.execute(CHAT_REALTIME_TRIGGER_SQL)
-    conn.execute("drop trigger if exists chat_messages_realtime_broadcast on courseplatform.chat_messages")
-    conn.execute(
-        """
-        create trigger chat_messages_realtime_broadcast
-        after insert or update or delete on courseplatform.chat_messages
-        for each row execute function courseplatform.broadcast_chat_message_change()
-        """
-    )
-    return True
+    return all(capabilities.get(key) for key in (
+        "messages_ready",
+        "broadcast_ready",
+        "topic_ready",
+        "access_policy_function_ready",
+        "broadcast_function_ready",
+        "trigger_ready",
+        "rls_policy_ready",
+    ))
 
 
 def _jwt_segment(value: dict[str, Any]) -> str:
@@ -3032,27 +3096,56 @@ create index if not exists idx_certificate_requests_student_course
 """
 
 
-def execute_statements(conn, sql: str) -> None:
-    for statement in [part.strip() for part in sql.split(";") if part.strip()]:
-        conn.execute(statement)
-
-
 def ensure_assessment_feature_schema(conn) -> None:
-    execute_statements(conn, ASSESSMENT_FEATURE_SQL)
+    global _ASSESSMENT_SCHEMA_READY
+    if _ASSESSMENT_SCHEMA_READY:
+        return
+    require_schema_capabilities(
+        conn,
+        "avaliações",
+        (
+            "courseplatform.lessons",
+            "courseplatform.lesson_progress",
+            "courseplatform.attempts",
+        ),
+        (
+            "courseplatform.lessons.submission_duration_minutes",
+            "courseplatform.lesson_progress.content_access_status",
+            "courseplatform.lesson_progress.evaluation_status",
+            "courseplatform.attempts.retry_authorized",
+            "courseplatform.attempts.assessment_snapshot_json",
+        ),
+    )
+    _ASSESSMENT_SCHEMA_READY = True
 
 
 def prepare_assessment_feature_schema() -> None:
-    global _ASSESSMENT_SCHEMA_READY
     if _ASSESSMENT_SCHEMA_READY:
         return
     with connection() as conn:
         ensure_assessment_feature_schema(conn)
-        conn.commit()
-    _ASSESSMENT_SCHEMA_READY = True
 
 
 def ensure_certificate_feature_schema(conn) -> None:
-    execute_statements(conn, CERTIFICATE_FEATURE_SQL)
+    global _CERTIFICATE_SCHEMA_READY
+    if _CERTIFICATE_SCHEMA_READY:
+        return
+    require_schema_capabilities(
+        conn,
+        "certificados",
+        (
+            "courseplatform.certificates",
+            "courseplatform.certificate_settings",
+            "courseplatform.certificate_requests",
+        ),
+        (
+            "courseplatform.certificates.certificate_type",
+            "courseplatform.certificates.template_snapshot_json",
+            "courseplatform.certificates.download_count",
+            "courseplatform.certificate_settings.certificate_profile_json",
+        ),
+    )
+    _CERTIFICATE_SCHEMA_READY = True
 
 
 def public_certificate(row: dict[str, Any] | None):
@@ -3694,9 +3787,6 @@ def health(_: dict[str, Any]):
     }
     try:
         db_ok = schema_exists()
-        if not db_ok:
-            schema_created = ensure_schema()
-            db_ok = schema_exists()
         if db_ok:
             data_row = fetch_one(
                 """
@@ -3720,7 +3810,10 @@ def health(_: dict[str, Any]):
             }
         else:
             db_error = "SchemaMissing"
-            db_error_hint = "Conexao Postgres ok, mas o schema courseplatform não foi encontrado e não foi possível cria-lo automaticamente."
+            db_error_hint = (
+                "Conexão Postgres ativa, mas o esquema courseplatform está incompleto. "
+                "Aplique as migrações versionadas antes de iniciar a API."
+            )
     except Exception as error:
         db_ok = False
         db_error = error.__class__.__name__

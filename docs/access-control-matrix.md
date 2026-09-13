@@ -110,14 +110,23 @@ Estas regras devem ser testadas no backend:
 
 ## Banco, views e Storage
 
-### Estado observado no repositório
+### Estado verificado em 13 de setembro de 2026
 
-- As tabelas `courseplatform.*` têm RLS ativada nos SQL atuais.
-- O esquema cria views de gestão em `public`, muitas com `select *`.
-- O SQL versionado concede acesso ao `service_role`; grants reais de `anon`/`authenticated` não foram verificados.
+- As 42 tabelas `courseplatform.*` têm RLS ativa e não têm policies; sem grants,
+  isto produz negação por defeito para clientes.
+- Em produção, `anon` e `authenticated` não têm acesso direto às tabelas internas
+  nem às 32 views `public.*` de compatibilidade.
+- A migração da Etapa 3 foi aplicada em 13 de setembro de 2026; todas as views
+  preservadas usam `security_invoker`.
+- `service_role` tem acesso total às tabelas internas e deve permanecer exclusiva
+  do servidor; nas views de compatibilidade será limitada a SELECT.
 - O Realtime tem policy para `authenticated` e valida tópicos com claims assinadas pelo backend.
-- Não existem policies de Storage versionadas no repositório.
+- Não existem buckets nem policies de Storage no projeto verificado.
 - A API liga diretamente ao Postgres e aplica a maioria das regras no Python.
+  A migração preparada substitui a ligação administrativa por
+  `courseplatform_api`, membro de `courseplatform_runtime`, sem `BYPASSRLS`, DDL
+  ou privilégios de gestão de roles. A troca de credenciais ainda exige
+  validação e execução controlada por ambiente.
 
 ### Verificações obrigatórias em staging/produção
 
@@ -128,7 +137,7 @@ Estas regras devem ser testadas no backend:
 - Buckets públicos/privados, listagem, upload, update e delete.
 - Ausência de service key, JWT secret e credenciais Postgres nos bundles frontend.
 
-Não altere estes privilégios diretamente em produção sem inventário de dependências e migração testada.
+Alterações futuras devem repetir o inventário de dependências e usar migrações versionadas.
 
 ## Casos de teste mínimos por papel
 
@@ -148,7 +157,12 @@ Não altere estes privilégios diretamente em produção sem inventário de depe
 
 ## Pontos ainda não verificados
 
-- Políticas e grants do projeto Supabase real.
+- Testes pós-endurecimento com utilizadores sintéticos numa branch/staging isolada.
+- Confirmação por SQL da desativação já efetuada dos defaults geridos de
+  autoexposição em **Integrations > Data API**.
+- Aplicação da migração da role mínima, ativação segura do login e confirmação
+  de que cada ambiente Vercel usa `courseplatform_api` em vez de `postgres`.
+- Políticas de Storage após a criação do bucket privado.
 - WAF, rate limiting, CAPTCHA e proteção contra enumeração.
 - MFA e SSO para staff.
 - Atribuição de revisores a cursos/grupos.

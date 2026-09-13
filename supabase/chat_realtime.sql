@@ -105,7 +105,9 @@ as $$
   end
 $$;
 
-revoke all on function courseplatform.chat_realtime_topic_allowed(text, jsonb) from public, anon;
+revoke all on function courseplatform.chat_realtime_topic_allowed(text, jsonb)
+  from public, anon, authenticated, service_role;
+grant usage on schema courseplatform to authenticated;
 grant execute on function courseplatform.chat_realtime_topic_allowed(text, jsonb) to authenticated;
 
 drop policy if exists courseplatform_chat_broadcast_select on realtime.messages;
@@ -180,6 +182,9 @@ begin
   return coalesce(new, old);
 end;
 $$;
+
+revoke all on function courseplatform.broadcast_chat_message_change()
+  from public, anon, authenticated, service_role;
 
 drop trigger if exists chat_messages_realtime_broadcast on courseplatform.chat_messages;
 create trigger chat_messages_realtime_broadcast
