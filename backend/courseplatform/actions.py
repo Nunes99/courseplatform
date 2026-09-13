@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - deployment validation reports this cle
     webpush = None
 
 from .config import get_settings
-from .db import connection, fetch_all, fetch_one, schema_exists
+from .db import EXPECTED_SCHEMA_VERSION, connection, fetch_all, fetch_one, schema_status
 from .security import (
     constant_time_equals,
     generate_id,
@@ -65,7 +65,11 @@ def public_error(error: Exception) -> dict[str, Any]:
         }
     return {
         "success": False,
-        "error": {"code": "API_ERROR", "message": str(error), "details": None},
+        "error": {
+            "code": "API_ERROR",
+            "message": "Ocorreu um erro interno ao processar o pedido.",
+            "details": None,
+        },
     }
 
 
@@ -95,13 +99,6 @@ def database_api_error(error: Exception) -> ApiError:
         "A base de dados não está disponível neste momento.",
         {"errorType": error_name},
     )
-
-
-def diagnostic_error_message(error: Exception) -> str:
-    text = str(error)
-    text = re.sub(r"postgresql://\S+", "[DATABASE_URL]", text)
-    text = re.sub(r"password=[^\s]+", "password=[hidden]", text, flags=re.IGNORECASE)
-    return text[:700]
 
 
 def as_bool(value: Any) -> bool:
@@ -178,6 +175,7 @@ _NOTIFICATION_SCHEMA_READY = False
 _CHAT_SCHEMA_READY = False
 _CHAT_REALTIME_SCHEMA_READY = False
 _CERTIFICATE_SCHEMA_READY = False
+_APPLICATION_SCHEMA_READY = False
 
 
 def progress_access_status(row: dict[str, Any] | None) -> str:
@@ -829,119 +827,6 @@ def notification_preferences(row: dict[str, Any] | None) -> dict[str, bool]:
         key: as_bool(source.get(key, default_value))
         for key, default_value in DEFAULT_NOTIFICATION_PREFERENCES.items()
     }
-
-
-NOTIFICATION_FEATURE_SQL = """
-alter table courseplatform.students add column if not exists whatsapp_opt_in boolean not null default false;
-alter table courseplatform.students add column if not exists whatsapp_opt_in_at timestamptz;
-alter table courseplatform.students add column if not exists email_opt_in boolean not null default false;
-alter table courseplatform.students add column if not exists email_opt_in_at timestamptz;
-alter table courseplatform.students add column if not exists telegram_chat_id text;
-alter table courseplatform.students add column if not exists telegram_opt_in boolean not null default false;
-alter table courseplatform.students add column if not exists telegram_opt_in_at timestamptz;
-alter table courseplatform.students add column if not exists notification_preferences_json jsonb not null default '{"MODULE_AVAILABLE":true,"SUBMISSION_STATUS":true,"REVIEW_FEEDBACK":true,"GENERAL":true}'::jsonb;
-create table if not exists courseplatform.notifications (
-  notification_id text primary key,
-  student_id text not null references courseplatform.students(student_id) on delete cascade,
-  created_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
-  category text not null default 'GENERAL',
-  title text not null,
-  message text not null,
-  action_url text,
-  entity_type text,
-  entity_id text,
-  priority text not null default 'NORMAL',
-  read_at timestamptz,
-  created_at timestamptz not null default now()
-);
-alter table courseplatform.notifications add column if not exists template_key text;
-alter table courseplatform.notifications add column if not exists template_variables_json jsonb not null default '{}'::jsonb;
-alter table courseplatform.notifications add column if not exists email_subject text;
-alter table courseplatform.notifications add column if not exists email_message text;
-alter table courseplatform.notifications add column if not exists push_title text;
-alter table courseplatform.notifications add column if not exists push_message text;
-create table if not exists courseplatform.notification_deliveries (
-  delivery_id text primary key,
-  notification_id text not null references courseplatform.notifications(notification_id) on delete cascade,
-  channel text not null,
-  recipient text,
-  status text not null default 'PENDING',
-  provider text,
-  provider_message_id text,
-  attempt_count integer not null default 0,
-  last_error text,
-  created_at timestamptz not null default now(),
-  sent_at timestamptz,
-  updated_at timestamptz,
-  unique(notification_id, channel)
-);
-create table if not exists courseplatform.notification_channel_settings (
-  channel text primary key,
-  enabled boolean not null default false,
-  phone_number_id text,
-  graph_api_version text,
-  template_name text,
-  template_language text,
-  platform_url text,
-  access_token_encrypted bytea,
-  updated_by text references courseplatform.admins(admin_id) on delete set null,
-  updated_at timestamptz
-);
-alter table courseplatform.notification_channel_settings add column if not exists smtp_host text;
-alter table courseplatform.notification_channel_settings add column if not exists smtp_port integer;
-alter table courseplatform.notification_channel_settings add column if not exists smtp_username text;
-alter table courseplatform.notification_channel_settings add column if not exists smtp_password_encrypted bytea;
-alter table courseplatform.notification_channel_settings add column if not exists from_email text;
-alter table courseplatform.notification_channel_settings add column if not exists from_name text;
-alter table courseplatform.notification_channel_settings add column if not exists use_tls boolean;
-alter table courseplatform.notification_channel_settings add column if not exists bot_username text;
-alter table courseplatform.notification_channel_settings add column if not exists parse_mode text;
-create table if not exists courseplatform.notification_templates (
-  template_key text primary key,
-  internal_title_template text not null,
-  internal_message_template text not null,
-  email_subject_template text not null,
-  email_message_template text not null,
-  push_title_template text not null,
-  push_message_template text not null,
-  updated_by text references courseplatform.admins(admin_id) on delete set null,
-  updated_at timestamptz not null default now()
-);
-create table if not exists courseplatform.push_subscriptions (
-  subscription_id text primary key,
-  student_id text not null references courseplatform.students(student_id) on delete cascade,
-  endpoint_hash text not null unique,
-  endpoint_encrypted bytea not null,
-  p256dh_encrypted bytea not null,
-  auth_encrypted bytea not null,
-  user_agent text,
-  device_label text,
-  enabled boolean not null default true,
-  failure_count integer not null default 0,
-  last_success_at timestamptz,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-create table if not exists courseplatform.telegram_link_tokens (
-  token_hash text primary key,
-  student_id text not null references courseplatform.students(student_id) on delete cascade,
-  expires_at timestamptz not null,
-  consumed_at timestamptz,
-  telegram_update_id bigint,
-  created_at timestamptz not null default now()
-);
-create index if not exists idx_telegram_link_tokens_student
-  on courseplatform.telegram_link_tokens(student_id, created_at desc);
-create table if not exists courseplatform.notification_channel_state (
-  channel text primary key,
-  cursor_value bigint not null default 0,
-  updated_at timestamptz
-);
-create index if not exists idx_notifications_student_created on courseplatform.notifications(student_id, created_at desc);
-create index if not exists idx_notifications_student_unread on courseplatform.notifications(student_id, read_at, created_at desc);
-create index if not exists idx_notification_deliveries_status on courseplatform.notification_deliveries(channel, status, created_at);
-create index if not exists idx_push_subscriptions_student on courseplatform.push_subscriptions(student_id, enabled, updated_at desc);
-"""
 
 
 def require_schema_capabilities(
@@ -2613,132 +2498,6 @@ def dispatch_notification_deliveries(notification_ids: list[str]) -> None:
             continue
 
 
-CHAT_FEATURE_SQL = """
-create table if not exists courseplatform.chat_rooms (
-  room_id text primary key,
-  room_key text not null unique,
-  room_type text not null,
-  name text not null,
-  description text,
-  course_id text references courseplatform.courses(course_id) on delete cascade,
-  group_id text references courseplatform.groups(group_id) on delete cascade,
-  owner_student_id text references courseplatform.students(student_id) on delete cascade,
-  direct_student_one_id text references courseplatform.students(student_id) on delete cascade,
-  direct_student_two_id text references courseplatform.students(student_id) on delete cascade,
-  created_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
-  status text not null default 'ACTIVE',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  check (room_type in ('COMMUNITY', 'COURSE', 'GROUP', 'SUPPORT', 'DIRECT'))
-);
-alter table courseplatform.chat_rooms
-  add column if not exists direct_student_one_id text references courseplatform.students(student_id) on delete cascade;
-alter table courseplatform.chat_rooms
-  add column if not exists direct_student_two_id text references courseplatform.students(student_id) on delete cascade;
-alter table courseplatform.chat_rooms drop constraint if exists chat_rooms_room_type_check;
-alter table courseplatform.chat_rooms
-  add constraint chat_rooms_room_type_check
-  check (room_type in ('COMMUNITY', 'COURSE', 'GROUP', 'SUPPORT', 'DIRECT'));
-create table if not exists courseplatform.chat_messages (
-  message_id text primary key,
-  room_id text not null references courseplatform.chat_rooms(room_id) on delete cascade,
-  sender_type text not null,
-  sender_student_id text references courseplatform.students(student_id) on delete set null,
-  sender_admin_id text references courseplatform.admins(admin_id) on delete set null,
-  body text not null,
-  reply_to_message_id text references courseplatform.chat_messages(message_id) on delete set null,
-  status text not null default 'ACTIVE',
-  edited_at timestamptz,
-  deleted_at timestamptz,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  check (sender_type in ('STUDENT', 'ADMIN')),
-  check (
-    (sender_type = 'STUDENT' and sender_student_id is not null and sender_admin_id is null)
-    or (sender_type = 'ADMIN' and sender_admin_id is not null and sender_student_id is null)
-  )
-);
-create table if not exists courseplatform.chat_reads (
-  read_id text primary key,
-  room_id text not null references courseplatform.chat_rooms(room_id) on delete cascade,
-  actor_type text not null,
-  student_id text references courseplatform.students(student_id) on delete cascade,
-  admin_id text references courseplatform.admins(admin_id) on delete cascade,
-  last_read_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  check (actor_type in ('STUDENT', 'ADMIN')),
-  check (
-    (actor_type = 'STUDENT' and student_id is not null and admin_id is null)
-    or (actor_type = 'ADMIN' and admin_id is not null and student_id is null)
-  )
-);
-create unique index if not exists idx_chat_reads_student
-  on courseplatform.chat_reads(room_id, student_id) where student_id is not null;
-create unique index if not exists idx_chat_reads_admin
-  on courseplatform.chat_reads(room_id, admin_id) where admin_id is not null;
-create table if not exists courseplatform.chat_message_receipts (
-  receipt_id text primary key,
-  message_id text not null references courseplatform.chat_messages(message_id) on delete cascade,
-  actor_type text not null,
-  student_id text references courseplatform.students(student_id) on delete cascade,
-  admin_id text references courseplatform.admins(admin_id) on delete cascade,
-  delivered_at timestamptz not null default now(),
-  read_at timestamptz,
-  updated_at timestamptz not null default now(),
-  check (actor_type in ('STUDENT', 'ADMIN')),
-  check (
-    (actor_type = 'STUDENT' and student_id is not null and admin_id is null)
-    or (actor_type = 'ADMIN' and admin_id is not null and student_id is null)
-  )
-);
-create unique index if not exists idx_chat_receipts_student
-  on courseplatform.chat_message_receipts(message_id, student_id) where student_id is not null;
-create unique index if not exists idx_chat_receipts_admin
-  on courseplatform.chat_message_receipts(message_id, admin_id) where admin_id is not null;
-create table if not exists courseplatform.chat_presence (
-  presence_id text primary key,
-  actor_type text not null,
-  actor_id text not null,
-  current_room_id text,
-  last_seen_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique(actor_type, actor_id),
-  check (actor_type in ('STUDENT', 'ADMIN'))
-);
-create index if not exists idx_chat_presence_seen
-  on courseplatform.chat_presence(actor_type, last_seen_at desc);
-create table if not exists courseplatform.chat_message_reports (
-  report_id text primary key,
-  message_id text not null references courseplatform.chat_messages(message_id) on delete cascade,
-  reported_by_student_id text references courseplatform.students(student_id) on delete set null,
-  reason text not null,
-  status text not null default 'OPEN',
-  resolved_by_admin_id text references courseplatform.admins(admin_id) on delete set null,
-  resolution_note text,
-  created_at timestamptz not null default now(),
-  resolved_at timestamptz
-);
-create index if not exists idx_chat_rooms_context
-  on courseplatform.chat_rooms(room_type, course_id, group_id, status);
-create unique index if not exists idx_chat_rooms_direct_students
-  on courseplatform.chat_rooms(direct_student_one_id, direct_student_two_id)
-  where room_type = 'DIRECT' and status = 'ACTIVE';
-create index if not exists idx_chat_messages_room_created
-  on courseplatform.chat_messages(room_id, created_at desc);
-create index if not exists idx_chat_reports_status
-  on courseplatform.chat_message_reports(status, created_at desc);
-create unique index if not exists idx_chat_reports_open_student
-  on courseplatform.chat_message_reports(message_id, reported_by_student_id)
-  where status = 'OPEN' and reported_by_student_id is not null;
-alter table courseplatform.chat_rooms enable row level security;
-alter table courseplatform.chat_messages enable row level security;
-alter table courseplatform.chat_reads enable row level security;
-alter table courseplatform.chat_message_receipts enable row level security;
-alter table courseplatform.chat_presence enable row level security;
-alter table courseplatform.chat_message_reports enable row level security;
-"""
-
-
 def ensure_chat_feature_schema(conn) -> None:
     global _CHAT_SCHEMA_READY
     if _CHAT_SCHEMA_READY:
@@ -2767,179 +2526,6 @@ def prepare_chat_feature_schema() -> None:
         return
     with connection() as conn:
         ensure_chat_feature_schema(conn)
-
-
-CHAT_REALTIME_ACCESS_SQL = """
-create or replace function courseplatform.chat_realtime_topic_allowed(
-  requested_topic text,
-  jwt_claims jsonb
-)
-returns boolean
-language sql
-stable
-security definer
-set search_path = ''
-as $$
-  select case
-    when requested_topic = (
-      'chat:actor:' || lower(coalesce(jwt_claims ->> 'actor_type', '')) || ':'
-      || coalesce(jwt_claims ->> 'actor_id', '') || ':inbox'
-    ) then (
-      (
-        upper(coalesce(jwt_claims ->> 'actor_type', '')) = 'ADMIN'
-        and exists (
-          select 1 from courseplatform.admins admin_user
-          where admin_user.admin_id = jwt_claims ->> 'actor_id'
-            and admin_user.status = 'ACTIVE'
-            and admin_user.role in ('OWNER', 'ADMIN', 'REVIEWER')
-        )
-      )
-      or (
-        upper(coalesce(jwt_claims ->> 'actor_type', '')) = 'STUDENT'
-        and exists (
-          select 1 from courseplatform.students student
-          where student.student_id = jwt_claims ->> 'actor_id'
-            and student.status = 'ACTIVE'
-        )
-      )
-    )
-    when requested_topic ~ '^chat:room:[^:]+:messages$' then exists (
-      select 1
-      from courseplatform.chat_rooms room
-      where room.room_id = substring(requested_topic from '^chat:room:([^:]+):messages$')
-        and room.status = 'ACTIVE'
-        and (
-        (
-          upper(coalesce(jwt_claims ->> 'actor_type', '')) = 'ADMIN'
-          and room.room_type <> 'DIRECT'
-          and exists (
-            select 1 from courseplatform.admins admin_user
-            where admin_user.admin_id = jwt_claims ->> 'actor_id'
-              and admin_user.status = 'ACTIVE'
-              and admin_user.role in ('OWNER', 'ADMIN', 'REVIEWER')
-          )
-        )
-        or
-        (
-          upper(coalesce(jwt_claims ->> 'actor_type', '')) = 'STUDENT'
-          and exists (
-            select 1 from courseplatform.students student
-            where student.student_id = jwt_claims ->> 'actor_id'
-              and student.status = 'ACTIVE'
-          )
-          and (
-            room.room_type = 'COMMUNITY'
-            or (room.room_type = 'SUPPORT' and room.owner_student_id = jwt_claims ->> 'actor_id')
-            or (
-              room.room_type = 'DIRECT'
-              and (room.direct_student_one_id = jwt_claims ->> 'actor_id'
-                   or room.direct_student_two_id = jwt_claims ->> 'actor_id')
-            )
-            or (
-              room.room_type = 'COURSE'
-              and exists (
-                select 1 from courseplatform.enrollments enrollment
-                where enrollment.student_id = jwt_claims ->> 'actor_id'
-                  and enrollment.course_id = room.course_id
-                  and enrollment.status in ('ACTIVE', 'COMPLETED')
-              )
-            )
-            or (
-              room.room_type = 'GROUP'
-              and exists (
-                select 1 from courseplatform.groups active_group
-                where active_group.group_id = room.group_id
-                  and active_group.status = 'ACTIVE'
-              )
-              and (
-                exists (
-                  select 1 from courseplatform.group_members member
-                  where member.student_id = jwt_claims ->> 'actor_id'
-                    and member.group_id = room.group_id
-                    and member.status = 'ACTIVE'
-                )
-                or exists (
-                  select 1 from courseplatform.enrollments enrollment
-                  where enrollment.student_id = jwt_claims ->> 'actor_id'
-                    and enrollment.group_id = room.group_id
-                    and enrollment.status in ('ACTIVE', 'COMPLETED')
-                )
-              )
-            )
-          )
-        )
-        )
-    )
-    else false
-  end
-$$
-"""
-
-CHAT_REALTIME_TRIGGER_SQL = """
-create or replace function courseplatform.broadcast_chat_message_change()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  room record;
-  admin_user record;
-  changed_room_id text := coalesce(new.room_id, old.room_id)::text;
-  changed_message_id text := coalesce(new.message_id, old.message_id)::text;
-  change_payload jsonb;
-begin
-  change_payload := jsonb_build_object(
-    'room_id', changed_room_id,
-    'message_id', changed_message_id,
-    'operation', tg_op
-  );
-  perform realtime.send(
-    change_payload,
-    tg_op,
-    'chat:room:' || changed_room_id || ':messages',
-    true
-  );
-
-  select * into room
-  from courseplatform.chat_rooms
-  where room_id = changed_room_id;
-
-  if room.room_type = 'DIRECT' then
-    if room.direct_student_one_id is not null then
-      perform realtime.send(
-        change_payload, 'ROOMS_CHANGED',
-        'chat:actor:student:' || room.direct_student_one_id || ':inbox', true
-      );
-    end if;
-    if room.direct_student_two_id is not null then
-      perform realtime.send(
-        change_payload, 'ROOMS_CHANGED',
-        'chat:actor:student:' || room.direct_student_two_id || ':inbox', true
-      );
-    end if;
-  elsif room.room_type = 'SUPPORT' then
-    if room.owner_student_id is not null then
-      perform realtime.send(
-        change_payload, 'ROOMS_CHANGED',
-        'chat:actor:student:' || room.owner_student_id || ':inbox', true
-      );
-    end if;
-    for admin_user in
-      select admin_id from courseplatform.admins
-      where status = 'ACTIVE' and role in ('OWNER', 'ADMIN', 'REVIEWER')
-    loop
-      perform realtime.send(
-        change_payload, 'ROOMS_CHANGED',
-        'chat:actor:admin:' || admin_user.admin_id || ':inbox', true
-      );
-    end loop;
-  end if;
-
-  return coalesce(new, old);
-end;
-$$
-"""
 
 
 def ensure_chat_realtime_schema(conn) -> bool:
@@ -3023,77 +2609,6 @@ def chat_realtime_token(actor: dict[str, Any], secret: str, lifetime_minutes: in
         hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
     ).decode("ascii").rstrip("=")
     return f"{header}.{claims}.{signature}", expires_at
-
-
-ASSESSMENT_FEATURE_SQL = """
-alter table courseplatform.lessons add column if not exists submission_duration_minutes integer;
-alter table courseplatform.lesson_progress add column if not exists content_access_status text;
-alter table courseplatform.lesson_progress add column if not exists evaluation_status text;
-update courseplatform.lesson_progress
-set content_access_status = case when status = 'LOCKED' then 'LOCKED' else 'AVAILABLE' end
-where content_access_status is null;
-update courseplatform.lesson_progress
-set evaluation_status = case
-  when status in ('IN_PROGRESS', 'UNDER_REVIEW', 'CORRECTION_REQUIRED', 'APPROVED', 'FAILED', 'TIME_EXCEEDED') then status
-  else 'NOT_STARTED'
-end
-where evaluation_status is null;
-alter table courseplatform.lesson_progress alter column content_access_status set default 'LOCKED';
-alter table courseplatform.lesson_progress alter column evaluation_status set default 'NOT_STARTED';
-create index if not exists idx_progress_access_evaluation
-  on courseplatform.lesson_progress(content_access_status, evaluation_status);
-"""
-
-
-CERTIFICATE_FEATURE_SQL = """
-alter table courseplatform.certificates add column if not exists certificate_type text not null default 'SIMPLE';
-alter table courseplatform.certificates add column if not exists recognition_level text not null default 'PARTICIPATION';
-alter table courseplatform.certificates add column if not exists content_summary text;
-alter table courseplatform.certificates add column if not exists professional_request_id text;
-alter table courseplatform.certificates add column if not exists download_count integer not null default 0;
-alter table courseplatform.certificates add column if not exists max_downloads integer;
-alter table courseplatform.certificates add column if not exists payment_status text not null default 'NOT_REQUIRED';
-alter table courseplatform.certificates add column if not exists approved_by text;
-alter table courseplatform.certificates add column if not exists approved_at timestamptz;
-alter table courseplatform.certificates add column if not exists status_note text;
-alter table courseplatform.certificates add column if not exists status_updated_by text;
-alter table courseplatform.certificates add column if not exists status_updated_at timestamptz;
-alter table courseplatform.certificates add column if not exists template_snapshot_json jsonb not null default '{}'::jsonb;
-create table if not exists courseplatform.certificate_settings (
-  course_id text primary key references courseplatform.courses(course_id) on delete cascade,
-  congratulations_message text,
-  survey_questions_json jsonb not null default '[]'::jsonb,
-  professional_price text,
-  payment_instructions text,
-  professional_preview_url text,
-  certificate_profile_json jsonb not null default '{}'::jsonb,
-  updated_by text,
-  updated_at timestamptz
-);
-alter table courseplatform.certificate_settings add column if not exists certificate_profile_json jsonb not null default '{}'::jsonb;
-
-create table if not exists courseplatform.certificate_requests (
-  request_id text primary key,
-  student_id text not null references courseplatform.students(student_id) on delete cascade,
-  course_id text not null references courseplatform.courses(course_id) on delete cascade,
-  certificate_id text references courseplatform.certificates(certificate_id) on delete set null,
-  request_type text not null default 'PROFESSIONAL',
-  status text not null default 'REQUESTED',
-  survey_answers_json jsonb not null default '{}'::jsonb,
-  payment_receipt_name text,
-  payment_receipt_url text,
-  payment_receipt_mime_type text,
-  submitted_at timestamptz,
-  reviewed_by text,
-  reviewed_at timestamptz,
-  admin_notes text,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz
-);
-
-create index if not exists idx_certificate_requests_student_course
-  on courseplatform.certificate_requests(student_id, course_id, status);
-"""
 
 
 def ensure_assessment_feature_schema(conn) -> None:
@@ -3771,11 +3286,17 @@ def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None
 
 
 def health(_: dict[str, Any]):
-    settings = get_settings()
-    db_ok = False
-    db_error = ""
-    db_error_hint = ""
-    schema_created = False
+    """Compatibility action for the public readiness check."""
+    try:
+        status = schema_status()
+    except Exception:
+        return success({"status": "not_ready"})
+    return success({"status": "ready" if status["compatible"] else "not_ready"})
+
+
+def health_diagnostics(payload: dict[str, Any]):
+    """Return operational detail only to active owners and administrators."""
+    admin_context(payload, {"OWNER", "ADMIN"})
     data_diagnostics = {
         "students": 0,
         "studentsWithPassword": 0,
@@ -3786,8 +3307,8 @@ def health(_: dict[str, Any]):
         "dataReady": False,
     }
     try:
-        db_ok = schema_exists()
-        if db_ok:
+        status = schema_status()
+        if status["compatible"]:
             data_row = fetch_one(
                 """
                 select
@@ -3798,7 +3319,7 @@ def health(_: dict[str, Any]):
                   (select count(*) from courseplatform.courses) as courses,
                   (select count(*) from courseplatform.lessons) as lessons
                 """
-            )
+            ) or {}
             data_diagnostics = {
                 "students": int(data_row.get("students") or 0),
                 "studentsWithPassword": int(data_row.get("students_with_password") or 0),
@@ -3808,46 +3329,28 @@ def health(_: dict[str, Any]):
                 "lessons": int(data_row.get("lessons") or 0),
                 "dataReady": bool((data_row.get("students") or 0) and (data_row.get("admins") or 0)),
             }
-        else:
-            db_error = "SchemaMissing"
-            db_error_hint = (
-                "Conexão Postgres ativa, mas o esquema courseplatform está incompleto. "
-                "Aplique as migrações versionadas antes de iniciar a API."
-            )
+        dependency_error = ""
     except Exception as error:
-        db_ok = False
-        db_error = error.__class__.__name__
-        db_error_message = diagnostic_error_message(error)
-        error_text = str(error).lower()
-        if "ecircuitbreaker" in error_text:
-            db_error_hint = "O pooler do Supabase bloqueou novas ligações após várias falhas de autenticação. Aguarde alguns minutos e confirme o utilizador e a palavra-passe do Postgres."
-        elif "authentication" in error_text or "password" in error_text:
-            db_error_hint = "Falha de autenticação no Postgres. Confirme POSTGRES_USER/POSTGRES_PASSWORD ou DATABASE_URL."
-        elif "timeout" in error_text or "timed out" in error_text:
-            db_error_hint = "Tempo limite de ligação excedido. Confirme o host, a porta, a rede e se o projeto Supabase está ativo."
-        elif db_error == "ProgrammingError":
-            db_error_hint = "Erro de SQL/configuração Postgres. Confirme se o schema courseplatform foi criado no mesmo projeto apontado por POSTGRES_URL."
-    else:
-        db_error_message = ""
+        status = {
+            "compatible": False,
+            "installedVersion": None,
+            "expectedVersion": EXPECTED_SCHEMA_VERSION,
+            "reason": "DATABASE_UNAVAILABLE",
+        }
+        dependency_error = error.__class__.__name__
+
     return success({
-        "version": settings.app_version,
-        "database": db_ok,
-        "databaseConfigured": bool(settings.database_url),
-        "databaseError": "" if db_ok else db_error,
-        "databaseErrorHint": "" if db_ok else db_error_hint,
-        "databaseErrorMessage": "" if db_ok else db_error_message,
-        "schemaCreated": schema_created,
-        "dataDiagnostics": data_diagnostics,
-        "authConfigured": db_ok
-        and data_diagnostics["studentsWithPassword"] > 0
-        and data_diagnostics["adminsWithPassword"] > 0,
-        "authDiagnostics": {
+        "status": "ready" if status["compatible"] else "not_ready",
+        "schema": status,
+        "dependencyError": dependency_error,
+        "data": data_diagnostics,
+        "authentication": {
             "mode": "supabase_postgres_bcrypt",
-            "requiresPasswordPepper": False,
-            "requiresAdminMasterKeyHash": False,
+            "configured": status["compatible"]
+            and data_diagnostics["studentsWithPassword"] > 0
+            and data_diagnostics["adminsWithPassword"] > 0,
             "adminRecoveryConfigured": bool(configured_admin_recovery_hashes()),
         },
-        "databaseDiagnostics": settings.database_diagnostics,
     })
 
 
@@ -10128,8 +9631,29 @@ def not_implemented(action: str):
     raise ApiError("NOT_IMPLEMENTED", f"A ação {action} ainda não foi portada para a API Python.")
 
 
+def require_application_schema() -> None:
+    global _APPLICATION_SCHEMA_READY
+    if _APPLICATION_SCHEMA_READY:
+        return
+    try:
+        status = schema_status()
+    except Exception as error:
+        raise database_api_error(error) from error
+    if not status["compatible"]:
+        raise ApiError(
+            "DATABASE_MIGRATION_REQUIRED",
+            "A versão do esquema da base de dados não é compatível com esta versão da aplicação.",
+            {
+                "expectedVersion": status["expectedVersion"],
+                "installedVersion": status["installedVersion"],
+            },
+        )
+    _APPLICATION_SCHEMA_READY = True
+
+
 ACTIONS = {
     "health": health,
+    "healthDiagnostics": health_diagnostics,
     "publicCourseConfig": public_course_config,
     "publicMediaConfig": public_media_config,
     "getMediaConfig": student_media_config,
@@ -10245,4 +9769,6 @@ def dispatch(action: str, payload: dict[str, Any]):
     handler = ACTIONS.get(action)
     if not handler:
         return not_implemented(action)
+    if action not in {"health", "healthDiagnostics"}:
+        require_application_schema()
     return handler(payload)

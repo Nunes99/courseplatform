@@ -144,16 +144,17 @@ Pontos ainda desconhecidos: rate limiting/WAF externo, MFA, grants reais, polici
 
 `backend/courseplatform/db.py` abre ligações psycopg síncronas e desativa prepared statements automáticos para compatibilidade com transaction pooling do Supavisor. A API usa a URL Postgres diretamente.
 
-`supabase/schema.sql` declara **40 tabelas** no esquema `courseplatform`:
+A cadeia em `supabase/migrations/` termina com **43 tabelas** no esquema
+`courseplatform`, incluindo o marcador operacional `schema_versions`:
 
 - Identidade: `students`, `admins`, `sessions`, `student_password_resets`, `student_password_reset_attempts`, `new_credentials`.
 - Catálogo: `courses`, `lessons`, `lesson_content`, `media_content`.
 - Avaliações: `questions`, `question_options`, `lesson_progress`, `attempts`, `answers`, `files`, `reviews`.
 - Turmas: `groups`, `enrollments`, `group_members`.
 - Chat: `chat_rooms`, `chat_messages`, `chat_reads`, `chat_message_receipts`, `chat_presence`, `chat_message_reports`.
-- Notificações: `notifications`, `notification_deliveries`, `notification_channel_settings`, `telegram_link_tokens`, `notification_channel_state`.
+- Notificações: `notifications`, `notification_deliveries`, `notification_channel_settings`, `notification_templates`, `push_subscriptions`, `telegram_link_tokens`, `notification_channel_state`.
 - Certificação: `certificates`, `certificate_settings`, `certificate_requests`.
-- Operação/importação: `audit_log`, `settings`, `lists`, `student_import`, `student_import_results`, `schema_guide`.
+- Operação/importação: `audit_log`, `settings`, `lists`, `student_import`, `student_import_results`, `schema_guide`, `schema_versions`.
 
 O esquema ativa RLS nas tabelas declaradas. A migração da role de runtime prepara
 `courseplatform_runtime` (grupo sem login) e `courseplatform_api` (login) com
@@ -171,16 +172,18 @@ O SQL concede `SELECT` dessas views ao `service_role`; privilégios reais de `an
 
 ### Esquemas divergentes e migrações
 
-Os dois ficheiros SQL não são iguais:
+Os snapshots SQL não são iguais e nenhum deles é a fonte de migração:
 
-- `supabase/schema.sql`: 40 tabelas e 32 views.
-- `backend/courseplatform/schema.sql`: acrescenta `notification_templates`, `push_subscriptions`, colunas de templates nas notificações, índices/RLS e respetivas views; totaliza 42 tabelas e 34 views.
+- `supabase/schema.sql`: snapshot com 43 tabelas e 32 views.
+- `backend/courseplatform/schema.sql`: snapshot legado com 42 tabelas e 34 views.
+- `supabase/migrations/`: cadeia canónica com as 42 tabelas funcionais e `schema_versions`.
 
-`actions.py` ainda contém constantes SQL legadas de preparação, mas os caminhos
-de pedido validam apenas a presença das capacidades necessárias. `health` não
-cria nem altera objetos. Novas alterações do banco devem passar exclusivamente
-por `supabase/migrations/`. Os dois snapshots SQL continuam divergentes e ainda
-não são uma fonte única para instalações novas.
+O DDL legado de preparação foi removido de `actions.py` e convertido em
+migrações numeradas. As funções `prepare_*` e `ensure_*` fazem apenas consultas
+de capacidades; a validação global compara `courseplatform.schema_versions`
+com a versão esperada pelo backend. Novas alterações do banco passam
+exclusivamente por `supabase/migrations/`. Os snapshots SQL são apenas material
+de consulta e não são executados durante pedidos.
 
 ### Storage
 
@@ -196,9 +199,9 @@ Não há criação de bucket ou policies de Storage versionadas no repositório.
 - policy privada em `realtime.messages` para a role `authenticated`;
 - trigger que publica mudanças mínimas de mensagens nos tópicos de sala/inbox.
 
-O backend mantém uma cópia legada desse DDL para compatibilidade de código, mas
-não a executa durante pedidos. A instalação e alteração do Realtime pertencem a
-migrações ou operações administrativas autorizadas.
+O contrato completo também está na migração
+`20260913122000_materialize_chat_realtime.sql`. A instalação e alteração do
+Realtime pertencem a migrações ou operações administrativas autorizadas.
 
 ## Fluxos principais
 

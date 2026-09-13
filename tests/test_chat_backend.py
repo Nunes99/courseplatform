@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import unittest
+from pathlib import Path
 
 from backend.courseplatform import actions
 
@@ -150,15 +151,19 @@ class ChatBackendTests(unittest.TestCase):
         self.assertEqual(int(expires_at.timestamp()), claims["exp"])
 
     def test_realtime_transport_broadcasts_only_minimal_invalidations(self):
-        trigger_sql = actions.CHAT_REALTIME_TRIGGER_SQL
-        policy_sql = actions.CHAT_REALTIME_ACCESS_SQL
-        self.assertIn("realtime.send", trigger_sql)
-        self.assertIn("ROOMS_CHANGED", trigger_sql)
-        self.assertIn("chat:actor:student:", trigger_sql)
-        self.assertNotIn("realtime.broadcast_changes", trigger_sql)
-        self.assertNotIn("new,\n    old", trigger_sql.lower())
-        self.assertIn("chat:actor:", policy_sql)
-        self.assertIn("active_group.status = 'ACTIVE'", policy_sql)
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase"
+            / "migrations"
+            / "20260913122000_materialize_chat_realtime.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("realtime.send", migration)
+        self.assertIn("ROOMS_CHANGED", migration)
+        self.assertIn("chat:actor:student:", migration)
+        self.assertNotIn("realtime.broadcast_changes", migration)
+        self.assertNotIn("new,\n    old", migration.lower())
+        self.assertIn("chat:actor:", migration)
+        self.assertIn("active_group.status = 'ACTIVE'", migration)
 
 
 if __name__ == "__main__":

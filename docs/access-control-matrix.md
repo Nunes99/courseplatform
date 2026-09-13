@@ -63,9 +63,9 @@ Papéis administrativos atuais: `REVIEWER`, `ADMIN` e `OWNER`. O `OWNER` é o ú
 
 ### Sem sessão ativa
 
-`health`, `publicCourseConfig`, `publicMediaConfig`, `verifyCertificate`, `login`, `recoverStudentAccess`, `adminLogin` e `recoverAdminAccess` são alcançáveis sem sessão prévia. O facto de uma ação ser pública não autoriza devolver dados sensíveis.
+`/health/live`, `/health/ready`, o alias mínimo `health`, `publicCourseConfig`, `publicMediaConfig`, `verifyCertificate`, `login`, `recoverStudentAccess`, `completeStudentPasswordReset`, `adminLogin` e `recoverAdminAccess` são alcançáveis sem sessão prévia. O facto de uma ação ser pública não autoriza devolver dados sensíveis.
 
-`recoverStudentAccess` não cumpre ainda a política da matriz: aceita email + ID público e devolve uma senha temporária. Esta discrepância é o achado A01 da auditoria.
+`recoverStudentAccess` devolve sempre uma resposta genérica e entrega um token de utilização única pelo email guardado. `/health/diagnostics` e `healthDiagnostics` exigem uma sessão ativa de `OWNER` ou `ADMIN`.
 
 ### Estudante autenticado
 

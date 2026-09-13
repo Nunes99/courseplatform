@@ -172,6 +172,7 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
             raise AssertionError(query)
 
         with (
+            patch.object(actions, "require_application_schema"),
             patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
             patch.object(actions, "prepare_assessment_feature_schema"),
             patch.object(actions, "fetch_one", side_effect=fetch_one),
@@ -253,6 +254,7 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
             yield database
 
         with (
+            patch.object(actions, "require_application_schema"),
             patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
             patch.object(actions, "prepare_assessment_feature_schema"),
             patch.object(actions, "fetch_one", return_value=attempt),

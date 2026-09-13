@@ -1,3 +1,10 @@
+-- Baseline do esquema CoursePlatform para instalações novas.
+--
+-- Esta migração foi extraída do snapshot versionado supabase/schema.sql. Em
+-- ambientes existentes, marque o baseline como aplicado apenas depois de
+-- confirmar que o esquema já existe; consulte docs/database-migrations.md.
+-- A migração é expansiva e não remove dados.
+
 create schema if not exists courseplatform;
 
 create extension if not exists pgcrypto;
@@ -654,20 +661,6 @@ create table if not exists courseplatform.schema_guide (
   notes text
 );
 
-create table if not exists courseplatform.schema_versions (
-  component text primary key,
-  version bigint not null,
-  applied_at timestamptz not null default now(),
-  constraint schema_versions_version_positive check (version > 0)
-);
-
-insert into courseplatform.schema_versions (component, version, applied_at)
-values ('application', 20260913185739, now())
-on conflict (component) do update
-set version = excluded.version,
-    applied_at = excluded.applied_at
-where courseplatform.schema_versions.version < excluded.version;
-
 create index if not exists idx_sessions_subject on courseplatform.sessions(subject_id);
 create index if not exists idx_password_resets_email_created on courseplatform.student_password_resets(email_hash, created_at desc);
 create index if not exists idx_password_resets_source_created on courseplatform.student_password_resets(source_hash, created_at desc);
@@ -750,7 +743,6 @@ alter table courseplatform.student_import_results enable row level security;
 alter table courseplatform.new_credentials enable row level security;
 alter table courseplatform.media_content enable row level security;
 alter table courseplatform.schema_guide enable row level security;
-alter table courseplatform.schema_versions enable row level security;
 
 grant usage on schema courseplatform to service_role;
 grant all on all tables in schema courseplatform to service_role;

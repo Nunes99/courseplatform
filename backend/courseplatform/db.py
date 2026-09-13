@@ -7,6 +7,11 @@ from psycopg.rows import dict_row
 
 from .config import get_settings
 
+
+APPLICATION_SCHEMA_COMPONENT = "application"
+EXPECTED_SCHEMA_VERSION = 20260913185739
+
+
 def _connect():
     settings = get_settings()
     settings.require_database()
@@ -87,20 +92,47 @@ def execute(query: str, params: Iterable[Any] | dict[str, Any] = ()):
         conn.commit()
 
 
-def schema_exists() -> bool:
-    row = fetch_one(
+def schema_status_with_conn(conn) -> dict[str, Any]:
+    relation_row = conn.execute(
         """
         select
-          to_regclass('courseplatform.students') is not null
-          and to_regclass('courseplatform.admins') is not null
-          and exists (
-            select 1 from information_schema.columns
-            where table_schema = 'courseplatform' and table_name = 'students' and column_name = 'password_hash'
-          )
-          and exists (
-            select 1 from information_schema.columns
-            where table_schema = 'courseplatform' and table_name = 'admins' and column_name = 'password_hash'
-          ) as ok
+          to_regclass('courseplatform.students') is not null as students_ready,
+          to_regclass('courseplatform.admins') is not null as admins_ready,
+          to_regclass('courseplatform.schema_versions') is not null as version_table_ready
         """
-    )
-    return bool(row and row["ok"])
+    ).fetchone()
+    relation_row = relation_row or {}
+    core_ready = bool(relation_row.get("students_ready") and relation_row.get("admins_ready"))
+    version_table_ready = bool(relation_row.get("version_table_ready"))
+    if not core_ready or not version_table_ready:
+        return {
+            "compatible": False,
+            "installedVersion": None,
+            "expectedVersion": EXPECTED_SCHEMA_VERSION,
+            "reason": "SCHEMA_MISSING" if not core_ready else "VERSION_TABLE_MISSING",
+        }
+
+    version_row = conn.execute(
+        """
+        select version
+        from courseplatform.schema_versions
+        where component = %s
+        """,
+        (APPLICATION_SCHEMA_COMPONENT,),
+    ).fetchone()
+    installed_version = int(version_row["version"]) if version_row and version_row.get("version") is not None else None
+    return {
+        "compatible": installed_version == EXPECTED_SCHEMA_VERSION,
+        "installedVersion": installed_version,
+        "expectedVersion": EXPECTED_SCHEMA_VERSION,
+        "reason": "READY" if installed_version == EXPECTED_SCHEMA_VERSION else "VERSION_MISMATCH",
+    }
+
+
+def schema_status() -> dict[str, Any]:
+    with connection() as conn:
+        return schema_status_with_conn(conn)
+
+
+def schema_exists() -> bool:
+    return bool(schema_status()["compatible"])

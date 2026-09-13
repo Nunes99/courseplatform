@@ -49,6 +49,11 @@ async def handle_get_action(request: Request):
     if request.url.path == "/" and not payload.get("action"):
         return static_file_response("index.html")
     action = payload.get("action", "health")
+    if action == "healthDiagnostics":
+        return JSONResponse(
+            public_error(ApiError("METHOD_NOT_ALLOWED", "Use o endpoint protegido de diagnóstico.")),
+            status_code=405,
+        )
     try:
         return JSONResponse(dispatch(action, payload))
     except Exception as error:
@@ -89,6 +94,34 @@ async def handle_post_action(request: Request, background_tasks: BackgroundTasks
 for route_path in ("/", "/api", "/api/index"):
     app.add_api_route(route_path, handle_get_action, methods=["GET"])
     app.add_api_route(route_path, handle_post_action, methods=["POST"])
+
+
+async def handle_liveness():
+    return JSONResponse({"status": "ok"})
+
+
+async def handle_readiness():
+    result = dispatch("health", {})
+    ready = result.get("data", {}).get("status") == "ready"
+    return JSONResponse({"status": "ready" if ready else "not_ready"}, status_code=200 if ready else 503)
+
+
+async def handle_health_diagnostics(request: Request):
+    admin_token = request.headers.get("x-admin-token") or ""
+    if not admin_token:
+        return JSONResponse(
+            public_error(ApiError("ADMIN_SESSION_REQUIRED", "É necessária uma sessão administrativa.")),
+            status_code=401,
+        )
+    try:
+        return JSONResponse(dispatch("healthDiagnostics", {"adminToken": admin_token}))
+    except Exception as error:
+        return JSONResponse(public_error(error), status_code=403 if isinstance(error, ApiError) else 500)
+
+
+app.add_api_route("/health/live", handle_liveness, methods=["GET"])
+app.add_api_route("/health/ready", handle_readiness, methods=["GET"])
+app.add_api_route("/health/diagnostics", handle_health_diagnostics, methods=["GET"])
 
 
 async def handle_certificate_pdf(certificate_id: str, request: Request):

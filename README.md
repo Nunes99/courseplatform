@@ -13,13 +13,14 @@ CoursePlatform é uma plataforma de aprendizagem com áreas de estudante e admin
 - `backend/courseplatform/certificate_pdf.py`: geração dos certificados PDF.
 - `public/`: frontend usado no deploy estático.
 - `backend/courseplatform/static/`: fallback estático empacotado com o backend.
-- `supabase/schema.sql`: esquema para instalação manual no Supabase.
+- `supabase/migrations/`: única fonte de verdade para criar e evoluir o esquema.
+- `supabase/schema.sql`: snapshot de consulta; não substitui a cadeia de migrações.
 - `backend/courseplatform/schema.sql`: snapshot legado do esquema, mantido para compatibilidade; pedidos da API não o executam.
 - `supabase/chat_realtime.sql`: funções, policy e trigger do chat Realtime.
 - `tests/`: testes Python com `unittest`.
 - `scripts/`: smoke test, geração de previews e verificações de browser.
 
-Os dois ficheiros de esquema e as duas cópias do frontend não são atualmente idênticos. Essa divergência está registada em [docs/architecture-current.md](docs/architecture-current.md) e não deve ser resolvida dentro de uma alteração sem migração e testes próprios.
+As duas cópias do frontend continuam a exigir sincronização controlada. Para banco, alterações novas pertencem exclusivamente a `supabase/migrations/`; os snapshots SQL não são executados pela API.
 
 ## Pré-requisitos
 
@@ -84,12 +85,30 @@ Contrato da role Postgres mínima usada pela API:
 .\.venv\Scripts\python.exe -m unittest tests.test_runtime_database_role -v
 ```
 
+Contrato de migrações e health checks:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_schema_migrations_and_health -v
+```
+
+Integração das migrações numa base PostgreSQL local descartável:
+
+```powershell
+$env:COURSEPLATFORM_TEST_DATABASE_URL = "postgresql://postgres:local-test-only@127.0.0.1:55432/courseplatform_test"
+.\.venv\Scripts\python.exe -m unittest tests.test_migration_postgres_integration -v
+Remove-Item Env:COURSEPLATFORM_TEST_DATABASE_URL
+```
+
+O teste recusa hosts remotos e bases cujo nome não contenha `test`. A preparação
+do contentor e o fluxo de staging/produção estão em
+[docs/database-migrations.md](docs/database-migrations.md).
+
 O diagnóstico SQL e o verificador de integração estão documentados em
 [docs/stage3-supabase-hardening.md](docs/stage3-supabase-hardening.md). O
 verificador recusa execução sem uma referência explícita de staging e não deve
 ser apontado para produção.
 
-Na linha de base de 12 de setembro de 2026 foram executados 96 testes, todos aprovados. Estes testes usam mocks e dados sintéticos; o resultado não valida permissões, desempenho, backups ou configuração de produção.
+Os testes unitários usam mocks e dados sintéticos. O resultado local não valida permissões, desempenho, backups ou configuração de produção.
 
 Testes de certificados:
 
@@ -112,9 +131,12 @@ Páginas e endpoints locais:
 - `http://127.0.0.1:8765/admin.html`
 - `http://127.0.0.1:8765/verify.html`
 - `http://127.0.0.1:8765/connection-test.html`
-- `http://127.0.0.1:8765/api/index?action=health`
+- `http://127.0.0.1:8765/health/live`
+- `http://127.0.0.1:8765/health/ready`
+- `http://127.0.0.1:8765/health/diagnostics` com `X-Admin-Token`
+- `http://127.0.0.1:8765/api/index?action=health` como alias legado de readiness
 
-O health check apenas consulta a disponibilidade do esquema. Quando faltam tabelas ou colunas, a API devolve `DATABASE_MIGRATION_REQUIRED`; a correção deve ser feita por uma migração versionada, nunca durante um pedido HTTP.
+Liveness não consulta o banco. Readiness faz apenas verificações leves de ligação e versão. Pedidos de negócio devolvem `DATABASE_MIGRATION_REQUIRED` quando a versão é incompatível; nenhum endpoint tenta reparar o esquema.
 
 ## Testes de browser
 
@@ -200,7 +222,7 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 - A autenticação atual é própria: bcrypt no Postgres, tokens opacos e apenas hashes dos tokens em `courseplatform.sessions`. Ainda não usa Supabase Auth.
 - A recuperação do estudante guarda apenas hashes HMAC do email/origem e SHA-256 do token. O token chega ao browser no fragmento do link, é removido imediatamente da barra de endereço e só pode ser consumido uma vez.
 - A API usa ligação direta ao Postgres. A chave `SUPABASE_SERVICE_ROLE_KEY` é usada no backend para uploads administrativos no Storage e nunca deve chegar ao navegador.
-- Não aplique `supabase/schema.sql`, `supabase/chat_realtime.sql` ou o esquema empacotado numa base existente sem backup, revisão do diff e autorização.
+- Não aplique snapshots SQL diretamente numa base existente. Use apenas a cadeia versionada e o processo de [migrações](docs/database-migrations.md), com backup, revisão do dry-run e autorização.
 - Não use IDs públicos de estudantes como segredo.
 - Consulte [docs/access-control-matrix.md](docs/access-control-matrix.md) antes de acrescentar endpoints ou ações.
 
@@ -209,6 +231,7 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 - [Arquitetura atual](docs/architecture-current.md)
 - [Matriz inicial de acessos](docs/access-control-matrix.md)
 - [Endurecimento Supabase da Etapa 3](docs/stage3-supabase-hardening.md)
+- [Migrações e health checks](docs/database-migrations.md)
 - [Auditoria e roteiro LMS](docs/auditoria-lms-2026-09-12.md)
 - [Instruções de evolução por etapas](docs/instrucoes-agente-evolucao-lms.md)
 - [Certificados](docs/certificate-layout.md)
