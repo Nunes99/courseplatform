@@ -1,4 +1,5 @@
 import base64
+import binascii
 import hashlib
 import hmac
 import ipaddress
@@ -233,6 +234,77 @@ def pagination(payload: dict[str, Any], default_limit: int = 100, max_limit: int
     offset = payload.get("offset")
     offset = int(offset) if offset not in (None, "") else (max(1, page) - 1) * limit
     return limit, max(0, offset), max(1, page)
+
+
+def cursor_page_limit(payload: dict[str, Any], default_limit: int = 50, max_limit: int = 500) -> int:
+    return max(1, min(int_value(payload.get("limit"), default_limit), max_limit))
+
+
+def cursor_scope(kind: str, *values: Any) -> str:
+    serialized = json.dumps([kind, *values], ensure_ascii=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+
+
+def encode_list_cursor(kind: str, scope: str, sort_at: Any, record_id: Any) -> str:
+    payload = {
+        "v": 1,
+        "kind": kind,
+        "scope": scope,
+        "sortAt": iso(sort_at),
+        "id": str_value(record_id),
+    }
+    encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+
+def decode_list_cursor(
+    value: Any,
+    kind: str,
+    scope: str,
+    *,
+    allow_null_sort: bool = False,
+) -> tuple[datetime | None, str] | None:
+    text = str_value(value)
+    if not text:
+        return None
+    if len(text) > 1024:
+        raise ApiError("INVALID_CURSOR", "O cursor de paginação é inválido.")
+    try:
+        padding = "=" * ((4 - len(text) % 4) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(f"{text}{padding}").decode("utf-8"))
+    except (binascii.Error, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        raise ApiError("INVALID_CURSOR", "O cursor de paginação é inválido.") from None
+    if not isinstance(decoded, dict) or decoded.get("v") != 1:
+        raise ApiError("INVALID_CURSOR", "O cursor de paginação é inválido.")
+    if decoded.get("kind") != kind or not hmac.compare_digest(str(decoded.get("scope") or ""), scope):
+        raise ApiError("CURSOR_FILTER_MISMATCH", "Os filtros mudaram. Reinicie a paginação.")
+    record_id = str_value(decoded.get("id"))
+    sort_at = parse_datetime(decoded.get("sortAt"))
+    if not record_id or (sort_at is None and not allow_null_sort):
+        raise ApiError("INVALID_CURSOR", "O cursor de paginação é inválido.")
+    return sort_at, record_id
+
+
+def cursor_pagination_result(
+    rows: list[dict[str, Any]],
+    limit: int,
+    kind: str,
+    scope: str,
+    sort_field: str,
+    id_field: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    has_more = len(rows) > limit
+    visible_rows = rows[:limit]
+    next_cursor = ""
+    if has_more and visible_rows:
+        last = visible_rows[-1]
+        next_cursor = encode_list_cursor(kind, scope, last.get(sort_field), last.get(id_field))
+    return visible_rows, {
+        "limit": limit,
+        "returned": len(visible_rows),
+        "hasMore": has_more,
+        "nextCursor": next_cursor,
+    }
 
 
 def public_student(row: dict[str, Any] | None):
@@ -5982,9 +6054,25 @@ def admin_list_submissions(payload: dict[str, Any]):
     expire_overdue_attempts()
     status = (payload.get("status") or "ALL").upper()
     query = (payload.get("query") or "").strip().lower()
-    limit = min(int(payload.get("limit") or 300), 500)
-    rows = fetch_all(
+    limit = cursor_page_limit(payload)
+    scope = cursor_scope("admin-submissions", status, query)
+    cursor = decode_list_cursor(payload.get("cursor"), "admin-submissions", scope)
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_at, cursor_id = cursor
+        cursor_sql = """
+          and (
+            coalesce(a.submitted_at, a.started_at, a.created_at) < %s
+            or (
+              coalesce(a.submitted_at, a.started_at, a.created_at) = %s
+              and a.attempt_id < %s
+            )
+          )
         """
+        cursor_params.extend((cursor_at, cursor_at, cursor_id))
+    rows = fetch_all(
+        f"""
         with latest_reviews as (
           select distinct on (attempt_id) *
           from courseplatform.reviews
@@ -6010,7 +6098,8 @@ def admin_list_submissions(payload: dict[str, Any]):
           p.evaluation_status, p.score as progress_score, p.attempt_count as progress_attempt_count,
           lr.review_id, lr.reviewer_id, lr.decision, lr.score as review_score,
           lr.comments, lr.correction_deadline, lr.unlock_next_lesson, lr.reviewed_at as review_reviewed_at,
-          coalesce(fc.file_count, 0) as file_count
+          coalesce(fc.file_count, 0) as file_count,
+          coalesce(a.submitted_at, a.started_at, a.created_at) as pagination_sort_at
         from courseplatform.attempts a
         left join courseplatform.students s on s.student_id = a.student_id
         left join courseplatform.lessons l on l.lesson_id = a.lesson_id
@@ -6029,12 +6118,25 @@ def admin_list_submissions(payload: dict[str, Any]):
               coalesce(l.title, '') || ' ' || coalesce(a.review_comments, '') || ' ' ||
               coalesce(l.lesson_id, '') || ' ' || coalesce(a.attempt_id, '')) like %s
           )
-        order by coalesce(a.submitted_at, a.started_at, a.created_at) desc nulls last
+          {cursor_sql}
+        order by coalesce(a.submitted_at, a.started_at, a.created_at) desc nulls last,
+                 a.attempt_id desc
         limit %s
         """,
-        (status, status, status, query, f"%{query}%", limit),
+        (status, status, status, query, f"%{query}%", *cursor_params, limit + 1),
     )
-    return success({"submissions": [submission_item(row) for row in rows]})
+    rows, page_info = cursor_pagination_result(
+        rows,
+        limit,
+        "admin-submissions",
+        scope,
+        "pagination_sort_at",
+        "attempt_id",
+    )
+    return success({
+        "submissions": [submission_item(row) for row in rows],
+        "pagination": page_info,
+    })
 
 
 def admin_get_submission(payload: dict[str, Any]):
@@ -7426,14 +7528,31 @@ def admin_list_certificate_requests(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     status = (payload.get("status") or "ALL").upper()
     query = (payload.get("query") or "").strip().lower()
-    limit = min(int(payload.get("limit") or 200), 500)
+    limit = cursor_page_limit(payload)
+    scope = cursor_scope("admin-certificate-requests", status, query)
+    cursor = decode_list_cursor(payload.get("cursor"), "admin-certificate-requests", scope)
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_at, cursor_id = cursor
+        cursor_sql = """
+              and (
+                coalesce(cr.submitted_at, cr.updated_at, cr.created_at) < %s
+                or (
+                  coalesce(cr.submitted_at, cr.updated_at, cr.created_at) = %s
+                  and cr.request_id < %s
+                )
+              )
+        """
+        cursor_params.extend((cursor_at, cursor_at, cursor_id))
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         rows = conn.execute(
-            """
+            f"""
             select cr.*, s.full_name, s.email, c.title,
                    cert.certificate_number, cert.verification_code, cert.issue_date,
-                   cert.final_score, cert.certificate_type, cert.content_summary
+                   cert.final_score, cert.certificate_type, cert.content_summary,
+                   coalesce(cr.submitted_at, cr.updated_at, cr.created_at) as pagination_sort_at
             from courseplatform.certificate_requests cr
             join courseplatform.students s on s.student_id = cr.student_id
             join courseplatform.courses c on c.course_id = cr.course_id
@@ -7444,24 +7563,60 @@ def admin_list_certificate_requests(payload: dict[str, Any]):
                 or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
                   coalesce(c.title, '') || ' ' || coalesce(cr.request_id, '')) like %s
               )
-            order by coalesce(cr.submitted_at, cr.updated_at, cr.created_at) desc
+              {cursor_sql}
+            order by coalesce(cr.submitted_at, cr.updated_at, cr.created_at) desc,
+                     cr.request_id desc
             limit %s
             """,
-            (status, status, query, f"%{query}%", limit),
+            (status, status, query, f"%{query}%", *cursor_params, limit + 1),
         ).fetchall()
         conn.commit()
-    return success({"requests": [public_certificate_request(row) for row in rows]})
+    rows, page_info = cursor_pagination_result(
+        rows,
+        limit,
+        "admin-certificate-requests",
+        scope,
+        "pagination_sort_at",
+        "request_id",
+    )
+    return success({
+        "requests": [public_certificate_request(row) for row in rows],
+        "pagination": page_info,
+    })
 
 
 def admin_list_certificates(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     status = (payload.get("status") or "ACTIVE").upper()
     query = str_value(payload.get("query")).lower()
-    limit = min(int(payload.get("limit") or 200), 500)
+    limit = cursor_page_limit(payload)
+    scope = cursor_scope("admin-certificates", status, query)
+    cursor = decode_list_cursor(
+        payload.get("cursor"),
+        "admin-certificates",
+        scope,
+        allow_null_sort=True,
+    )
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_at, cursor_id = cursor
+        if cursor_at is None:
+            cursor_sql = "and cert.issue_date is null and cert.certificate_id < %s"
+            cursor_params.append(cursor_id)
+        else:
+            cursor_sql = """
+              and (
+                cert.issue_date < %s
+                or cert.issue_date is null
+                or (cert.issue_date = %s and cert.certificate_id < %s)
+              )
+            """
+            cursor_params.extend((cursor_at, cursor_at, cursor_id))
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         rows = conn.execute(
-            """
+            f"""
             select cert.*, s.full_name as student_name, s.email, c.title as course_title,
                    cs.certificate_profile_json as course_certificate_profile
             from courseplatform.certificates cert
@@ -7479,17 +7634,26 @@ def admin_list_certificates(payload: dict[str, Any]):
                   coalesce(c.title, '') || ' ' || coalesce(cert.certificate_number, '') || ' ' ||
                   coalesce(cert.verification_code, '')) like %s
               )
-            order by cert.issue_date desc nulls last
+              {cursor_sql}
+            order by cert.issue_date desc nulls last, cert.certificate_id desc
             limit %s
             """,
-            (status, status, status, query, f"%{query}%", limit),
+            (status, status, status, query, f"%{query}%", *cursor_params, limit + 1),
         ).fetchall()
         conn.commit()
+    rows, page_info = cursor_pagination_result(
+        rows,
+        limit,
+        "admin-certificates",
+        scope,
+        "issue_date",
+        "certificate_id",
+    )
     return success({"certificates": [
         {**public_certificate(row), "downloadAccess": certificate_download_access(
             row, (row.get("course_certificate_profile") or {}).get("participation"),
         )} for row in rows
-    ]})
+    ], "pagination": page_info})
 
 
 def admin_set_certificate_status(payload: dict[str, Any]):
@@ -8682,96 +8846,93 @@ def chat_direct_pair(student_a: str, student_b: str) -> tuple[str, str]:
 
 
 def sync_chat_rooms(conn, actor: dict[str, Any]) -> None:
-    upsert_chat_room(
-        conn,
-        "COMMUNITY",
-        "COMMUNITY",
-        "Comunidade geral",
-        "Espaço comum para estudantes e formadores da plataforma.",
-    )
     if actor["type"] == "STUDENT":
-        student_id = actor["id"]
-        courses = conn.execute(
-            """
-            select distinct c.course_id, c.title
-            from courseplatform.enrollments e
-            join courseplatform.courses c on c.course_id = e.course_id
-            where e.student_id = %s
-              and e.status in ('ACTIVE', 'COMPLETED')
-              and c.status = 'ACTIVE'
-            order by c.title
-            """,
-            (student_id,),
-        ).fetchall()
-        groups = conn.execute(
-            """
-            select distinct g.group_id, g.name, g.course_id
-            from courseplatform.groups g
-            left join courseplatform.group_members gm
-              on gm.group_id = g.group_id and gm.student_id = %s and gm.status = 'ACTIVE'
-            left join courseplatform.enrollments e
-              on e.group_id = g.group_id and e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED')
-            where g.status = 'ACTIVE' and (gm.group_member_id is not null or e.enrollment_id is not null)
-            order by g.name
-            """,
-            (student_id, student_id),
-        ).fetchall()
-        for course in courses:
-            upsert_chat_room(
-                conn, f"COURSE:{course['course_id']}", "COURSE", course["title"],
-                "Conversa do curso com estudantes e formadores matriculados.",
-                course_id=course["course_id"],
-            )
-        for group in groups:
-            upsert_chat_room(
-                conn, f"GROUP:{group['group_id']}", "GROUP", group["name"],
-                "Canal reservado aos membros deste grupo.",
-                course_id=group.get("course_id"), group_id=group["group_id"],
-            )
-        upsert_chat_room(
-            conn, f"SUPPORT:{student_id}", "SUPPORT", "Apoio com formadores",
-            "Conversa privada entre o estudante e a equipa de formação.",
-            owner_student_id=student_id,
-        )
-        return
+        desired_rooms_sql = """
+          select 'COMMUNITY'::text as room_key, 'COMMUNITY'::text as room_type,
+                 'Comunidade geral'::text as name,
+                 'Espaço comum para estudantes e formadores da plataforma.'::text as description,
+                 null::text as course_id, null::text as group_id, null::text as owner_student_id
+          union all
+          select distinct 'COURSE:' || c.course_id, 'COURSE', c.title,
+                 'Conversa do curso com estudantes e formadores matriculados.',
+                 c.course_id, null::text, null::text
+          from courseplatform.enrollments e
+          join courseplatform.courses c on c.course_id = e.course_id
+          where e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED') and c.status = 'ACTIVE'
+          union all
+          select distinct 'GROUP:' || g.group_id, 'GROUP', g.name,
+                 'Canal reservado aos membros deste grupo.',
+                 g.course_id, g.group_id, null::text
+          from courseplatform.groups g
+          left join courseplatform.group_members gm
+            on gm.group_id = g.group_id and gm.student_id = %s and gm.status = 'ACTIVE'
+          left join courseplatform.enrollments e
+            on e.group_id = g.group_id and e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED')
+          where g.status = 'ACTIVE' and (gm.group_member_id is not null or e.enrollment_id is not null)
+          union all
+          select 'SUPPORT:' || %s, 'SUPPORT', 'Apoio com formadores',
+                 'Conversa privada entre o estudante e a equipa de formação.',
+                 null::text, null::text, %s
+        """
+        params = (actor["id"], actor["id"], actor["id"], actor["id"], actor["id"])
+    else:
+        desired_rooms_sql = """
+          select 'COMMUNITY'::text as room_key, 'COMMUNITY'::text as room_type,
+                 'Comunidade geral'::text as name,
+                 'Espaço comum para estudantes e formadores da plataforma.'::text as description,
+                 null::text as course_id, null::text as group_id, null::text as owner_student_id
+          union all
+          select 'COURSE:' || c.course_id, 'COURSE', c.title,
+                 'Conversa do curso com estudantes e formadores matriculados.',
+                 c.course_id, null::text, null::text
+          from courseplatform.courses c where c.status = 'ACTIVE'
+          union all
+          select 'GROUP:' || g.group_id, 'GROUP', g.name,
+                 'Canal reservado aos membros deste grupo.',
+                 g.course_id, g.group_id, null::text
+          from courseplatform.groups g where g.status = 'ACTIVE'
+          union all
+          select 'SUPPORT:' || s.student_id, 'SUPPORT', 'Apoio com formadores',
+                 'Conversa privada entre o estudante e a equipa de formação.',
+                 null::text, null::text, s.student_id
+          from courseplatform.students s where s.status = 'ACTIVE'
+        """
+        params = ()
 
-    courses = conn.execute(
-        "select course_id, title from courseplatform.courses where status = 'ACTIVE' order by title"
-    ).fetchall()
-    groups = conn.execute(
-        "select group_id, name, course_id from courseplatform.groups where status = 'ACTIVE' order by name"
-    ).fetchall()
-    students_without_support = conn.execute(
-        """
-        select s.student_id
-        from courseplatform.students s
-        where s.status = 'ACTIVE'
-          and not exists (
-            select 1 from courseplatform.chat_rooms r
-            where r.room_key = 'SUPPORT:' || s.student_id
-          )
-        order by s.full_name
-        limit 2000
-        """
-    ).fetchall()
-    for course in courses:
-        upsert_chat_room(
-            conn, f"COURSE:{course['course_id']}", "COURSE", course["title"],
-            "Conversa do curso com estudantes e formadores matriculados.",
-            course_id=course["course_id"],
+    conn.execute(
+        f"""
+        with desired_rooms as ({desired_rooms_sql})
+        insert into courseplatform.chat_rooms
+          (room_id, room_key, room_type, name, description, course_id, group_id,
+           owner_student_id, status, created_at, updated_at)
+        select
+          'CRM-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 12)),
+          room_key, room_type, left(name, 160), left(description, 500),
+          course_id, group_id, owner_student_id, 'ACTIVE', now(), now()
+        from desired_rooms
+        on conflict (room_key) do update set
+          name = excluded.name,
+          description = excluded.description,
+          course_id = excluded.course_id,
+          group_id = excluded.group_id,
+          owner_student_id = excluded.owner_student_id,
+          updated_at = now()
+        where (
+          courseplatform.chat_rooms.name,
+          courseplatform.chat_rooms.description,
+          courseplatform.chat_rooms.course_id,
+          courseplatform.chat_rooms.group_id,
+          courseplatform.chat_rooms.owner_student_id
+        ) is distinct from (
+          excluded.name,
+          excluded.description,
+          excluded.course_id,
+          excluded.group_id,
+          excluded.owner_student_id
         )
-    for group in groups:
-        upsert_chat_room(
-            conn, f"GROUP:{group['group_id']}", "GROUP", group["name"],
-            "Canal reservado aos membros deste grupo.",
-            course_id=group.get("course_id"), group_id=group["group_id"],
-        )
-    for student in students_without_support:
-        upsert_chat_room(
-            conn, f"SUPPORT:{student['student_id']}", "SUPPORT", "Apoio com formadores",
-            "Conversa privada entre o estudante e a equipa de formação.",
-            owner_student_id=student["student_id"],
-        )
+        """,
+        params,
+    )
 
 
 def student_can_access_chat_room(conn, student_id: str, room: dict[str, Any]) -> bool:
@@ -8872,7 +9033,9 @@ def chat_realtime_configuration(payload: dict[str, Any]):
     return success({"realtime": result})
 
 
-def chat_message_row(conn, message_id: str) -> dict[str, Any] | None:
+def chat_message_rows(conn, message_ids: list[str]) -> list[dict[str, Any]]:
+    if not message_ids:
+        return []
     return conn.execute(
         """
         select m.*,
@@ -8894,10 +9057,15 @@ def chat_message_row(conn, message_id: str) -> dict[str, Any] | None:
         left join courseplatform.chat_messages reply on reply.message_id = m.reply_to_message_id
         left join courseplatform.students rs on rs.student_id = reply.sender_student_id
         left join courseplatform.admins ra on ra.admin_id = reply.sender_admin_id
-        where m.message_id = %s
+        where m.message_id = any(%s)
         """,
-        (message_id,),
-    ).fetchone()
+        (message_ids,),
+    ).fetchall()
+
+
+def chat_message_row(conn, message_id: str) -> dict[str, Any] | None:
+    rows = chat_message_rows(conn, [message_id])
+    return rows[0] if rows else None
 
 
 def public_chat_message(row: dict[str, Any] | None, actor: dict[str, Any]) -> dict[str, Any] | None:
@@ -9051,6 +9219,154 @@ def upsert_chat_room_read_cursor(conn, room_id: str, actor: dict[str, Any]) -> N
         )
 
 
+def chat_room_summary_context(
+    conn,
+    rooms: list[dict[str, Any]],
+    actor: dict[str, Any],
+    active_admin_count: int,
+) -> dict[str, dict[str, Any]]:
+    room_ids = [str_value(room.get("room_id")) for room in rooms if room.get("room_id")]
+    if not room_ids:
+        return {}
+
+    latest_refs = conn.execute(
+        """
+        select distinct on (room_id) room_id, message_id
+        from courseplatform.chat_messages
+        where room_id = any(%s)
+        order by room_id, created_at desc, message_id desc
+        """,
+        (room_ids,),
+    ).fetchall()
+    latest_rows = chat_message_rows(conn, [row["message_id"] for row in latest_refs])
+    latest_by_room = {row["room_id"]: row for row in latest_rows}
+
+    actor_column = "student_id" if actor["type"] == "STUDENT" else "admin_id"
+    sender_column = "sender_student_id" if actor["type"] == "STUDENT" else "sender_admin_id"
+    unread_rows = conn.execute(
+        f"""
+        with read_cursors as (
+          select room_id, max(last_read_at) as last_read_at
+          from courseplatform.chat_reads
+          where {actor_column} = %s and room_id = any(%s)
+          group by room_id
+        )
+        select m.room_id, count(*) as count
+        from courseplatform.chat_messages m
+        left join read_cursors r on r.room_id = m.room_id
+        where m.room_id = any(%s)
+          and m.status = 'ACTIVE'
+          and m.{sender_column} is distinct from %s
+          and m.created_at > coalesce(r.last_read_at, 'epoch'::timestamptz)
+        group by m.room_id
+        """,
+        (actor["id"], room_ids, room_ids, actor["id"]),
+    ).fetchall()
+    unread_by_room = {row["room_id"]: int(row.get("count") or 0) for row in unread_rows}
+
+    online_rows = conn.execute(
+        """
+        select current_room_id as room_id, count(*) as count
+        from courseplatform.chat_presence
+        where current_room_id = any(%s)
+          and last_seen_at > now() - interval '75 seconds'
+        group by current_room_id
+        """,
+        (room_ids,),
+    ).fetchall()
+    online_by_room = {row["room_id"]: int(row.get("count") or 0) for row in online_rows}
+
+    course_ids = sorted({room.get("course_id") for room in rooms if room.get("room_type") == "COURSE" and room.get("course_id")})
+    course_counts = {}
+    if course_ids:
+        rows = conn.execute(
+            """
+            select course_id, count(distinct student_id) as count
+            from courseplatform.enrollments
+            where course_id = any(%s) and status in ('ACTIVE', 'COMPLETED')
+            group by course_id
+            """,
+            (course_ids,),
+        ).fetchall()
+        course_counts = {row["course_id"]: int(row.get("count") or 0) for row in rows}
+
+    group_ids = sorted({room.get("group_id") for room in rooms if room.get("room_type") == "GROUP" and room.get("group_id")})
+    group_counts = {}
+    if group_ids:
+        rows = conn.execute(
+            """
+            select group_id, count(distinct student_id) as count
+            from (
+              select group_id, student_id from courseplatform.group_members
+              where group_id = any(%s) and status = 'ACTIVE'
+              union
+              select group_id, student_id from courseplatform.enrollments
+              where group_id = any(%s) and status in ('ACTIVE', 'COMPLETED')
+            ) members
+            group by group_id
+            """,
+            (group_ids, group_ids),
+        ).fetchall()
+        group_counts = {row["group_id"]: int(row.get("count") or 0) for row in rows}
+
+    active_student_count = 0
+    if any(room.get("room_type") == "COMMUNITY" for room in rooms):
+        row = conn.execute(
+            "select count(*) as count from courseplatform.students where status = 'ACTIVE'"
+        ).fetchone() or {}
+        active_student_count = int(row.get("count") or 0)
+
+    peer_ids: set[str] = set()
+    for room in rooms:
+        if room.get("room_type") == "DIRECT" and actor["type"] == "STUDENT":
+            peer_ids.add(
+                room.get("direct_student_two_id")
+                if room.get("direct_student_one_id") == actor["id"]
+                else room.get("direct_student_one_id")
+            )
+        elif room.get("room_type") == "SUPPORT" and actor["type"] == "ADMIN":
+            peer_ids.add(room.get("owner_student_id"))
+    peer_ids.discard(None)
+    peer_ids.discard("")
+    peers_by_id = {}
+    if peer_ids:
+        rows = conn.execute(
+            """
+            select s.student_id, s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
+                   presence.last_seen_at,
+                   coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
+            from courseplatform.students s
+            left join courseplatform.chat_presence presence
+              on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
+            where s.student_id = any(%s)
+            """,
+            (sorted(peer_ids),),
+        ).fetchall()
+        peers_by_id = {row["student_id"]: row for row in rows}
+
+    context: dict[str, dict[str, Any]] = {}
+    for room in rooms:
+        room_type = room.get("room_type")
+        if room_type == "DIRECT":
+            participant_count = 2
+        elif room_type == "SUPPORT":
+            participant_count = 1 + active_admin_count
+        elif room_type == "COURSE":
+            participant_count = course_counts.get(room.get("course_id"), 0) + active_admin_count
+        elif room_type == "GROUP":
+            participant_count = group_counts.get(room.get("group_id"), 0) + active_admin_count
+        else:
+            participant_count = active_student_count + active_admin_count
+        context[room["room_id"]] = {
+            "lastMessage": latest_by_room.get(room["room_id"]),
+            "unreadCount": unread_by_room.get(room["room_id"], 0),
+            "onlineCount": online_by_room.get(room["room_id"], 0),
+            "participantCount": participant_count,
+            "peersById": peers_by_id,
+        }
+    return context
+
+
 def chat_room_participant_count(conn, room: dict[str, Any], active_admin_count: int | None = None) -> int:
     if room.get("room_type") == "DIRECT":
         return 2
@@ -9098,31 +9414,37 @@ def public_chat_room(
     room: dict[str, Any],
     actor: dict[str, Any],
     active_admin_count: int | None = None,
+    summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     actor_column = "student_id" if actor["type"] == "STUDENT" else "admin_id"
     sender_column = "sender_student_id" if actor["type"] == "STUDENT" else "sender_admin_id"
-    last_message = conn.execute(
-        """
-        select message_id from courseplatform.chat_messages
-        where room_id = %s order by created_at desc limit 1
-        """,
-        (room["room_id"],),
-    ).fetchone()
-    unread = conn.execute(
-        f"""
-        select count(*) as count
-        from courseplatform.chat_messages m
-        where m.room_id = %s
-          and m.status = 'ACTIVE'
-          and m.{sender_column} is distinct from %s
-          and m.created_at > coalesce((
-            select last_read_at from courseplatform.chat_reads
-            where room_id = %s and {actor_column} = %s
-            order by last_read_at desc limit 1
-          ), 'epoch'::timestamptz)
-        """,
-        (room["room_id"], actor["id"], room["room_id"], actor["id"]),
-    ).fetchone() or {}
+    if summary is None:
+        last_message_ref = conn.execute(
+            """
+            select message_id from courseplatform.chat_messages
+            where room_id = %s order by created_at desc, message_id desc limit 1
+            """,
+            (room["room_id"],),
+        ).fetchone()
+        last_message = chat_message_row(conn, last_message_ref["message_id"]) if last_message_ref else None
+        unread = conn.execute(
+            f"""
+            select count(*) as count
+            from courseplatform.chat_messages m
+            where m.room_id = %s
+              and m.status = 'ACTIVE'
+              and m.{sender_column} is distinct from %s
+              and m.created_at > coalesce((
+                select last_read_at from courseplatform.chat_reads
+                where room_id = %s and {actor_column} = %s
+                order by last_read_at desc limit 1
+              ), 'epoch'::timestamptz)
+            """,
+            (room["room_id"], actor["id"], room["room_id"], actor["id"]),
+        ).fetchone() or {}
+    else:
+        last_message = summary.get("lastMessage")
+        unread = {"count": summary.get("unreadCount", 0)}
     display_name = room.get("name") or "Conversa"
     peer_payload = None
     if room.get("room_type") == "DIRECT" and actor["type"] == "STUDENT":
@@ -9131,18 +9453,20 @@ def public_chat_room(
             if room.get("direct_student_one_id") == actor["id"]
             else room.get("direct_student_one_id")
         )
-        peer = conn.execute(
-            """
-            select s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
-                   presence.last_seen_at,
-                   coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
-            from courseplatform.students s
-            left join courseplatform.chat_presence presence
-              on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
-            where s.student_id = %s and s.status = 'ACTIVE'
-            """,
-            (peer_id,),
-        ).fetchone() or {}
+        peer = (summary or {}).get("peersById", {}).get(peer_id)
+        if peer is None:
+            peer = conn.execute(
+                """
+                select s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
+                       presence.last_seen_at,
+                       coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
+                from courseplatform.students s
+                left join courseplatform.chat_presence presence
+                  on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
+                where s.student_id = %s and s.status = 'ACTIVE'
+                """,
+                (peer_id,),
+            ).fetchone() or {}
         display_name = peer.get("full_name") or "Colega de curso"
         peer_payload = {
             "publicStudentId": peer.get("public_student_id") or "",
@@ -9153,18 +9477,20 @@ def public_chat_room(
             "lastSeenAt": iso(peer.get("last_seen_at")),
         }
     if room.get("room_type") == "SUPPORT" and actor["type"] == "ADMIN":
-        owner = conn.execute(
-            """
-            select s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
-                   presence.last_seen_at,
-                   coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
-            from courseplatform.students s
-            left join courseplatform.chat_presence presence
-              on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
-            where s.student_id = %s
-            """,
-            (room.get("owner_student_id"),),
-        ).fetchone() or {}
+        owner = (summary or {}).get("peersById", {}).get(room.get("owner_student_id"))
+        if owner is None:
+            owner = conn.execute(
+                """
+                select s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
+                       presence.last_seen_at,
+                       coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
+                from courseplatform.students s
+                left join courseplatform.chat_presence presence
+                  on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
+                where s.student_id = %s
+                """,
+                (room.get("owner_student_id"),),
+            ).fetchone() or {}
         display_name = owner.get("full_name") or "Apoio ao estudante"
         peer_payload = {
             "publicStudentId": owner.get("public_student_id") or "",
@@ -9174,13 +9500,18 @@ def public_chat_room(
             "isOnline": bool(owner.get("is_online")),
             "lastSeenAt": iso(owner.get("last_seen_at")),
         }
-    online = conn.execute(
-        """
-        select count(*) as count from courseplatform.chat_presence
-        where current_room_id = %s and last_seen_at > now() - interval '75 seconds'
-        """,
-        (room["room_id"],),
-    ).fetchone() or {}
+    if summary is None:
+        online = conn.execute(
+            """
+            select count(*) as count from courseplatform.chat_presence
+            where current_room_id = %s and last_seen_at > now() - interval '75 seconds'
+            """,
+            (room["room_id"],),
+        ).fetchone() or {}
+        participant_count = chat_room_participant_count(conn, room, active_admin_count)
+    else:
+        online = {"count": summary.get("onlineCount", 0)}
+        participant_count = int(summary.get("participantCount") or 0)
     return {
         "roomId": room.get("room_id"),
         "roomType": room.get("room_type"),
@@ -9190,9 +9521,9 @@ def public_chat_room(
         "groupId": room.get("group_id") or "",
         "peer": peer_payload,
         "onlineCount": int(online.get("count") or 0),
-        "participantCount": chat_room_participant_count(conn, room, active_admin_count),
+        "participantCount": participant_count,
         "unreadCount": int(unread.get("count") or 0),
-        "lastMessage": public_chat_message(chat_message_row(conn, last_message["message_id"]), actor) if last_message else None,
+        "lastMessage": public_chat_message(last_message, actor),
         "updatedAt": iso(room.get("updated_at")),
     }
 
@@ -9329,26 +9660,66 @@ def chat_list_rooms(payload: dict[str, Any]):
     with connection() as conn:
         actor = chat_actor_with_conn(conn, payload)
         sync_chat_rooms(conn, actor)
-        rooms = conn.execute(
+        if actor["type"] == "STUDENT":
+            access_sql = """
+              and (
+                r.room_type = 'COMMUNITY'
+                or (r.room_type = 'SUPPORT' and r.owner_student_id = %s)
+                or (
+                  r.room_type = 'DIRECT'
+                  and %s in (r.direct_student_one_id, r.direct_student_two_id)
+                )
+                or (
+                  r.room_type = 'COURSE'
+                  and exists (
+                    select 1 from courseplatform.enrollments e
+                    where e.student_id = %s and e.course_id = r.course_id
+                      and e.status in ('ACTIVE', 'COMPLETED')
+                  )
+                )
+                or (
+                  r.room_type = 'GROUP'
+                  and (
+                    exists (
+                      select 1 from courseplatform.group_members gm
+                      where gm.student_id = %s and gm.group_id = r.group_id and gm.status = 'ACTIVE'
+                    )
+                    or exists (
+                      select 1 from courseplatform.enrollments e
+                      where e.student_id = %s and e.group_id = r.group_id
+                        and e.status in ('ACTIVE', 'COMPLETED')
+                    )
+                  )
+                )
+              )
             """
+            access_params = (actor["id"], actor["id"], actor["id"], actor["id"], actor["id"])
+        else:
+            access_sql = "and r.room_type <> 'DIRECT'"
+            access_params = ()
+        rooms = conn.execute(
+            f"""
             select r.*,
                    (select max(m.created_at) from courseplatform.chat_messages m where m.room_id = r.room_id) as last_message_at
             from courseplatform.chat_rooms r
             where r.status = 'ACTIVE'
+              {access_sql}
             order by last_message_at desc nulls last,
                      case r.room_type when 'COMMUNITY' then 1 when 'GROUP' then 2 when 'COURSE' then 3 else 4 end,
-                     r.name
-            """
+                     r.name,
+                     r.room_id
+            """,
+            access_params,
         ).fetchall()
-        if actor["type"] == "STUDENT":
-            rooms = [room for room in rooms if student_can_access_chat_room(conn, actor["id"], room)]
-        else:
-            rooms = [room for room in rooms if room.get("room_type") != "DIRECT"]
         active_admins = conn.execute(
             "select count(*) as count from courseplatform.admins where status = 'ACTIVE'"
         ).fetchone() or {}
         active_admin_count = int(active_admins.get("count") or 0)
-        result = [public_chat_room(conn, room, actor, active_admin_count) for room in rooms]
+        summaries = chat_room_summary_context(conn, rooms, actor, active_admin_count)
+        result = [
+            public_chat_room(conn, room, actor, active_admin_count, summaries.get(room["room_id"], {}))
+            for room in rooms
+        ]
         conn.commit()
     return success({
         "rooms": result,

@@ -15105,3 +15105,38 @@ professional-certificate {
     gap: 10px;
   }
 }
+/* Cursor pagination keeps large administrative lists compact and stable. */
+.cursor-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line, #d8dee6);
+  color: var(--muted, #617286);
+  font-size: 0.875rem;
+}
+
+.cursor-pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cursor-pagination .button-compact {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+@media (max-width: 640px) {
+  .cursor-pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cursor-pagination > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

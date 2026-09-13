@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from .actions import (
     ApiError,
@@ -55,7 +56,7 @@ async def handle_get_action(request: Request):
             status_code=405,
         )
     try:
-        return JSONResponse(dispatch(action, payload))
+        return JSONResponse(await run_in_threadpool(dispatch, action, payload))
     except Exception as error:
         return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)
 
@@ -74,7 +75,7 @@ async def handle_post_action(request: Request, background_tasks: BackgroundTasks
         payload.pop("_requestSource", None)
         if action in {"recoverStudentAccess", "completeStudentPasswordReset"}:
             payload["_requestSource"] = request_source(request)
-        result = dispatch(action, payload)
+        result = await run_in_threadpool(dispatch, action, payload)
         notification_ids = result.pop("_backgroundNotificationIds", []) if isinstance(result, dict) else []
         reset_delivery = result.pop("_passwordResetDelivery", None) if isinstance(result, dict) else None
         if notification_ids:
@@ -101,7 +102,7 @@ async def handle_liveness():
 
 
 async def handle_readiness():
-    result = dispatch("health", {})
+    result = await run_in_threadpool(dispatch, "health", {})
     ready = result.get("data", {}).get("status") == "ready"
     return JSONResponse({"status": "ready" if ready else "not_ready"}, status_code=200 if ready else 503)
 
@@ -114,7 +115,9 @@ async def handle_health_diagnostics(request: Request):
             status_code=401,
         )
     try:
-        return JSONResponse(dispatch("healthDiagnostics", {"adminToken": admin_token}))
+        return JSONResponse(
+            await run_in_threadpool(dispatch, "healthDiagnostics", {"adminToken": admin_token})
+        )
     except Exception as error:
         return JSONResponse(public_error(error), status_code=403 if isinstance(error, ApiError) else 500)
 
@@ -134,10 +137,15 @@ async def handle_certificate_pdf(certificate_id: str, request: Request):
         "verificationBaseUrl": verification_base_url,
     }
     try:
-        result = admin_certificate_pdf_payload(payload) if admin_token else certificate_pdf_payload(payload)
-        pdf_bytes = build_course_certificate_pdf(result["pdfData"], result["model"])
+        payload_builder = admin_certificate_pdf_payload if admin_token else certificate_pdf_payload
+        result = await run_in_threadpool(payload_builder, payload)
+        pdf_bytes = await run_in_threadpool(
+            build_course_certificate_pdf,
+            result["pdfData"],
+            result["model"],
+        )
         if not admin_token:
-            record_certificate_download(payload)
+            await run_in_threadpool(record_certificate_download, payload)
         certificate_number = result["certificate"].get("certificateNumber") or certificate_id
         filename = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in certificate_number)
         return Response(

@@ -62,8 +62,11 @@ const BRAND_LOGO_STORED_MAX_BYTES = 900 * 1024;
 
 let api;
 let submissionSearchTimer;
+let certificateSearchTimer;
 let studentSearchTimer;
 let courseSearchTimer;
+let submissionRequestVersion = 0;
+let certificateRequestVersion = 0;
 const state = {
   admin: null,
   statistics: null,
@@ -71,6 +74,14 @@ const state = {
   submissionFilters: {
     status: 'ALL',
     query: ''
+  },
+  submissionPagination: {
+    cursor: '',
+    nextCursor: '',
+    hasMore: false,
+    returned: 0,
+    limit: 50,
+    history: []
   },
   students: [],
   courseStructure: null,
@@ -94,6 +105,14 @@ const state = {
     status: 'ALL',
     certificateStatus: 'ACTIVE',
     query: ''
+  },
+  certificatePagination: {
+    certificates: {
+      cursor: '', nextCursor: '', hasMore: false, returned: 0, limit: 50, history: []
+    },
+    requests: {
+      cursor: '', nextCursor: '', hasMore: false, returned: 0, limit: 50, history: []
+    }
   },
   certificateSettings: null,
   studentFilters: {
@@ -2185,6 +2204,12 @@ function renderAdminProfile() {
 
 async function loadCertifications(options = {}) {
   const main = document.querySelector('#adminMain');
+  const requestVersion = ++certificateRequestVersion;
+  const requestKey = JSON.stringify({
+    filters: state.certificateFilters,
+    certificateCursor: state.certificatePagination.certificates.cursor,
+    requestCursor: state.certificatePagination.requests.cursor
+  });
   if (!options.silent) {
     main.innerHTML = loadingTemplate('A carregar certificações...');
   }
@@ -2194,29 +2219,47 @@ async function loadCertifications(options = {}) {
       api.adminCertificateRequests({
         status: state.certificateFilters.status,
         query: state.certificateFilters.query,
-        limit: 300
+        limit: state.certificatePagination.requests.limit,
+        cursor: state.certificatePagination.requests.cursor
       }, options),
       api.adminCertificates({
         status: state.certificateFilters.certificateStatus,
         query: state.certificateFilters.query,
-        limit: 300
+        limit: state.certificatePagination.certificates.limit,
+        cursor: state.certificatePagination.certificates.cursor
       }, options),
       api.adminCourses({ limit: 500 }, options)
     ]);
+    if (requestVersion !== certificateRequestVersion || requestKey !== JSON.stringify({
+      filters: state.certificateFilters,
+      certificateCursor: state.certificatePagination.certificates.cursor,
+      requestCursor: state.certificatePagination.requests.cursor
+    })) return false;
     state.certificateRequests = requestsResult.requests || [];
     state.certificates = certificatesResult.certificates || [];
+    Object.assign(state.certificatePagination.requests, requestsResult.pagination || {
+      nextCursor: '', hasMore: false, returned: state.certificateRequests.length
+    });
+    Object.assign(state.certificatePagination.certificates, certificatesResult.pagination || {
+      nextCursor: '', hasMore: false, returned: state.certificates.length
+    });
     state.courses = coursesResult.courses || state.courses || [];
     const firstCourse = state.courses.find((item) => item.course?.status !== 'DELETED')?.course;
     state.selectedCourseId = state.selectedCourseId || firstCourse?.courseId || config.courseId;
     const settingsResult = await api.adminCertificateSettings(state.selectedCourseId, options);
+    if (requestVersion !== certificateRequestVersion) return false;
     state.certificateSettings = settingsResult.settings || {};
-    renderCertifications();
+    if (options.silent) renderPreservingFocus(renderCertifications);
+    else renderCertifications();
+    return true;
   } catch (error) {
+    if (requestVersion !== certificateRequestVersion) return false;
     if (options.silent) {
       console.warn('Falha ao atualizar certificações em segundo plano:', error);
-      return;
+      return false;
     }
     handleAdminError(error);
+    return false;
   }
 }
 
@@ -2301,6 +2344,7 @@ function renderCertifications() {
           <div class="student-empty-state">Sem certificados para os filtros atuais.</div>
         `}
       </div>
+      ${cursorPaginationTemplate('certificates', state.certificatePagination.certificates)}
     </section>
 
     <section class="admin-content-panel certificate-requests-panel">
@@ -2328,6 +2372,7 @@ function renderCertifications() {
           <div class="student-empty-state">Sem pedidos para os filtros atuais.</div>
         `}
       </div>
+      ${cursorPaginationTemplate('certificate-requests', state.certificatePagination.requests)}
     </section>
 
     <section class="certificate-admin-grid certificate-model-grid">
@@ -2401,18 +2446,28 @@ function renderCertifications() {
   root.querySelector('[data-use-standard-certificate-logo]')?.addEventListener('click', useStandardCertificateLogo);
   document.querySelector('#certificateStatusFilter').addEventListener('change', (event) => {
     state.certificateFilters.status = event.currentTarget.value;
+    resetCursorPagination(state.certificatePagination.requests);
     loadCertifications();
   });
   document.querySelector('#certificateAccessStatusFilter').addEventListener('change', (event) => {
     state.certificateFilters.certificateStatus = event.currentTarget.value;
+    resetCursorPagination(state.certificatePagination.certificates);
     loadCertifications();
   });
   document.querySelector('#certificateSearch').addEventListener('input', (event) => {
     state.certificateFilters.query = event.currentTarget.value;
-    loadCertifications({ silent: true }).then(renderCertifications);
+    resetCursorPagination(state.certificatePagination.certificates);
+    resetCursorPagination(state.certificatePagination.requests);
+    scheduleCertificateRefresh();
   });
   document.querySelector('#refreshCertificateData').addEventListener('click', () => loadCertifications({ force: true }));
   document.querySelector('#refreshCertificateFormat').addEventListener('click', refreshCertificateFormatAll);
+  root.querySelectorAll('[data-cursor-pagination]').forEach((button) => {
+    button.addEventListener('click', () => changeCertificatePage(
+      button.dataset.cursorPagination,
+      button.dataset.direction
+    ));
+  });
   root.querySelectorAll('[data-review-certificate-request]').forEach((button) => {
     button.addEventListener('click', () => reviewCertificateRequest(
       button.dataset.reviewCertificateRequest,
@@ -3399,8 +3454,79 @@ async function deleteCertificateFromButton(button) {
   }
 }
 
+function resetCursorPagination(pagination) {
+  pagination.cursor = '';
+  pagination.nextCursor = '';
+  pagination.hasMore = false;
+  pagination.returned = 0;
+  pagination.history = [];
+}
+
+function cursorPaginationTemplate(name, pagination) {
+  const page = (pagination.history?.length || 0) + 1;
+  const returned = Number(pagination.returned || 0);
+  return `
+    <nav class="cursor-pagination" aria-label="Navegação da lista">
+      <span>Página ${page} · ${returned} ${returned === 1 ? 'registo' : 'registos'}</span>
+      <div>
+        <button class="button button-secondary button-compact" type="button"
+          data-cursor-pagination="${escapeHtml(name)}" data-direction="previous"
+          ${pagination.history?.length ? '' : 'disabled'}>Anterior</button>
+        <button class="button button-secondary button-compact" type="button"
+          data-cursor-pagination="${escapeHtml(name)}" data-direction="next"
+          ${pagination.hasMore && pagination.nextCursor ? '' : 'disabled'}>Seguinte</button>
+      </div>
+    </nav>
+  `;
+}
+
+async function moveCursorPage(pagination, direction, loader) {
+  const previousState = {
+    cursor: pagination.cursor,
+    nextCursor: pagination.nextCursor,
+    hasMore: pagination.hasMore,
+    returned: pagination.returned,
+    history: [...(pagination.history || [])]
+  };
+  if (direction === 'next') {
+    if (!pagination.hasMore || !pagination.nextCursor) return;
+    pagination.history.push(pagination.cursor || '');
+    pagination.cursor = pagination.nextCursor;
+  } else if (direction === 'previous') {
+    if (!pagination.history.length) return;
+    pagination.cursor = pagination.history.pop() || '';
+  } else {
+    return;
+  }
+  pagination.nextCursor = '';
+  pagination.hasMore = false;
+  const loaded = await loader();
+  if (loaded === false) Object.assign(pagination, previousState);
+}
+
+async function changeCertificatePage(name, direction) {
+  const pagination = name === 'certificates'
+    ? state.certificatePagination.certificates
+    : state.certificatePagination.requests;
+  await moveCursorPage(pagination, direction, () => loadCertifications({ force: true }));
+}
+
+function scheduleCertificateRefresh(delay = 400) {
+  clearTimeout(certificateSearchTimer);
+  const expectedFilters = JSON.stringify(state.certificateFilters);
+  certificateSearchTimer = setTimeout(async () => {
+    if (expectedFilters !== JSON.stringify(state.certificateFilters)) return;
+    await loadCertifications({ silent: true, force: true });
+  }, delay);
+}
+
 async function loadPending(options = {}) {
   const main = document.querySelector('#adminMain');
+  const requestVersion = ++submissionRequestVersion;
+  const requestKey = JSON.stringify({
+    filters: state.submissionFilters,
+    cursor: state.submissionPagination.cursor
+  });
   if (!options.silent) {
     main.innerHTML = loadingTemplate('A carregar submissões...');
   }
@@ -3409,19 +3535,31 @@ async function loadPending(options = {}) {
     const result = await api.adminSubmissions({
       status: state.submissionFilters.status,
       query: state.submissionFilters.query,
-      limit: 300
+      limit: state.submissionPagination.limit,
+      cursor: state.submissionPagination.cursor
     }, options);
-    state.pending = result.submissions;
+    if (requestVersion !== submissionRequestVersion || requestKey !== JSON.stringify({
+      filters: state.submissionFilters,
+      cursor: state.submissionPagination.cursor
+    })) return false;
+    state.pending = result.submissions || [];
+    Object.assign(state.submissionPagination, result.pagination || {
+      nextCursor: '', hasMore: false, returned: state.pending.length
+    });
     await loadAccessContext(options);
+    if (requestVersion !== submissionRequestVersion) return false;
     if (!options.silent) {
       renderSubmissionsV2();
     }
+    return true;
   } catch (error) {
+    if (requestVersion !== submissionRequestVersion) return false;
     if (options.silent) {
       console.warn('Falha ao atualizar submissões em segundo plano:', error);
-      return;
+      return false;
     }
     handleAdminError(error);
+    return false;
   }
 }
 
@@ -3680,15 +3818,18 @@ function renderSubmissionsV2() {
         </tbody>
       </table>
     </div>
+    ${cursorPaginationTemplate('submissions', state.submissionPagination)}
   `;
 
   document.querySelector('#refreshPending').addEventListener('click', () => loadPending({ force: true }));
   document.querySelector('#submissionStatusFilter').addEventListener('change', (event) => {
     state.submissionFilters.status = event.currentTarget.value;
+    resetCursorPagination(state.submissionPagination);
     loadPending();
   });
   document.querySelector('#submissionSearch').addEventListener('input', (event) => {
     state.submissionFilters.query = event.currentTarget.value;
+    resetCursorPagination(state.submissionPagination);
     renderPreservingFocus(renderSubmissionsV2);
     scheduleSubmissionRefresh();
   });
@@ -3703,6 +3844,10 @@ function renderSubmissionsV2() {
   root.querySelectorAll('[data-open-submission]').forEach((button) => {
     button.addEventListener('click', () => openSubmission(button.dataset.openSubmission));
   });
+  root.querySelector('[data-cursor-pagination="submissions"][data-direction="previous"]')
+    ?.addEventListener('click', () => changeSubmissionPage('previous'));
+  root.querySelector('[data-cursor-pagination="submissions"][data-direction="next"]')
+    ?.addEventListener('click', () => changeSubmissionPage('next'));
 
   reportHeight();
 }
@@ -3711,12 +3856,20 @@ function scheduleSubmissionRefresh(delay = 450) {
   clearTimeout(submissionSearchTimer);
   const expectedFilters = JSON.stringify(state.submissionFilters);
   submissionSearchTimer = setTimeout(() => {
-    loadPending({ silent: true }).then(() => {
-      if (expectedFilters === JSON.stringify(state.submissionFilters) && document.querySelector('#submissionSearch')) {
+    loadPending({ silent: true, force: true }).then((loaded) => {
+      if (loaded && expectedFilters === JSON.stringify(state.submissionFilters) && document.querySelector('#submissionSearch')) {
         renderPreservingFocus(renderSubmissionsV2);
       }
     });
   }, delay);
+}
+
+async function changeSubmissionPage(direction) {
+  await moveCursorPage(
+    state.submissionPagination,
+    direction,
+    () => loadPending({ force: true })
+  );
 }
 
 function filteredSubmissions() {
