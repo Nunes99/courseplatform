@@ -308,6 +308,9 @@ def public_lesson(row: dict[str, Any] | None):
         "individualMinutes": float(row.get("individual_minutes") or 0),
         "submissionDurationMinutes": submission_duration,
         "passingScore": float(row.get("passing_score") or 0),
+        "feedbackReleaseMode": feedback_release_mode(row.get("feedback_release_mode")),
+        "showCorrectAnswers": as_bool(row.get("show_correct_answers")),
+        "showExplanations": as_bool(row.get("show_explanations")),
         "prerequisiteLessonId": row.get("prerequisite_lesson_id"),
         "status": row.get("status"),
         "createdAt": iso(row.get("created_at")),
@@ -361,7 +364,7 @@ def public_content(row: dict[str, Any] | None):
     }
 
 
-def public_question(row: dict[str, Any] | None):
+def staff_question(row: dict[str, Any] | None):
     if not row:
         return None
     return {
@@ -378,7 +381,7 @@ def public_question(row: dict[str, Any] | None):
     }
 
 
-def public_option(row: dict[str, Any] | None):
+def staff_option(row: dict[str, Any] | None):
     if not row:
         return None
     return {
@@ -411,14 +414,14 @@ def public_progress(row: dict[str, Any] | None):
     }
 
 
-def public_attempt(row: dict[str, Any] | None):
+def student_attempt(row: dict[str, Any] | None):
     if not row:
         return None
     deadline = row.get("deadline_at")
     remaining = None
     if isinstance(deadline, datetime):
         remaining = max(0, int((deadline - utc_now()).total_seconds()))
-    return {
+    result = {
         "attemptId": row["attempt_id"],
         "progressId": row.get("progress_id"),
         "lessonId": row.get("lesson_id"),
@@ -427,14 +430,32 @@ def public_attempt(row: dict[str, Any] | None):
         "deadlineAt": iso(row.get("deadline_at")),
         "submittedAt": iso(row.get("submitted_at")),
         "status": row.get("status"),
-        "score": None if row.get("score") is None else float(row["score"]),
-        "reviewedAt": iso(row.get("reviewed_at")),
-        "reviewComments": row.get("review_comments"),
         "retryAuthorized": as_bool(row.get("retry_authorized")),
         "remainingSeconds": remaining,
         "createdAt": iso(row.get("created_at")),
         "updatedAt": iso(row.get("updated_at")),
     }
+    if row.get("reviewed_at"):
+        result.update({
+            "score": None if row.get("score") is None else float(row["score"]),
+            "reviewedAt": iso(row.get("reviewed_at")),
+            "reviewComments": row.get("review_comments"),
+        })
+    return result
+
+
+def staff_attempt(row: dict[str, Any] | None):
+    if not row:
+        return None
+    result = student_attempt(row)
+    result.update({
+        "score": None if row.get("score") is None else float(row["score"]),
+        "objectiveScore": None if row.get("objective_score") is None else float(row["objective_score"]),
+        "reviewerId": row.get("reviewer_id"),
+        "reviewedAt": iso(row.get("reviewed_at")),
+        "reviewComments": row.get("review_comments"),
+    })
+    return result
 
 
 def expire_attempt_if_needed(attempt: dict[str, Any] | None):
@@ -522,7 +543,19 @@ def public_review(row: dict[str, Any] | None):
     }
 
 
-def public_answer(row: dict[str, Any] | None):
+def student_review(row: dict[str, Any] | None):
+    if not row:
+        return None
+    return {
+        "decision": row.get("decision"),
+        "score": None if row.get("score") is None else float(row["score"]),
+        "comments": row.get("comments"),
+        "correctionDeadline": iso(row.get("correction_deadline")),
+        "reviewedAt": iso(row.get("reviewed_at")),
+    }
+
+
+def staff_answer(row: dict[str, Any] | None):
     if not row:
         return None
     return {
@@ -536,6 +569,106 @@ def public_answer(row: dict[str, Any] | None):
         "savedAt": iso(row.get("saved_at")),
         "submittedAt": iso(row.get("submitted_at")),
     }
+
+
+FEEDBACK_RELEASE_MODES = {"NEVER", "AFTER_SUBMISSION", "AFTER_REVIEW"}
+OBJECTIVE_QUESTION_TYPES = {"SINGLE_CHOICE", "TRUE_FALSE", "MULTIPLE_CHOICE"}
+
+
+def feedback_release_mode(value: Any) -> str:
+    mode = str_value(value).upper() or "AFTER_REVIEW"
+    return mode if mode in FEEDBACK_RELEASE_MODES else "AFTER_REVIEW"
+
+
+def feedback_policy(row: dict[str, Any] | None) -> dict[str, Any]:
+    source = row or {}
+    return {
+        "releaseMode": feedback_release_mode(source.get("feedback_release_mode") or source.get("releaseMode")),
+        "showCorrectAnswers": as_bool(source.get("show_correct_answers", source.get("showCorrectAnswers"))),
+        "showExplanations": as_bool(source.get("show_explanations", source.get("showExplanations"))),
+    }
+
+
+def student_question(
+    row: dict[str, Any] | None,
+    *,
+    reveal_answers: bool = False,
+    reveal_explanations: bool = False,
+):
+    if not row:
+        return None
+    result = {
+        "questionId": row["question_id"],
+        "lessonId": row.get("lesson_id"),
+        "questionOrder": int(row.get("question_order") or 0),
+        "questionType": row.get("question_type"),
+        "prompt": row.get("prompt"),
+        "isRequired": as_bool(row.get("is_required")),
+        "status": row.get("status"),
+    }
+    if reveal_answers:
+        result["correctAnswer"] = row.get("correct_answer")
+    if reveal_explanations:
+        result["explanation"] = row.get("explanation")
+    return result
+
+
+def student_option(row: dict[str, Any] | None, *, reveal_answers: bool = False):
+    if not row:
+        return None
+    result = {
+        "optionId": row["option_id"],
+        "questionId": row.get("question_id"),
+        "optionOrder": int(row.get("option_order") or 0),
+        "optionLabel": row.get("option_label"),
+        "optionText": row.get("option_text"),
+    }
+    if reveal_answers:
+        result["isCorrect"] = as_bool(row.get("is_correct"))
+    return result
+
+
+def student_answer(row: dict[str, Any] | None, *, reveal_answers: bool = False):
+    if not row:
+        return None
+    result = {
+        "answerId": row["answer_id"],
+        "attemptId": row.get("attempt_id"),
+        "questionId": row.get("question_id"),
+        "answerText": row.get("answer_text"),
+        "selectedOptionId": row.get("selected_option_id"),
+        "savedAt": iso(row.get("saved_at")),
+        "submittedAt": iso(row.get("submitted_at")),
+    }
+    if reveal_answers:
+        result["isCorrect"] = None if row.get("is_correct") is None else as_bool(row.get("is_correct"))
+    return result
+
+
+def selected_option_ids(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        raw = str_value(value)
+        if not raw:
+            return []
+        values = [raw]
+        if raw.startswith("[") and raw.endswith("]"):
+            try:
+                decoded = json.loads(raw)
+            except (TypeError, ValueError):
+                legacy_values = re.findall(r"['\"]([^'\"]+)['\"]", raw)
+                decoded = legacy_values if legacy_values else None
+            if isinstance(decoded, (list, tuple, set)):
+                values = decoded
+    return list(dict.fromkeys(str_value(item) for item in values if str_value(item)))
+
+
+def selected_option_storage(value: Any, question_type: str) -> str:
+    selected = selected_option_ids(value)
+    if question_type == "MULTIPLE_CHOICE":
+        return json.dumps(selected, ensure_ascii=True, separators=(",", ":"))
+    return selected[0] if selected else ""
 
 
 def public_file(row: dict[str, Any] | None):
@@ -4349,7 +4482,7 @@ def dashboard_payload(conn, student: dict[str, Any], course_id: str):
                     "submitted_at": row.get("submitted_at"),
                     "approved_at": row.get("approved_at"),
                 }),
-                "activeAttempt": public_attempt({
+                "activeAttempt": student_attempt({
                     "attempt_id": row.get("attempt_id"),
                     "progress_id": row.get("progress_id"),
                     "lesson_id": row.get("lesson_id"),
@@ -4454,8 +4587,8 @@ def get_lesson(payload: dict[str, Any]):
         "content": [public_content(row) for row in content],
         "questions": [
             {
-                **public_question(question),
-                "options": [public_option(option) for option in options_by_question.get(question["question_id"], [])],
+                **student_question(question),
+                "options": [student_option(option) for option in options_by_question.get(question["question_id"], [])],
             }
             for question in questions
         ],
@@ -4477,34 +4610,44 @@ def attempt_status(payload: dict[str, Any]):
     attempt = expire_attempt_if_needed(attempt)
     if not attempt:
         raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
-    answers = fetch_all(
-        "select * from courseplatform.answers where attempt_id = %s order by saved_at",
-        (attempt["attempt_id"],),
-    )
-    files = fetch_all(
-        """
-        select *
-        from courseplatform.files
-        where attempt_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'
-        order by uploaded_at
-        """,
-        (attempt["attempt_id"],),
-    )
-    latest_review = fetch_one(
-        """
-        select *
-        from courseplatform.reviews
-        where attempt_id = %s
-        order by reviewed_at desc nulls last
-        limit 1
-        """,
-        (attempt["attempt_id"],),
-    )
+    with connection() as conn:
+        answers = conn.execute(
+            "select * from courseplatform.answers where attempt_id = %s order by saved_at",
+            (attempt["attempt_id"],),
+        ).fetchall()
+        files = conn.execute(
+            """
+            select *
+            from courseplatform.files
+            where attempt_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'
+            order by uploaded_at
+            """,
+            (attempt["attempt_id"],),
+        ).fetchall()
+        latest_review = conn.execute(
+            """
+            select *
+            from courseplatform.reviews
+            where attempt_id = %s
+            order by reviewed_at desc nulls last
+            limit 1
+            """,
+            (attempt["attempt_id"],),
+        ).fetchone()
+        snapshot = snapshot_for_attempt_with_conn(conn, attempt)
+    reveal_answers, reveal_explanations = feedback_visibility(attempt, snapshot)
+    policy = feedback_policy(snapshot.get("feedbackPolicy"))
     return success({
-        "attempt": public_attempt(attempt),
-        "answers": [public_answer(row) for row in answers],
+        "attempt": student_attempt(attempt),
+        "questions": student_snapshot_questions(attempt, snapshot),
+        "answers": [student_answer(row, reveal_answers=reveal_answers) for row in answers],
         "files": [public_file(row) for row in files],
-        "latestReview": public_review(latest_review),
+        "latestReview": student_review(latest_review) if attempt.get("submitted_at") or attempt.get("reviewed_at") else None,
+        "feedbackPolicy": {
+            "releaseMode": policy["releaseMode"],
+            "correctAnswersVisible": reveal_answers,
+            "explanationsVisible": reveal_explanations,
+        },
     })
 
 
@@ -5084,6 +5227,162 @@ def editable_attempt(conn, attempt_id, student_id):
     return attempt
 
 
+def parse_assessment_snapshot(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def assessment_snapshot_with_conn(conn, lesson_id: str, lesson: dict[str, Any] | None = None) -> dict[str, Any]:
+    lesson_row = lesson or conn.execute(
+        """select lesson_id, feedback_release_mode, show_correct_answers, show_explanations
+           from courseplatform.lessons where lesson_id = %s""",
+        (lesson_id,),
+    ).fetchone()
+    if not lesson_row:
+        raise ApiError("LESSON_NOT_FOUND", "Módulo não encontrado.")
+    questions = conn.execute(
+        """select question_id, lesson_id, question_order, question_type, prompt, points,
+                  correct_answer, explanation, is_required, status
+           from courseplatform.questions
+           where lesson_id = %s and coalesce(status, 'ACTIVE') = 'ACTIVE'
+           order by question_order""",
+        (lesson_id,),
+    ).fetchall()
+    question_ids = [row["question_id"] for row in questions]
+    options_by_question: dict[str, list[dict[str, Any]]] = {question_id: [] for question_id in question_ids}
+    if question_ids:
+        options = conn.execute(
+            """select option_id, question_id, option_order, option_label, option_text, is_correct
+               from courseplatform.question_options
+               where question_id = any(%s)
+               order by question_id, option_order""",
+            (question_ids,),
+        ).fetchall()
+        for option in options:
+            options_by_question[option["question_id"]].append({
+                "option_id": option["option_id"],
+                "question_id": option.get("question_id"),
+                "option_order": int_value(option.get("option_order")),
+                "option_label": option.get("option_label"),
+                "option_text": option.get("option_text"),
+                "is_correct": as_bool(option.get("is_correct")),
+            })
+    snapshot_questions = [
+        {
+            "question_id": question["question_id"],
+            "lesson_id": question.get("lesson_id"),
+            "question_order": int_value(question.get("question_order")),
+            "question_type": question.get("question_type"),
+            "prompt": question.get("prompt"),
+            "points": float_value(question.get("points")),
+            "correct_answer": question.get("correct_answer"),
+            "explanation": question.get("explanation"),
+            "is_required": as_bool(question.get("is_required")),
+            "status": question.get("status"),
+            "options": options_by_question.get(question["question_id"], []),
+        }
+        for question in questions
+    ]
+    policy = feedback_policy(lesson_row)
+    digest_payload = json.dumps(
+        {"feedbackPolicy": policy, "questions": snapshot_questions},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return {
+        "version": 1,
+        "capturedAt": iso(utc_now()),
+        "feedbackPolicy": policy,
+        "questions": snapshot_questions,
+        "digest": hashlib.sha256(digest_payload.encode("utf-8")).hexdigest(),
+    }
+
+
+def snapshot_for_attempt_with_conn(conn, attempt: dict[str, Any]) -> dict[str, Any]:
+    snapshot = parse_assessment_snapshot(attempt.get("assessment_snapshot_json"))
+    if isinstance(snapshot.get("questions"), list):
+        return snapshot
+    raise ApiError(
+        "ASSESSMENT_SNAPSHOT_MISSING",
+        "A versão desta avaliação não está disponível. A administração deve validar a migração antes de continuar.",
+    )
+
+
+def feedback_visibility(attempt: dict[str, Any], snapshot: dict[str, Any]) -> tuple[bool, bool]:
+    policy = feedback_policy(snapshot.get("feedbackPolicy"))
+    mode = policy["releaseMode"]
+    released = mode == "AFTER_SUBMISSION" and bool(attempt.get("submitted_at"))
+    released = released or (
+        mode == "AFTER_REVIEW"
+        and bool(attempt.get("reviewed_at"))
+        and str_value(attempt.get("status")).upper() in {"APPROVED", "CORRECTION_REQUIRED", "FAILED"}
+    )
+    if mode == "NEVER":
+        released = False
+    return (
+        released and policy["showCorrectAnswers"],
+        released and policy["showExplanations"],
+    )
+
+
+def student_snapshot_questions(attempt: dict[str, Any], snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    reveal_answers, reveal_explanations = feedback_visibility(attempt, snapshot)
+    return [
+        {
+            **student_question(
+                question,
+                reveal_answers=reveal_answers,
+                reveal_explanations=reveal_explanations,
+            ),
+            "options": [
+                student_option(option, reveal_answers=reveal_answers)
+                for option in question.get("options", [])
+            ],
+        }
+        for question in snapshot.get("questions", [])
+        if isinstance(question, dict)
+    ]
+
+
+def grade_objective_answers(
+    snapshot: dict[str, Any],
+    answers: list[dict[str, Any]],
+) -> tuple[float | None, list[tuple[bool, float, str]]]:
+    answer_by_question = {row["question_id"]: row for row in answers}
+    total_points = 0.0
+    awarded_total = 0.0
+    results: list[tuple[bool, float, str]] = []
+    for question in snapshot.get("questions", []):
+        if not isinstance(question, dict) or str_value(question.get("question_type")).upper() not in OBJECTIVE_QUESTION_TYPES:
+            continue
+        points = max(0.0, float_value(question.get("points")))
+        total_points += points
+        answer = answer_by_question.get(question.get("question_id")) or {}
+        selected = set(selected_option_ids(answer.get("selected_option_id")))
+        correct = {
+            str_value(option.get("option_id"))
+            for option in question.get("options", [])
+            if isinstance(option, dict) and as_bool(option.get("is_correct"))
+        }
+        if not correct and question.get("correct_answer") not in (None, ""):
+            correct = set(selected_option_ids(question.get("correct_answer")))
+        is_correct = bool(correct) and selected == correct
+        awarded = points if is_correct else 0.0
+        awarded_total += awarded
+        if answer.get("answer_id"):
+            results.append((is_correct, awarded, answer["answer_id"]))
+    score = round((awarded_total / total_points) * 100, 2) if total_points > 0 else None
+    return score, results
+
+
 def start_attempt(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["lessonId"])
@@ -5097,7 +5396,8 @@ def start_attempt_with_conn(conn, student, lesson_id):
     # Serialize starts and consume each retry permission only once.
     progress = conn.execute(
         """
-        select p.*, l.exercise_minutes, l.individual_minutes, l.submission_duration_minutes
+        select p.*, l.exercise_minutes, l.individual_minutes, l.submission_duration_minutes,
+               l.feedback_release_mode, l.show_correct_answers, l.show_explanations
         from courseplatform.lesson_progress p
         join courseplatform.lessons l on l.lesson_id = p.lesson_id
         where p.student_id = %s and p.lesson_id = %s
@@ -5123,7 +5423,7 @@ def start_attempt_with_conn(conn, student, lesson_id):
     ).fetchone()
     if existing and existing.get("status") == "IN_PROGRESS":
         editable_attempt(conn, existing["attempt_id"], student["student_id"])
-        return success({"attempt": public_attempt(existing)})
+        return success({"attempt": student_attempt(existing)})
 
     now = utc_now()
     minutes = int_value(progress.get("submission_duration_minutes"))
@@ -5150,17 +5450,26 @@ def start_attempt_with_conn(conn, student, lesson_id):
     attempt_number = int_value(progress.get("attempt_count")) + 1
     if existing:
         attempt_number = max(attempt_number, int_value(existing.get("attempt_number")) + 1)
+    existing_snapshot = parse_assessment_snapshot((existing or {}).get("assessment_snapshot_json"))
+    snapshot = existing_snapshot if is_retry and isinstance(existing_snapshot.get("questions"), list) else assessment_snapshot_with_conn(
+        conn,
+        lesson_id,
+        progress,
+    )
     attempt = conn.execute(
         """
         insert into courseplatform.attempts
           (attempt_id, progress_id, student_id, lesson_id, attempt_number, started_at,
-           deadline_at, submitted_at, status, score, retry_authorized, created_at, updated_at)
-        values (%s, %s, %s, %s, %s, %s, %s, null, 'IN_PROGRESS', null, false, %s, %s)
+           deadline_at, submitted_at, status, score, objective_score, assessment_snapshot_json,
+           retry_authorized, created_at, updated_at)
+        values (%s, %s, %s, %s, %s, %s, %s, null, 'IN_PROGRESS', null, null, %s, false, %s, %s)
         returning *
         """,
         (
             generate_id("ATT"), progress["progress_id"], student["student_id"], lesson_id,
-            attempt_number, now, deadline, now, now,
+            attempt_number, now, deadline,
+            json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
+            now, now,
         ),
     ).fetchone()
     if is_retry:
@@ -5192,7 +5501,7 @@ def start_attempt_with_conn(conn, student, lesson_id):
         "deadlineAt": iso(deadline),
     })
     conn.commit()
-    return success({"attempt": public_attempt(attempt)})
+    return success({"attempt": student_attempt(attempt)})
 
 
 def save_answer(payload: dict[str, Any]):
@@ -5201,12 +5510,25 @@ def save_answer(payload: dict[str, Any]):
     prepare_assessment_feature_schema()
     with connection() as conn:
         attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
-        question = conn.execute(
-            "select question_id from courseplatform.questions where question_id = %s and lesson_id = %s",
-            (payload["questionId"], attempt["lesson_id"]),
-        ).fetchone()
+        snapshot = snapshot_for_attempt_with_conn(conn, attempt)
+        question = next(
+            (
+                item for item in snapshot.get("questions", [])
+                if isinstance(item, dict) and item.get("question_id") == payload["questionId"]
+            ),
+            None,
+        )
         if not question:
             raise ApiError("QUESTION_NOT_FOUND", "Questão não encontrada neste módulo.")
+        question_type = str_value(question.get("question_type")).upper()
+        selected_options = selected_option_ids(payload.get("selectedOptionId"))
+        valid_option_ids = {
+            str_value(option.get("option_id"))
+            for option in question.get("options", [])
+            if isinstance(option, dict)
+        }
+        if any(option_id not in valid_option_ids for option_id in selected_options):
+            raise ApiError("INVALID_ANSWER_OPTION", "A resposta contém uma opção que não pertence a esta questão.")
         answer = conn.execute(
             """
             insert into courseplatform.answers
@@ -5223,11 +5545,11 @@ def save_answer(payload: dict[str, Any]):
                 attempt["attempt_id"],
                 payload["questionId"],
                 str_value(payload.get("answerText")),
-                str_value(payload.get("selectedOptionId")),
+                selected_option_storage(payload.get("selectedOptionId"), question_type),
             ),
         ).fetchone()
         conn.commit()
-    return success({"answer": public_answer(answer)})
+    return success({"answer": student_answer(answer)})
 
 
 def upload_file(payload: dict[str, Any]):
@@ -5298,14 +5620,31 @@ def submit_attempt(payload: dict[str, Any]):
     status = "UNDER_REVIEW"
     with connection() as conn:
         attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
+        snapshot = snapshot_for_attempt_with_conn(conn, attempt)
+        answers = conn.execute(
+            "select * from courseplatform.answers where attempt_id = %s for update",
+            (attempt["attempt_id"],),
+        ).fetchall()
+        objective_score, graded_answers = grade_objective_answers(snapshot, answers)
+        conn.execute(
+            "update courseplatform.answers set submitted_at = %s where attempt_id = %s",
+            (now, attempt["attempt_id"]),
+        )
+        for is_correct, awarded_points, answer_id in graded_answers:
+            conn.execute(
+                """update courseplatform.answers
+                   set is_correct = %s, awarded_points = %s, submitted_at = %s
+                   where answer_id = %s and attempt_id = %s""",
+                (is_correct, awarded_points, now, answer_id, attempt["attempt_id"]),
+            )
         updated = conn.execute(
             """
             update courseplatform.attempts
-            set status = %s, submitted_at = %s, updated_at = %s
+            set status = %s, submitted_at = %s, objective_score = %s, updated_at = %s
             where attempt_id = %s
             returning *
             """,
-            (status, now, now, attempt["attempt_id"]),
+            (status, now, objective_score, now, attempt["attempt_id"]),
         ).fetchone()
         conn.execute(
             """
@@ -5317,7 +5656,7 @@ def submit_attempt(payload: dict[str, Any]):
         )
         audit(conn, "STUDENT", student["student_id"], "ATTEMPT_SUBMITTED", "ATTEMPT", attempt["attempt_id"], {"status": status})
         conn.commit()
-    return success({"attempt": public_attempt(updated)})
+    return success({"attempt": student_attempt(updated)})
 
 
 def my_certificate(payload: dict[str, Any]):
@@ -5880,8 +6219,8 @@ def admin_course_structure(payload: dict[str, Any]):
                 "content": [public_content(item) for item in content_by_lesson.get(lesson["lesson_id"], [])],
                 "questions": [
                     {
-                        "question": public_question(item["question"]),
-                        "options": [public_option(option) for option in item["options"]],
+                        "question": staff_question(item["question"]),
+                        "options": [staff_option(option) for option in item["options"]],
                     }
                     for item in questions_by_lesson.get(lesson["lesson_id"], [])
                 ],
@@ -6036,7 +6375,7 @@ def submission_item(row: dict[str, Any]):
             "score": row.get("progress_score"),
             "attempt_count": row.get("progress_attempt_count"),
         }),
-        "attempt": public_attempt(row),
+        "attempt": staff_attempt(row),
         "latestReview": public_review(review),
         "fileCount": int(row.get("file_count") or 0),
     }
@@ -6115,26 +6454,11 @@ def admin_get_submission(payload: dict[str, Any]):
         "select * from courseplatform.lesson_progress where progress_id = %s",
         (attempt.get("progress_id"),),
     )
-    questions = fetch_all(
-        """
-        select *
-        from courseplatform.questions
-        where lesson_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'
-        order by question_order
-        """,
-        (attempt["lesson_id"],),
-    )
+    with connection() as conn:
+        snapshot = snapshot_for_attempt_with_conn(conn, attempt)
+    questions = [row for row in snapshot.get("questions", []) if isinstance(row, dict)]
     answers = fetch_all("select * from courseplatform.answers where attempt_id = %s", (attempt["attempt_id"],))
     answer_by_question = {row["question_id"]: row for row in answers}
-    question_ids = [row["question_id"] for row in questions]
-    options_by_question: dict[str, list[dict[str, Any]]] = {question_id: [] for question_id in question_ids}
-    if question_ids:
-        options = fetch_all(
-            "select * from courseplatform.question_options where question_id = any(%s) order by option_order",
-            (question_ids,),
-        )
-        for option in options:
-            options_by_question[option["question_id"]].append(option)
     files = fetch_all(
         "select * from courseplatform.files where attempt_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED' order by uploaded_at",
         (attempt["attempt_id"],),
@@ -6144,14 +6468,14 @@ def admin_get_submission(payload: dict[str, Any]):
         "student": public_student(student or {"student_id": attempt["student_id"], "full_name": "Estudante sem cadastro", "email": "", "status": "UNKNOWN"}),
         "lesson": public_lesson(lesson or {"lesson_id": attempt["lesson_id"], "title": attempt["lesson_id"]}),
         "progress": public_progress(progress) if progress else None,
-        "attempt": public_attempt(attempt),
+        "attempt": staff_attempt(attempt),
         "answers": [
             {
                 "question": {
-                    **public_question(question),
-                    "options": [public_option(option) for option in options_by_question.get(question["question_id"], [])],
+                    **staff_question(question),
+                    "options": [staff_option(option) for option in question.get("options", [])],
                 },
-                "answer": public_answer(answer_by_question.get(question["question_id"])) or {
+                "answer": staff_answer(answer_by_question.get(question["question_id"])) or {
                     "answerId": "",
                     "attemptId": attempt["attempt_id"],
                     "questionId": question["question_id"],
@@ -6275,7 +6599,7 @@ def admin_review_submission(payload: dict[str, Any]):
         })
         conn.commit()
     dispatch_notification_deliveries(notification_ids)
-    return success({"attempt": public_attempt(updated), "review": public_review(review)})
+    return success({"attempt": staff_attempt(updated), "review": public_review(review)})
 
 
 def admin_authorize_retry(payload: dict[str, Any]):
@@ -6344,7 +6668,7 @@ def admin_authorize_retry(payload: dict[str, Any]):
         audit(conn, "ADMIN", admin["admin_id"], "RETRY_REVOKED", "ATTEMPT", attempt["attempt_id"])
         conn.commit()
     dispatch_notification_deliveries(notification_ids)
-    return success({"attempt": public_attempt(attempt)})
+    return success({"attempt": staff_attempt(attempt)})
 
 
 def admin_update_attempt(payload: dict[str, Any]):
@@ -6480,7 +6804,7 @@ def admin_update_attempt(payload: dict[str, Any]):
                 notification_ids.append(notification_id)
         conn.commit()
     dispatch_notification_deliveries(notification_ids)
-    return success({"attempt": public_attempt(updated), "progress": public_progress(updated_progress) if updated_progress else None})
+    return success({"attempt": staff_attempt(updated), "progress": public_progress(updated_progress) if updated_progress else None})
 
 
 def admin_save_media_config(payload: dict[str, Any]):
@@ -6871,6 +7195,12 @@ def admin_save_lesson(payload: dict[str, Any]):
     prepare_assessment_feature_schema()
     lesson_id = str_value(payload.get("lessonId")) or generate_id("LESSON")
     status = str_value(payload.get("status") or "ACTIVE").upper()
+    requested_release_mode = str_value(payload.get("feedbackReleaseMode")).upper()
+    if requested_release_mode and requested_release_mode not in FEEDBACK_RELEASE_MODES:
+        raise ApiError("INVALID_FEEDBACK_POLICY", "A política de divulgação do feedback é inválida.")
+    release_mode = feedback_release_mode(payload.get("feedbackReleaseMode"))
+    show_correct_answers = as_bool(payload.get("showCorrectAnswers"))
+    show_explanations = as_bool(payload.get("showExplanations"))
     submission_duration = int_value(payload.get("submissionDurationMinutes"))
     if submission_duration <= 0:
         submission_duration = int_value(payload.get("exerciseMinutes")) + int_value(payload.get("individualMinutes"))
@@ -6881,8 +7211,9 @@ def admin_save_lesson(payload: dict[str, Any]):
             insert into courseplatform.lessons
               (lesson_id, course_id, lesson_number, title, slug, summary, theory_minutes,
                exercise_minutes, individual_minutes, passing_score, prerequisite_lesson_id,
-               submission_duration_minutes, status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+               submission_duration_minutes, feedback_release_mode, show_correct_answers,
+               show_explanations, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
             on conflict (lesson_id) do update
             set course_id = excluded.course_id, lesson_number = excluded.lesson_number,
                 title = excluded.title, slug = excluded.slug, summary = excluded.summary,
@@ -6890,6 +7221,9 @@ def admin_save_lesson(payload: dict[str, Any]):
                 individual_minutes = excluded.individual_minutes, passing_score = excluded.passing_score,
                 prerequisite_lesson_id = excluded.prerequisite_lesson_id,
                 submission_duration_minutes = excluded.submission_duration_minutes,
+                feedback_release_mode = excluded.feedback_release_mode,
+                show_correct_answers = excluded.show_correct_answers,
+                show_explanations = excluded.show_explanations,
                 status = excluded.status,
                 updated_at = now()
             returning *
@@ -6907,6 +7241,9 @@ def admin_save_lesson(payload: dict[str, Any]):
                 float_value(payload.get("passingScore"), 60),
                 str_value(payload.get("prerequisiteLessonId")) or None,
                 submission_duration,
+                release_mode,
+                show_correct_answers,
+                show_explanations,
                 status,
             ),
         ).fetchone()
@@ -7456,7 +7793,7 @@ def admin_student_details(payload: dict[str, Any]):
                     "lessonNumber": int(row.get("lesson_number") or 0),
                     "title": row.get("lesson_title"),
                 },
-                "attempt": public_attempt({
+                "attempt": staff_attempt({
                     "attempt_id": row.get("attempt_id"),
                     "progress_id": row.get("progress_id"),
                     "lesson_id": row.get("lesson_id"),

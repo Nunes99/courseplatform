@@ -2581,7 +2581,7 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
   }
 
   if (['UNDER_REVIEW', 'CORRECTION_REQUIRED', 'FAILED', 'TIME_EXCEEDED'].includes(status)) {
-    return reviewStateTemplate(effectiveAttempt, attemptData?.latestReview);
+    return reviewStateTemplate(effectiveAttempt, attemptData?.latestReview, attemptData);
   }
 
   if (!effectiveAttempt) {
@@ -2608,6 +2608,9 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
   const answerMap = new Map(
     (attemptData?.answers || []).map((answer) => [answer.questionId, answer])
   );
+  const attemptQuestions = attemptData?.questions?.length
+    ? attemptData.questions
+    : lessonData.questions;
 
   return `
     <div class="attempt-header">
@@ -2623,7 +2626,7 @@ function attemptFormTemplate(lessonData, attempt, attemptData) {
 
     ${attempt.attemptNumber > 1 ? '<p class="success-note">Reveja as respostas disponíveis e carregue os documentos corretos para este novo envio.</p>' : ''}
     <div class="question-list">
-      ${lessonData.questions.map((question) => {
+      ${attemptQuestions.map((question) => {
         return questionTemplate(question, answerMap.get(question.questionId));
       }).join('')}
     </div>
@@ -2698,7 +2701,7 @@ function questionTemplate(question, answer = null) {
     <article class="question-card" data-question="${escapeHtml(question.questionId)}">
       <div class="question-number">Questão ${question.questionOrder}</div>
       <h3>${escapeHtml(question.prompt)}</h3>
-      <p class="question-points">${question.points} pontos ${question.isRequired ? ' -  obrigatoria' : ''}</p>
+      <p class="question-points">${question.isRequired ? 'Resposta obrigatória' : 'Resposta opcional'}</p>
       ${field}
       <div class="save-indicator" data-save-indicator="${escapeHtml(question.questionId)}"></div>
     </article>
@@ -2737,7 +2740,45 @@ function fileTemplate(file) {
   `;
 }
 
-function reviewStateTemplate(attempt, review) {
+function assessmentFeedbackTemplate(attemptData) {
+  const policy = attemptData?.feedbackPolicy || {};
+  if (!policy.correctAnswersVisible && !policy.explanationsVisible) return '';
+  const answerMap = new Map((attemptData?.answers || []).map((answer) => [answer.questionId, answer]));
+  return `
+    <section class="assessment-feedback" aria-label="Feedback detalhado">
+      <h3>Feedback das questões</h3>
+      <div class="question-list">
+        ${(attemptData?.questions || []).map((question) => {
+          const answer = answerMap.get(question.questionId) || {};
+          const selected = parseSelectedOptions(answer.selectedOptionId);
+          const selectedLabels = (question.options || [])
+            .filter((option) => selected.includes(option.optionId))
+            .map((option) => option.optionText || option.optionLabel);
+          const correctLabels = (question.options || [])
+            .filter((option) => option.isCorrect)
+            .map((option) => option.optionText || option.optionLabel);
+          const submittedAnswer = answer.answerText || selectedLabels.join(', ') || 'Sem resposta';
+          const expectedAnswer = correctLabels.join(', ') || question.correctAnswer || '';
+          return `
+            <article class="question-card">
+              <div class="question-number">Questão ${question.questionOrder}</div>
+              <h4>${escapeHtml(question.prompt)}</h4>
+              <p><strong>A sua resposta:</strong> ${escapeHtml(submittedAnswer)}</p>
+              ${policy.correctAnswersVisible && expectedAnswer
+                ? `<p><strong>Resposta correta:</strong> ${escapeHtml(expectedAnswer)}</p>`
+                : ''}
+              ${policy.explanationsVisible && question.explanation
+                ? `<p><strong>Explicação:</strong> ${escapeHtml(question.explanation)}</p>`
+                : ''}
+            </article>
+          `;
+        }).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function reviewStateTemplate(attempt, review, attemptData = null) {
   if (!attempt) {
     return `
       <div class="completion-card">
@@ -2766,6 +2807,7 @@ function reviewStateTemplate(attempt, review) {
       ${review?.correctionDeadline
         ? `<p>Prazo para correção: <strong>${formatDate(review.correctionDeadline)}</strong></p>`
         : ''}
+      ${assessmentFeedbackTemplate(attemptData)}
       ${retry}
       <button class="button button-secondary" id="backReview">Voltar ao curso</button>
     </div>
@@ -3047,7 +3089,8 @@ async function submitAttempt(event) {
 
     document.querySelector('#assessmentArea').innerHTML = reviewStateTemplate(
       state.attempt,
-      state.attemptData.latestReview
+      state.attemptData.latestReview,
+      state.attemptData
     );
     bindAssessmentEvents();
     showToast('Atividade submetida com sucesso.', 'success');
@@ -3099,7 +3142,8 @@ function startStatusPoll(attemptId) {
 
         document.querySelector('#assessmentArea').innerHTML = reviewStateTemplate(
           data.attempt,
-          data.latestReview
+          data.latestReview,
+          data
         );
         bindAssessmentEvents();
         reportHeight();
@@ -3118,7 +3162,8 @@ async function refreshExpiredAttempt() {
 
     document.querySelector('#assessmentArea').innerHTML = reviewStateTemplate(
       data.attempt,
-      data.latestReview
+      data.latestReview,
+      data
     );
     bindAssessmentEvents();
     reportHeight();
@@ -3995,7 +4040,7 @@ function showReviewDialog(attemptData) {
   overlay.innerHTML = `
     <div class="dialog-card">
       <button class="dialog-close" type="button" aria-label="Fechar">A—</button>
-      ${reviewStateTemplate(attemptData.attempt, attemptData.latestReview)}
+      ${reviewStateTemplate(attemptData.attempt, attemptData.latestReview, attemptData)}
     </div>
   `;
 

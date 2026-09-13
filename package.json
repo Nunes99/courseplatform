@@ -9,6 +9,7 @@
   "scripts": {
     "qa:certificates": "node scripts/verify_certificate_browser.cjs",
     "qa:password-recovery": "node scripts/verify_password_recovery_browser.cjs",
+    "qa:assessment-feedback": "node scripts/verify_assessment_feedback.cjs",
     "qa:submission-retry": "node scripts/verify_submission_retry.cjs",
     "qa:participation-policy": "node scripts/verify_participation_policy.cjs"
   },

@@ -6436,6 +6436,9 @@ function showLessonDialog(lessonId = '') {
     individualMinutes: 0,
     submissionDurationMinutes: 180,
     passingScore: state.courseStructure?.course?.passingScore || 60,
+    feedbackReleaseMode: 'AFTER_REVIEW',
+    showCorrectAnswers: false,
+    showExplanations: false,
     prerequisiteLessonId: '',
     status: 'ACTIVE'
   };
@@ -6455,7 +6458,7 @@ function showLessonDialog(lessonId = '') {
             <input type="number" name="lessonNumber" min="1" value="${escapeHtml(lesson.lessonNumber || 1)}" required>
           </label>
           <label>
-            <span>Nota minima</span>
+            <span>Nota mínima</span>
             <input type="number" name="passingScore" min="0" max="100" value="${escapeHtml(lesson.passingScore || 60)}">
           </label>
           <label>
@@ -6484,7 +6487,7 @@ function showLessonDialog(lessonId = '') {
             <input type="number" name="theoryMinutes" min="0" value="${escapeHtml(lesson.theoryMinutes || 0)}">
           </label>
           <label>
-            <span>Exercicios (min)</span>
+            <span>Exercícios (min)</span>
             <input type="number" name="exerciseMinutes" min="0" value="${escapeHtml(lesson.exerciseMinutes || 0)}">
           </label>
           <label>
@@ -6498,15 +6501,36 @@ function showLessonDialog(lessonId = '') {
           </label>
         </div>
         <label>
-          <span>Módulo pre-requisito</span>
+          <span>Módulo pré-requisito</span>
           <select name="prerequisiteLessonId">
-            ${studentFilterOption('', 'Sem pre-requisito', lesson.prerequisiteLessonId || '')}
+            ${studentFilterOption('', 'Sem pré-requisito', lesson.prerequisiteLessonId || '')}
             ${lessons
               .filter((item) => item.lesson?.lessonId !== lesson.lessonId)
               .map((item) => studentFilterOption(item.lesson.lessonId, `Aula ${item.lesson.lessonNumber} - ${item.lesson.title}`, lesson.prerequisiteLessonId || ''))
               .join('')}
           </select>
         </label>
+        <fieldset class="form-section">
+          <legend>Divulgação do feedback</legend>
+          <div class="course-form-grid">
+            <label>
+              <span>Disponibilizar gabarito</span>
+              <select name="feedbackReleaseMode">
+                ${studentFilterOption('NEVER', 'Nunca', lesson.feedbackReleaseMode || 'AFTER_REVIEW')}
+                ${studentFilterOption('AFTER_SUBMISSION', 'Após a submissão', lesson.feedbackReleaseMode || 'AFTER_REVIEW')}
+                ${studentFilterOption('AFTER_REVIEW', 'Após a revisão', lesson.feedbackReleaseMode || 'AFTER_REVIEW')}
+              </select>
+            </label>
+            <label class="checkbox-field">
+              <input type="checkbox" name="showCorrectAnswers" ${lesson.showCorrectAnswers ? 'checked' : ''}>
+              <span>Mostrar respostas corretas</span>
+            </label>
+            <label class="checkbox-field">
+              <input type="checkbox" name="showExplanations" ${lesson.showExplanations ? 'checked' : ''}>
+              <span>Mostrar explicações</span>
+            </label>
+          </div>
+        </fieldset>
         <div class="dialog-actions">
           ${lessonId ? '<button class="button button-danger" type="button" data-delete-dialog-lesson>Eliminar módulo</button>' : ''}
           <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
@@ -6535,6 +6559,8 @@ function showLessonDialog(lessonId = '') {
     ['lessonNumber', 'passingScore', 'theoryMinutes', 'exerciseMinutes', 'individualMinutes', 'submissionDurationMinutes'].forEach((field) => {
       values[field] = Number(values[field] || 0);
     });
+    values.showCorrectAnswers = form.elements.showCorrectAnswers.checked;
+    values.showExplanations = form.elements.showExplanations.checked;
 
     setBusy(button, true, 'A guardar...');
     try {

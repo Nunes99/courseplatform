@@ -11,21 +11,49 @@ NOW = datetime(2026, 9, 11, 12, tzinfo=timezone.utc)
 
 
 class Result:
-    def __init__(self, row=None):
+    def __init__(self, row=None, rows=None):
         self.row = copy.deepcopy(row)
+        self.rows = copy.deepcopy(rows if rows is not None else ([] if row is None else [row]))
 
     def fetchone(self):
         return self.row
 
+    def fetchall(self):
+        return self.rows
+
 
 class SubmissionDatabase:
     def __init__(self):
+        snapshot = {
+            "version": 1,
+            "feedbackPolicy": {
+                "releaseMode": "AFTER_REVIEW",
+                "showCorrectAnswers": False,
+                "showExplanations": False,
+            },
+            "questions": [{
+                "question_id": "Q1",
+                "lesson_id": "L1",
+                "question_order": 1,
+                "question_type": "LONG_TEXT",
+                "prompt": "Descreva a solução.",
+                "points": 10,
+                "correct_answer": "",
+                "explanation": "",
+                "is_required": True,
+                "status": "ACTIVE",
+                "options": [],
+            }],
+        }
+        self.snapshot = snapshot
         self.progress = dict(progress_id="P1", student_id="S1", lesson_id="L1", status="TIME_EXCEEDED",
                              evaluation_status="TIME_EXCEEDED", content_access_status="AVAILABLE", attempt_count=1,
-                             submission_duration_minutes=180)
+                             submission_duration_minutes=180, feedback_release_mode="AFTER_REVIEW",
+                             show_correct_answers=False, show_explanations=False)
         self.attempts = {"A1": dict(attempt_id="A1", progress_id="P1", student_id="S1", lesson_id="L1",
                                    attempt_number=1, status="TIME_EXCEEDED", retry_authorized=False,
-                                   deadline_at=NOW - timedelta(days=1), score=None)}
+                                   deadline_at=NOW - timedelta(days=1), score=None,
+                                   assessment_snapshot_json=snapshot)}
         self.reviews = []
         self.answers = {"A1": [dict(question_id="Q1", answer_text="Resposta anterior", selected_option_id="")]}
         self.files = {"F1": dict(file_id="F1", attempt_id="A1", student_id="S1", status="ACTIVE", file_name="errado.pdf")}
@@ -54,8 +82,12 @@ class SubmissionDatabase:
             return Result(rows[-1] if rows else None)
         if q.startswith("select title from"):
             return Result({"title": "Trabalho prático"})
-        if q.startswith("select question_id"):
-            return Result({"question_id": "Q1"} if params == ("Q1", "L1") else None)
+        if q.startswith("select question_id, lesson_id"):
+            return Result(rows=self.snapshot["questions"])
+        if q.startswith("select option_id, question_id"):
+            return Result(rows=[])
+        if q.startswith("select * from courseplatform.answers"):
+            return Result(rows=self.answers.get(params[0], []))
         if q.startswith("select attempt_id from courseplatform.files"):
             file = self.files.get(params[0])
             return Result(file if file and file["student_id"] == params[1] else None)
@@ -66,19 +98,29 @@ class SubmissionDatabase:
             return Result(row)
         if q.startswith("insert into courseplatform.attempts"):
             row = dict(zip(("attempt_id", "progress_id", "student_id", "lesson_id", "attempt_number", "started_at",
-                            "deadline_at", "created_at", "updated_at"), params))
+                            "deadline_at", "assessment_snapshot_json", "created_at", "updated_at"), params))
+            row["assessment_snapshot_json"] = actions.parse_assessment_snapshot(row["assessment_snapshot_json"])
             row.update(status="IN_PROGRESS", retry_authorized=False)
             self.attempts[row["attempt_id"]] = row
             return Result(row)
         if q.startswith("update courseplatform.attempts"):
             row = self.attempts[params[-1]]
-            if "score = %s" in q:
+            if "objective_score = %s" in q:
+                row.update(status=params[0], submitted_at=params[1], objective_score=params[2])
+            elif "score = %s" in q:
                 row.update(status=params[0], score=params[1], review_comments=params[4], retry_authorized=params[5])
-            elif "submitted_at = %s" in q:
-                row.update(status=params[0], submitted_at=params[1])
             else:
                 row["retry_authorized"] = False
             return Result(row)
+        if q.startswith("update courseplatform.answers set submitted_at"):
+            for answer in self.answers.get(params[1], []):
+                answer["submitted_at"] = params[0]
+            return Result()
+        if q.startswith("update courseplatform.answers set is_correct"):
+            for answer in self.answers.get(params[-1], []):
+                if answer.get("answer_id") == params[3]:
+                    answer.update(is_correct=params[0], awarded_points=params[1], submitted_at=params[2])
+            return Result()
         if q.startswith("update courseplatform.lesson_progress"):
             if "status = 'in_progress'" in q:
                 self.progress.update(status="IN_PROGRESS", evaluation_status="IN_PROGRESS", attempt_count=params[1])

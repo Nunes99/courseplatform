@@ -106,6 +106,7 @@ Os scripts de browser executam as páginas reais com respostas sintéticas e int
 ```powershell
 $env:PREVIEW_URL = "http://127.0.0.1:8765"
 node scripts/verify_certificate_browser.cjs
+node scripts/verify_assessment_feedback.cjs
 node scripts/verify_submission_retry.cjs
 node scripts/verify_participation_policy.cjs
 Remove-Item Env:PREVIEW_URL

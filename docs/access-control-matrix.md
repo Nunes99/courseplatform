@@ -30,8 +30,11 @@ Papéis administrativos atuais: `REVIEWER`, `ADMIN` e `OWNER`. O `OWNER` é o ú
 | Estado/matrícula do estudante | Não | Ler próprio | Leitura no âmbito | Gestão | Gestão |
 | Cursos públicos | Apenas publicados | Apenas atribuídos/publicados | Leitura | Gestão | Gestão |
 | Estrutura e módulos | Apenas conteúdo público | Conforme matrícula/acesso | Leitura | Gestão | Gestão |
+| Enunciado e opções sem gabarito | Não | Próprios, conforme matrícula/acesso | Leitura no âmbito | Gestão | Gestão |
 | Gabarito antes da entrega | Não | Não | No âmbito de revisão | Sim | Sim |
 | Gabarito após a entrega | Não | Conforme política de feedback | No âmbito de revisão | Sim | Sim |
+| Pontuação interna por questão | Não | Não | No âmbito de revisão | Sim | Sim |
+| Snapshot histórico da avaliação | Não | Apenas representação filtrada da própria tentativa | Leitura integral no âmbito | Leitura integral | Leitura integral |
 | Progresso e notas | Não | Próprios | Leitura/atualização no âmbito | Gestão | Gestão |
 | Iniciar tentativa/responder | Não | Próprio e dentro das regras | Não | Não | Não |
 | Upload/remover trabalho | Não | Própria tentativa editável | Não | Gestão pela revisão, se prevista | Gestão pela revisão, se prevista |
@@ -74,7 +77,7 @@ Os handlers usam `student_context` ou `student_context_with_conn`. Ações princ
 - Certificados: `getMyCertificate`, `getMyCertifications`, pedidos, pagamento e registo de download.
 - Comunicação: notificações, Push, Telegram e chat.
 
-`getLesson` não cumpre ainda a política da matriz porque os serializadores incluem campos do gabarito. Esta discrepância é o achado A02.
+`getLesson` usa o contrato de estudante e omite gabarito, explicações, pesos e marcas de correção. `getAttemptStatus` aplica a política congelada na tentativa e só divulga os campos autorizados no momento configurado. A correção da Etapa 2 está documentada em [assessment-feedback-policy.md](assessment-feedback-policy.md).
 
 ### Todos os papéis de staff ativos
 

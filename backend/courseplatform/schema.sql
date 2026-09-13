@@ -117,6 +117,10 @@ create table if not exists courseplatform.lessons (
   individual_minutes numeric default 0,
   submission_duration_minutes integer,
   passing_score numeric default 60,
+  feedback_release_mode text not null default 'AFTER_REVIEW'
+    check (feedback_release_mode in ('NEVER', 'AFTER_SUBMISSION', 'AFTER_REVIEW')),
+  show_correct_answers boolean not null default false,
+  show_explanations boolean not null default false,
   prerequisite_lesson_id text,
   status text default 'ACTIVE',
   created_at timestamptz,
@@ -333,6 +337,8 @@ create table if not exists courseplatform.attempts (
   submitted_at timestamptz,
   status text default 'IN_PROGRESS',
   score numeric,
+  objective_score numeric,
+  assessment_snapshot_json jsonb not null default '{}'::jsonb,
   reviewer_id text,
   reviewed_at timestamptz,
   review_comments text,
@@ -344,7 +350,7 @@ create table if not exists courseplatform.attempts (
 create table if not exists courseplatform.answers (
   answer_id text primary key,
   attempt_id text not null references courseplatform.attempts(attempt_id) on delete cascade,
-  question_id text not null references courseplatform.questions(question_id) on delete cascade,
+  question_id text not null references courseplatform.questions(question_id) on delete restrict,
   answer_text text,
   selected_option_id text,
   is_correct boolean,
