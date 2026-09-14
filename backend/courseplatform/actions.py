@@ -36,6 +36,16 @@ from .security import (
     session_expiry,
     utc_now,
 )
+from .storage import (
+    StorageError,
+    decode_legacy_data_url,
+    download_private_object,
+    legacy_external_url,
+    storage_service_headers,
+    storage_object_path,
+    upload_private_object,
+    validate_upload,
+)
 
 
 class ApiError(Exception):
@@ -100,6 +110,10 @@ def database_api_error(error: Exception) -> ApiError:
         "A base de dados não está disponível neste momento.",
         {"errorType": error_name},
     )
+
+
+def storage_api_error(error: StorageError) -> ApiError:
+    return ApiError(error.code, error.message)
 
 
 def as_bool(value: Any) -> bool:
@@ -751,6 +765,10 @@ def selected_option_storage(value: Any, question_type: str) -> str:
 def public_file(row: dict[str, Any] | None):
     if not row:
         return None
+    content_available = bool(
+        (row.get("storage_status") == "READY" and row.get("storage_bucket") and row.get("storage_path"))
+        or str_value(row.get("drive_url"))
+    )
     return {
         "fileId": row["file_id"],
         "attemptId": row.get("attempt_id"),
@@ -760,7 +778,9 @@ def public_file(row: dict[str, Any] | None):
         "mimeType": row.get("mime_type"),
         "sizeBytes": int(row.get("size_bytes") or 0),
         "driveFileId": row.get("drive_file_id"),
-        "driveUrl": row.get("drive_url"),
+        "driveUrl": "",
+        "contentUrl": f"/api/files/{row['file_id']}/content" if content_available else "",
+        "storageStatus": row.get("storage_status") or ("LEGACY" if row.get("drive_url") else None),
         "uploadedAt": iso(row.get("uploaded_at")),
         "status": row.get("status"),
     }
@@ -2766,6 +2786,14 @@ def public_certificate(row: dict[str, Any] | None):
 def public_certificate_request(row: dict[str, Any] | None):
     if not row:
         return None
+    receipt_available = bool(
+        (
+            row.get("payment_receipt_storage_status") == "READY"
+            and row.get("payment_receipt_bucket")
+            and row.get("payment_receipt_path")
+        )
+        or str_value(row.get("payment_receipt_url"))
+    )
     return {
         "requestId": row["request_id"],
         "studentId": row.get("student_id"),
@@ -2775,8 +2803,14 @@ def public_certificate_request(row: dict[str, Any] | None):
         "status": row.get("status"),
         "surveyAnswers": row.get("survey_answers_json") or {},
         "paymentReceiptName": row.get("payment_receipt_name"),
-        "paymentReceiptUrl": row.get("payment_receipt_url"),
+        "paymentReceiptUrl": (
+            f"/api/certificate-requests/{row['request_id']}/receipt" if receipt_available else ""
+        ),
         "paymentReceiptMimeType": row.get("payment_receipt_mime_type"),
+        "paymentReceiptSizeBytes": int(row.get("payment_receipt_size_bytes") or 0),
+        "paymentReceiptStorageStatus": row.get("payment_receipt_storage_status") or (
+            "LEGACY" if row.get("payment_receipt_url") else None
+        ),
         "submittedAt": iso(row.get("submitted_at")),
         "reviewedBy": row.get("reviewed_by"),
         "reviewedAt": iso(row.get("reviewed_at")),
@@ -3539,7 +3573,8 @@ def normalize_brand_logo_url(value: Any) -> str:
 
 def upload_raster_asset_to_storage(file_bytes: bytes, mime_type: str, object_path: str) -> tuple[bool, str]:
     settings = get_settings()
-    if not settings.supabase_url or not settings.supabase_service_role_key:
+    service_headers = storage_service_headers(settings)
+    if not settings.supabase_url or not service_headers:
         return False, ""
     try:
         request = urllib.request.Request(
@@ -3547,8 +3582,7 @@ def upload_raster_asset_to_storage(file_bytes: bytes, mime_type: str, object_pat
             data=file_bytes,
             method="POST",
             headers={
-                "Authorization": f"Bearer {settings.supabase_service_role_key}",
-                "apikey": settings.supabase_service_role_key,
+                **service_headers,
                 "Content-Type": mime_type,
                 "x-upsert": "true",
             },
@@ -5224,17 +5258,47 @@ def upload_file(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["attemptId", "fileName"])
     prepare_assessment_feature_schema()
-    mime_type = str_value(payload.get("mimeType") or "application/octet-stream")
-    base64_data = str_value(payload.get("base64Data"))
-    drive_url = f"data:{mime_type};base64,{base64_data}" if base64_data else str_value(payload.get("driveUrl"))
+    with connection() as conn:
+        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
+    try:
+        upload = validate_upload(
+            payload.get("base64Data"),
+            payload.get("fileName"),
+            payload.get("mimeType"),
+            purpose="SUBMISSION",
+        )
+    except StorageError as error:
+        raise storage_api_error(error) from error
+
+    settings = get_settings()
+    object_path = storage_object_path("submission", student["student_id"], attempt["attempt_id"], upload)
+    upload_key = hashlib.sha256(
+        f"{student['student_id']}:{attempt['attempt_id']}:{upload.checksum_sha256}".encode("utf-8")
+    ).hexdigest()
+    try:
+        upload_private_object(settings.supabase_submission_bucket, object_path, upload)
+    except StorageError as error:
+        raise storage_api_error(error) from error
+
     with connection() as conn:
         attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
         row = conn.execute(
             """
             insert into courseplatform.files
               (file_id, attempt_id, student_id, lesson_id, file_name, mime_type,
-               size_bytes, drive_file_id, drive_url, uploaded_at, status)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), 'ACTIVE')
+               size_bytes, drive_file_id, drive_url, storage_bucket, storage_path,
+               storage_checksum_sha256, storage_status, storage_upload_key, uploaded_at, status)
+            values (%s, %s, %s, %s, %s, %s, %s, '', '', %s, %s, %s, 'READY', %s, now(), 'ACTIVE')
+            on conflict (storage_upload_key) where storage_upload_key is not null do update
+            set file_name = excluded.file_name,
+                mime_type = excluded.mime_type,
+                size_bytes = excluded.size_bytes,
+                storage_bucket = excluded.storage_bucket,
+                storage_path = excluded.storage_path,
+                storage_checksum_sha256 = excluded.storage_checksum_sha256,
+                storage_status = 'READY',
+                uploaded_at = now(),
+                status = 'ACTIVE'
             returning *
             """,
             (
@@ -5242,13 +5306,24 @@ def upload_file(payload: dict[str, Any]):
                 attempt["attempt_id"],
                 student["student_id"],
                 attempt["lesson_id"],
-                str_value(payload.get("fileName")),
-                mime_type,
-                len(base64_data),
-                "",
-                drive_url,
+                upload.file_name,
+                upload.mime_type,
+                upload.size_bytes,
+                settings.supabase_submission_bucket,
+                object_path,
+                upload.checksum_sha256,
+                upload_key,
             ),
         ).fetchone()
+        audit(
+            conn,
+            "STUDENT",
+            student["student_id"],
+            "SUBMISSION_FILE_UPLOADED",
+            "FILE",
+            row["file_id"],
+            {"attemptId": attempt["attempt_id"], "sizeBytes": upload.size_bytes, "mimeType": upload.mime_type},
+        )
         conn.commit()
     return success({"file": public_file(row)})
 
@@ -5482,11 +5557,34 @@ def request_professional_certificate(payload: dict[str, Any]):
 def submit_professional_certificate_payment(payload: dict[str, Any]):
     _, student = student_context(payload)
     require_fields(payload, ["requestId", "receiptFileName"])
-    receipt_mime = str_value(payload.get("receiptMimeType") or "application/octet-stream")
-    receipt_base64 = str_value(payload.get("receiptBase64"))
-    receipt_url = f"data:{receipt_mime};base64,{receipt_base64}" if receipt_base64 else str_value(payload.get("receiptUrl"))
-    if not receipt_url:
-        raise ApiError("RECEIPT_REQUIRED", "Carregue o comprovativo de pagamento.")
+    request = fetch_one(
+        """
+        select * from courseplatform.certificate_requests
+        where request_id = %s and student_id = %s
+          and request_type = 'PROFESSIONAL'
+          and status in ('REQUESTED', 'PAYMENT_SUBMITTED')
+          and certificate_id is null
+        """,
+        (payload["requestId"], student["student_id"]),
+    )
+    if not request:
+        raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
+    try:
+        upload = validate_upload(
+            payload.get("receiptBase64"),
+            payload.get("receiptFileName"),
+            payload.get("receiptMimeType"),
+            purpose="PAYMENT_RECEIPT",
+        )
+    except StorageError as error:
+        raise storage_api_error(error) from error
+    settings = get_settings()
+    object_path = storage_object_path("payment-receipt", student["student_id"], request["request_id"], upload)
+    try:
+        upload_private_object(settings.supabase_payment_receipt_bucket, object_path, upload)
+    except StorageError as error:
+        raise storage_api_error(error) from error
+
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         request = conn.execute(
@@ -5494,8 +5592,13 @@ def submit_professional_certificate_payment(payload: dict[str, Any]):
             update courseplatform.certificate_requests
             set status = 'PAYMENT_SUBMITTED',
                 payment_receipt_name = %s,
-                payment_receipt_url = %s,
+                payment_receipt_url = '',
                 payment_receipt_mime_type = %s,
+                payment_receipt_bucket = %s,
+                payment_receipt_path = %s,
+                payment_receipt_checksum_sha256 = %s,
+                payment_receipt_size_bytes = %s,
+                payment_receipt_storage_status = 'READY',
                 submitted_at = now(),
                 updated_at = now()
             where request_id = %s and student_id = %s
@@ -5505,17 +5608,135 @@ def submit_professional_certificate_payment(payload: dict[str, Any]):
             returning *
             """,
             (
-                str_value(payload.get("receiptFileName")),
-                receipt_url,
-                receipt_mime,
+                upload.file_name,
+                upload.mime_type,
+                settings.supabase_payment_receipt_bucket,
+                object_path,
+                upload.checksum_sha256,
+                upload.size_bytes,
                 payload["requestId"],
                 student["student_id"],
             ),
         ).fetchone()
+        if request:
+            audit(
+                conn,
+                "STUDENT",
+                student["student_id"],
+                "PAYMENT_RECEIPT_UPLOADED",
+                "CERTIFICATE_REQUEST",
+                request["request_id"],
+                {"sizeBytes": upload.size_bytes, "mimeType": upload.mime_type},
+            )
         conn.commit()
     if not request:
         raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
     return success({"request": public_certificate_request(request)})
+
+
+def _private_content_payload(
+    row: dict[str, Any],
+    *,
+    bucket_field: str,
+    path_field: str,
+    checksum_field: str,
+    status_field: str,
+    legacy_url_field: str,
+    file_name_field: str,
+    mime_type_field: str,
+    size_field: str,
+) -> dict[str, Any]:
+    settings = get_settings()
+    legacy_url = str_value(row.get(legacy_url_field))
+    if row.get(status_field) == "READY" and row.get(bucket_field) and row.get(path_field):
+        try:
+            content = download_private_object(
+                row[bucket_field],
+                row[path_field],
+                settings.storage_legacy_read_max_bytes,
+            )
+        except StorageError as error:
+            raise storage_api_error(error) from error
+        expected_checksum = str_value(row.get(checksum_field))
+        if expected_checksum and not hmac.compare_digest(hashlib.sha256(content).hexdigest(), expected_checksum):
+            raise ApiError("FILE_INTEGRITY_ERROR", "A integridade do ficheiro armazenado não pôde ser confirmada.")
+        return {
+            "content": content,
+            "fileName": row.get(file_name_field) or "ficheiro",
+            "mimeType": row.get(mime_type_field) or "application/octet-stream",
+        }
+    external_url = legacy_external_url(legacy_url)
+    if external_url:
+        return {"redirectUrl": external_url, "fileName": row.get(file_name_field) or "ficheiro"}
+    try:
+        content, legacy_mime = decode_legacy_data_url(legacy_url, settings.storage_legacy_read_max_bytes)
+    except StorageError as error:
+        raise storage_api_error(error) from error
+    return {
+        "content": content,
+        "fileName": row.get(file_name_field) or "ficheiro",
+        "mimeType": row.get(mime_type_field) or legacy_mime or "application/octet-stream",
+        "sizeBytes": int(row.get(size_field) or len(content)),
+    }
+
+
+def submission_file_download_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    require_fields(payload, ["fileId"])
+    if str_value(payload.get("adminToken")):
+        admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+        row = fetch_one(
+            "select * from courseplatform.files where file_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'",
+            (payload["fileId"],),
+        )
+    else:
+        _, student = student_context(payload)
+        row = fetch_one(
+            """select * from courseplatform.files
+               where file_id = %s and student_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'""",
+            (payload["fileId"], student["student_id"]),
+        )
+    if not row:
+        raise ApiError("FILE_NOT_FOUND", "Ficheiro não encontrado.")
+    return _private_content_payload(
+        row,
+        bucket_field="storage_bucket",
+        path_field="storage_path",
+        checksum_field="storage_checksum_sha256",
+        status_field="storage_status",
+        legacy_url_field="drive_url",
+        file_name_field="file_name",
+        mime_type_field="mime_type",
+        size_field="size_bytes",
+    )
+
+
+def certificate_receipt_download_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    require_fields(payload, ["requestId"])
+    if str_value(payload.get("adminToken")):
+        admin_context(payload, {"OWNER", "ADMIN"})
+        row = fetch_one(
+            "select * from courseplatform.certificate_requests where request_id = %s",
+            (payload["requestId"],),
+        )
+    else:
+        _, student = student_context(payload)
+        row = fetch_one(
+            "select * from courseplatform.certificate_requests where request_id = %s and student_id = %s",
+            (payload["requestId"], student["student_id"]),
+        )
+    if not row or not (row.get("payment_receipt_path") or row.get("payment_receipt_url")):
+        raise ApiError("PAYMENT_RECEIPT_NOT_FOUND", "Comprovativo de pagamento não encontrado.")
+    return _private_content_payload(
+        row,
+        bucket_field="payment_receipt_bucket",
+        path_field="payment_receipt_path",
+        checksum_field="payment_receipt_checksum_sha256",
+        status_field="payment_receipt_storage_status",
+        legacy_url_field="payment_receipt_url",
+        file_name_field="payment_receipt_name",
+        mime_type_field="payment_receipt_mime_type",
+        size_field="payment_receipt_size_bytes",
+    )
 
 
 def record_certificate_download(payload: dict[str, Any]):

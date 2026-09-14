@@ -3,21 +3,24 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from .actions import (
     ApiError,
     admin_certificate_pdf_payload,
     certificate_pdf_payload,
+    certificate_receipt_download_payload,
     dispatch,
     dispatch_notification_deliveries,
     dispatch_student_password_reset,
     public_error,
     record_certificate_download,
+    submission_file_download_payload,
 )
 from .certificate_pdf import CertificateLayoutError, build_course_certificate_pdf
 from .config import get_settings
+from .storage import safe_download_name
 
 settings = get_settings()
 STATIC_DIRS = [
@@ -160,6 +163,81 @@ async def handle_certificate_pdf(certificate_id: str, request: Request):
 
 
 app.add_api_route("/api/certificates/{certificate_id}/pdf", handle_certificate_pdf, methods=["GET"])
+
+
+def private_content_response(result: dict, force_download: bool = False):
+    if result.get("redirectUrl"):
+        return RedirectResponse(
+            result["redirectUrl"],
+            status_code=307,
+            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+        )
+    disposition = "attachment" if force_download else "inline"
+    filename = safe_download_name(result.get("fileName"))
+    return Response(
+        content=result.get("content") or b"",
+        media_type=result.get("mimeType") or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def private_content_error_status(error: Exception) -> int:
+    if not isinstance(error, ApiError):
+        return 500
+    if error.code in {
+        "SESSION_REQUIRED",
+        "INVALID_SESSION",
+        "SESSION_EXPIRED",
+        "ADMIN_SESSION_REQUIRED",
+        "INVALID_ADMIN_SESSION",
+        "STUDENT_SESSION_REQUIRED",
+    }:
+        return 401
+    if error.code in {"FILE_NOT_FOUND", "PAYMENT_RECEIPT_NOT_FOUND"}:
+        return 404
+    if error.code in {
+        "ADMIN_FORBIDDEN", "PERMISSION_DENIED", "FORBIDDEN", "ADMIN_NOT_ACTIVE", "STUDENT_NOT_ACTIVE"
+    }:
+        return 403
+    return 400
+
+
+async def handle_submission_file(file_id: str, request: Request):
+    payload = {
+        "fileId": file_id,
+        "sessionToken": request.headers.get("x-session-token") or "",
+        "adminToken": request.headers.get("x-admin-token") or "",
+    }
+    try:
+        result = await run_in_threadpool(submission_file_download_payload, payload)
+        return private_content_response(result, request.query_params.get("download") == "1")
+    except Exception as error:
+        return JSONResponse(public_error(error), status_code=private_content_error_status(error))
+
+
+async def handle_certificate_receipt(request_id: str, request: Request):
+    payload = {
+        "requestId": request_id,
+        "sessionToken": request.headers.get("x-session-token") or "",
+        "adminToken": request.headers.get("x-admin-token") or "",
+    }
+    try:
+        result = await run_in_threadpool(certificate_receipt_download_payload, payload)
+        return private_content_response(result, request.query_params.get("download") == "1")
+    except Exception as error:
+        return JSONResponse(public_error(error), status_code=private_content_error_status(error))
+
+
+app.add_api_route("/api/files/{file_id}/content", handle_submission_file, methods=["GET"])
+app.add_api_route(
+    "/api/certificate-requests/{request_id}/receipt",
+    handle_certificate_receipt,
+    methods=["GET"],
+)
 
 
 def static_file_response(raw_path: str):

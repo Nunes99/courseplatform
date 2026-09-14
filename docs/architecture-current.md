@@ -41,6 +41,8 @@ O sistema é um monólito: frontend estático, API e regras de negócio estão n
 - `GET /`, `GET /api` e `GET /api/index` chamam o dispatcher. Sem `action` na raiz, `/` entrega `index.html`; nas rotas de API, o action padrão é `health`.
 - `POST /`, `POST /api` e `POST /api/index` recebem JSON com `action` e respetivo payload.
 - `GET /api/certificates/{certificate_id}/pdf` gera o PDF. Aceita sessão de estudante ou sessão administrativa nos headers/query params tratados pela rota.
+- `GET /api/files/{file_id}/content` entrega trabalhos após validar a sessão e a propriedade ou papel administrativo.
+- `GET /api/certificate-requests/{request_id}/receipt` entrega comprovativos após validar estudante proprietário ou OWNER/ADMIN.
 - `GET /{static_path:path}` entrega ficheiros estáticos e aliases `/admin`, `/verify` e `/connection-test`.
 
 O backend procura assets primeiro em `public/` e depois em `backend/courseplatform/static/`. No deploy estático do Vercel, `public/` também é publicado diretamente.
@@ -187,9 +189,12 @@ de consulta e não são executados durante pedidos.
 
 ### Storage
 
-O backend usa `SUPABASE_SERVICE_ROLE_KEY` para `POST /storage/v1/object/{bucket}/{path}` em uploads administrativos de imagens de certificados e branding. O bucket padrão é configurável por `SUPABASE_CERTIFICATE_BUCKET`.
+O backend usa `SUPABASE_SECRET_KEY` exclusivamente no servidor, mantendo
+`SUPABASE_SERVICE_ROLE_KEY` apenas como alternativa legada. Assets administrativos
+usam `SUPABASE_CERTIFICATE_BUCKET`; trabalhos e comprovativos novos usam
+`SUPABASE_SUBMISSION_BUCKET` e `SUPABASE_PAYMENT_RECEIPT_BUCKET`.
 
-Não há criação de bucket ou policies de Storage versionadas no repositório. Trabalhos e comprovativos continuam armazenados como data URLs/Base64 no Postgres; por isso Storage ainda não é a fonte de todos os ficheiros.
+A migração `20260914100000_private_submission_storage.sql` cria os buckets privados e acrescenta bucket, caminho, checksum, tamanho e estado aos registos. A API autoriza cada leitura e suporta temporariamente Base64/HTTPS legado. O script `scripts/backfill_private_storage.py` copia os objetos históricos sem apagar a origem; a execução externa permanece pendente.
 
 ### Realtime
 
@@ -301,7 +306,7 @@ Configurações externas de branch protection, Vercel, Supabase, backups e CI n�
 | --- | --- | --- |
 | Estudantes, cursos e progresso | `courseplatform.*` no Postgres | Backend Python aplica a maior parte da autorização |
 | Senhas e sessões | Postgres | Autenticação própria, não Supabase Auth |
-| Trabalhos/comprovativos | Postgres/Base64 ou URL legada | Ainda não migrados para Storage privado |
+| Trabalhos/comprovativos | Storage privado + metadados no Postgres | Base64/URL legada permanece apenas durante o backfill compatível |
 | Assets de certificados | Configuração no Postgres; cópia opcional no Storage | Upload usa service role no servidor |
 | Certificado emitido | `certificates` + snapshot JSON | PDF é gerado a pedido |
 | Notificação interna | `notifications` | Fonte principal do histórico de comunicação |

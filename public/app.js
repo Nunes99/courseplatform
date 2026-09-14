@@ -2726,6 +2726,7 @@ function optionListTemplate(question, selected, inputType) {
 }
 
 function fileTemplate(file) {
+  const contentUrl = file.contentUrl || file.driveUrl || '';
   return `
     <div class="uploaded-file" data-file="${escapeHtml(file.fileId)}">
       <div>
@@ -2733,7 +2734,10 @@ function fileTemplate(file) {
         <span>${escapeHtml(formatBytes(file.sizeBytes))}</span>
       </div>
       <div class="file-actions">
-        <a href="${escapeHtml(file.driveUrl)}" target="_blank" rel="noopener">Abrir</a>
+        <button type="button" data-open-student-file="${escapeHtml(file.fileId)}"
+          data-file-url="${escapeHtml(contentUrl)}" data-file-name="${escapeHtml(file.fileName || 'ficheiro')}">Abrir</button>
+        <button type="button" data-download-student-file="${escapeHtml(file.fileId)}"
+          data-file-url="${escapeHtml(contentUrl)}" data-file-name="${escapeHtml(file.fileName || 'ficheiro')}">Baixar</button>
         <button type="button" data-delete-file="${escapeHtml(file.fileId)}">Eliminar</button>
       </div>
     </div>
@@ -2832,6 +2836,7 @@ function bindAssessmentEvents() {
     location.hash = '#/';
   });
   document.querySelector('#startAttempt')?.addEventListener('click', startAttempt);
+  bindStudentFileEvents();
 
   if (!state.attempt || state.attempt.status !== 'IN_PROGRESS') {
     return;
@@ -2852,6 +2857,52 @@ function bindAssessmentEvents() {
   document.querySelector('#driveUploadForm')?.addEventListener('submit', uploadDriveImage);
   document.querySelector('#submitAttempt')?.addEventListener('click', submitAttempt);
   bindDeleteFileEvents();
+}
+
+function bindStudentFileEvents() {
+  root.querySelectorAll('[data-open-student-file], [data-download-student-file]').forEach((button) => {
+    button.addEventListener('click', () => openStudentFile(
+      button,
+      Boolean(button.dataset.downloadStudentFile)
+    ));
+  });
+}
+
+async function openStudentFile(button, download) {
+  const fileId = button.dataset.openStudentFile || button.dataset.downloadStudentFile;
+  const externalUrl = button.dataset.fileUrl || '';
+  const fileName = button.dataset.fileName || 'ficheiro';
+  if (/^https:\/\//i.test(externalUrl)) {
+    window.open(externalUrl, '_blank', 'noopener');
+    return;
+  }
+  const previewWindow = download ? null : window.open('', '_blank');
+  if (previewWindow) previewWindow.opener = null;
+  setBusy(button, true, download ? 'A baixar...' : 'A abrir...');
+  try {
+    const blob = await api.studentFileContent(fileId, download);
+    openFileBlob(blob, fileName, download, previewWindow);
+  } catch (error) {
+    previewWindow?.close();
+    handleError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function openFileBlob(blob, fileName, download, previewWindow = null) {
+  const objectUrl = URL.createObjectURL(blob);
+  if (download || !previewWindow) {
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } else {
+    previewWindow.location.href = objectUrl;
+  }
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
 }
 
 async function startAttempt(event) {

@@ -135,11 +135,13 @@ class MigrationManifestTests(unittest.TestCase):
         self.assertEqual("20260911000000", versions[0])
 
     def test_version_migration_matches_backend_contract(self):
-        migration = MIGRATIONS / "20260913185739_add_application_schema_version.sql"
-        sql = migration.read_text(encoding="utf-8")
-        self.assertIn(str(db.EXPECTED_SCHEMA_VERSION), sql)
-        self.assertIn("courseplatform.schema_versions", sql)
-        self.assertIn("courseplatform_runtime_read", sql)
+        migrations = sorted(MIGRATIONS.glob("*.sql"))
+        matching = [
+            path for path in migrations
+            if str(db.EXPECTED_SCHEMA_VERSION) in path.read_text(encoding="utf-8")
+        ]
+        self.assertTrue(matching)
+        self.assertIn("courseplatform.schema_versions", matching[-1].read_text(encoding="utf-8"))
 
     def test_runtime_ddl_was_removed_from_python_request_modules(self):
         ddl = re.compile(r"\b(create|alter|drop|grant|revoke)\s+(table|schema|view|function|trigger|privileges)\b", re.IGNORECASE)

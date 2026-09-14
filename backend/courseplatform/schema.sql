@@ -370,6 +370,11 @@ create table if not exists courseplatform.files (
   size_bytes bigint,
   drive_file_id text,
   drive_url text,
+  storage_bucket text,
+  storage_path text,
+  storage_checksum_sha256 text,
+  storage_status text,
+  storage_upload_key text,
   uploaded_at timestamptz,
   status text not null default 'ACTIVE'
 );
@@ -560,6 +565,11 @@ create table if not exists courseplatform.certificate_requests (
   payment_receipt_name text,
   payment_receipt_url text,
   payment_receipt_mime_type text,
+  payment_receipt_bucket text,
+  payment_receipt_path text,
+  payment_receipt_checksum_sha256 text,
+  payment_receipt_size_bytes bigint,
+  payment_receipt_storage_status text,
   submitted_at timestamptz,
   reviewed_by text,
   reviewed_at timestamptz,

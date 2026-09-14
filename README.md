@@ -199,7 +199,10 @@ Recuperação de estudantes:
 
 Supabase Storage e Realtime:
 
-- `SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_CERTIFICATE_BUCKET`;
+- `SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SECRET_KEY`;
+- `SUPABASE_SERVICE_ROLE_KEY` apenas como compatibilidade legada;
+- `SUPABASE_CERTIFICATE_BUCKET`, `SUPABASE_SUBMISSION_BUCKET`, `SUPABASE_PAYMENT_RECEIPT_BUCKET`;
+- `SUBMISSION_FILE_MAX_BYTES`, `PAYMENT_RECEIPT_MAX_BYTES`, `STORAGE_LEGACY_READ_MAX_BYTES`, `SUPABASE_STORAGE_TIMEOUT_SECONDS`;
 - `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`;
 - `SUPABASE_REALTIME_JWT_SECRET`, `SUPABASE_JWT_SECRET`, `CHAT_REALTIME_ENABLED`, `CHAT_REALTIME_TOKEN_MINUTES`.
 
@@ -221,7 +224,10 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 
 - A autenticação atual é própria: bcrypt no Postgres, tokens opacos e apenas hashes dos tokens em `courseplatform.sessions`. Ainda não usa Supabase Auth.
 - A recuperação do estudante guarda apenas hashes HMAC do email/origem e SHA-256 do token. O token chega ao browser no fragmento do link, é removido imediatamente da barra de endereço e só pode ser consumido uma vez.
-- A API usa ligação direta ao Postgres. A chave `SUPABASE_SERVICE_ROLE_KEY` é usada no backend para uploads administrativos no Storage e nunca deve chegar ao navegador.
+- A API usa ligação direta ao Postgres. A chave `SUPABASE_SECRET_KEY` (ou a
+  `SUPABASE_SERVICE_ROLE_KEY` legada) é usada apenas no backend para objetos
+  privados e nunca deve chegar ao navegador.
+- Trabalhos e comprovativos novos são validados pelo conteúdo e guardados em buckets privados. A migração histórica é descrita em [docs/stage6-private-storage.md](docs/stage6-private-storage.md).
 - Não aplique snapshots SQL diretamente numa base existente. Use apenas a cadeia versionada e o processo de [migrações](docs/database-migrations.md), com backup, revisão do dry-run e autorização.
 - Não use IDs públicos de estudantes como segredo.
 - Consulte [docs/access-control-matrix.md](docs/access-control-matrix.md) antes de acrescentar endpoints ou ações.

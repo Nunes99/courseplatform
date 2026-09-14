@@ -38,6 +38,8 @@ Papéis administrativos atuais: `REVIEWER`, `ADMIN` e `OWNER`. O `OWNER` é o ú
 | Progresso e notas | Não | Próprios | Leitura/atualização no âmbito | Gestão | Gestão |
 | Iniciar tentativa/responder | Não | Próprio e dentro das regras | Não | Não | Não |
 | Upload/remover trabalho | Não | Própria tentativa editável | Não | Gestão pela revisão, se prevista | Gestão pela revisão, se prevista |
+| Abrir/baixar trabalho privado | Não | Apenas próprio | No âmbito de revisão | Gestão | Gestão |
+| Abrir comprovativo de certificado | Não | Apenas próprio | Não | Gestão | Gestão |
 | Ver submissões | Não | Próprias | No âmbito de revisão | Todas no âmbito administrativo | Todas |
 | Rever/reabrir submissão | Não | Não | No âmbito de revisão | Gestão | Gestão |
 | Media/vídeos restritos | Apenas públicos | Conforme email/matrícula/regra | Leitura | Gestão | Gestão |
@@ -121,7 +123,7 @@ Estas regras devem ser testadas no backend:
 - `service_role` tem acesso total às tabelas internas e deve permanecer exclusiva
   do servidor; nas views de compatibilidade será limitada a SELECT.
 - O Realtime tem policy para `authenticated` e valida tópicos com claims assinadas pelo backend.
-- Não existem buckets nem policies de Storage no projeto verificado.
+- A migração da Etapa 6 prepara dois buckets privados sem policies de cliente. O backend usa a service role somente depois de autorizar cada pedido; a aplicação real da migração ainda deve ser confirmada por ambiente.
 - A API liga diretamente ao Postgres e aplica a maioria das regras no Python.
   A migração preparada substitui a ligação administrativa por
   `courseplatform_api`, membro de `courseplatform_runtime`, sem `BYPASSRLS`, DDL

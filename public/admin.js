@@ -2492,6 +2492,7 @@ function renderCertifications() {
   root.querySelectorAll('[data-delete-certificate]').forEach((button) => {
     button.addEventListener('click', () => deleteCertificateFromButton(button));
   });
+  bindAdminProtectedFileEvents(root);
   reportHeight();
 }
 
@@ -2772,9 +2773,11 @@ function adminCertificateActionDataset(certificate) {
 function certificateRequestCardTemplate(request) {
   const isParticipation = request.requestType === 'PARTICIPATION';
   const receipt = request.paymentReceiptUrl ? adminFileCardTemplate({
+    receiptRequestId: request.requestId,
     fileName: request.paymentReceiptName || 'Comprovativo',
-    driveUrl: request.paymentReceiptUrl,
+    contentUrl: request.paymentReceiptUrl,
     mimeType: request.paymentReceiptMimeType,
+    sizeBytes: request.paymentReceiptSizeBytes,
     uploadedAt: request.submittedAt
   }) : `<p class="empty-note">${isParticipation ? 'Certificado de participação gratuito. Não requer comprovativo de pagamento.' : 'Sem comprovativo anexado. Em cursos com emissão livre, o pedido pode ser aprovado sem pagamento.'}</p>`;
   const canReview = request.status === 'PAYMENT_SUBMITTED';
@@ -4125,14 +4128,6 @@ function renderSubmission() {
     </article>
   `).join('');
 
-  const files = data.files.map((file) => `
-    <a class="admin-file-card" href="${escapeHtml(file.driveUrl)}"
-      target="_blank" rel="noopener">
-      <strong>${escapeHtml(file.fileName)}</strong>
-      <span>${formatBytes(file.sizeBytes)} · ${formatDate(file.uploadedAt)}</span>
-    </a>
-  `).join('');
-
   const enhancedAnswers = data.answers.map(answerReviewTemplate).join('');
   const enhancedFiles = data.files.map(adminFileCardTemplate).join('');
 
@@ -4294,6 +4289,7 @@ function renderSubmission() {
   root.querySelectorAll('[data-student-access]').forEach((button) => {
     button.addEventListener('click', () => applySingleStudentAccess(button.dataset.studentAccess));
   });
+  bindAdminProtectedFileEvents(root);
   reportHeight();
 }
 
@@ -4353,8 +4349,22 @@ function optionDisplayText(option = {}) {
 }
 
 function adminFileCardTemplate(file) {
-  const openUrl = fileOpenUrl(file);
-  const downloadUrl = fileDownloadUrl(file);
+  const contentUrl = file.contentUrl || file.driveUrl || '';
+  const externalLegacy = /^https:\/\//i.test(contentUrl);
+  const protectedId = externalLegacy ? '' : (file.fileId || file.receiptRequestId || '');
+  const protectedKind = file.receiptRequestId ? 'receipt' : 'submission';
+  const openUrl = protectedId ? '' : fileOpenUrl(file);
+  const downloadUrl = protectedId ? '' : fileDownloadUrl(file);
+  const protectedActions = protectedId ? `
+    <button class="button button-small button-secondary" type="button"
+      data-open-protected-admin-file="${escapeHtml(protectedId)}"
+      data-protected-file-kind="${protectedKind}"
+      data-file-name="${escapeHtml(file.fileName || 'ficheiro')}">Abrir</button>
+    <button class="button button-small button-primary" type="button"
+      data-download-protected-admin-file="${escapeHtml(protectedId)}"
+      data-protected-file-kind="${protectedKind}"
+      data-file-name="${escapeHtml(file.fileName || 'ficheiro')}">Baixar</button>
+  ` : '';
   const canOpen = Boolean(openUrl);
   const canDownload = Boolean(downloadUrl);
 
@@ -4365,6 +4375,7 @@ function adminFileCardTemplate(file) {
         <span>${formatBytes(file.sizeBytes)} &middot; ${formatDate(file.uploadedAt)}</span>
       </div>
       <div class="admin-file-actions">
+        ${protectedActions}
         ${canOpen ? `
           <a class="button button-small button-secondary" href="${escapeHtml(openUrl)}" target="_blank" rel="noopener">
             Abrir
@@ -4382,11 +4393,11 @@ function adminFileCardTemplate(file) {
 }
 
 function fileOpenUrl(file = {}) {
-  return file.driveUrl || '';
+  return file.contentUrl || file.driveUrl || '';
 }
 
 function fileDownloadUrl(file = {}) {
-  const rawUrl = file.driveUrl || '';
+  const rawUrl = file.contentUrl || file.driveUrl || '';
   if (!rawUrl) return '';
   if (rawUrl.startsWith('data:')) return rawUrl;
   const driveId = file.driveFileId || googleDriveFileId(rawUrl);
@@ -4394,6 +4405,50 @@ function fileDownloadUrl(file = {}) {
     return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(driveId)}`;
   }
   return rawUrl;
+}
+
+function bindAdminProtectedFileEvents(container = root) {
+  container.querySelectorAll('[data-open-protected-admin-file], [data-download-protected-admin-file]').forEach((button) => {
+    button.addEventListener('click', () => openAdminProtectedFile(
+      button,
+      Boolean(button.dataset.downloadProtectedAdminFile)
+    ));
+  });
+}
+
+async function openAdminProtectedFile(button, download) {
+  const resourceId = button.dataset.openProtectedAdminFile || button.dataset.downloadProtectedAdminFile;
+  const kind = button.dataset.protectedFileKind;
+  const fileName = button.dataset.fileName || 'ficheiro';
+  const previewWindow = download ? null : window.open('', '_blank');
+  if (previewWindow) previewWindow.opener = null;
+  setBusy(button, true, download ? 'A baixar...' : 'A abrir...');
+  try {
+    const blob = kind === 'receipt'
+      ? await api.adminCertificateReceipt(resourceId, download)
+      : await api.adminFileContent(resourceId, download);
+    openAdminFileBlob(blob, fileName, download, previewWindow);
+  } catch (error) {
+    previewWindow?.close();
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function openAdminFileBlob(blob, fileName, download, previewWindow = null) {
+  const objectUrl = URL.createObjectURL(blob);
+  if (download || !previewWindow) {
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } else {
+    previewWindow.location.href = objectUrl;
+  }
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
 }
 
 function googleDriveFileId(rawUrl) {

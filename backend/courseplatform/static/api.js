@@ -352,6 +352,12 @@ export class CoursePlatformApi {
     return this.studentRequest('getAttemptStatus', { attemptId });
   }
 
+  studentFileContent(fileId, download = false) {
+    return this.protectedBlob(`/api/files/${encodeURIComponent(fileId)}/content`, {
+      'x-session-token': this.studentToken()
+    }, download);
+  }
+
   certificate(courseId = this.courseId) {
     return this.studentRequest('getMyCertificate', { courseId });
   }
@@ -436,6 +442,37 @@ export class CoursePlatformApi {
       return response.blob();
     }
 
+    return this.parseResponse(response);
+  }
+
+  adminFileContent(fileId, download = false) {
+    return this.protectedBlob(`/api/files/${encodeURIComponent(fileId)}/content`, {
+      'x-admin-token': this.adminToken()
+    }, download);
+  }
+
+  adminCertificateReceipt(requestId, download = false) {
+    return this.protectedBlob(`/api/certificate-requests/${encodeURIComponent(requestId)}/receipt`, {
+      'x-admin-token': this.adminToken()
+    }, download);
+  }
+
+  async protectedBlob(path, headers, download = false) {
+    const apiUrl = new URL(this.apiUrl);
+    const url = new URL(path, apiUrl.origin);
+    if (download) url.searchParams.set('download', '1');
+    let response;
+    try {
+      response = await fetch(url.toString(), {
+        method: 'GET',
+        redirect: 'follow',
+        cache: 'no-store',
+        headers
+      });
+    } catch (error) {
+      throw this.networkError(error);
+    }
+    if (response.ok) return response.blob();
     return this.parseResponse(response);
   }
 

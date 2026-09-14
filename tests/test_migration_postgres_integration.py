@@ -16,6 +16,7 @@ STAGE4_PREFIXES = {
     "20260913123000",
     "20260913124000",
     "20260913185739",
+    "20260914100000",
 }
 RUNTIME_ROLE_VERSION = "20260913131500"
 
@@ -85,6 +86,7 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             create schema storage;
             create table storage.buckets (
               id text primary key,
+              name text not null,
               public boolean not null default false
             );
             create table realtime.messages (
@@ -131,7 +133,7 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             "select version from courseplatform.schema_versions where component = 'application'"
         ).fetchone()[0]
         self.assertEqual(1, count)
-        self.assertEqual(20260913185739, version)
+        self.assertEqual(20260914100000, version)
 
     def test_previous_schema_upgrade_preserves_related_learning_records(self):
         files = migration_files()

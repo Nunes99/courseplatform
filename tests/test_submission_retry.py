@@ -138,7 +138,9 @@ class SubmissionDatabase:
             return Result(row)
         if q.startswith("insert into courseplatform.files"):
             row = dict(zip(("file_id", "attempt_id", "student_id", "lesson_id", "file_name", "mime_type",
-                            "size_bytes", "drive_file_id", "drive_url"), params))
+                            "size_bytes", "storage_bucket", "storage_path", "storage_checksum_sha256",
+                            "storage_upload_key"), params))
+            row.update(drive_file_id="", drive_url="", storage_status="READY")
             row["status"] = "ACTIVE"
             self.files[row["file_id"]] = row
             return Result(row)
@@ -174,6 +176,7 @@ class SubmissionRetryTests(unittest.TestCase):
             "create_student_notification": lambda *a, **k: "N1",
             "dispatch_notification_deliveries": lambda *a: None,
             "audit": lambda *a: None,
+            "upload_private_object": lambda *a: None,
         }
         for name, value in replacements.items():
             self.stack.enter_context(patch.object(actions, name, value))

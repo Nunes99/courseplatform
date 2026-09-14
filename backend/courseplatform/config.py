@@ -181,6 +181,7 @@ class Settings:
         self.admin_recovery_key = os.getenv("ADMIN_RECOVERY_KEY", "").strip()
         self.admin_recovery_key_hash = os.getenv("ADMIN_RECOVERY_KEY_HASH", "").strip()
         self.supabase_url = os.getenv("SUPABASE_URL", os.getenv("NEXT_PUBLIC_SUPABASE_URL", "")).strip().rstrip("/")
+        self.supabase_secret_key = os.getenv("SUPABASE_SECRET_KEY", "").strip()
         self.supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
         self.supabase_publishable_key = (
             os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
@@ -196,6 +197,16 @@ class Settings:
         }
         self.chat_realtime_token_minutes = _int_env("CHAT_REALTIME_TOKEN_MINUTES", 30)
         self.supabase_storage_bucket = os.getenv("SUPABASE_CERTIFICATE_BUCKET", "courseplatform-certificate-assets").strip()
+        self.supabase_submission_bucket = os.getenv(
+            "SUPABASE_SUBMISSION_BUCKET", "courseplatform-submissions"
+        ).strip()
+        self.supabase_payment_receipt_bucket = os.getenv(
+            "SUPABASE_PAYMENT_RECEIPT_BUCKET", "courseplatform-payment-receipts"
+        ).strip()
+        self.submission_file_max_bytes = _int_env("SUBMISSION_FILE_MAX_BYTES", 10 * 1024 * 1024)
+        self.payment_receipt_max_bytes = _int_env("PAYMENT_RECEIPT_MAX_BYTES", 5 * 1024 * 1024)
+        self.storage_legacy_read_max_bytes = _int_env("STORAGE_LEGACY_READ_MAX_BYTES", 25 * 1024 * 1024)
+        self.storage_timeout_seconds = _int_env("SUPABASE_STORAGE_TIMEOUT_SECONDS", 30)
         self.whatsapp_enabled = os.getenv("WHATSAPP_ENABLED", "false").strip().lower() in {"1", "true", "yes", "sim"}
         self.whatsapp_access_token = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()
         self.whatsapp_config_encryption_key = os.getenv("WHATSAPP_CONFIG_ENCRYPTION_KEY", "").strip()
