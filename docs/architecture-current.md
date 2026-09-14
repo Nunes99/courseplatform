@@ -194,7 +194,7 @@ O backend usa `SUPABASE_SECRET_KEY` exclusivamente no servidor, mantendo
 usam `SUPABASE_CERTIFICATE_BUCKET`; trabalhos e comprovativos novos usam
 `SUPABASE_SUBMISSION_BUCKET` e `SUPABASE_PAYMENT_RECEIPT_BUCKET`.
 
-A migração `20260914100000_private_submission_storage.sql` cria os buckets privados e acrescenta bucket, caminho, checksum, tamanho e estado aos registos. A API autoriza cada leitura e suporta temporariamente Base64/HTTPS legado. O script `scripts/backfill_private_storage.py` copia os objetos históricos sem apagar a origem; a execução externa permanece pendente.
+A migração `20260914103215_private_submission_storage.sql` cria os buckets privados e acrescenta bucket, caminho, checksum, tamanho e estado aos registos. A API autoriza cada leitura e suporta temporariamente Base64/HTTPS legado. O script `scripts/backfill_private_storage.py` copia os objetos históricos sem apagar a origem; a execução externa permanece pendente.
 
 ### Realtime
 

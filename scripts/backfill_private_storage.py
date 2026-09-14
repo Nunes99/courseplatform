@@ -5,8 +5,10 @@ window after the schema migration and a verified database backup.
 """
 
 import argparse
+import hashlib
+import hmac
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -18,6 +20,8 @@ from backend.courseplatform.config import get_settings
 from backend.courseplatform.db import connection
 from backend.courseplatform.actions import audit
 from backend.courseplatform.storage import (
+    StorageError,
+    download_private_object,
     storage_object_path,
     upload_private_object,
     validate_legacy_upload,
@@ -28,8 +32,32 @@ from backend.courseplatform.storage import (
 class BackfillResult:
     scanned: int = 0
     eligible: int = 0
+    verified: int = 0
     copied: int = 0
     failed: int = 0
+    errors: dict[str, int] = field(default_factory=dict)
+
+    def record_failure(self, error: Exception) -> None:
+        self.failed += 1
+        code = str(getattr(error, "code", error.__class__.__name__) or "UNKNOWN_ERROR")
+        safe_code = "".join(character for character in code.upper() if character.isalnum() or character == "_")
+        safe_code = safe_code or "UNKNOWN_ERROR"
+        self.errors[safe_code] = self.errors.get(safe_code, 0) + 1
+
+
+def verify_private_object(bucket: str, path: str, upload) -> None:
+    content = download_private_object(bucket, path, upload.size_bytes)
+    checksum = hashlib.sha256(content).hexdigest()
+    if len(content) != upload.size_bytes or not hmac.compare_digest(checksum, upload.checksum_sha256):
+        raise StorageError(
+            "PRIVATE_STORAGE_VERIFICATION_FAILED",
+            "O objeto copiado não corresponde ao ficheiro histórico.",
+        )
+
+
+def submission_storage_path(row, upload) -> str:
+    entity_id = f"{row['attempt_id']}-{row['file_id']}"
+    return storage_object_path("submission", row["student_id"], entity_id, upload)
 
 
 def submission_rows(limit: int):
@@ -38,7 +66,7 @@ def submission_rows(limit: int):
             """
             select file_id, attempt_id, student_id, file_name, mime_type, drive_url
             from courseplatform.files
-            where drive_url like 'data:%;base64,%'
+            where drive_url like 'data:%%;base64,%%'
               and coalesce(storage_status, '') <> 'READY'
             order by uploaded_at nulls first, file_id
             limit %s
@@ -54,7 +82,7 @@ def receipt_rows(limit: int):
             select request_id, student_id, payment_receipt_name, payment_receipt_mime_type,
                    payment_receipt_url
             from courseplatform.certificate_requests
-            where payment_receipt_url like 'data:%;base64,%'
+            where payment_receipt_url like 'data:%%;base64,%%'
               and coalesce(payment_receipt_storage_status, '') <> 'READY'
             order by submitted_at nulls first, request_id
             limit %s
@@ -75,8 +103,10 @@ def backfill_submissions(limit: int, apply: bool) -> BackfillResult:
             result.eligible += 1
             if not apply:
                 continue
-            path = storage_object_path("submission", row["student_id"], row["attempt_id"], upload)
+            path = submission_storage_path(row, upload)
             upload_private_object(settings.supabase_submission_bucket, path, upload)
+            verify_private_object(settings.supabase_submission_bucket, path, upload)
+            result.verified += 1
             with connection() as conn:
                 updated = conn.execute(
                     """
@@ -108,8 +138,8 @@ def backfill_submissions(limit: int, apply: bool) -> BackfillResult:
                     )
                 conn.commit()
             result.copied += int(bool(updated))
-        except Exception:
-            result.failed += 1
+        except Exception as error:
+            result.record_failure(error)
     return result
 
 
@@ -130,6 +160,8 @@ def backfill_receipts(limit: int, apply: bool) -> BackfillResult:
                 continue
             path = storage_object_path("payment-receipt", row["student_id"], row["request_id"], upload)
             upload_private_object(settings.supabase_payment_receipt_bucket, path, upload)
+            verify_private_object(settings.supabase_payment_receipt_bucket, path, upload)
+            result.verified += 1
             with connection() as conn:
                 updated = conn.execute(
                     """
@@ -160,8 +192,8 @@ def backfill_receipts(limit: int, apply: bool) -> BackfillResult:
                     )
                 conn.commit()
             result.copied += int(bool(updated))
-        except Exception:
-            result.failed += 1
+        except Exception as error:
+            result.record_failure(error)
     return result
 
 
@@ -174,11 +206,19 @@ def main() -> int:
     submissions = backfill_submissions(limit, args.apply)
     receipts = backfill_receipts(limit, args.apply)
     mode = "apply" if args.apply else "dry-run"
+    error_counts = {
+        f"submission_{code}": count for code, count in submissions.errors.items()
+    } | {
+        f"receipt_{code}": count for code, count in receipts.errors.items()
+    }
+    errors = ",".join(f"{code}:{count}" for code, count in sorted(error_counts.items())) or "none"
     print(
         f"mode={mode} submissions_scanned={submissions.scanned} submissions_eligible={submissions.eligible} "
+        f"submissions_verified={submissions.verified} "
         f"submissions_copied={submissions.copied} submissions_failed={submissions.failed} "
         f"receipts_scanned={receipts.scanned} receipts_eligible={receipts.eligible} "
-        f"receipts_copied={receipts.copied} receipts_failed={receipts.failed}"
+        f"receipts_verified={receipts.verified} "
+        f"receipts_copied={receipts.copied} receipts_failed={receipts.failed} errors={errors}"
     )
     return 1 if submissions.failed or receipts.failed else 0
 

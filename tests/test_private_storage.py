@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 from fastapi.testclient import TestClient
 
 from backend.courseplatform import actions, storage
+from scripts import backfill_private_storage, cleanup_legacy_base64, validate_private_downloads
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -359,8 +360,58 @@ class PrivateStorageHttpTests(unittest.TestCase):
 
 
 class PrivateStorageMigrationTests(unittest.TestCase):
+    def test_backfill_parameterized_queries_escape_like_wildcards(self):
+        source = (ROOT / "scripts" / "backfill_private_storage.py").read_text(encoding="utf-8")
+        self.assertIn("drive_url like 'data:%%;base64,%%'", source)
+        self.assertIn("payment_receipt_url like 'data:%%;base64,%%'", source)
+
+    def test_backfill_gives_every_historical_file_a_distinct_object_path(self):
+        upload = storage.ValidatedUpload(
+            PDF_BYTES,
+            "trabalho.pdf",
+            "application/pdf",
+            len(PDF_BYTES),
+            hashlib.sha256(PDF_BYTES).hexdigest(),
+        )
+        first = backfill_private_storage.submission_storage_path(
+            {"student_id": "S1", "attempt_id": "A1", "file_id": "F1"}, upload
+        )
+        second = backfill_private_storage.submission_storage_path(
+            {"student_id": "S1", "attempt_id": "A1", "file_id": "F2"}, upload
+        )
+        self.assertNotEqual(first, second)
+
+    def test_backfill_verifies_uploaded_bytes_before_database_update(self):
+        with patch.object(backfill_private_storage, "download_private_object", return_value=PDF_BYTES):
+            backfill_private_storage.verify_private_object(
+                "private",
+                "submission/S1/A1/checksum/content.pdf",
+                storage.ValidatedUpload(
+                    PDF_BYTES,
+                    "trabalho.pdf",
+                    "application/pdf",
+                    len(PDF_BYTES),
+                    hashlib.sha256(PDF_BYTES).hexdigest(),
+                ),
+            )
+
+        with patch.object(backfill_private_storage, "download_private_object", return_value=b"changed"):
+            with self.assertRaises(storage.StorageError) as raised:
+                backfill_private_storage.verify_private_object(
+                    "private",
+                    "submission/S1/A1/checksum/content.pdf",
+                    storage.ValidatedUpload(
+                        PDF_BYTES,
+                        "trabalho.pdf",
+                        "application/pdf",
+                        len(PDF_BYTES),
+                        hashlib.sha256(PDF_BYTES).hexdigest(),
+                    ),
+                )
+        self.assertEqual("PRIVATE_STORAGE_VERIFICATION_FAILED", raised.exception.code)
+
     def test_migration_is_additive_private_and_versioned(self):
-        migration = ROOT / "supabase" / "migrations" / "20260914100000_private_submission_storage.sql"
+        migration = ROOT / "supabase" / "migrations" / "20260914103215_private_submission_storage.sql"
         sql = migration.read_text(encoding="utf-8").lower()
         self.assertIn("add column if not exists storage_bucket", sql)
         self.assertIn("add column if not exists payment_receipt_bucket", sql)
@@ -390,6 +441,66 @@ class PrivateStorageMigrationTests(unittest.TestCase):
         for source in (api_source, student_source, admin_source):
             self.assertNotIn("SUPABASE_SERVICE_ROLE_KEY", source)
             self.assertNotIn("SUPABASE_SECRET_KEY", source)
+
+    def test_retirement_verifies_legacy_and_storage_bytes(self):
+        checksum = hashlib.sha256(PDF_BYTES).hexdigest()
+        row = {
+            "drive_url": f"data:application/pdf;base64,{PDF_BASE64}",
+            "file_name": "trabalho.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": len(PDF_BYTES),
+            "storage_bucket": "private",
+            "storage_path": "submission/S1/A1/F1/content.pdf",
+            "storage_checksum_sha256": checksum,
+        }
+        with patch.object(cleanup_legacy_base64, "download_private_object", return_value=PDF_BYTES):
+            cleanup_legacy_base64.verify_copy(
+                row,
+                purpose="SUBMISSION",
+                legacy_field="drive_url",
+                name_field="file_name",
+                mime_field="mime_type",
+                size_field="size_bytes",
+                bucket_field="storage_bucket",
+                path_field="storage_path",
+                checksum_field="storage_checksum_sha256",
+            )
+        with patch.object(cleanup_legacy_base64, "download_private_object", return_value=b"changed"):
+            with self.assertRaises(storage.StorageError) as raised:
+                cleanup_legacy_base64.verify_copy(
+                    row,
+                    purpose="SUBMISSION",
+                    legacy_field="drive_url",
+                    name_field="file_name",
+                    mime_field="mime_type",
+                    size_field="size_bytes",
+                    bucket_field="storage_bucket",
+                    path_field="storage_path",
+                    checksum_field="storage_checksum_sha256",
+                )
+        self.assertEqual("LEGACY_STORAGE_DOWNLOAD_MISMATCH", raised.exception.code)
+
+    def test_retirement_is_dry_run_first_and_requires_retention_confirmations(self):
+        source = (ROOT / "scripts" / "cleanup_legacy_base64.py").read_text(encoding="utf-8")
+        self.assertIn("MINIMUM_APPLY_RETENTION_DAYS = 30", source)
+        self.assertIn('parser.add_argument("--apply", action="store_true"', source)
+        self.assertIn("--confirm-backup", source)
+        self.assertIn("--confirm-stability", source)
+        self.assertNotIn("drop column", source.lower())
+        self.assertNotIn("delete from courseplatform.files", source.lower())
+        self.assertNotIn("delete from courseplatform.certificate_requests", source.lower())
+
+    def test_live_validation_does_not_log_tokens_or_identifiers(self):
+        source = (ROOT / "scripts" / "validate_private_downloads.py").read_text(encoding="utf-8")
+        self.assertIn("COURSEPLATFORM_VALIDATION_STUDENT_TOKEN", source)
+        self.assertIn("COURSEPLATFORM_VALIDATION_REVIEWER_TOKEN", source)
+        self.assertIn("COURSEPLATFORM_VALIDATION_ADMIN_TOKEN", source)
+        self.assertNotIn("print(student_token", source)
+        self.assertNotIn("print(reviewer_token", source)
+        self.assertNotIn("print(admin_token", source)
+        self.assertIn('assert_status("anonymous_submission"', source)
+        self.assertIn('"reviewer_receipt"', source)
+        self.assertIn('"student_other_submission"', source)
 
 
 if __name__ == "__main__":

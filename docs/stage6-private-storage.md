@@ -12,6 +12,30 @@ Trabalhos e comprovativos novos deixam de persistir Base64 no Postgres. O backen
 
 Os formatos aceites para trabalhos são PDF, JPG, PNG, WebP, TXT, Word, Excel e PowerPoint. Comprovativos aceitam apenas PDF, JPG, PNG e WebP. Os limites padrão são 10 MiB e 5 MiB, respetivamente.
 
+## Estado remoto verificado em 2026-09-14
+
+A migração `20260914103215_private_submission_storage` foi aplicada ao projeto
+`courseplatform`. Foram confirmados:
+
+- versão lógica da aplicação `20260914100000`;
+- dez novas colunas de metadados, três índices e duas constraints;
+- buckets `courseplatform-submissions` e `courseplatform-payment-receipts` privados;
+- ausência de `SELECT` para `anon` e `authenticated` nas tabelas afetadas;
+- `SELECT`, `INSERT` e `UPDATE` disponíveis para `courseplatform_runtime`;
+- liveness e readiness públicas com HTTP 200;
+- endpoint de ficheiros sem sessão com HTTP 401.
+
+O backfill foi executado em 2026-09-14, depois de um dry-run integral. Foram
+copiados 73 trabalhos e 4 comprovativos em lotes pequenos. Cada upload foi
+baixado e comparado por tamanho e SHA-256 antes de a respetiva linha ser marcada
+como `READY`. O dry-run final encontrou zero itens pendentes e os 77 valores
+Base64 originais permaneceram nas colunas legadas.
+
+A consulta agregada final pelo conector Supabase não foi executada porque o
+workspace do conector ficou sem créditos. A confirmação independente das
+contagens em `storage.objects` e `audit_log` permanece pendente; esta limitação
+não alterou dados nem interrompeu as verificações byte a byte do script.
+
 ## Compatibilidade histórica
 
 `drive_url` e `payment_receipt_url` não são removidos. O backend deixa de expor data URLs nas respostas, mas consegue servi-los depois da autorização. URLs HTTPS legadas continuam disponíveis durante a transição.
@@ -31,7 +55,7 @@ O comando só apresenta contagens agregadas. Uma repetição ignora linhas já m
 ## Ordem de aplicação
 
 1. Confirmar backup e restauro num ambiente isolado.
-2. Aplicar `20260914100000_private_submission_storage.sql`. A migração não reescreve os blobs históricos; as constraints ficam `NOT VALID`, mas já protegem novas escritas.
+2. Aplicar `20260914103215_private_submission_storage.sql`. A migração não reescreve os blobs históricos; as constraints ficam `NOT VALID`, mas já protegem novas escritas.
 3. Configurar `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (recomendada) ou
    `SUPABASE_SERVICE_ROLE_KEY` (legada), e os nomes dos dois buckets apenas no backend.
 4. Publicar a API compatível e validar upload/download com estudante, REVIEWER, ADMIN e OWNER sintéticos.
@@ -51,3 +75,6 @@ Reverter primeiro a aplicação. As colunas e buckets são aditivos e podem perm
 - recusa de ficheiro de outro estudante e de comprovativo por REVIEWER;
 - comportamento sob interrupção/repetição e concorrência;
 - métricas de latência, memória e erros no Preview.
+
+O procedimento read-only de validação por papel e a retirada futura dos valores
+Base64 estão descritos em `docs/private-storage-validation-and-retirement.md`.

@@ -32,7 +32,7 @@ emite um certificado numa transação e não altera o esquema.
 3. Migrações `2026091312*`: materialização do DDL legado.
 4. `20260913131500_create_courseplatform_runtime_role.sql`: role mínima da API.
 5. `20260913185739_add_application_schema_version.sql`: marcador de compatibilidade.
-6. `20260914100000_private_submission_storage.sql`: metadados e buckets privados para trabalhos e comprovativos.
+6. `20260914103215_private_submission_storage.sql`: metadados e buckets privados para trabalhos e comprovativos.
 
 As migrações da Etapa 4 são aditivas e repetíveis. A migração histórica da role
 runtime é a exceção deliberada: uma segunda execução falha antes de alterar
