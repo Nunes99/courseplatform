@@ -11,7 +11,8 @@
     "qa:password-recovery": "node scripts/verify_password_recovery_browser.cjs",
     "qa:assessment-feedback": "node scripts/verify_assessment_feedback.cjs",
     "qa:submission-retry": "node scripts/verify_submission_retry.cjs",
-    "qa:participation-policy": "node scripts/verify_participation_policy.cjs"
+    "qa:participation-policy": "node scripts/verify_participation_policy.cjs",
+    "qa:course-editions": "node scripts/verify_course_editions_browser.cjs"
   },
   "devDependencies": {
     "playwright": "1.62.1"

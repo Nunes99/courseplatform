@@ -382,6 +382,48 @@ def public_course(row: dict[str, Any] | None):
     }
 
 
+def public_course_version(row: dict[str, Any] | None):
+    if not row:
+        return None
+    return {
+        "courseVersionId": row.get("course_version_id"),
+        "courseId": row.get("course_id"),
+        "versionNumber": int(row.get("version_number") or 0),
+        "status": row.get("status"),
+        "title": row.get("title"),
+        "description": row.get("description"),
+        "totalHours": float(row.get("total_hours") or 0),
+        "passingScore": float(row.get("passing_score") or 0),
+        "createdBy": row.get("created_by"),
+        "publishedBy": row.get("published_by"),
+        "createdAt": iso(row.get("created_at")),
+        "updatedAt": iso(row.get("updated_at")),
+        "publishedAt": iso(row.get("published_at")),
+    }
+
+
+def public_course_offering(row: dict[str, Any] | None):
+    if not row:
+        return None
+    return {
+        "offeringId": row.get("offering_id"),
+        "courseId": row.get("course_id"),
+        "courseVersionId": row.get("course_version_id"),
+        "offeringCode": row.get("offering_code"),
+        "name": row.get("name"),
+        "startDate": iso(row.get("start_date")),
+        "endDate": iso(row.get("end_date")),
+        "capacity": None if row.get("capacity") is None else int(row.get("capacity")),
+        "status": row.get("status"),
+        "leadAdminId": row.get("lead_admin_id"),
+        "rules": row.get("rules_json") or {},
+        "calendar": row.get("calendar_json") or [],
+        "enrollmentCount": int(row.get("enrollment_count") or 0),
+        "createdAt": iso(row.get("created_at")),
+        "updatedAt": iso(row.get("updated_at")),
+    }
+
+
 def public_lesson(row: dict[str, Any] | None):
     if not row:
         return None
@@ -417,6 +459,8 @@ def public_enrollment(row: dict[str, Any] | None):
         "enrollmentId": row["enrollment_id"],
         "studentId": row.get("student_id"),
         "courseId": row.get("course_id"),
+        "courseVersionId": row.get("course_version_id"),
+        "offeringId": row.get("offering_id"),
         "groupId": row.get("group_id"),
         "status": row.get("status"),
         "enrolledAt": iso(row.get("enrolled_at")),
@@ -433,6 +477,7 @@ def public_group_member(row: dict[str, Any] | None):
     return {
         "groupMemberId": row["group_member_id"],
         "groupId": row.get("group_id"),
+        "enrollmentId": row.get("enrollment_id"),
         "studentId": row.get("student_id"),
         "status": row.get("status"),
         "joinedAt": iso(row.get("joined_at")),
@@ -2763,6 +2808,9 @@ def public_certificate(row: dict[str, Any] | None):
         "certificateId": row["certificate_id"],
         "studentId": row.get("student_id"),
         "courseId": row.get("course_id"),
+        "enrollmentId": row.get("enrollment_id"),
+        "offeringId": row.get("offering_id"),
+        "courseVersionId": row.get("course_version_id"),
         "certificateNumber": row.get("certificate_number"),
         "verificationCode": row.get("verification_code"),
         "issueDate": iso(row.get("issue_date")),
@@ -2799,6 +2847,9 @@ def public_certificate_request(row: dict[str, Any] | None):
         "requestId": row["request_id"],
         "studentId": row.get("student_id"),
         "courseId": row.get("course_id"),
+        "enrollmentId": row.get("enrollment_id"),
+        "offeringId": row.get("offering_id"),
+        "courseVersionId": row.get("course_version_id"),
         "certificateId": row.get("certificate_id"),
         "requestType": row.get("request_type"),
         "status": row.get("status"),
@@ -3061,20 +3112,34 @@ def certificate_settings_payload(row: dict[str, Any] | None, course: dict[str, A
     }
 
 
-def certificate_template_snapshot(conn, course_id: str, certificate_type: str = "SIMPLE") -> dict[str, Any]:
+def certificate_template_snapshot(
+    conn,
+    course_id: str,
+    certificate_type: str = "SIMPLE",
+    course_version: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+    version = course_version or {}
+    document_course = {
+        **(course or {}),
+        "title": version.get("title") or (course or {}).get("title"),
+        "description": version.get("description") or (course or {}).get("description"),
+        "total_hours": version.get("total_hours") if version.get("total_hours") is not None else (course or {}).get("total_hours"),
+        "passing_score": version.get("passing_score") if version.get("passing_score") is not None else (course or {}).get("passing_score"),
+    }
     row = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
-    settings = certificate_settings_payload(row, course)
-    profile = normalize_certificate_profile(settings.get("certificateProfile"), course)
+    settings = certificate_settings_payload(row, document_course)
+    profile = normalize_certificate_profile(settings.get("certificateProfile"), document_course)
     if not profile.get("certifiedContents"):
-        profile["certifiedContents"] = certificate_content_summary(conn, course_id)
+        profile["certifiedContents"] = certificate_content_summary(conn, course_id, version)
     return {
         "version": 1,
         "certificateType": certificate_type,
         "capturedAt": iso(utc_now()),
         "courseId": course_id,
-        "courseTitle": (course or {}).get("title"),
-        "courseHours": float((course or {}).get("total_hours") or 0),
+        "courseVersionId": version.get("course_version_id"),
+        "courseTitle": document_course.get("title"),
+        "courseHours": float(document_course.get("total_hours") or 0),
         "profile": profile,
     }
 
@@ -3094,7 +3159,23 @@ def certificate_verification_code() -> str:
     return f"LSS{utc_now().year}{certificate_token(10)}"
 
 
-def certificate_content_summary(conn, course_id: str) -> str:
+def certificate_content_summary(
+    conn,
+    course_id: str,
+    course_version: dict[str, Any] | None = None,
+) -> str:
+    version_snapshot = (course_version or {}).get("content_snapshot_json") or {}
+    version_lessons = version_snapshot.get("lessons") if isinstance(version_snapshot, dict) else None
+    if isinstance(version_lessons, list):
+        rows = [
+            row for row in version_lessons
+            if isinstance(row, dict)
+            and str_value(row.get("status") or "ACTIVE").upper() == "ACTIVE"
+        ]
+        return "\n".join(
+            f"Módulo {int(row.get('lesson_number') or 0)}: {row.get('title') or ''}".strip()
+            for row in rows
+        )
     rows = conn.execute(
         """
         select lesson_number, title, coalesce(summary, '') as summary
@@ -3110,39 +3191,51 @@ def certificate_content_summary(conn, course_id: str) -> str:
     )
 
 
-def course_completion_snapshot(conn, student_id: str, course_id: str):
+def course_completion_snapshot(
+    conn,
+    student_id: str,
+    course_id: str,
+    enrollment_id: str = "",
+):
     ensure_assessment_feature_schema(conn)
-    enrollment = conn.execute(
-        "select * from courseplatform.enrollments where student_id = %s and course_id = %s",
-        (student_id, course_id),
-    ).fetchone()
+    enrollment = resolve_student_enrollment_with_conn(conn, student_id, course_id, enrollment_id)
     course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
-    lesson_total = conn.execute(
-        """
-        select count(*) as total
-        from courseplatform.lessons
-        where course_id = %s and coalesce(status, 'ACTIVE') = 'ACTIVE'
-        """,
-        (course_id,),
+    version = conn.execute(
+        "select * from courseplatform.course_versions where course_version_id = %s",
+        (enrollment["course_version_id"],),
     ).fetchone()
-    approved_total = conn.execute(
-        """
-        select count(distinct p.lesson_id) as total
-        from courseplatform.lesson_progress p
-        join courseplatform.lessons l on l.lesson_id = p.lesson_id
-        where p.student_id = %s and l.course_id = %s
-          and coalesce(p.evaluation_status, p.status) = 'APPROVED'
-          and coalesce(l.status, 'ACTIVE') = 'ACTIVE'
-        """,
-        (student_id, course_id),
-    ).fetchone()
-    total = int((lesson_total or {}).get("total") or 0)
+    snapshot = (version or {}).get("content_snapshot_json") or {}
+    lessons = [
+        item for item in (snapshot.get("lessons") or [])
+        if isinstance(item, dict)
+        and str_value(item.get("status") or "ACTIVE").upper() == "ACTIVE"
+    ]
+    lesson_ids = [item.get("lesson_id") for item in lessons if item.get("lesson_id")]
+    approved_total = {"total": 0}
+    if lesson_ids:
+        approved_total = conn.execute(
+            """
+            select count(distinct lesson_id) as total
+            from courseplatform.lesson_progress
+            where enrollment_id = %s and lesson_id = any(%s)
+              and coalesce(evaluation_status, status) = 'APPROVED'
+            """,
+            (enrollment["enrollment_id"], lesson_ids),
+        ).fetchone()
+    total = len(lesson_ids)
     approved = int((approved_total or {}).get("total") or 0)
     progress = float((enrollment or {}).get("progress_percent") or 0)
     completed = bool(enrollment) and (
         enrollment.get("status") == "COMPLETED" or progress >= 100 or (total > 0 and approved >= total)
     )
-    return enrollment, course, total, approved, completed
+    document_course = {
+        **(course or {}),
+        "title": (version or {}).get("title") or (course or {}).get("title"),
+        "description": (version or {}).get("description") or (course or {}).get("description"),
+        "total_hours": (version or {}).get("total_hours"),
+        "passing_score": (version or {}).get("passing_score"),
+    }
+    return enrollment, document_course, version, total, approved, completed
 
 
 def sync_enrollment_completion(conn, enrollment: dict[str, Any] | None, completed: bool, final_score: float | None = None):
@@ -3222,14 +3315,26 @@ def refresh_enrollment_progress(conn, progress_id: str | None):
     ).fetchone()
 
 
-def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
+def ensure_simple_certificate(
+    conn,
+    student: dict[str, Any],
+    course_id: str,
+    enrollment_id: str = "",
+):
     ensure_certificate_feature_schema(conn)
     # Serialize issuance and participation requests for this enrollment.
     conn.execute(
-        "select enrollment_id from courseplatform.enrollments where student_id = %s and course_id = %s for update",
-        (student["student_id"], course_id),
+        """
+        select enrollment_id from courseplatform.enrollments
+        where student_id = %s and course_id = %s
+          and (%s = '' or enrollment_id = %s)
+        for update
+        """,
+        (student["student_id"], course_id, enrollment_id, enrollment_id),
     ).fetchone()
-    enrollment, course, _, _, completed = course_completion_snapshot(conn, student["student_id"], course_id)
+    enrollment, course, version, _, _, completed = course_completion_snapshot(
+        conn, student["student_id"], course_id, enrollment_id
+    )
     enrollment = sync_enrollment_completion(conn, enrollment, completed, (enrollment or {}).get("final_score"))
     if not completed:
         return None, enrollment, course, False
@@ -3241,22 +3346,23 @@ def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
         from courseplatform.certificates cert
         join courseplatform.courses c on c.course_id = cert.course_id
         join courseplatform.students s on s.student_id = cert.student_id
-        where cert.student_id = %s and cert.course_id = %s
+        where cert.student_id = %s and cert.course_id = %s and cert.enrollment_id = %s
           and coalesce(cert.certificate_type, 'SIMPLE') = 'SIMPLE'
         order by cert.issue_date desc nulls last
         limit 1
         """,
-        (student["student_id"], course_id),
+        (student["student_id"], course_id, enrollment["enrollment_id"]),
     ).fetchone()
     if existing:
         return existing, enrollment, course, True
     cert = conn.execute(
         """
         insert into courseplatform.certificates
-          (certificate_id, student_id, course_id, certificate_number, verification_code,
+          (certificate_id, student_id, course_id, enrollment_id, offering_id, course_version_id,
+           certificate_number, verification_code,
            issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
            recognition_level, content_summary, template_snapshot_json, max_downloads, payment_status)
-        values (%s, %s, %s, %s, %s, now(), %s, '', '', 'ISSUED', 'SIMPLE',
+        values (%s, %s, %s, %s, %s, %s, %s, %s, now(), %s, '', '', 'ISSUED', 'SIMPLE',
                 'PARTICIPATION', %s, %s, null, 'NOT_REQUIRED')
         returning *
         """,
@@ -3264,11 +3370,14 @@ def ensure_simple_certificate(conn, student: dict[str, Any], course_id: str):
             generate_id("CERT"),
             student["student_id"],
             course_id,
+            enrollment["enrollment_id"],
+            enrollment["offering_id"],
+            enrollment["course_version_id"],
             certificate_number(),
             certificate_verification_code(),
             (enrollment or {}).get("final_score"),
-            certificate_content_summary(conn, course_id),
-            json.dumps(certificate_template_snapshot(conn, course_id, "SIMPLE")),
+            certificate_content_summary(conn, course_id, version),
+            json.dumps(certificate_template_snapshot(conn, course_id, "SIMPLE", version)),
         ),
     ).fetchone()
     return {**cert, "course_title": (course or {}).get("title"), "student_name": student.get("full_name")}, enrollment, course, True
@@ -4073,6 +4182,253 @@ def admin_me(payload: dict[str, Any]):
     return success({"admin": public_admin(admin)})
 
 
+def course_structure_snapshot_with_conn(conn, course_id: str) -> dict[str, Any]:
+    course = conn.execute(
+        "select * from courseplatform.courses where course_id = %s",
+        (course_id,),
+    ).fetchone()
+    if not course:
+        raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
+    lessons = conn.execute(
+        "select * from courseplatform.lessons where course_id = %s order by lesson_number, lesson_id",
+        (course_id,),
+    ).fetchall()
+    lesson_ids = [row["lesson_id"] for row in lessons]
+    content_rows = []
+    question_rows = []
+    option_rows = []
+    if lesson_ids:
+        content_rows = conn.execute(
+            "select * from courseplatform.lesson_content where lesson_id = any(%s) order by section_order, content_id",
+            (lesson_ids,),
+        ).fetchall()
+        question_rows = conn.execute(
+            "select * from courseplatform.questions where lesson_id = any(%s) order by question_order, question_id",
+            (lesson_ids,),
+        ).fetchall()
+        question_ids = [row["question_id"] for row in question_rows]
+        if question_ids:
+            option_rows = conn.execute(
+                "select * from courseplatform.question_options where question_id = any(%s) order by option_order, option_id",
+                (question_ids,),
+            ).fetchall()
+
+    content_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
+    questions_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
+    options_by_question: dict[str, list[dict[str, Any]]] = {
+        row["question_id"]: [] for row in question_rows
+    }
+    for row in content_rows:
+        content_by_lesson[row["lesson_id"]].append({key: iso(value) if isinstance(value, datetime) else value for key, value in row.items()})
+    for row in option_rows:
+        options_by_question.setdefault(row["question_id"], []).append(
+            {key: iso(value) if isinstance(value, datetime) else value for key, value in row.items()}
+        )
+    for row in question_rows:
+        question = {key: iso(value) if isinstance(value, datetime) else value for key, value in row.items() if key != "lesson_id"}
+        question["options"] = options_by_question.get(row["question_id"], [])
+        questions_by_lesson[row["lesson_id"]].append(question)
+
+    snapshot_lessons = []
+    for row in lessons:
+        lesson = {key: iso(value) if isinstance(value, datetime) else value for key, value in row.items() if key != "course_id"}
+        lesson["content"] = content_by_lesson.get(row["lesson_id"], [])
+        lesson["questions"] = questions_by_lesson.get(row["lesson_id"], [])
+        snapshot_lessons.append(lesson)
+    return {
+        "schemaVersion": 1,
+        "capturedAt": iso(utc_now()),
+        "course": {
+            "course_id": course["course_id"],
+            "course_code": course.get("course_code"),
+            "title": course.get("title"),
+            "description": course.get("description"),
+            "total_hours": float(course.get("total_hours") or 0),
+            "passing_score": float(course.get("passing_score") or 0),
+        },
+        "lessons": snapshot_lessons,
+    }
+
+
+def resolve_course_offering_with_conn(conn, course_id: str, offering_id: str = "") -> dict[str, Any]:
+    if offering_id:
+        offering = conn.execute(
+            "select * from courseplatform.course_offerings where offering_id = %s and course_id = %s",
+            (offering_id, course_id),
+        ).fetchone()
+        if not offering:
+            raise ApiError("OFFERING_NOT_FOUND", "Edição/turma não encontrada para este curso.")
+        return offering
+    rows = conn.execute(
+        """
+        select * from courseplatform.course_offerings
+        where course_id = %s and status in ('OPEN', 'ACTIVE')
+        order by start_date desc nulls last, created_at desc
+        limit 2
+        """,
+        (course_id,),
+    ).fetchall()
+    if len(rows) == 1:
+        return rows[0]
+    if len(rows) > 1:
+        raise ApiError("OFFERING_REQUIRED", "Selecione a edição/turma do curso.")
+    fallback = conn.execute(
+        """
+        select * from courseplatform.course_offerings
+        where course_id = %s and status <> 'ARCHIVED'
+        order by start_date desc nulls last, created_at desc
+        limit 2
+        """,
+        (course_id,),
+    ).fetchall()
+    if len(fallback) == 1:
+        return fallback[0]
+    if len(fallback) > 1:
+        raise ApiError("OFFERING_REQUIRED", "Selecione a edição/turma do curso.")
+    raise ApiError("OFFERING_NOT_FOUND", "Este curso ainda não possui uma edição/turma.")
+
+
+def resolve_student_enrollment_with_conn(
+    conn,
+    student_id: str,
+    course_id: str = "",
+    enrollment_id: str = "",
+) -> dict[str, Any]:
+    if enrollment_id:
+        enrollment = conn.execute(
+            """
+            select * from courseplatform.enrollments
+            where enrollment_id = %s and student_id = %s
+              and (%s = '' or course_id = %s)
+            """,
+            (enrollment_id, student_id, course_id, course_id),
+        ).fetchone()
+        if not enrollment:
+            raise ApiError("ENROLLMENT_NOT_FOUND", "Matrícula não encontrada.")
+        return enrollment
+    rows = conn.execute(
+        """
+        select * from courseplatform.enrollments
+        where student_id = %s and (%s = '' or course_id = %s)
+          and status in ('ACTIVE', 'COMPLETED')
+        order by enrolled_at desc nulls last, updated_at desc nulls last
+        limit 2
+        """,
+        (student_id, course_id, course_id),
+    ).fetchall()
+    if len(rows) == 1:
+        return rows[0]
+    if len(rows) > 1:
+        raise ApiError("ENROLLMENT_REQUIRED", "Selecione a matrícula/edição do curso.")
+    raise ApiError("ENROLLMENT_NOT_FOUND", "Matrícula não encontrada.")
+
+
+def ensure_offering_enrollment_with_conn(
+    conn,
+    student_id: str,
+    offering: dict[str, Any],
+    group_id: str | None = None,
+) -> dict[str, Any]:
+    enrollment = conn.execute(
+        """
+        select * from courseplatform.enrollments
+        where student_id = %s and offering_id = %s
+        for update
+        """,
+        (student_id, offering["offering_id"]),
+    ).fetchone()
+    if enrollment:
+        if group_id and enrollment.get("group_id") != group_id:
+            enrollment = conn.execute(
+                """
+                update courseplatform.enrollments
+                set group_id = %s, updated_at = now()
+                where enrollment_id = %s
+                returning *
+                """,
+                (group_id, enrollment["enrollment_id"]),
+            ).fetchone()
+        initialize_enrollment_progress_with_conn(conn, enrollment)
+        return enrollment
+    capacity = int_value(offering.get("capacity"))
+    if capacity:
+        current = conn.execute(
+            "select count(*) as total from courseplatform.enrollments where offering_id = %s and status <> 'CANCELLED'",
+            (offering["offering_id"],),
+        ).fetchone() or {}
+        if int(current.get("total") or 0) >= capacity:
+            raise ApiError("OFFERING_CAPACITY_REACHED", "A edição/turma atingiu a capacidade definida.")
+    enrollment = conn.execute(
+        """
+        insert into courseplatform.enrollments
+          (enrollment_id, student_id, course_id, course_version_id, offering_id,
+           group_id, status, enrolled_at, progress_percent, updated_at)
+        values (%s, %s, %s, %s, %s, %s, 'ACTIVE', now(), 0, now())
+        returning *
+        """,
+        (
+            generate_id("ENR"),
+            student_id,
+            offering["course_id"],
+            offering["course_version_id"],
+            offering["offering_id"],
+            group_id,
+        ),
+    ).fetchone()
+    initialize_enrollment_progress_with_conn(conn, enrollment)
+    return enrollment
+
+
+def initialize_enrollment_progress_with_conn(conn, enrollment: dict[str, Any]) -> int:
+    version = conn.execute(
+        """
+        select content_snapshot_json
+        from courseplatform.course_versions
+        where course_version_id = %s
+        """,
+        (enrollment["course_version_id"],),
+    ).fetchone() or {}
+    snapshot = version.get("content_snapshot_json") or {}
+    lessons = snapshot.get("lessons") if isinstance(snapshot, dict) else []
+    if not isinstance(lessons, list):
+        return 0
+    active_lessons = sorted(
+        (
+            lesson for lesson in lessons
+            if isinstance(lesson, dict)
+            and str_value(lesson.get("lesson_id"))
+            and str_value(lesson.get("status") or "ACTIVE").upper() == "ACTIVE"
+        ),
+        key=lambda lesson: (int_value(lesson.get("lesson_number")), str_value(lesson.get("lesson_id"))),
+    )
+    initialized = 0
+    for lesson in active_lessons:
+        access_status = "LOCKED" if str_value(lesson.get("prerequisite_lesson_id")) else "AVAILABLE"
+        row = conn.execute(
+            """
+            insert into courseplatform.lesson_progress
+              (progress_id, enrollment_id, student_id, lesson_id, status,
+               content_access_status, evaluation_status, unlocked_at,
+               attempt_count, updated_at)
+            values (%s, %s, %s, %s, %s, %s, 'NOT_STARTED',
+                    case when %s = 'AVAILABLE' then now() else null end, 0, now())
+            on conflict (enrollment_id, lesson_id) do nothing
+            returning progress_id
+            """,
+            (
+                generate_id("PRG"),
+                enrollment["enrollment_id"],
+                enrollment["student_id"],
+                lesson["lesson_id"],
+                access_status,
+                access_status,
+                access_status,
+            ),
+        ).fetchone()
+        initialized += 1 if row else 0
+    return initialized
+
+
 def my_courses(payload: dict[str, Any]):
     require_session_token(payload)
     with connection() as conn:
@@ -4090,21 +4446,26 @@ def student_courses_rows(conn, student_id: str):
         """
         select
           e.enrollment_id, e.student_id, e.course_id as enrollment_course_id,
+          e.course_version_id, e.offering_id,
           e.group_id, e.status as enrollment_status, e.enrolled_at, e.completed_at,
           e.progress_percent, e.final_score, e.certificate_id,
           c.course_id, c.course_code, c.title, c.description, c.total_hours,
           c.passing_score, c.status as course_status, c.created_at, c.updated_at,
+          cv.version_number, cv.status as version_status, cv.title as version_title,
+          cv.description as version_description, cv.total_hours as version_total_hours,
+          cv.passing_score as version_passing_score, cv.published_at,
+          o.offering_code, o.name as offering_name, o.start_date as offering_start_date,
+          o.end_date as offering_end_date, o.capacity as offering_capacity,
+          o.status as offering_status, o.lead_admin_id, o.rules_json, o.calendar_json,
           g.name as group_name, g.start_date, g.end_date,
-          (
-            select count(*)
-            from courseplatform.lessons l
-            where l.course_id = c.course_id and l.status = 'ACTIVE'
-          ) as lesson_count
+          coalesce(jsonb_array_length(cv.content_snapshot_json -> 'lessons'), 0) as lesson_count
         from courseplatform.enrollments e
         join courseplatform.courses c on c.course_id = e.course_id
+        join courseplatform.course_versions cv on cv.course_version_id = e.course_version_id
+        join courseplatform.course_offerings o on o.offering_id = e.offering_id
         left join courseplatform.groups g on g.group_id = e.group_id
         where e.student_id = %s and c.status <> 'DELETED'
-        order by c.title
+        order by coalesce(o.start_date, e.enrolled_at) desc nulls last, c.title
         """,
         (student_id,),
     ).fetchall()
@@ -4120,10 +4481,32 @@ def student_courses_payload(rows: list[dict[str, Any]]):
         }
         course_row = {
             **row,
+            "title": row.get("version_title") or row.get("title"),
+            "description": row.get("version_description") or row.get("description"),
+            "total_hours": row.get("version_total_hours"),
+            "passing_score": row.get("version_passing_score"),
             "status": row.get("course_status"),
+        }
+        version_row = {
+            **row,
+            "status": row.get("version_status"),
+            "title": row.get("version_title"),
+            "description": row.get("version_description"),
+            "total_hours": row.get("version_total_hours"),
+            "passing_score": row.get("version_passing_score"),
+        }
+        offering_row = {
+            **row,
+            "name": row.get("offering_name"),
+            "start_date": row.get("offering_start_date"),
+            "end_date": row.get("offering_end_date"),
+            "capacity": row.get("offering_capacity"),
+            "status": row.get("offering_status"),
         }
         courses.append({
             "course": public_course(course_row),
+            "courseVersion": public_course_version(version_row),
+            "offering": public_course_offering(offering_row),
             "enrollment": public_enrollment(enrollment_row),
             "group": {
                 "name": row.get("group_name"),
@@ -4135,72 +4518,96 @@ def student_courses_payload(rows: list[dict[str, Any]]):
     return courses
 
 
-def dashboard_payload(conn, student: dict[str, Any], course_id: str):
-    enrollment = conn.execute(
-        "select * from courseplatform.enrollments where student_id = %s and course_id = %s",
-        (student["student_id"], course_id),
+def dashboard_payload(conn, student: dict[str, Any], course_id: str = "", enrollment_id: str = ""):
+    enrollment = resolve_student_enrollment_with_conn(
+        conn, student["student_id"], course_id, enrollment_id
+    )
+    course = conn.execute(
+        "select * from courseplatform.courses where course_id = %s",
+        (enrollment["course_id"],),
     ).fetchone()
-    course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
-    lessons = conn.execute(
-        """
-        select l.*, p.progress_id, p.status as progress_status,
-               p.content_access_status, p.evaluation_status, p.score, p.attempt_count,
-               p.unlocked_at, p.started_at, p.submitted_at, p.approved_at,
-               a.attempt_id, a.attempt_number, a.started_at as attempt_started_at,
-               a.deadline_at, a.submitted_at as attempt_submitted_at,
-               a.status as attempt_status, a.score as attempt_score,
-               a.reviewed_at, a.review_comments, a.retry_authorized
-        from courseplatform.lessons l
-        left join courseplatform.lesson_progress p
-          on p.lesson_id = l.lesson_id and p.student_id = %s
-        left join lateral (
-          select *
-          from courseplatform.attempts a
-          where a.lesson_id = l.lesson_id and a.student_id = %s
-          order by coalesce(a.started_at, a.created_at) desc nulls last
-          limit 1
-        ) a on true
-        where l.course_id = %s and l.status = 'ACTIVE'
-        order by l.lesson_number
-        """,
-        (student["student_id"], student["student_id"], course_id),
-    ).fetchall()
+    version = conn.execute(
+        "select * from courseplatform.course_versions where course_version_id = %s",
+        (enrollment["course_version_id"],),
+    ).fetchone()
+    offering = conn.execute(
+        "select * from courseplatform.course_offerings where offering_id = %s",
+        (enrollment["offering_id"],),
+    ).fetchone()
+    if not course or not version or not offering:
+        raise ApiError("ENROLLMENT_STRUCTURE_INVALID", "A matrícula não está ligada a uma edição válida.")
+    snapshot = version.get("content_snapshot_json") or {}
+    snapshot_lessons = snapshot.get("lessons") if isinstance(snapshot, dict) else []
+    if not isinstance(snapshot_lessons, list):
+        snapshot_lessons = []
+    lesson_ids = [str_value(item.get("lesson_id")) for item in snapshot_lessons if isinstance(item, dict)]
+    progress_rows = []
+    if lesson_ids:
+        progress_rows = conn.execute(
+            """
+            select p.*,
+                   a.attempt_id, a.attempt_number, a.started_at as attempt_started_at,
+                   a.deadline_at, a.submitted_at as attempt_submitted_at,
+                   a.status as attempt_status, a.score as attempt_score,
+                   a.reviewed_at, a.review_comments, a.retry_authorized
+            from courseplatform.lesson_progress p
+            left join lateral (
+              select * from courseplatform.attempts a
+              where a.progress_id = p.progress_id
+              order by coalesce(a.started_at, a.created_at) desc nulls last
+              limit 1
+            ) a on true
+            where p.enrollment_id = %s and p.lesson_id = any(%s)
+            """,
+            (enrollment["enrollment_id"], lesson_ids),
+        ).fetchall()
+    progress_by_lesson = {row["lesson_id"]: row for row in progress_rows}
+    version_course = {
+        **course,
+        "title": version.get("title") or course.get("title"),
+        "description": version.get("description") or course.get("description"),
+        "total_hours": version.get("total_hours"),
+        "passing_score": version.get("passing_score"),
+    }
     return {
         "student": public_student(student),
-        "course": public_course(course),
+        "course": public_course(version_course),
+        "courseVersion": public_course_version(version),
+        "offering": public_course_offering(offering),
         "enrollment": public_enrollment(enrollment),
         "lessons": [
             {
-                "lesson": public_lesson(row),
+                "lesson": public_lesson(lesson),
                 "progress": public_progress({
-                    "progress_id": row.get("progress_id"),
-                    "lesson_id": row.get("lesson_id"),
-                    "status": row.get("progress_status") or "LOCKED",
-                    "content_access_status": row.get("content_access_status"),
-                    "evaluation_status": row.get("evaluation_status"),
-                    "score": row.get("score"),
-                    "attempt_count": row.get("attempt_count"),
-                    "unlocked_at": row.get("unlocked_at"),
-                    "started_at": row.get("started_at"),
-                    "submitted_at": row.get("submitted_at"),
-                    "approved_at": row.get("approved_at"),
+                    "progress_id": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("progress_id"),
+                    "lesson_id": lesson.get("lesson_id"),
+                    "status": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("status") or "LOCKED",
+                    "content_access_status": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("content_access_status"),
+                    "evaluation_status": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("evaluation_status"),
+                    "score": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("score"),
+                    "attempt_count": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_count"),
+                    "unlocked_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("unlocked_at"),
+                    "started_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("started_at"),
+                    "submitted_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("submitted_at"),
+                    "approved_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("approved_at"),
                 }),
                 "activeAttempt": student_attempt({
-                    "attempt_id": row.get("attempt_id"),
-                    "progress_id": row.get("progress_id"),
-                    "lesson_id": row.get("lesson_id"),
-                    "attempt_number": row.get("attempt_number"),
-                    "started_at": row.get("attempt_started_at"),
-                    "deadline_at": row.get("deadline_at"),
-                    "submitted_at": row.get("attempt_submitted_at"),
-                    "status": row.get("attempt_status"),
-                    "score": row.get("attempt_score"),
-                    "reviewed_at": row.get("reviewed_at"),
-                    "review_comments": row.get("review_comments"),
-                    "retry_authorized": row.get("retry_authorized"),
-                }) if row.get("attempt_id") else None,
+                    "attempt_id": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_id"),
+                    "progress_id": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("progress_id"),
+                    "lesson_id": lesson.get("lesson_id"),
+                    "attempt_number": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_number"),
+                    "started_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_started_at"),
+                    "deadline_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("deadline_at"),
+                    "submitted_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_submitted_at"),
+                    "status": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_status"),
+                    "score": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_score"),
+                    "reviewed_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("reviewed_at"),
+                    "review_comments": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("review_comments"),
+                    "retry_authorized": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("retry_authorized"),
+                }) if progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_id") else None,
             }
-            for row in lessons
+            for lesson in snapshot_lessons
+            if isinstance(lesson, dict) and str_value(lesson.get("status") or "ACTIVE").upper() == "ACTIVE"
         ],
     }
 
@@ -4212,15 +4619,26 @@ def student_home(payload: dict[str, Any]):
         _, student = student_context_with_conn(conn, payload)
         course_rows = student_courses_rows(conn, student["student_id"])
         courses = student_courses_payload(course_rows)
+        requested_enrollment_id = str_value(payload.get("enrollmentId"))
         requested_course_id = payload.get("courseId") or get_settings().default_course_id
-        available_course_ids = [item["course"]["courseId"] for item in courses if item.get("course")]
-        selected_course_id = requested_course_id if requested_course_id in available_course_ids else (available_course_ids[0] if available_course_ids else requested_course_id)
-        dashboard_data = dashboard_payload(conn, student, selected_course_id)
+        selected_entry = next(
+            (item for item in courses if item.get("enrollment", {}).get("enrollmentId") == requested_enrollment_id),
+            None,
+        )
+        if not selected_entry:
+            selected_entry = next(
+                (item for item in courses if item.get("course", {}).get("courseId") == requested_course_id),
+                courses[0] if courses else None,
+            )
+        selected_enrollment_id = selected_entry.get("enrollment", {}).get("enrollmentId") if selected_entry else ""
+        selected_course_id = selected_entry.get("course", {}).get("courseId") if selected_entry else requested_course_id
+        dashboard_data = dashboard_payload(conn, student, selected_course_id, selected_enrollment_id)
         media = read_media_config_with_conn(conn, selected_course_id)
     return success({
         "student": public_student(student),
         "courses": courses,
         "selectedCourseId": selected_course_id,
+        "selectedEnrollmentId": selected_enrollment_id,
         "dashboard": dashboard_data,
         "mediaConfig": student_visible_media(media, student),
     })
@@ -4229,9 +4647,10 @@ def student_home(payload: dict[str, Any]):
 def dashboard(payload: dict[str, Any]):
     _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
+    enrollment_id = str_value(payload.get("enrollmentId"))
     prepare_assessment_feature_schema()
     with connection() as conn:
-        return success(dashboard_payload(conn, student, course_id))
+        return success(dashboard_payload(conn, student, course_id, enrollment_id))
 
 
 def get_lesson(payload: dict[str, Any]):
@@ -4239,48 +4658,52 @@ def get_lesson(payload: dict[str, Any]):
     require_fields(payload, ["lessonId"])
     prepare_assessment_feature_schema()
     lesson_id = payload["lessonId"]
-    lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (lesson_id,))
-    if not lesson:
-        raise ApiError("LESSON_NOT_FOUND", "Módulo não encontrado.")
-    progress = fetch_one(
-        """
-        select *
-        from courseplatform.lesson_progress
-        where student_id = %s and lesson_id = %s
-        """,
-        (student["student_id"], lesson_id),
-    )
+    enrollment_id = str_value(payload.get("enrollmentId"))
+    with connection() as conn:
+        live_lesson = conn.execute(
+            "select course_id from courseplatform.lessons where lesson_id = %s",
+            (lesson_id,),
+        ).fetchone()
+        course_id = live_lesson.get("course_id") if live_lesson else ""
+        enrollment = resolve_student_enrollment_with_conn(
+            conn, student["student_id"], course_id, enrollment_id
+        )
+        version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s",
+            (enrollment["course_version_id"],),
+        ).fetchone()
+        snapshot = (version or {}).get("content_snapshot_json") or {}
+        snapshot_lessons = snapshot.get("lessons") if isinstance(snapshot, dict) else []
+        lesson = next(
+            (
+                item for item in snapshot_lessons
+                if isinstance(item, dict) and item.get("lesson_id") == lesson_id
+            ),
+            None,
+        )
+        if not lesson:
+            raise ApiError("LESSON_NOT_FOUND", "Módulo não encontrado nesta edição do curso.")
+        progress = conn.execute(
+            """
+            select * from courseplatform.lesson_progress
+            where enrollment_id = %s and lesson_id = %s
+            """,
+            (enrollment["enrollment_id"], lesson_id),
+        ).fetchone()
     if not progress or progress_access_status(progress) != "AVAILABLE":
         raise ApiError("LESSON_LOCKED", "Este módulo ainda não está disponível para leitura.")
-    content = fetch_all(
-        """
-        select *
-        from courseplatform.lesson_content
-        where lesson_id = %s and coalesce(status, 'ACTIVE') = 'ACTIVE'
-        order by section_order
-        """,
-        (lesson_id,),
-    )
-    questions = fetch_all(
-        """
-        select *
-        from courseplatform.questions
-        where lesson_id = %s and coalesce(status, 'ACTIVE') = 'ACTIVE'
-        order by question_order
-        """,
-        (lesson_id,),
-    )
-    question_ids = [row["question_id"] for row in questions]
-    options_by_question: dict[str, list[dict[str, Any]]] = {question_id: [] for question_id in question_ids}
-    if question_ids:
-        options = fetch_all(
-            "select * from courseplatform.question_options where question_id = any(%s) order by option_order",
-            (question_ids,),
-        )
-        for option in options:
-            options_by_question[option["question_id"]].append(option)
+    content = [
+        row for row in (lesson.get("content") or [])
+        if isinstance(row, dict) and str_value(row.get("status") or "ACTIVE").upper() == "ACTIVE"
+    ]
+    questions = [
+        row for row in (lesson.get("questions") or [])
+        if isinstance(row, dict) and str_value(row.get("status") or "ACTIVE").upper() == "ACTIVE"
+    ]
     return success({
         "lesson": public_lesson(lesson),
+        "enrollment": public_enrollment(enrollment),
+        "courseVersion": public_course_version(version),
         "progress": public_progress(progress or {
             "progress_id": "",
             "lesson_id": lesson_id,
@@ -4291,7 +4714,7 @@ def get_lesson(payload: dict[str, Any]):
         "questions": [
             {
                 **student_question(question),
-                "options": [student_option(option) for option in options_by_question.get(question["question_id"], [])],
+                "options": [student_option(option) for option in question.get("options", [])],
             }
             for question in questions
         ],
@@ -5009,6 +5432,28 @@ def assessment_snapshot_with_conn(conn, lesson_id: str, lesson: dict[str, Any] |
     }
 
 
+def assessment_snapshot_from_version_lesson(lesson: dict[str, Any]) -> dict[str, Any]:
+    questions = [
+        question for question in (lesson.get("questions") or [])
+        if isinstance(question, dict)
+        and str_value(question.get("status") or "ACTIVE").upper() == "ACTIVE"
+    ]
+    policy = feedback_policy(lesson)
+    digest_payload = json.dumps(
+        {"feedbackPolicy": policy, "questions": questions},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return {
+        "version": 1,
+        "capturedAt": iso(utc_now()),
+        "feedbackPolicy": policy,
+        "questions": questions,
+        "digest": hashlib.sha256(digest_payload.encode("utf-8")).hexdigest(),
+    }
+
+
 def snapshot_for_attempt_with_conn(conn, attempt: dict[str, Any]) -> dict[str, Any]:
     snapshot = parse_assessment_snapshot(attempt.get("assessment_snapshot_json"))
     if isinstance(snapshot.get("questions"), list):
@@ -5091,23 +5536,42 @@ def start_attempt(payload: dict[str, Any]):
     require_fields(payload, ["lessonId"])
     prepare_assessment_feature_schema()
     lesson_id = payload["lessonId"]
+    enrollment_id = str_value(payload.get("enrollmentId"))
     with connection() as conn:
-        return start_attempt_with_conn(conn, student, lesson_id)
+        return start_attempt_with_conn(conn, student, lesson_id, enrollment_id)
 
 
-def start_attempt_with_conn(conn, student, lesson_id):
+def start_attempt_with_conn(conn, student, lesson_id, enrollment_id: str = ""):
     # Serialize starts and consume each retry permission only once.
-    progress = conn.execute(
-        """
-        select p.*, l.exercise_minutes, l.individual_minutes, l.submission_duration_minutes,
-               l.feedback_release_mode, l.show_correct_answers, l.show_explanations
-        from courseplatform.lesson_progress p
-        join courseplatform.lessons l on l.lesson_id = p.lesson_id
-        where p.student_id = %s and p.lesson_id = %s
-        for update of p
-        """,
-        (student["student_id"], lesson_id),
-    ).fetchone()
+    if enrollment_id:
+        progress = conn.execute(
+            """
+            select p.*, l.exercise_minutes, l.individual_minutes, l.submission_duration_minutes,
+                   l.feedback_release_mode, l.show_correct_answers, l.show_explanations
+            from courseplatform.lesson_progress p
+            join courseplatform.lessons l on l.lesson_id = p.lesson_id
+            where p.student_id = %s and p.lesson_id = %s and p.enrollment_id = %s
+            for update of p
+            """,
+            (student["student_id"], lesson_id, enrollment_id),
+        ).fetchone()
+    else:
+        matches = conn.execute(
+            """
+            select p.*, l.exercise_minutes, l.individual_minutes, l.submission_duration_minutes,
+                   l.feedback_release_mode, l.show_correct_answers, l.show_explanations
+            from courseplatform.lesson_progress p
+            join courseplatform.lessons l on l.lesson_id = p.lesson_id
+            where p.student_id = %s and p.lesson_id = %s
+            order by p.updated_at desc nulls last
+            limit 2
+            for update of p
+            """,
+            (student["student_id"], lesson_id),
+        ).fetchall()
+        if len(matches) > 1:
+            raise ApiError("ENROLLMENT_REQUIRED", "Selecione a matrícula/edição antes de iniciar a atividade.")
+        progress = matches[0] if matches else None
     if not progress or progress_access_status(progress) != "AVAILABLE":
         raise ApiError("LESSON_LOCKED", "Este módulo ainda não está disponível.")
     if progress_evaluation_status(progress) not in {"NOT_STARTED", "IN_PROGRESS", "CORRECTION_REQUIRED", "FAILED", "TIME_EXCEEDED"}:
@@ -5117,12 +5581,12 @@ def start_attempt_with_conn(conn, student, lesson_id):
         """
         select *
         from courseplatform.attempts
-        where student_id = %s and lesson_id = %s
+        where progress_id = %s
         order by attempt_number desc, created_at desc
         limit 1
         for update
         """,
-        (student["student_id"], lesson_id),
+        (progress["progress_id"],),
     ).fetchone()
     if existing and existing.get("status") == "IN_PROGRESS":
         editable_attempt(conn, existing["attempt_id"], student["student_id"])
@@ -5154,11 +5618,29 @@ def start_attempt_with_conn(conn, student, lesson_id):
     if existing:
         attempt_number = max(attempt_number, int_value(existing.get("attempt_number")) + 1)
     existing_snapshot = parse_assessment_snapshot((existing or {}).get("assessment_snapshot_json"))
-    snapshot = existing_snapshot if is_retry and isinstance(existing_snapshot.get("questions"), list) else assessment_snapshot_with_conn(
-        conn,
-        lesson_id,
-        progress,
-    )
+    if is_retry and isinstance(existing_snapshot.get("questions"), list):
+        snapshot = existing_snapshot
+    else:
+        version_row = conn.execute(
+            """
+            select cv.content_snapshot_json
+            from courseplatform.enrollments e
+            join courseplatform.course_versions cv on cv.course_version_id = e.course_version_id
+            where e.enrollment_id = %s
+            """,
+            (progress["enrollment_id"],),
+        ).fetchone()
+        version_snapshot = (version_row or {}).get("content_snapshot_json") or {}
+        version_lesson = next(
+            (
+                item for item in version_snapshot.get("lessons", [])
+                if isinstance(item, dict) and item.get("lesson_id") == lesson_id
+            ),
+            None,
+        )
+        if not version_lesson:
+            raise ApiError("LESSON_VERSION_MISMATCH", "O módulo não pertence à versão desta matrícula.")
+        snapshot = assessment_snapshot_from_version_lesson(version_lesson)
     attempt = conn.execute(
         """
         insert into courseplatform.attempts
@@ -5406,8 +5888,9 @@ def submit_attempt(payload: dict[str, Any]):
 def my_certificate(payload: dict[str, Any]):
     _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
+    enrollment_id = str_value(payload.get("enrollmentId"))
     with connection() as conn:
-        cert, _, _, _ = ensure_simple_certificate(conn, student, course_id)
+        cert, _, _, _ = ensure_simple_certificate(conn, student, course_id, enrollment_id)
         policy = participation_policy(conn, course_id)
         conn.commit()
     return success({"certificate": student_certificate_payload(cert, policy)})
@@ -5416,8 +5899,11 @@ def my_certificate(payload: dict[str, Any]):
 def my_certifications(payload: dict[str, Any]):
     _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
+    enrollment_id = str_value(payload.get("enrollmentId"))
     with connection() as conn:
-        simple_cert, enrollment, course, completed = ensure_simple_certificate(conn, student, course_id)
+        simple_cert, enrollment, course, completed = ensure_simple_certificate(
+            conn, student, course_id, enrollment_id
+        )
         settings_row = conn.execute(
             "select * from courseplatform.certificate_settings where course_id = %s",
             (course_id,),
@@ -5428,11 +5914,11 @@ def my_certifications(payload: dict[str, Any]):
             from courseplatform.certificates cert
             join courseplatform.courses c on c.course_id = cert.course_id
             join courseplatform.students s on s.student_id = cert.student_id
-            where cert.student_id = %s and cert.course_id = %s
+            where cert.student_id = %s and cert.course_id = %s and cert.enrollment_id = %s
               and coalesce(cert.status, 'ISSUED') <> 'DELETED'
             order by cert.issue_date desc nulls last
             """,
-            (student["student_id"], course_id),
+            (student["student_id"], course_id, enrollment["enrollment_id"]),
         ).fetchall()
         requests = conn.execute(
             """
@@ -5440,10 +5926,10 @@ def my_certifications(payload: dict[str, Any]):
             from courseplatform.certificate_requests cr
             join courseplatform.students s on s.student_id = cr.student_id
             join courseplatform.courses c on c.course_id = cr.course_id
-            where cr.student_id = %s and cr.course_id = %s
+            where cr.student_id = %s and cr.course_id = %s and cr.enrollment_id = %s
             order by coalesce(cr.updated_at, cr.created_at) desc
             """,
-            (student["student_id"], course_id),
+            (student["student_id"], course_id, enrollment["enrollment_id"]),
         ).fetchall()
         policy = normalize_participation_policy(((settings_row or {}).get("certificate_profile_json") or {}).get("participation"))
         conn.commit()
@@ -5462,8 +5948,11 @@ def my_certifications(payload: dict[str, Any]):
 def request_participation_certificate(payload: dict[str, Any]):
     _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
+    enrollment_id = str_value(payload.get("enrollmentId"))
     with connection() as conn:
-        cert, _, _, completed = ensure_simple_certificate(conn, student, course_id)
+        cert, enrollment, _, completed = ensure_simple_certificate(
+            conn, student, course_id, enrollment_id
+        )
         if not completed:
             raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado.")
         policy = participation_policy(conn, course_id)
@@ -5475,19 +5964,25 @@ def request_participation_certificate(payload: dict[str, Any]):
         request = conn.execute(
             """
             select * from courseplatform.certificate_requests
-            where student_id = %s and course_id = %s and request_type = 'PARTICIPATION'
+            where student_id = %s and course_id = %s and enrollment_id = %s
+              and request_type = 'PARTICIPATION'
               and status = 'PAYMENT_SUBMITTED'
             order by created_at desc limit 1
-            """, (student["student_id"], course_id),
+            """, (student["student_id"], course_id, enrollment["enrollment_id"]),
         ).fetchone()
         if not request:
             request = conn.execute(
                 """
                 insert into courseplatform.certificate_requests
-                  (request_id, student_id, course_id, request_type, status, created_at, updated_at)
-                values (%s, %s, %s, 'PARTICIPATION', 'PAYMENT_SUBMITTED', now(), now())
+                  (request_id, student_id, course_id, enrollment_id, offering_id,
+                   course_version_id, request_type, status, created_at, updated_at)
+                values (%s, %s, %s, %s, %s, %s, 'PARTICIPATION', 'PAYMENT_SUBMITTED', now(), now())
                 returning *
-                """, (generate_id("CREQ"), student["student_id"], course_id),
+                """, (
+                    generate_id("CREQ"), student["student_id"], course_id,
+                    enrollment["enrollment_id"], enrollment["offering_id"],
+                    enrollment["course_version_id"],
+                ),
             ).fetchone()
             audit(conn, "STUDENT", student["student_id"], "PARTICIPATION_REQUESTED", "CERTIFICATE_REQUEST", request["request_id"])
         conn.commit()
@@ -5497,9 +5992,12 @@ def request_participation_certificate(payload: dict[str, Any]):
 def request_professional_certificate(payload: dict[str, Any]):
     _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
+    enrollment_id = str_value(payload.get("enrollmentId"))
     survey_answers = payload.get("surveyAnswers") if isinstance(payload.get("surveyAnswers"), dict) else {}
     with connection() as conn:
-        _, _, _, completed = ensure_simple_certificate(conn, student, course_id)
+        _, enrollment, _, completed = ensure_simple_certificate(
+            conn, student, course_id, enrollment_id
+        )
         if not completed:
             raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado profissional.")
         course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
@@ -5516,14 +6014,14 @@ def request_professional_certificate(payload: dict[str, Any]):
             select cr.*
             from courseplatform.certificate_requests cr
             left join courseplatform.certificates cert on cert.certificate_id = cr.certificate_id
-            where cr.student_id = %s and cr.course_id = %s
+            where cr.student_id = %s and cr.course_id = %s and cr.enrollment_id = %s
               and cr.request_type = 'PROFESSIONAL'
               and cr.status in ('REQUESTED', 'PAYMENT_SUBMITTED', 'APPROVED')
               and not (cr.status = 'APPROVED' and coalesce(cert.status, 'ISSUED') in ('BLOCKED', 'DELETED'))
             order by created_at desc
             limit 1
             """,
-            (student["student_id"], course_id),
+            (student["student_id"], course_id, enrollment["enrollment_id"]),
         ).fetchone()
         if existing:
             request = conn.execute(
@@ -5544,12 +6042,18 @@ def request_professional_certificate(payload: dict[str, Any]):
             request = conn.execute(
                 """
                 insert into courseplatform.certificate_requests
-                  (request_id, student_id, course_id, request_type, status,
+                  (request_id, student_id, course_id, enrollment_id, offering_id,
+                   course_version_id, request_type, status,
                    survey_answers_json, created_at, updated_at)
-                values (%s, %s, %s, 'PROFESSIONAL', %s, %s, now(), now())
+                values (%s, %s, %s, %s, %s, %s, 'PROFESSIONAL', %s, %s, now(), now())
                 returning *
                 """,
-                (generate_id("CREQ"), student["student_id"], course_id, initial_status, json.dumps(survey_answers)),
+                (
+                    generate_id("CREQ"), student["student_id"], course_id,
+                    enrollment["enrollment_id"], enrollment["offering_id"],
+                    enrollment["course_version_id"], initial_status,
+                    json.dumps(survey_answers),
+                ),
             ).fetchone()
         conn.commit()
     return success({"request": public_certificate_request(request)})
@@ -5783,7 +6287,7 @@ def certificate_pdf_payload(payload: dict[str, Any]):
             join courseplatform.courses c on c.course_id = cert.course_id
             join courseplatform.students s on s.student_id = cert.student_id
             left join courseplatform.enrollments e
-              on e.student_id = cert.student_id and e.course_id = cert.course_id
+              on e.enrollment_id = cert.enrollment_id
             where cert.certificate_id = %s and cert.student_id = %s
             """,
             (payload["certificateId"], student["student_id"]),
@@ -5791,8 +6295,12 @@ def certificate_pdf_payload(payload: dict[str, Any]):
         if not cert:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
         require_certificate_download_access(conn, cert)
+        version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s",
+            (cert.get("course_version_id"),),
+        ).fetchone() if cert.get("course_version_id") else None
         snapshot = cert.get("template_snapshot_json") or certificate_template_snapshot(
-            conn, cert.get("course_id"), cert.get("certificate_type")
+            conn, cert.get("course_id"), cert.get("certificate_type"), version
         )
         conn.commit()
     return certificate_document_payload(cert, snapshot, verification_base_url)
@@ -5813,14 +6321,20 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
             join courseplatform.courses c on c.course_id = cert.course_id
             join courseplatform.students s on s.student_id = cert.student_id
             left join courseplatform.enrollments e
-              on e.student_id = cert.student_id and e.course_id = cert.course_id
+              on e.enrollment_id = cert.enrollment_id
             where cert.certificate_id = %s
             """,
             (payload["certificateId"],),
         ).fetchone()
         snapshot = cert.get("template_snapshot_json") if cert else None
         if cert and not snapshot:
-            snapshot = certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
+            version = conn.execute(
+                "select * from courseplatform.course_versions where course_version_id = %s",
+                (cert.get("course_version_id"),),
+            ).fetchone() if cert.get("course_version_id") else None
+            snapshot = certificate_template_snapshot(
+                conn, cert.get("course_id"), cert.get("certificate_type"), version
+            )
         conn.commit()
     if not cert:
         raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
@@ -6080,6 +6594,25 @@ def admin_course_structure(payload: dict[str, Any]):
     if not course:
         raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
     lessons = fetch_all("select * from courseplatform.lessons where course_id = %s order by lesson_number", (course_id,))
+    versions = fetch_all(
+        """
+        select * from courseplatform.course_versions
+        where course_id = %s
+        order by version_number desc
+        """,
+        (course_id,),
+    )
+    offerings = fetch_all(
+        """
+        select o.*, count(e.enrollment_id) as enrollment_count
+        from courseplatform.course_offerings o
+        left join courseplatform.enrollments e on e.offering_id = o.offering_id
+        where o.course_id = %s
+        group by o.offering_id
+        order by o.start_date desc nulls last, o.created_at desc
+        """,
+        (course_id,),
+    )
     lesson_ids = [row["lesson_id"] for row in lessons]
     content_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
     questions_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
@@ -6098,6 +6631,8 @@ def admin_course_structure(payload: dict[str, Any]):
             questions_by_lesson[question["lesson_id"]].append({"question": question, "options": options_by_question.get(question["question_id"], [])})
     return success({
         "course": public_course(course),
+        "versions": [public_course_version(row) for row in versions],
+        "offerings": [public_course_offering(row) for row in offerings],
         "lessons": [
             {
                 "lesson": public_lesson(lesson),
@@ -6129,7 +6664,7 @@ def admin_list_groups(payload: dict[str, Any]):
         """,
         (payload.get("courseId") or "", payload.get("courseId") or ""),
     )
-    return success({"groups": [{"group": {"groupId": row["group_id"], "groupCode": row.get("group_code"), "name": row.get("name"), "courseId": row.get("course_id"), "startDate": iso(row.get("start_date")), "endDate": iso(row.get("end_date")), "status": row.get("status"), "createdAt": iso(row.get("created_at")), "updatedAt": iso(row.get("updated_at"))}, "memberCount": int(row["member_count"] or 0)} for row in rows]})
+    return success({"groups": [{"group": {"groupId": row["group_id"], "groupCode": row.get("group_code"), "name": row.get("name"), "courseId": row.get("course_id"), "offeringId": row.get("offering_id"), "startDate": iso(row.get("start_date")), "endDate": iso(row.get("end_date")), "status": row.get("status"), "createdAt": iso(row.get("created_at")), "updatedAt": iso(row.get("updated_at"))}, "memberCount": int(row["member_count"] or 0)} for row in rows]})
 
 
 def admin_list_students(payload: dict[str, Any]):
@@ -6353,6 +6888,259 @@ def admin_list_submissions(payload: dict[str, Any]):
     return success({
         "submissions": [submission_item(row) for row in rows],
         "pagination": page_info,
+    })
+
+
+def admin_create_course_version(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["courseId"])
+    course_id = str_value(payload.get("courseId"))
+    with connection() as conn:
+        course = conn.execute(
+            "select * from courseplatform.courses where course_id = %s for update",
+            (course_id,),
+        ).fetchone()
+        if not course:
+            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
+        existing = conn.execute(
+            "select * from courseplatform.course_versions where course_id = %s and status = 'DRAFT' for update",
+            (course_id,),
+        ).fetchone()
+        if existing:
+            return success({"courseVersion": public_course_version(existing), "created": False})
+        latest = conn.execute(
+            "select coalesce(max(version_number), 0) as version_number from courseplatform.course_versions where course_id = %s",
+            (course_id,),
+        ).fetchone() or {}
+        version_number = int(latest.get("version_number") or 0) + 1
+        snapshot = course_structure_snapshot_with_conn(conn, course_id)
+        row = conn.execute(
+            """
+            insert into courseplatform.course_versions
+              (course_version_id, course_id, version_number, status, title, description,
+               total_hours, passing_score, content_snapshot_json, created_by, created_at, updated_at)
+            values (%s, %s, %s, 'DRAFT', %s, %s, %s, %s, %s, %s, now(), now())
+            returning *
+            """,
+            (
+                generate_id("CRSV"), course_id, version_number, course.get("title"),
+                course.get("description"), float_value(course.get("total_hours")),
+                float_value(course.get("passing_score"), 60),
+                json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
+                admin["admin_id"],
+            ),
+        ).fetchone()
+        audit(
+            conn, "ADMIN", admin["admin_id"], "COURSE_VERSION_CREATED",
+            "COURSE_VERSION", row["course_version_id"],
+            {"courseId": course_id, "versionNumber": version_number},
+        )
+        conn.commit()
+    return success({"courseVersion": public_course_version(row), "created": True})
+
+
+def admin_publish_course_version(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["courseVersionId"])
+    with connection() as conn:
+        version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s for update",
+            (payload["courseVersionId"],),
+        ).fetchone()
+        if not version:
+            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
+        if version.get("status") != "DRAFT":
+            raise ApiError("COURSE_VERSION_NOT_DRAFT", "Apenas uma versão em rascunho pode ser publicada.")
+        snapshot = course_structure_snapshot_with_conn(conn, version["course_id"])
+        course_data = snapshot["course"]
+        row = conn.execute(
+            """
+            update courseplatform.course_versions
+            set status = 'PUBLISHED', title = %s, description = %s,
+                total_hours = %s, passing_score = %s, content_snapshot_json = %s,
+                published_by = %s, published_at = now(), updated_at = now()
+            where course_version_id = %s and status = 'DRAFT'
+            returning *
+            """,
+            (
+                course_data.get("title"), course_data.get("description"),
+                float_value(course_data.get("total_hours")),
+                float_value(course_data.get("passing_score"), 60),
+                json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
+                admin["admin_id"], version["course_version_id"],
+            ),
+        ).fetchone()
+        audit(
+            conn, "ADMIN", admin["admin_id"], "COURSE_VERSION_PUBLISHED",
+            "COURSE_VERSION", row["course_version_id"],
+            {"courseId": row["course_id"], "versionNumber": row["version_number"]},
+        )
+        conn.commit()
+    return success({"courseVersion": public_course_version(row)})
+
+
+def admin_save_course_offering(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["courseId", "courseVersionId", "name"])
+    status = str_value(payload.get("status") or "DRAFT").upper()
+    if status not in {"DRAFT", "OPEN", "ACTIVE", "COMPLETED", "CANCELLED", "ARCHIVED"}:
+        raise ApiError("INVALID_OFFERING_STATUS", "Estado da edição/turma inválido.")
+    raw_start_date = payload.get("startDate")
+    raw_end_date = payload.get("endDate")
+    start_date = parse_datetime(raw_start_date)
+    end_date = parse_datetime(raw_end_date)
+    if raw_start_date not in (None, "") and start_date is None:
+        raise ApiError("INVALID_OFFERING_PERIOD", "A data inicial da edição é inválida.")
+    if raw_end_date not in (None, "") and end_date is None:
+        raise ApiError("INVALID_OFFERING_PERIOD", "A data final da edição é inválida.")
+    if start_date and start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=timezone.utc)
+    if end_date and end_date.tzinfo is None:
+        end_date = end_date.replace(tzinfo=timezone.utc)
+    if start_date and end_date and end_date < start_date:
+        raise ApiError("INVALID_OFFERING_PERIOD", "A data final não pode ser anterior à data inicial.")
+    capacity = int_value(payload.get("capacity")) if payload.get("capacity") not in (None, "") else None
+    if capacity is not None and capacity <= 0:
+        raise ApiError("INVALID_OFFERING_CAPACITY", "A capacidade deve ser superior a zero.")
+    offering_id = str_value(payload.get("offeringId")) or generate_id("COFF")
+    rules = payload.get("rules") if isinstance(payload.get("rules"), dict) else {}
+    calendar = payload.get("calendar") if isinstance(payload.get("calendar"), list) else []
+    with connection() as conn:
+        version = conn.execute(
+            """
+            select * from courseplatform.course_versions
+            where course_version_id = %s and course_id = %s
+            """,
+            (payload["courseVersionId"], payload["courseId"]),
+        ).fetchone()
+        if not version:
+            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
+        if version.get("status") != "PUBLISHED":
+            raise ApiError("COURSE_VERSION_NOT_PUBLISHED", "Publique a versão antes de criar uma edição/turma.")
+        row = conn.execute(
+            """
+            insert into courseplatform.course_offerings
+              (offering_id, course_id, course_version_id, offering_code, name,
+               start_date, end_date, capacity, status, lead_admin_id, rules_json,
+               calendar_json, created_by, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+            on conflict (offering_id) do update
+            set course_id = excluded.course_id,
+                course_version_id = excluded.course_version_id,
+                offering_code = excluded.offering_code,
+                name = excluded.name,
+                start_date = excluded.start_date,
+                end_date = excluded.end_date,
+                capacity = excluded.capacity,
+                status = excluded.status,
+                lead_admin_id = excluded.lead_admin_id,
+                rules_json = excluded.rules_json,
+                calendar_json = excluded.calendar_json,
+                updated_at = now()
+            returning *
+            """,
+            (
+                offering_id, payload["courseId"], payload["courseVersionId"],
+                str_value(payload.get("offeringCode") or offering_id), str_value(payload.get("name")),
+                start_date, end_date, capacity, status,
+                str_value(payload.get("leadAdminId")) or None,
+                json.dumps(rules, ensure_ascii=True, separators=(",", ":")),
+                json.dumps(calendar, ensure_ascii=True, separators=(",", ":")),
+                admin["admin_id"],
+            ),
+        ).fetchone()
+        audit(
+            conn, "ADMIN", admin["admin_id"], "COURSE_OFFERING_SAVED",
+            "COURSE_OFFERING", offering_id,
+            {"courseId": row["course_id"], "courseVersionId": row["course_version_id"], "status": status},
+        )
+        conn.commit()
+    return success({"offering": public_course_offering(row)})
+
+
+def admin_enroll_students_in_offering(payload: dict[str, Any]):
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["offeringId"])
+    student_ids = list(dict.fromkeys(
+        str_value(value) for value in (payload.get("studentIds") or []) if str_value(value)
+    ))
+    if not student_ids:
+        raise ApiError("EMPTY_ENROLLMENT_TARGET", "Selecione pelo menos um estudante.")
+    group_id = str_value(payload.get("groupId")) or None
+    with connection() as conn:
+        offering = conn.execute(
+            "select * from courseplatform.course_offerings where offering_id = %s for update",
+            (payload["offeringId"],),
+        ).fetchone()
+        if not offering:
+            raise ApiError("OFFERING_NOT_FOUND", "Edição/turma não encontrada.")
+        if offering.get("status") not in {"OPEN", "ACTIVE"}:
+            raise ApiError("OFFERING_NOT_OPEN", "A edição/turma não aceita novas matrículas.")
+        if group_id:
+            group = conn.execute(
+                "select * from courseplatform.groups where group_id = %s and offering_id = %s",
+                (group_id, offering["offering_id"]),
+            ).fetchone()
+            if not group:
+                raise ApiError("GROUP_OFFERING_MISMATCH", "O grupo não pertence à edição selecionada.")
+        enrollments = []
+        for student_id in student_ids:
+            student = conn.execute(
+                "select student_id from courseplatform.students where student_id = %s and status = 'ACTIVE'",
+                (student_id,),
+            ).fetchone()
+            if not student:
+                raise ApiError("STUDENT_NOT_FOUND", "Um dos estudantes selecionados não está ativo.")
+            enrollment = ensure_offering_enrollment_with_conn(conn, student_id, offering, group_id)
+            enrollments.append(enrollment)
+            if group_id:
+                conn.execute(
+                    """
+                    insert into courseplatform.group_members
+                      (group_member_id, group_id, student_id, enrollment_id, status, joined_at, updated_at)
+                    values (%s, %s, %s, %s, 'ACTIVE', now(), now())
+                    on conflict (group_id, student_id) do update
+                    set enrollment_id = excluded.enrollment_id, status = 'ACTIVE', updated_at = now()
+                    """,
+                    (generate_id("GM"), group_id, student_id, enrollment["enrollment_id"]),
+                )
+        audit(
+            conn, "ADMIN", admin["admin_id"], "STUDENTS_ENROLLED_IN_OFFERING",
+            "COURSE_OFFERING", offering["offering_id"],
+            {"studentCount": len(enrollments), "groupId": group_id},
+        )
+        conn.commit()
+    return success({
+        "offering": public_course_offering(offering),
+        "enrollments": [public_enrollment(row) for row in enrollments],
+    })
+
+
+def admin_list_course_reconciliation_issues(payload: dict[str, Any]):
+    admin_context(payload, {"OWNER", "ADMIN"})
+    rows = fetch_all(
+        """
+        select * from courseplatform.migration_reconciliation_issues
+        where migration_key = '20260915101047'
+          and (%s = 'ALL' or status = %s)
+        order by detected_at, entity_type, entity_id
+        limit 1000
+        """,
+        (str_value(payload.get("status") or "OPEN").upper(),) * 2,
+    )
+    return success({
+        "issues": [
+            {
+                "issueId": row.get("issue_id"),
+                "entityType": row.get("entity_type"),
+                "entityId": row.get("entity_id"),
+                "issueCode": row.get("issue_code"),
+                "details": row.get("details_json") or {},
+                "status": row.get("status"),
+                "detectedAt": iso(row.get("detected_at")),
+            }
+            for row in rows
+        ]
     })
 
 
@@ -7208,13 +7996,24 @@ def admin_save_group(payload: dict[str, Any]):
     group_id = str_value(payload.get("groupId")) or generate_id("GRP")
     student_ids = payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else []
     with connection() as conn:
+        existing_group = conn.execute(
+            "select * from courseplatform.groups where group_id = %s",
+            (group_id,),
+        ).fetchone()
+        offering = resolve_course_offering_with_conn(
+            conn,
+            payload["courseId"],
+            str_value(payload.get("offeringId")) or str_value((existing_group or {}).get("offering_id")),
+        )
         group = conn.execute(
             """
             insert into courseplatform.groups
-              (group_id, group_code, name, course_id, start_date, end_date, status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, now(), now())
+              (group_id, group_code, name, course_id, offering_id,
+               start_date, end_date, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, now(), now())
             on conflict (group_id) do update
             set group_code = excluded.group_code, name = excluded.name, course_id = excluded.course_id,
+                offering_id = excluded.offering_id,
                 start_date = excluded.start_date, end_date = excluded.end_date,
                 status = excluded.status, updated_at = now()
             returning *
@@ -7224,25 +8023,27 @@ def admin_save_group(payload: dict[str, Any]):
                 str_value(payload.get("groupCode") or group_id),
                 str_value(payload.get("name")),
                 payload["courseId"],
+                offering["offering_id"],
                 parse_datetime(payload.get("startDate")),
                 parse_datetime(payload.get("endDate")),
                 str_value(payload.get("status") or "ACTIVE").upper(),
             ),
         ).fetchone()
         for student_id in student_ids:
+            enrollment = ensure_offering_enrollment_with_conn(conn, student_id, offering, group_id)
             conn.execute(
                 """
                 insert into courseplatform.group_members
-                  (group_member_id, group_id, student_id, status, joined_at, updated_at)
-                values (%s, %s, %s, 'ACTIVE', now(), now())
+                  (group_member_id, group_id, student_id, enrollment_id, status, joined_at, updated_at)
+                values (%s, %s, %s, %s, 'ACTIVE', now(), now())
                 on conflict (group_id, student_id) do update
-                set status = 'ACTIVE', updated_at = now()
+                set enrollment_id = excluded.enrollment_id, status = 'ACTIVE', updated_at = now()
                 """,
-                (generate_id("GM"), group_id, student_id),
+                (generate_id("GM"), group_id, student_id, enrollment["enrollment_id"]),
             )
         audit(conn, "ADMIN", admin["admin_id"], "GROUP_SAVED", "GROUP", group_id, {"studentCount": len(student_ids)})
         conn.commit()
-    return success({"group": {"groupId": group["group_id"], "groupCode": group.get("group_code"), "name": group.get("name"), "courseId": group.get("course_id"), "startDate": iso(group.get("start_date")), "endDate": iso(group.get("end_date")), "status": group.get("status")}})
+    return success({"group": {"groupId": group["group_id"], "groupCode": group.get("group_code"), "name": group.get("name"), "courseId": group.get("course_id"), "offeringId": group.get("offering_id"), "startDate": iso(group.get("start_date")), "endDate": iso(group.get("end_date")), "status": group.get("status")}})
 
 
 def admin_assign_students_to_group(payload: dict[str, Any]):
@@ -7250,16 +8051,37 @@ def admin_assign_students_to_group(payload: dict[str, Any]):
     require_fields(payload, ["groupId"])
     student_ids = payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else []
     with connection() as conn:
+        group = conn.execute(
+            """
+            select g.*, o.course_version_id, o.status as offering_status,
+                   o.capacity, o.rules_json, o.calendar_json
+            from courseplatform.groups g
+            join courseplatform.course_offerings o on o.offering_id = g.offering_id
+            where g.group_id = %s
+            """,
+            (payload["groupId"],),
+        ).fetchone()
+        if not group:
+            raise ApiError("GROUP_NOT_FOUND", "Grupo não encontrado.")
+        offering = {
+            **group,
+            "offering_id": group["offering_id"],
+            "course_id": group["course_id"],
+            "status": group.get("offering_status"),
+        }
         for student_id in student_ids:
+            enrollment = ensure_offering_enrollment_with_conn(
+                conn, student_id, offering, group["group_id"]
+            )
             conn.execute(
                 """
                 insert into courseplatform.group_members
-                  (group_member_id, group_id, student_id, status, joined_at, updated_at)
-                values (%s, %s, %s, 'ACTIVE', now(), now())
+                  (group_member_id, group_id, student_id, enrollment_id, status, joined_at, updated_at)
+                values (%s, %s, %s, %s, 'ACTIVE', now(), now())
                 on conflict (group_id, student_id) do update
-                set status = 'ACTIVE', updated_at = now()
+                set enrollment_id = excluded.enrollment_id, status = 'ACTIVE', updated_at = now()
                 """,
-                (generate_id("GM"), payload["groupId"], student_id),
+                (generate_id("GM"), payload["groupId"], student_id, enrollment["enrollment_id"]),
             )
         audit(conn, "ADMIN", admin["admin_id"], "GROUP_MEMBERS_ASSIGNED", "GROUP", payload["groupId"], {"studentCount": len(student_ids)})
         conn.commit()
@@ -7276,12 +8098,25 @@ def admin_set_lesson_access(payload: dict[str, Any]):
     lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
     student_ids = set(payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else [])
     group_ids = payload.get("groupIds") if isinstance(payload.get("groupIds"), list) else []
+    offering_id = str_value(payload.get("offeringId"))
     if group_ids:
         rows = fetch_all(
-            "select student_id from courseplatform.group_members where group_id = any(%s) and status = 'ACTIVE'",
+            """
+            select gm.student_id, g.offering_id
+            from courseplatform.group_members gm
+            join courseplatform.groups g on g.group_id = gm.group_id
+            where gm.group_id = any(%s) and gm.status = 'ACTIVE'
+            """,
             (group_ids,),
         )
         student_ids.update(row["student_id"] for row in rows)
+        offering_ids = {row.get("offering_id") for row in rows if row.get("offering_id")}
+        if offering_id and offering_ids and offering_ids != {offering_id}:
+            raise ApiError("GROUP_OFFERING_MISMATCH", "Os grupos não pertencem à edição selecionada.")
+        if not offering_id and len(offering_ids) == 1:
+            offering_id = next(iter(offering_ids))
+        if len(offering_ids) > 1:
+            raise ApiError("OFFERING_REQUIRED", "Selecione grupos de uma única edição/turma.")
     if not lesson_ids or not student_ids:
         raise ApiError("EMPTY_ACCESS_TARGET", "Selecione módulos e estudantes.")
     updated = 0
@@ -7292,26 +8127,12 @@ def admin_set_lesson_access(payload: dict[str, Any]):
                 lesson = conn.execute("select * from courseplatform.lessons where lesson_id = %s", (lesson_id,)).fetchone()
                 if not lesson:
                     continue
-                enrollment = conn.execute(
-                    """
-                    select *
-                    from courseplatform.enrollments
-                    where student_id = %s and course_id = %s
-                    order by enrolled_at desc nulls last
-                    limit 1
-                    """,
-                    (student_id, lesson["course_id"]),
-                ).fetchone()
-                if not enrollment:
-                    enrollment = conn.execute(
-                        """
-                        insert into courseplatform.enrollments
-                          (enrollment_id, student_id, course_id, status, enrolled_at, progress_percent, updated_at)
-                        values (%s, %s, %s, 'ACTIVE', now(), 0, now())
-                        returning *
-                        """,
-                        (generate_id("ENR"), student_id, lesson["course_id"]),
-                    ).fetchone()
+                offering = resolve_course_offering_with_conn(
+                    conn, lesson["course_id"], offering_id
+                )
+                enrollment = ensure_offering_enrollment_with_conn(
+                    conn, student_id, offering
+                )
                 previous = conn.execute(
                     """
                     select * from courseplatform.lesson_progress
@@ -7381,6 +8202,7 @@ def admin_manage_lesson_progress(payload: dict[str, Any]):
     lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
     student_ids = set(payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else [])
     group_ids = payload.get("groupIds") if isinstance(payload.get("groupIds"), list) else []
+    offering_id = str_value(payload.get("offeringId"))
     access_status = str_value(payload.get("contentAccessStatus")).upper()
     evaluation_status = str_value(payload.get("evaluationStatus")).upper()
     if access_status in {"UNCHANGED", "KEEP"}:
@@ -7406,10 +8228,22 @@ def admin_manage_lesson_progress(payload: dict[str, Any]):
     with connection() as conn:
         if group_ids:
             rows = conn.execute(
-                "select student_id from courseplatform.group_members where group_id = any(%s) and status = 'ACTIVE'",
+                """
+                select gm.student_id, g.offering_id
+                from courseplatform.group_members gm
+                join courseplatform.groups g on g.group_id = gm.group_id
+                where gm.group_id = any(%s) and gm.status = 'ACTIVE'
+                """,
                 (group_ids,),
             ).fetchall()
             student_ids.update(row["student_id"] for row in rows)
+            offering_ids = {row.get("offering_id") for row in rows if row.get("offering_id")}
+            if offering_id and offering_ids and offering_ids != {offering_id}:
+                raise ApiError("GROUP_OFFERING_MISMATCH", "Os grupos não pertencem à edição selecionada.")
+            if not offering_id and len(offering_ids) == 1:
+                offering_id = next(iter(offering_ids))
+            if len(offering_ids) > 1:
+                raise ApiError("OFFERING_REQUIRED", "Selecione grupos de uma única edição/turma.")
         if (access_status or evaluation_status) and not student_ids:
             raise ApiError("EMPTY_PROGRESS_TARGET", "Selecione pelo menos uma turma ou estudante.")
 
@@ -7431,25 +8265,12 @@ def admin_manage_lesson_progress(payload: dict[str, Any]):
                 ).fetchone()
                 if not lesson:
                     continue
-                enrollment = conn.execute(
-                    """
-                    select * from courseplatform.enrollments
-                    where student_id = %s and course_id = %s
-                    order by enrolled_at desc nulls last
-                    limit 1
-                    """,
-                    (student_id, lesson["course_id"]),
-                ).fetchone()
-                if not enrollment:
-                    enrollment = conn.execute(
-                        """
-                        insert into courseplatform.enrollments
-                          (enrollment_id, student_id, course_id, status, enrolled_at, progress_percent, updated_at)
-                        values (%s, %s, %s, 'ACTIVE', now(), 0, now())
-                        returning *
-                        """,
-                        (generate_id("ENR"), student_id, lesson["course_id"]),
-                    ).fetchone()
+                offering = resolve_course_offering_with_conn(
+                    conn, lesson["course_id"], offering_id
+                )
+                enrollment = ensure_offering_enrollment_with_conn(
+                    conn, student_id, offering
+                )
                 progress = conn.execute(
                     """
                     select * from courseplatform.lesson_progress
@@ -8001,7 +8822,9 @@ def admin_delete_certificate(payload: dict[str, Any]):
 
 def approve_participation_request(conn, request, admin):
     student = conn.execute("select * from courseplatform.students where student_id = %s", (request["student_id"],)).fetchone()
-    cert, _, _, completed = ensure_simple_certificate(conn, student, request["course_id"])
+    cert, _, _, completed = ensure_simple_certificate(
+        conn, student, request["course_id"], str_value(request.get("enrollment_id"))
+    )
     if not completed:
         raise ApiError("COURSE_NOT_COMPLETED", "O estudante ainda não concluiu este curso.")
     if not cert:
@@ -8053,15 +8876,25 @@ def admin_review_certificate_request(payload: dict[str, Any]):
         elif decision == "APPROVED":
             student = conn.execute("select * from courseplatform.students where student_id = %s", (request["student_id"],)).fetchone()
             course = conn.execute("select * from courseplatform.courses where course_id = %s", (request["course_id"],)).fetchone()
+            enrollment = resolve_student_enrollment_with_conn(
+                conn,
+                request["student_id"],
+                request["course_id"],
+                str_value(request.get("enrollment_id")),
+            )
+            version = conn.execute(
+                "select * from courseplatform.course_versions where course_version_id = %s",
+                (enrollment["course_version_id"],),
+            ).fetchone()
             certificate = conn.execute(
                 """
                 insert into courseplatform.certificates
-                  (certificate_id, student_id, course_id, certificate_number, verification_code,
+                  (certificate_id, student_id, course_id, enrollment_id, offering_id,
+                   course_version_id, certificate_number, verification_code,
                    issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
                    recognition_level, content_summary, template_snapshot_json, professional_request_id,
                    download_count, max_downloads, payment_status, approved_by, approved_at)
-                values (%s, %s, %s, %s, %s, now(),
-                  (select final_score from courseplatform.enrollments where student_id = %s and course_id = %s limit 1),
+                values (%s, %s, %s, %s, %s, %s, %s, %s, now(), %s,
                   '', '', 'ISSUED', 'PROFESSIONAL', 'CONTENT_DETAILED', %s, %s, %s, 0, 5,
                   'CONFIRMED', %s, now())
                 returning *
@@ -8070,12 +8903,14 @@ def admin_review_certificate_request(payload: dict[str, Any]):
                     generate_id("CERT"),
                     request["student_id"],
                     request["course_id"],
+                    enrollment["enrollment_id"],
+                    enrollment["offering_id"],
+                    enrollment["course_version_id"],
                     certificate_number(),
                     certificate_verification_code(),
-                    request["student_id"],
-                    request["course_id"],
-                    certificate_content_summary(conn, request["course_id"]),
-                    json.dumps(certificate_template_snapshot(conn, request["course_id"], "PROFESSIONAL")),
+                    enrollment.get("final_score"),
+                    certificate_content_summary(conn, request["course_id"], version),
+                    json.dumps(certificate_template_snapshot(conn, request["course_id"], "PROFESSIONAL", version)),
                     request["request_id"],
                     admin["admin_id"],
                 ),
@@ -10299,6 +11134,11 @@ ACTIONS = {
     "adminGetPlatformStatistics": admin_platform_statistics,
     "adminListCourses": admin_list_courses,
     "adminGetCourseStructure": admin_course_structure,
+    "adminCreateCourseVersion": admin_create_course_version,
+    "adminPublishCourseVersion": admin_publish_course_version,
+    "adminSaveCourseOffering": admin_save_course_offering,
+    "adminEnrollStudentsInOffering": admin_enroll_students_in_offering,
+    "adminListCourseReconciliationIssues": admin_list_course_reconciliation_issues,
     "adminListGroups": admin_list_groups,
     "adminListStudents": admin_list_students,
     "adminGetStudentDetails": admin_student_details,

@@ -175,12 +175,12 @@ export class CoursePlatformApi {
     }
   }
 
-  dashboard(courseId = this.courseId) {
-    return this.studentRequest('getDashboard', { courseId });
+  dashboard(courseId = this.courseId, enrollmentId = '') {
+    return this.studentRequest('getDashboard', { courseId, enrollmentId });
   }
 
-  studentHome(courseId = this.courseId) {
-    return this.studentRequest('getStudentHome', { courseId });
+  studentHome(courseId = this.courseId, enrollmentId = '') {
+    return this.studentRequest('getStudentHome', { courseId, enrollmentId });
   }
 
   myCourses() {
@@ -243,6 +243,10 @@ export class CoursePlatformApi {
 
   chatRooms() {
     return this.studentRequest('getChatRooms');
+  }
+
+  chatRealtimeConfiguration() {
+    return this.studentRequest('getChatRealtimeConfiguration');
   }
 
   chatContacts() {
@@ -313,12 +317,12 @@ export class CoursePlatformApi {
     return result;
   }
 
-  getLesson(lessonId) {
-    return this.studentRequest('getLesson', { lessonId });
+  getLesson(lessonId, enrollmentId = '') {
+    return this.studentRequest('getLesson', { lessonId, enrollmentId });
   }
 
-  startAttempt(lessonId) {
-    return this.studentRequest('startAttempt', { lessonId });
+  startAttempt(lessonId, enrollmentId = '') {
+    return this.studentRequest('startAttempt', { lessonId, enrollmentId });
   }
 
   saveAnswer(attemptId, questionId, values = {}) {
@@ -358,23 +362,24 @@ export class CoursePlatformApi {
     }, download);
   }
 
-  certificate(courseId = this.courseId) {
-    return this.studentRequest('getMyCertificate', { courseId });
+  certificate(courseId = this.courseId, enrollmentId = '') {
+    return this.studentRequest('getMyCertificate', { courseId, enrollmentId });
   }
 
-  certifications(courseId = this.courseId) {
-    return this.studentRequest('getMyCertifications', { courseId });
+  certifications(courseId = this.courseId, enrollmentId = '') {
+    return this.studentRequest('getMyCertifications', { courseId, enrollmentId });
   }
 
-  requestProfessionalCertificate(courseId = this.courseId, surveyAnswers = {}) {
+  requestProfessionalCertificate(courseId = this.courseId, surveyAnswers = {}, enrollmentId = '') {
     return this.studentRequest('requestProfessionalCertificate', {
       courseId,
+      enrollmentId,
       surveyAnswers
     });
   }
 
-  requestParticipationCertificate(courseId = this.courseId) {
-    return this.studentRequest('requestParticipationCertificate', { courseId });
+  requestParticipationCertificate(courseId = this.courseId, enrollmentId = '') {
+    return this.studentRequest('requestParticipationCertificate', { courseId, enrollmentId });
   }
 
   async submitProfessionalCertificatePayment(requestId, file) {
@@ -628,6 +633,30 @@ export class CoursePlatformApi {
     }, options);
   }
 
+  adminCreateCourseVersion(courseId) {
+    return this.mutateAdmin('adminCreateCourseVersion', { courseId });
+  }
+
+  adminPublishCourseVersion(courseVersionId) {
+    return this.mutateAdmin('adminPublishCourseVersion', { courseVersionId });
+  }
+
+  adminSaveCourseOffering(payload) {
+    return this.mutateAdmin('adminSaveCourseOffering', payload);
+  }
+
+  adminEnrollStudentsInOffering(offeringId, studentIds, groupId = '') {
+    return this.mutateAdmin('adminEnrollStudentsInOffering', {
+      offeringId,
+      studentIds,
+      groupId
+    });
+  }
+
+  adminCourseReconciliationIssues(status = 'OPEN', options = {}) {
+    return this.cachedAdminRequest('adminListCourseReconciliationIssues', { status }, options);
+  }
+
   adminSaveCourse(payload) {
     return this.mutateAdmin('adminSaveCourse', payload);
   }
@@ -674,6 +703,10 @@ export class CoursePlatformApi {
 
   adminChatRooms() {
     return this.adminRequest('adminListChatRooms');
+  }
+
+  adminChatRealtimeConfiguration() {
+    return this.adminRequest('adminGetChatRealtimeConfiguration');
   }
 
   adminUpdatePresence(currentRoomId = '') {

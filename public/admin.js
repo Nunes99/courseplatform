@@ -5641,7 +5641,7 @@ function renderCourseList() {
   main.innerHTML = `
     <div class="admin-page-heading">
       <div>
-        <p class="eyebrow">Catalogo académico</p>
+        <p class="eyebrow">Catálogo académico</p>
         <h1>Cursos</h1>
       </div>
       <div class="admin-heading-actions">
@@ -5899,6 +5899,7 @@ function renderCourses() {
 
     <section class="admin-content-tabs" aria-label="Organização do conteúdo">
       <button type="button" class="${state.courseView === 'overview' ? 'is-active' : ''}" data-course-view="overview">Visão geral</button>
+      <button type="button" class="${state.courseView === 'editions' ? 'is-active' : ''}" data-course-view="editions">Versões e edições</button>
       <button type="button" class="${state.courseView === 'modules' ? 'is-active' : ''}" data-course-view="modules">Módulos</button>
       <button type="button" class="${state.courseView === 'groups' ? 'is-active' : ''}" data-course-view="groups">Grupos</button>
     </section>
@@ -5915,6 +5916,17 @@ function renderCourses() {
   document.querySelector('#deleteCourse')?.addEventListener('click', deleteCurrentCourse);
   document.querySelector('#newGroup')?.addEventListener('click', () => showGroupDialog());
   document.querySelector('#newLesson')?.addEventListener('click', () => showLessonDialog());
+  document.querySelector('#createCourseDraft')?.addEventListener('click', createCourseDraft);
+  document.querySelector('#newCourseOffering')?.addEventListener('click', () => showCourseOfferingDialog());
+  root.querySelectorAll('[data-publish-course-version]').forEach((button) => {
+    button.addEventListener('click', () => publishCourseVersion(button.dataset.publishCourseVersion));
+  });
+  root.querySelectorAll('[data-edit-course-offering]').forEach((button) => {
+    button.addEventListener('click', () => showCourseOfferingDialog(button.dataset.editCourseOffering));
+  });
+  root.querySelectorAll('[data-enroll-course-offering]').forEach((button) => {
+    button.addEventListener('click', () => showOfferingEnrollmentDialog(button.dataset.enrollCourseOffering));
+  });
   root.querySelectorAll('[data-course-view]').forEach((button) => {
     button.addEventListener('click', () => {
       state.courseView = button.dataset.courseView;
@@ -5957,6 +5969,41 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
       ${state.courseFilters.showDeletedItems ? 'Ocultar eliminados' : `Mostrar eliminados (${deletedTotal})`}
     </button>
   ` : '';
+
+  if (state.courseView === 'editions') {
+    const versions = state.courseStructure?.versions || [];
+    const offerings = state.courseStructure?.offerings || [];
+    const hasDraft = versions.some((item) => item.status === 'DRAFT');
+    return `
+      <section class="admin-content-panel">
+        <div class="course-section-heading">
+          <div>
+            <p class="eyebrow">Publicação e calendário</p>
+            <h2>Versões e edições do curso</h2>
+            <p>As versões publicadas preservam o conteúdo histórico de cada matrícula.</p>
+          </div>
+          <div class="admin-heading-actions">
+            <button class="button button-secondary" id="createCourseDraft" type="button" ${hasDraft ? 'disabled' : ''}>Nova versão</button>
+            <button class="button button-primary" id="newCourseOffering" type="button">Nova edição</button>
+          </div>
+        </div>
+        <div class="course-edition-grid">
+          <div>
+            <h3>Versões de conteúdo</h3>
+            <div class="course-module-list course-module-list-clean">
+              ${versions.length ? versions.map(courseVersionCardTemplate).join('') : '<div class="student-empty-state">Nenhuma versão registada.</div>'}
+            </div>
+          </div>
+          <div>
+            <h3>Edições e turmas</h3>
+            <div class="course-module-list course-module-list-clean">
+              ${offerings.length ? offerings.map(courseOfferingCardTemplate).join('') : '<div class="student-empty-state">Nenhuma edição registada.</div>'}
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
 
   if (state.courseView === 'modules') {
     return `
@@ -6040,7 +6087,7 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
             <input type="number" name="totalHours" min="0" value="${escapeHtml(course.totalHours || 0)}">
           </label>
           <label>
-            <span>Nota minima</span>
+          <span>Nota mínima</span>
             <input type="number" name="passingScore" min="0" max="100" value="${escapeHtml(course.passingScore || 60)}">
           </label>
         </div>
@@ -6051,6 +6098,55 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
         </div>
       </form>
     </section>
+  `;
+}
+
+function courseVersionCardTemplate(version) {
+  return `
+    <article class="course-module-card">
+      <div>
+        <span class="status-pill ${statusClass(version.status)}">${escapeHtml(statusLabel(version.status))}</span>
+        <h3>Versão ${escapeHtml(version.versionNumber || '')}</h3>
+        <p>${escapeHtml(version.title || '')}</p>
+      </div>
+      <dl>
+        <div><dt>Carga horária</dt><dd>${escapeHtml(version.totalHours || 0)} h</dd></div>
+        <div><dt>Nota mínima</dt><dd>${escapeHtml(version.passingScore || 0)}%</dd></div>
+        <div><dt>Publicada</dt><dd>${escapeHtml(formatDate(version.publishedAt))}</dd></div>
+      </dl>
+      ${version.status === 'DRAFT' ? `
+        <div class="admin-row-actions">
+          <button class="button button-primary button-small" type="button"
+            data-publish-course-version="${escapeHtml(version.courseVersionId)}">Publicar versão</button>
+        </div>
+      ` : ''}
+    </article>
+  `;
+}
+
+function courseOfferingCardTemplate(offering) {
+  return `
+    <article class="course-module-card">
+      <div>
+        <span class="status-pill ${statusClass(offering.status)}">${escapeHtml(statusLabel(offering.status))}</span>
+        <h3>${escapeHtml(offering.name || 'Edição')}</h3>
+        <p>${escapeHtml(offering.offeringCode || offering.offeringId || '')}</p>
+      </div>
+      <dl>
+        <div><dt>Matrículas</dt><dd>${escapeHtml(offering.enrollmentCount || 0)}</dd></div>
+        <div><dt>Capacidade</dt><dd>${escapeHtml(offering.capacity || 'Sem limite')}</dd></div>
+        <div><dt>Período</dt><dd>${escapeHtml(formatDate(offering.startDate))} - ${escapeHtml(formatDate(offering.endDate))}</dd></div>
+      </dl>
+      <div class="admin-row-actions">
+        <button class="button button-secondary button-small" type="button"
+          aria-label="Editar ${escapeHtml(offering.name || offering.offeringCode || 'edição')}"
+          data-edit-course-offering="${escapeHtml(offering.offeringId)}">Editar</button>
+        <button class="button button-primary button-small" type="button"
+          aria-label="Matricular estudantes em ${escapeHtml(offering.name || offering.offeringCode || 'edição')}"
+          data-enroll-course-offering="${escapeHtml(offering.offeringId)}"
+          ${['OPEN', 'ACTIVE'].includes(offering.status) ? '' : 'disabled'}>Matricular estudantes</button>
+      </div>
+    </article>
   `;
 }
 
@@ -6448,7 +6544,7 @@ function showCourseDialog() {
             <input type="number" name="totalHours" min="0" value="0">
           </label>
           <label>
-            <span>Nota minima</span>
+            <span>Nota mínima</span>
             <input type="number" name="passingScore" min="0" max="100" value="60">
           </label>
           <label>
@@ -6498,10 +6594,189 @@ function showCourseDialog() {
   });
 }
 
+
+async function createCourseDraft() {
+  const course = state.courseStructure?.course || {};
+  if (!course.courseId || !confirmAdminAction('Criar uma nova versão em rascunho a partir do conteúdo atual?')) return;
+  const button = document.querySelector('#createCourseDraft');
+  setBusy(button, true, 'A criar...');
+  try {
+    const result = await api.adminCreateCourseVersion(course.courseId);
+    showToast(result.created ? 'Nova versão em rascunho criada.' : 'Já existe uma versão em rascunho.', 'success');
+    await loadCourses();
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function publishCourseVersion(courseVersionId) {
+  if (!courseVersionId || !confirmAdminAction('Publicar esta versão? O conteúdo publicado ficará imutável.')) return;
+  const button = document.querySelector(`[data-publish-course-version="${CSS.escape(courseVersionId)}"]`);
+  setBusy(button, true, 'A publicar...');
+  try {
+    await api.adminPublishCourseVersion(courseVersionId);
+    showToast('Versão publicada.', 'success');
+    await loadCourses();
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function showCourseOfferingDialog(offeringId = '') {
+  const versions = (state.courseStructure?.versions || []).filter((item) => item.status === 'PUBLISHED');
+  const existing = (state.courseStructure?.offerings || []).find((item) => item.offeringId === offeringId) || {};
+  const course = state.courseStructure?.course || {};
+  const selectedVersionId = existing.courseVersionId || versions[0]?.courseVersionId || '';
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card course-lesson-dialog">
+      <button class="dialog-close" type="button">x</button>
+      <h2>${offeringId ? 'Editar edição' : 'Nova edição do curso'}</h2>
+      <form id="courseOfferingForm" class="form-stack">
+        <input type="hidden" name="offeringId" value="${escapeHtml(existing.offeringId || '')}">
+        <input type="hidden" name="courseId" value="${escapeHtml(course.courseId || '')}">
+        <label>
+          <span>Versão publicada</span>
+          <select name="courseVersionId" required ${existing.enrollmentCount ? 'disabled' : ''}>
+            ${versions.map((version) => `<option value="${escapeHtml(version.courseVersionId)}" ${version.courseVersionId === selectedVersionId ? 'selected' : ''}>Versão ${escapeHtml(version.versionNumber)} - ${escapeHtml(version.title || '')}</option>`).join('')}
+          </select>
+          ${existing.enrollmentCount ? `<input type="hidden" name="courseVersionId" value="${escapeHtml(selectedVersionId)}">` : ''}
+        </label>
+        <div class="course-form-grid">
+          <label><span>Código da edição</span><input name="offeringCode" value="${escapeHtml(existing.offeringCode || '')}" required></label>
+          <label><span>Nome</span><input name="name" value="${escapeHtml(existing.name || '')}" required></label>
+          <label><span>Capacidade</span><input type="number" name="capacity" min="1" value="${escapeHtml(existing.capacity || '')}" placeholder="Sem limite"></label>
+        </div>
+        <div class="course-form-grid">
+          <label><span>Início</span><input type="date" name="startDate" value="${escapeHtml(dateInputValue(existing.startDate))}"></label>
+          <label><span>Fim</span><input type="date" name="endDate" value="${escapeHtml(dateInputValue(existing.endDate))}"></label>
+          <label>
+            <span>Estado</span>
+            <select name="status">
+              ${['DRAFT', 'OPEN', 'ACTIVE', 'COMPLETED', 'CANCELLED', 'ARCHIVED'].map((status) => studentFilterOption(status, statusLabel(status), existing.status || 'DRAFT')).join('')}
+            </select>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit" ${versions.length ? '' : 'disabled'}>Guardar edição</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-cancel-dialog]').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.querySelector('#courseOfferingForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!confirmAdminAction('Guardar os dados desta edição/turma?')) return;
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const values = Object.fromEntries(new FormData(form));
+    values.capacity = values.capacity ? Number(values.capacity) : null;
+    setBusy(button, true, 'A guardar...');
+    try {
+      await api.adminSaveCourseOffering(values);
+      showToast('Edição guardada.', 'success');
+      overlay.remove();
+      await loadCourses();
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  });
+}
+
+function showOfferingEnrollmentDialog(offeringId) {
+  const offering = (state.courseStructure?.offerings || []).find((item) => item.offeringId === offeringId);
+  if (!offering) return;
+  const groups = (state.groups || []).filter(({ group }) => group.offeringId === offeringId && group.status === 'ACTIVE');
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card course-lesson-dialog">
+      <button class="dialog-close" type="button">x</button>
+      <h2>Matricular estudantes</h2>
+      <p>${escapeHtml(offering.name || offering.offeringCode || '')}</p>
+      <form id="offeringEnrollmentForm" class="form-stack">
+        <label>
+          <span>Grupo opcional</span>
+          <select name="groupId">
+            <option value="">Sem grupo</option>
+            ${groups.map(({ group }) => `<option value="${escapeHtml(group.groupId)}">${escapeHtml(group.name)}</option>`).join('')}
+          </select>
+        </label>
+        <fieldset class="group-student-picker">
+          <legend>Estudantes</legend>
+          ${selectAllToolbar('studentIds')}
+          <div class="video-student-list">
+            ${(state.students || []).map(({ student, enrollments }) => {
+              const enrolled = (enrollments || []).some((item) => item.offeringId === offeringId && item.status !== 'CANCELLED');
+              return `
+                <label class="video-student-option">
+                  <input type="checkbox" name="studentIds" value="${escapeHtml(student.studentId)}" ${enrolled ? 'disabled' : ''}>
+                  <span><strong>${escapeHtml(studentPublicIdLabel(student.publicStudentId))} · ${escapeHtml(student.fullName)}</strong><small>${enrolled ? 'Já matriculado nesta edição' : escapeHtml(student.email)}</small></span>
+                </label>
+              `;
+            }).join('') || '<p class="empty-note">Nenhum estudante disponível.</p>'}
+          </div>
+        </fieldset>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
+          <button class="button button-primary" type="submit">Confirmar matrículas</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  bindSelectAllControls(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-cancel-dialog]').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  overlay.querySelector('#offeringEnrollmentForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const studentIds = data.getAll('studentIds');
+    if (!studentIds.length) {
+      showToast('Selecione pelo menos um estudante.', 'error');
+      return;
+    }
+    if (!confirmAdminAction(`Confirmar ${studentIds.length} matrícula(s) nesta edição?`)) return;
+    const button = form.querySelector('button[type="submit"]');
+    setBusy(button, true, 'A matricular...');
+    try {
+      await api.adminEnrollStudentsInOffering(offeringId, studentIds, data.get('groupId') || '');
+      showToast('Matrículas atualizadas.', 'success');
+      overlay.remove();
+      await loadCourses();
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  });
+}
+
 function showGroupDialog(groupId = '') {
   const found = (state.groups || []).find((item) => item.group.groupId === groupId);
+  const offerings = (state.courseStructure?.offerings || []).filter(
+    (item) => !['CANCELLED', 'ARCHIVED'].includes(item.status) || item.offeringId === found?.group?.offeringId
+  );
   const group = found?.group || {
     courseId: state.courseStructure?.course?.courseId || state.selectedCourseId || config.courseId,
+    offeringId: offerings.length === 1 ? offerings[0].offeringId : '',
     groupCode: '',
     name: '',
     startDate: '',
@@ -6519,6 +6794,13 @@ function showGroupDialog(groupId = '') {
       <form id="groupForm" class="form-stack">
         <input type="hidden" name="groupId" value="${escapeHtml(group.groupId || '')}">
         <input type="hidden" name="courseId" value="${escapeHtml(group.courseId)}">
+        <label>
+          <span>Edição/turma do curso</span>
+          <select name="offeringId" required>
+            <option value="">Selecionar edição</option>
+            ${offerings.map((offering) => `<option value="${escapeHtml(offering.offeringId)}" ${offering.offeringId === group.offeringId ? 'selected' : ''}>${escapeHtml(offering.name || offering.offeringCode)}</option>`).join('')}
+          </select>
+        </label>
         <label>
           <span>Nome da turma</span>
           <input name="name" value="${escapeHtml(group.name || '')}" required>

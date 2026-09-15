@@ -47,6 +47,7 @@ class SubmissionDatabase:
         }
         self.snapshot = snapshot
         self.progress = dict(progress_id="P1", student_id="S1", lesson_id="L1", status="TIME_EXCEEDED",
+                             enrollment_id="E1",
                              evaluation_status="TIME_EXCEEDED", content_access_status="AVAILABLE", attempt_count=1,
                              submission_duration_minutes=180, feedback_release_mode="AFTER_REVIEW",
                              show_correct_answers=False, show_explanations=False)
@@ -86,6 +87,15 @@ class SubmissionDatabase:
             return Result(rows=self.snapshot["questions"])
         if q.startswith("select option_id, question_id"):
             return Result(rows=[])
+        if q.startswith("select cv.content_snapshot_json"):
+            return Result({"content_snapshot_json": {"lessons": [{
+                "lesson_id": "L1",
+                "submission_duration_minutes": 180,
+                "feedback_release_mode": "AFTER_REVIEW",
+                "show_correct_answers": False,
+                "show_explanations": False,
+                "questions": self.snapshot["questions"],
+            }]}})
         if q.startswith("select * from courseplatform.answers"):
             return Result(rows=self.answers.get(params[0], []))
         if q.startswith("select attempt_id from courseplatform.files"):

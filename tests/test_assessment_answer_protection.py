@@ -152,31 +152,56 @@ class AttemptStatusConnection:
 
 class AssessmentAnswerProtectionTests(unittest.TestCase):
     def test_http_student_lesson_never_contains_answer_key_or_internal_score(self):
-        def fetch_one(query, params):
-            return lesson_row() if "from courseplatform.lessons" in query else {
-                "progress_id": "P1",
-                "lesson_id": "L1",
-                "status": "AVAILABLE",
-                "content_access_status": "AVAILABLE",
-                "evaluation_status": "NOT_STARTED",
-                "attempt_count": 0,
-            }
+        class LessonConnection:
+            def execute(self, query, params=()):
+                normalized = " ".join(query.lower().split())
+                if normalized.startswith("select course_id from courseplatform.lessons"):
+                    return QueryResult(row={"course_id": "C1"})
+                if normalized.startswith("select * from courseplatform.enrollments"):
+                    return QueryResult(row={
+                        "enrollment_id": "E1",
+                        "student_id": "S1",
+                        "course_id": "C1",
+                        "course_version_id": "CV1",
+                        "offering_id": "O1",
+                        "status": "ACTIVE",
+                    })
+                if normalized.startswith("select * from courseplatform.course_versions"):
+                    return QueryResult(row={
+                        "course_version_id": "CV1",
+                        "course_id": "C1",
+                        "version_number": 1,
+                        "status": "PUBLISHED",
+                        "title": "Curso",
+                        "content_snapshot_json": {
+                            "lessons": [{
+                                **lesson_row(),
+                                "content": [],
+                                "questions": [{**question_row(), "options": option_rows()}],
+                            }],
+                        },
+                    })
+                if normalized.startswith("select * from courseplatform.lesson_progress"):
+                    return QueryResult(row={
+                        "progress_id": "P1",
+                        "enrollment_id": "E1",
+                        "lesson_id": "L1",
+                        "status": "AVAILABLE",
+                        "content_access_status": "AVAILABLE",
+                        "evaluation_status": "NOT_STARTED",
+                        "attempt_count": 0,
+                    })
+                raise AssertionError(normalized)
 
-        def fetch_all(query, params):
-            if "lesson_content" in query:
-                return []
-            if "question_options" in query:
-                return option_rows()
-            if "courseplatform.questions" in query:
-                return [question_row()]
-            raise AssertionError(query)
+        @contextmanager
+        def connect():
+            yield LessonConnection()
 
         with (
             patch.object(actions, "require_application_schema"),
             patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
             patch.object(actions, "prepare_assessment_feature_schema"),
-            patch.object(actions, "fetch_one", side_effect=fetch_one),
-            patch.object(actions, "fetch_all", side_effect=fetch_all),
+            patch.object(actions, "connection", connect),
         ):
             response = TestClient(app).post("/api", json={
                 "action": "getLesson",
@@ -194,6 +219,10 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
             return {"course_id": "C1", "title": "Curso", "status": "ACTIVE"}
 
         def fetch_all(query, params):
+            if "from courseplatform.course_versions" in query:
+                return []
+            if "from courseplatform.course_offerings" in query:
+                return []
             if "from courseplatform.lessons" in query:
                 return [lesson_row()]
             if "lesson_content" in query:

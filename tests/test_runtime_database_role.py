@@ -14,6 +14,12 @@ MIGRATION = (
     / "migrations"
     / "20260913131500_create_courseplatform_runtime_role.sql"
 )
+COURSE_MODEL_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "20260915101047_model_course_versions_and_offerings.sql"
+)
 
 
 class _Rows:
@@ -40,14 +46,16 @@ class _SchemaConnection:
 class RuntimeDatabaseRoleTests(unittest.TestCase):
     @staticmethod
     def _granted_tables(sql: str, privilege: str) -> set[str]:
-        match = re.search(
+        matches = re.finditer(
             rf"grant\s+{privilege}\s+on\s+table\s+(.*?)\s+to\s+courseplatform_runtime\s*;",
             sql,
             re.IGNORECASE | re.DOTALL,
         )
-        if not match:
-            return set()
-        return set(re.findall(r"courseplatform\.([a-z_][a-z0-9_]*)", match.group(1)))
+        return {
+            table
+            for match in matches
+            for table in re.findall(r"courseplatform\.([a-z_][a-z0-9_]*)", match.group(1))
+        }
 
     def test_runtime_role_has_no_admin_attributes_or_password_in_migration(self):
         sql = MIGRATION.read_text(encoding="utf-8").lower()
@@ -94,7 +102,10 @@ class RuntimeDatabaseRoleTests(unittest.TestCase):
 
     def test_runtime_grants_cover_every_static_application_query(self):
         source = APPLICATION_SOURCE.read_text(encoding="utf-8")
-        sql = MIGRATION.read_text(encoding="utf-8")
+        sql = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (MIGRATION, COURSE_MODEL_MIGRATION)
+        )
         expected = {
             "select": set(
                 re.findall(

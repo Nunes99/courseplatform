@@ -29,6 +29,8 @@ Papéis administrativos atuais: `REVIEWER`, `ADMIN` e `OWNER`. O `OWNER` é o ú
 | Lista de estudantes | Não | Não | Leitura no âmbito | Leitura/gestão | Leitura/gestão |
 | Estado/matrícula do estudante | Não | Ler próprio | Leitura no âmbito | Gestão | Gestão |
 | Cursos públicos | Apenas publicados | Apenas atribuídos/publicados | Leitura | Gestão | Gestão |
+| Versões publicadas e edições | Não | Apenas as associadas às próprias matrículas | Leitura | Criar/publicar/configurar | Criar/publicar/configurar |
+| Matrículas em edições | Não | Ler apenas as próprias | Leitura no âmbito | Criar/gerir | Criar/gerir |
 | Estrutura e módulos | Apenas conteúdo público | Conforme matrícula/acesso | Leitura | Gestão | Gestão |
 | Enunciado e opções sem gabarito | Não | Próprios, conforme matrícula/acesso | Leitura no âmbito | Gestão | Gestão |
 | Gabarito antes da entrega | Não | Não | No âmbito de revisão | Sim | Sim |
@@ -74,7 +76,7 @@ Papéis administrativos atuais: `REVIEWER`, `ADMIN` e `OWNER`. O `OWNER` é o ú
 Os handlers usam `student_context` ou `student_context_with_conn`. Ações principais:
 
 - Perfil: `updateMyProfile`, `changeMyAccessCode`, `changeMyEmail`.
-- Cursos: `getDashboard`, `getStudentHome`, `getMyCourses`, `getMediaConfig`, `getLesson`.
+- Cursos: `getDashboard`, `getStudentHome`, `getMyCourses`, `getMediaConfig`, `getLesson`; a matrícula/edição é resolvida pela sessão e, quando existe mais de uma no mesmo curso, exige `enrollmentId` explícito.
 - Avaliações: `startAttempt`, `getAttemptStatus`, `saveAnswer`, `uploadFile`, `deleteUploadedFile`, `submitAttempt`.
 - Certificados: `getMyCertificate`, `getMyCertifications`, pedidos, pagamento e registo de download.
 - Comunicação: notificações, Push, Telegram e chat.
@@ -89,7 +91,11 @@ Limitação conhecida: a autorização é sobretudo por papel global; a noção 
 
 ### ADMIN e OWNER
 
-Usam `admin_context(payload, {"OWNER", "ADMIN"})` para gerir estudantes, cursos, módulos, grupos, acessos/progresso, media, certificados, pedidos, inquéritos e notificações/configurações.
+Usam `admin_context(payload, {"OWNER", "ADMIN"})` para gerir estudantes,
+cursos, versões, edições, matrículas, módulos, grupos, acessos/progresso, media,
+certificados, pedidos, inquéritos e notificações/configurações. Versões publicadas
+e a versão de uma edição com matrículas também são protegidas por constraints e
+triggers no Postgres.
 
 ### Apenas OWNER
 

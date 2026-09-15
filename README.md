@@ -148,6 +148,7 @@ node scripts/verify_certificate_browser.cjs
 node scripts/verify_assessment_feedback.cjs
 node scripts/verify_submission_retry.cjs
 node scripts/verify_participation_policy.cjs
+node scripts/verify_course_editions_browser.cjs
 Remove-Item Env:PREVIEW_URL
 ```
 

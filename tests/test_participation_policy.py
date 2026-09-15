@@ -35,7 +35,9 @@ class CertificateDB:
         self.calls = []
         self.course = {'course_id': 'C1', 'title': 'Curso de teste'}
         self.enrollment = {'enrollment_id': 'E1', 'student_id': 'S1', 'course_id': 'C1',
+                           'course_version_id': 'CV1', 'offering_id': 'O1',
                            'status': 'COMPLETED', 'progress_percent': 100}
+        self.version = {'course_version_id': 'CV1', 'course_id': 'C1', 'title': 'Curso de teste'}
         self.student = {'student_id': 'S1', 'full_name': 'Estudante de Teste'}
 
     def __enter__(self):
@@ -118,7 +120,7 @@ class ParticipationPolicyTests(unittest.TestCase):
             'utc_now': NOW,
             'ensure_certificate_feature_schema': None,
             'audit': None,
-            'course_completion_snapshot': (self.db.enrollment, self.db.course, 1, 1, True),
+            'course_completion_snapshot': (self.db.enrollment, self.db.course, self.db.version, 1, 1, True),
             'sync_enrollment_completion': self.db.enrollment,
             'certificate_content_summary': 'Conteudo',
             'certificate_template_snapshot': {'profile': {'issuerName': 'Original'}},
@@ -268,7 +270,11 @@ class ParticipationPolicyTests(unittest.TestCase):
         self.db.profile['participation']['enabled'] = False
         self.assert_code('PARTICIPATION_DISABLED', a.request_participation_certificate, {'courseId': 'C1'})
         self.db.profile['participation']['enabled'] = True
-        with patch.object(a, 'course_completion_snapshot', return_value=(self.db.enrollment, self.db.course, 1, 0, False)):
+        with patch.object(
+            a,
+            'course_completion_snapshot',
+            return_value=(self.db.enrollment, self.db.course, self.db.version, 1, 0, False),
+        ):
             self.assert_code('COURSE_NOT_COMPLETED', a.request_participation_certificate, {'courseId': 'C1'})
 
     def test_admin_can_restore_and_reset_downloads(self):

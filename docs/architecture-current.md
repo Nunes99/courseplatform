@@ -2,6 +2,10 @@
 
 Data da linha de base: 12 de setembro de 2026. Commit de referência: `c1a8188`.
 
+Atualização arquitetural preparada em 15 de setembro de 2026: catálogo, versões
+publicadas, edições/turmas e matrículas foram separados por migração expansiva.
+Esta atualização permanece local até validação e aplicação autorizada.
+
 ## Âmbito
 
 Este documento descreve o que existe no repositório. Não é a arquitetura-alvo e não confirma a configuração real do Supabase ou Vercel. Foram inspecionados código, SQL, frontend, testes e scripts locais; não foram consultados dados, credenciais ou logs de produção.
@@ -62,20 +66,19 @@ A área do estudante usa rotas por hash. A sessão do estudante é guardada em `
 
 ### Divergência dos assets
 
-As cópias `public/` e `backend/courseplatform/static/` não são integralmente iguais. Na linha de base, os seguintes ficheiros divergem:
+As cópias `public/` e `backend/courseplatform/static/` não são integralmente iguais. Após a atualização de 15 de setembro, ainda divergem:
 
 - `admin.html`
-- `api.js`
-- `app.js`
 - `chat.js`
 - `index.html`
 - `sw.js`
 
-`admin.js` e `assets/css/styles.css` estavam iguais na comparação efetuada. Não existe processo de build/sincronização versionado que defina automaticamente a cópia canónica.
+`admin.js`, `api.js`, `app.js` e `assets/css/styles.css` estão sincronizados.
+Não existe processo de build/sincronização versionado que defina automaticamente a cópia canónica.
 
 ## Superfície da API
 
-O dispatcher regista **109 nomes de ação**. Vários nomes administrativos reutilizam o mesmo handler do chat; `adminListPendingSubmissions` é alias de `adminListSubmissions`.
+O dispatcher regista **115 nomes de ação**. Vários nomes administrativos reutilizam o mesmo handler do chat; `adminListPendingSubmissions` é alias de `adminListSubmissions`.
 
 ### Públicas ou de autenticação
 
@@ -115,7 +118,7 @@ No chat, staff ativo pode aceder a salas não diretas; a autorização concreta 
 ### OWNER e ADMIN: gestão
 
 - Media e estudantes: `adminSaveMediaConfig`, `adminCreateStudent`, `adminChangeStudentEmail`, `adminSetStudentStatus`, `adminResetStudentAccessCode`, `adminRestoreCredentials`.
-- Cursos e aprendizagem: `adminSaveCourse`, `adminSaveLesson`, `adminSaveLessonContent`, `adminSaveGroup`, `adminAssignStudentsToGroup`, `adminSetLessonAccess`, `adminManageLessonProgress`.
+- Cursos e aprendizagem: `adminSaveCourse`, `adminSaveLesson`, `adminSaveLessonContent`, `adminCreateCourseVersion`, `adminPublishCourseVersion`, `adminSaveCourseOffering`, `adminEnrollStudentsInOffering`, `adminListCourseReconciliationIssues`, `adminSaveGroup`, `adminAssignStudentsToGroup`, `adminSetLessonAccess`, `adminManageLessonProgress`.
 - Certificados: `adminSetCertificateStatus`, `adminRefreshCertificateFormat`, `adminDeleteCertificate`, `adminReviewCertificateRequest`, `adminDeleteCertificateRequest`, `adminSaveCertificateSettings`, `adminSaveCertificateSurvey`, `adminUploadCertificateAsset`, `adminUploadBrandLogo`.
 - Notificações: `adminCreateNotification`, `adminSaveNotificationTemplate`, `adminResetNotificationTemplate`, `adminSaveWhatsAppConfiguration`, `adminSaveEmailConfiguration`, `adminSaveTelegramConfiguration`, `adminRetryNotificationDeliveries`.
 
@@ -146,13 +149,13 @@ Pontos ainda desconhecidos: rate limiting/WAF externo, MFA, grants reais, polici
 
 `backend/courseplatform/db.py` abre ligações psycopg síncronas e desativa prepared statements automáticos para compatibilidade com transaction pooling do Supavisor. A API usa a URL Postgres diretamente.
 
-A cadeia em `supabase/migrations/` termina com **43 tabelas** no esquema
+A cadeia em `supabase/migrations/` termina com **46 tabelas** no esquema
 `courseplatform`, incluindo o marcador operacional `schema_versions`:
 
 - Identidade: `students`, `admins`, `sessions`, `student_password_resets`, `student_password_reset_attempts`, `new_credentials`.
-- Catálogo: `courses`, `lessons`, `lesson_content`, `media_content`.
+- Catálogo e publicação: `courses`, `course_versions`, `course_offerings`, `lessons`, `lesson_content`, `media_content`.
 - Avaliações: `questions`, `question_options`, `lesson_progress`, `attempts`, `answers`, `files`, `reviews`.
-- Turmas: `groups`, `enrollments`, `group_members`.
+- Turmas: `groups`, `enrollments`, `group_members`, `migration_reconciliation_issues`.
 - Chat: `chat_rooms`, `chat_messages`, `chat_reads`, `chat_message_receipts`, `chat_presence`, `chat_message_reports`.
 - Notificações: `notifications`, `notification_deliveries`, `notification_channel_settings`, `notification_templates`, `push_subscriptions`, `telegram_link_tokens`, `notification_channel_state`.
 - Certificação: `certificates`, `certificate_settings`, `certificate_requests`.
@@ -233,7 +236,8 @@ Browser -> completeStudentPasswordReset(token, nova senha)
 ### Aprendizagem e submissão
 
 ```text
-Matrícula -> lesson_progress -> startAttempt -> attempts
+Curso de catálogo -> versão publicada imutável -> edição/turma -> matrícula
+  -> lesson_progress -> startAttempt -> attempts
   -> saveAnswer / uploadFile -> submitAttempt
   -> adminReviewSubmission -> reviews + estado da tentativa/progresso
   -> possível autorização de reenvio -> nova tentativa preservando histórico

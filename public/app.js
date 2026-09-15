@@ -71,6 +71,7 @@ const state = {
   dashboard: null,
   myCourses: [],
   selectedCourseId: localStorage.getItem('courseSelectedCourseId') || config.courseId || '',
+  selectedEnrollmentId: localStorage.getItem('courseSelectedEnrollmentId') || '',
   lesson: null,
   attempt: null,
   attemptData: null,
@@ -1044,7 +1045,9 @@ async function logout() {
 function studentAppShell(activeView, content, page = {}) {
   const student = state.dashboard?.student || {};
   const course = state.dashboard?.course || {};
-  const currentCourse = state.myCourses.find((item) => item.course?.courseId === state.selectedCourseId)?.course || course;
+  const currentCourse = state.myCourses.find(
+    (item) => item.enrollment?.enrollmentId === state.selectedEnrollmentId
+  )?.course || course;
   const navItems = [
     { id: 'overview', label: 'Visão geral', href: '#/', icon: 'classroom' },
     { id: 'courses', label: 'Meus cursos', href: '#/courses', icon: 'book-shelf' },
@@ -1142,7 +1145,9 @@ function studentAppShell(activeView, content, page = {}) {
 
 function normalizeStudentDashboard(home = {}) {
   const dashboard = home.dashboard || {};
-  const currentCourse = (home.courses || []).find((item) => item.course?.courseId === home.selectedCourseId) || {};
+  const currentCourse = (home.courses || []).find(
+    (item) => item.enrollment?.enrollmentId === home.selectedEnrollmentId
+  ) || {};
   const course = dashboard.course || currentCourse.course || {};
   const enrollment = dashboard.enrollment || currentCourse.enrollment || {};
   const student = dashboard.student || home.student || {};
@@ -1225,7 +1230,7 @@ async function renderDashboard(view = 'overview') {
   root.innerHTML = loadingTemplate('A carregar o curso...');
 
   const [home, notificationData, pushData] = await Promise.all([
-    api.studentHome(state.selectedCourseId),
+    api.studentHome(state.selectedCourseId, state.selectedEnrollmentId),
     api.notifications({ limit: 6 }),
     api.pushConfiguration()
   ]);
@@ -1233,7 +1238,9 @@ async function renderDashboard(view = 'overview') {
   setNotificationState(notificationData);
   state.myCourses = Array.isArray(home.courses) ? home.courses : [];
   state.selectedCourseId = home.selectedCourseId || state.selectedCourseId || config.courseId || '';
+  state.selectedEnrollmentId = home.selectedEnrollmentId || state.selectedEnrollmentId || '';
   localStorage.setItem('courseSelectedCourseId', state.selectedCourseId);
+  localStorage.setItem('courseSelectedEnrollmentId', state.selectedEnrollmentId);
   setMediaConfig(home.mediaConfig || {});
   applyBrandLogo();
 
@@ -1266,7 +1273,9 @@ async function renderDashboard(view = 'overview') {
   const latestFeedbackItem = dashboard.lessons
     .filter((item) => item.activeAttempt?.reviewComments)
     .sort((left, right) => new Date(right.activeAttempt?.reviewedAt || 0) - new Date(left.activeAttempt?.reviewedAt || 0))[0] || null;
-  const selectedCourseEntry = state.myCourses.find((item) => item.course?.courseId === state.selectedCourseId);
+  const selectedCourseEntry = state.myCourses.find(
+    (item) => item.enrollment?.enrollmentId === state.selectedEnrollmentId
+  );
   const nextDeadlineValue = nextLessonItem?.activeAttempt?.deadlineAt || selectedCourseEntry?.group?.endDate || '';
   const nextDeadlineLabel = nextDeadlineValue ? formatDate(nextDeadlineValue) : 'Sem prazo definido';
 
@@ -1580,7 +1589,9 @@ async function renderDashboard(view = 'overview') {
   root.querySelectorAll('[data-select-student-course]').forEach((button) => {
     button.addEventListener('click', async () => {
       state.selectedCourseId = button.dataset.selectStudentCourse;
+      state.selectedEnrollmentId = button.dataset.enrollmentId || '';
       localStorage.setItem('courseSelectedCourseId', state.selectedCourseId);
+      localStorage.setItem('courseSelectedEnrollmentId', state.selectedEnrollmentId);
       await renderDashboard(view);
     });
   });
@@ -1608,9 +1619,10 @@ async function renderDashboard(view = 'overview') {
 function studentCourseCardTemplate(item) {
   const course = item.course || {};
   const enrollment = item.enrollment || {};
+  const offering = item.offering || {};
   const group = item.group || null;
-  const active = course.courseId === state.selectedCourseId;
-  const remainingDays = courseRemainingDaysLabel(group?.endDate);
+  const active = enrollment.enrollmentId === state.selectedEnrollmentId;
+  const remainingDays = courseRemainingDaysLabel(offering.endDate || group?.endDate);
 
   return `
     <article class="student-course-card ${active ? 'is-active' : ''}">
@@ -1628,6 +1640,7 @@ function studentCourseCardTemplate(item) {
       </dl>
       <button class="button ${active ? 'button-disabled' : 'button-secondary'}" type="button"
         data-select-student-course="${escapeHtml(course.courseId)}"
+        data-enrollment-id="${escapeHtml(enrollment.enrollmentId || '')}"
         ${active ? 'disabled' : ''}>
         ${active ? 'Curso aberto' : 'Abrir curso'}
       </button>
@@ -1744,13 +1757,14 @@ async function renderNotifications() {
   root.innerHTML = loadingTemplate('A carregar notificações...');
 
   const [home, notificationData, pushData] = await Promise.all([
-    api.studentHome(state.selectedCourseId),
+    api.studentHome(state.selectedCourseId, state.selectedEnrollmentId),
     api.notifications({ limit: 100 }),
     api.pushConfiguration()
   ]);
   await refreshPushState(pushData);
   state.myCourses = Array.isArray(home.courses) ? home.courses : [];
   state.selectedCourseId = home.selectedCourseId || state.selectedCourseId || config.courseId || '';
+  state.selectedEnrollmentId = home.selectedEnrollmentId || state.selectedEnrollmentId || '';
   state.dashboard = normalizeStudentDashboard(home);
   setNotificationState(notificationData);
   setMediaConfig(home.mediaConfig || {});
@@ -1867,11 +1881,12 @@ async function renderChat(initialRoomId = '') {
   root.innerHTML = loadingTemplate('A preparar as conversas...');
 
   const [home, notificationData] = await Promise.all([
-    api.studentHome(state.selectedCourseId),
+    api.studentHome(state.selectedCourseId, state.selectedEnrollmentId),
     api.notifications({ limit: 6 })
   ]);
   state.myCourses = Array.isArray(home.courses) ? home.courses : [];
   state.selectedCourseId = home.selectedCourseId || state.selectedCourseId || config.courseId || '';
+  state.selectedEnrollmentId = home.selectedEnrollmentId || state.selectedEnrollmentId || '';
   state.dashboard = normalizeStudentDashboard(home);
   setNotificationState(notificationData);
   setMediaConfig(home.mediaConfig || {});
@@ -2483,7 +2498,7 @@ async function openLesson(lessonId) {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar a aula...');
 
-  const lessonData = await api.getLesson(lessonId);
+  const lessonData = await api.getLesson(lessonId, state.selectedEnrollmentId);
   state.lesson = lessonData;
 
   let activeAttempt = state.dashboard?.lessons?.find(
@@ -2910,7 +2925,7 @@ async function startAttempt(event) {
   setBusy(button, true, 'A iniciar...');
 
   try {
-    const result = await api.startAttempt(state.lesson.lesson.lessonId);
+    const result = await api.startAttempt(state.lesson.lesson.lessonId, state.selectedEnrollmentId);
     state.attempt = result.attempt;
     state.attemptData = await api.attemptStatus(result.attempt.attemptId);
 
@@ -3495,7 +3510,7 @@ async function renderCertificate() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar o certificado...');
 
-  const result = await api.certificate(state.selectedCourseId);
+  const result = await api.certificate(state.selectedCourseId, state.selectedEnrollmentId);
 
   if (!result.certificate) {
     root.innerHTML = `
@@ -3538,7 +3553,7 @@ async function renderCertifications() {
   clearTimers();
   root.innerHTML = loadingTemplate('A carregar as certificações...');
 
-  const result = await api.certifications(state.selectedCourseId);
+  const result = await api.certifications(state.selectedCourseId, state.selectedEnrollmentId);
   const settings = result.settings || {};
   const certificates = result.certificates || [];
   const requests = result.requests || [];
@@ -3643,7 +3658,7 @@ async function requestParticipationCertificate(event) {
   const button = event.currentTarget;
   setBusy(button, true, 'A enviar...');
   try {
-    await api.requestParticipationCertificate(state.selectedCourseId);
+    await api.requestParticipationCertificate(state.selectedCourseId, state.selectedEnrollmentId);
     showToast('Pedido de participação enviado para aprovação.', 'success');
     await renderCertifications();
   } catch (error) {
@@ -3886,7 +3901,11 @@ async function submitProfessionalCertificateRequest(event, overlay = null) {
   });
   setBusy(button, true, 'A enviar...');
   try {
-    const result = await api.requestProfessionalCertificate(state.selectedCourseId, surveyAnswers);
+    const result = await api.requestProfessionalCertificate(
+      state.selectedCourseId,
+      surveyAnswers,
+      state.selectedEnrollmentId
+    );
     const payment = certificatePaymentPolicy(state.certifications?.settings || {});
     showToast(payment.requiresPayment ? 'Pedido criado. Envie o comprovativo de pagamento.' : 'Pedido criado para revisão administrativa.', 'success');
     overlay?.remove();

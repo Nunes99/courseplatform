@@ -6,7 +6,7 @@
 executa `supabase/schema.sql`, `supabase/chat_realtime.sql` ou
 `backend/courseplatform/schema.sql` durante pedidos.
 
-A versão exigida pelo backend é `20260914100000`. A última migração grava esse
+A versão exigida pelo backend é `20260915101047`. A última migração grava esse
 valor em `courseplatform.schema_versions`. Uma ausência ou diferença produz
 `DATABASE_MIGRATION_REQUIRED`; a aplicação não tenta corrigir a base.
 
@@ -33,6 +33,7 @@ emite um certificado numa transação e não altera o esquema.
 4. `20260913131500_create_courseplatform_runtime_role.sql`: role mínima da API.
 5. `20260913185739_add_application_schema_version.sql`: marcador de compatibilidade.
 6. `20260914103215_private_submission_storage.sql`: metadados e buckets privados para trabalhos e comprovativos.
+7. `20260915101047_model_course_versions_and_offerings.sql`: separa catálogo, versão publicada, edição/turma e matrícula histórica.
 
 As migrações da Etapa 4 são aditivas e repetíveis. A migração histórica da role
 runtime é a exceção deliberada: uma segunda execução falha antes de alterar
@@ -61,7 +62,8 @@ docker rm --force courseplatform-migration-test
 O teste cria contratos sintéticos mínimos para roles e Realtime do Supabase,
 aplica uma base vazia, simula a atualização do esquema anterior, valida a falha
 segura da role e repete as migrações idempotentes, preservando dados relacionados.
-Não valida o serviço Supabase real.
+Também valida múltiplas edições do mesmo curso, imutabilidade de versões
+publicadas e vínculos históricos dos certificados. Não valida o serviço Supabase real.
 
 ## Base existente
 
