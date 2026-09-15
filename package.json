@@ -7,6 +7,8 @@
     "node": ">=20"
   },
   "scripts": {
+    "sync:frontend": "node scripts/sync_frontend.cjs",
+    "check:frontend": "node scripts/sync_frontend.cjs --check",
     "qa:certificates": "node scripts/verify_certificate_browser.cjs",
     "qa:password-recovery": "node scripts/verify_password_recovery_browser.cjs",
     "qa:assessment-feedback": "node scripts/verify_assessment_feedback.cjs",

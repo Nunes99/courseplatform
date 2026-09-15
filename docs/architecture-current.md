@@ -6,6 +6,9 @@ Atualização arquitetural preparada em 15 de setembro de 2026: catálogo, vers�
 publicadas, edições/turmas e matrículas foram separados por migração expansiva.
 Esta atualização permanece local até validação e aplicação autorizada.
 
+Na mesma data começou a Etapa 8: contratos comuns, identidade e o manifesto do
+dispatcher foram separados por domínio sem alterar a superfície de 115 ações.
+
 ## Âmbito
 
 Este documento descreve o que existe no repositório. Não é a arquitetura-alvo e não confirma a configuração real do Supabase ou Vercel. Foram inspecionados código, SQL, frontend, testes e scripts locais; não foram consultados dados, credenciais ou logs de produção.
@@ -22,7 +25,9 @@ FastAPI / Vercel Python Function
         |
         | dispatch(action, payload)
         v
-backend/courseplatform/actions.py
+backend/courseplatform/actions.py (adaptador compatível)
+        |
+        +------ contracts.py + domains/*
         |
         +------ psycopg síncrono ------> Supabase Postgres
         |
@@ -35,7 +40,11 @@ backend/courseplatform/actions.py
 Supabase Postgres -- trigger/policy --> Supabase Realtime --> Browser/chat
 ```
 
-O sistema é um monólito: frontend estático, API e regras de negócio estão no mesmo repositório. A maior parte das regras e consultas está em `backend/courseplatform/actions.py`.
+O sistema é um monólito em transição para módulos internos: frontend estático,
+API e regras de negócio continuam no mesmo repositório. A maior parte das regras
+e consultas ainda está em `backend/courseplatform/actions.py`; o registo das
+ações, contratos comuns e a primeira camada de identidade já têm módulos
+próprios.
 
 ## Pontos de entrada
 
@@ -64,21 +73,26 @@ O backend procura assets primeiro em `public/` e depois em `backend/courseplatfo
 
 A área do estudante usa rotas por hash. A sessão do estudante é guardada em `localStorage`; a sessão administrativa, em `sessionStorage`. O backend guarda apenas SHA-256 dos tokens opacos na tabela de sessões.
 
-### Divergência dos assets
+### Fonte dos assets
 
-As cópias `public/` e `backend/courseplatform/static/` não são integralmente iguais. Após a atualização de 15 de setembro, ainda divergem:
+`public/` é a fonte canónica e única para alterações do frontend.
+`backend/courseplatform/static/` é uma distribuição gerada pelo script
+`scripts/sync_frontend.cjs`. O modo `--check` compara conjunto de ficheiros e
+SHA-256 e falha se houver divergência. A paridade integral das árvores também é
+protegida por teste unitário.
 
-- `admin.html`
-- `chat.js`
-- `index.html`
-- `sw.js`
-
-`admin.js`, `api.js`, `app.js` e `assets/css/styles.css` estão sincronizados.
-Não existe processo de build/sincronização versionado que defina automaticamente a cópia canónica.
+Os entrypoints existentes não mudaram. `admin.js` importa a paginação partilhada
+de `public/admin/pagination.js`, `app.js` importa o parser de rotas de
+`public/student/routes.js`, e `styles.css` importa os tokens de
+`public/assets/css/tokens.css`.
 
 ## Superfície da API
 
-O dispatcher regista **115 nomes de ação**. Vários nomes administrativos reutilizam o mesmo handler do chat; `adminListPendingSubmissions` é alias de `adminListSubmissions`.
+O dispatcher regista **115 nomes de ação** através de nove manifestos de domínio
+em `backend/courseplatform/domains/`. `actions.py` resolve esses nomes para os
+handlers existentes e permanece o adaptador público durante a extração. Vários
+nomes administrativos reutilizam o mesmo handler do chat;
+`adminListPendingSubmissions` é alias de `adminListSubmissions`.
 
 ### Públicas ou de autenticação
 

@@ -34,6 +34,15 @@
 
     <div class="site-header-actions">
       <button class="admin-identity" id="adminIdentity" type="button"></button>
+      <button class="mobile-header-action" id="adminMobileNotificationButton" type="button"
+        aria-label="Gerir notificações" title="Gerir notificações" hidden>
+        <img src="https://api.iconify.design/lucide/bell.svg?color=%2300365B" alt="">
+      </button>
+      <button class="mobile-header-action notification-button" id="adminMobileChatButton" type="button"
+        aria-label="Mensagens" title="Mensagens" hidden>
+        <img src="https://api.iconify.design/lucide/message-square.svg?color=%2300365B" alt="">
+        <span class="notification-badge" data-admin-chat-badge hidden>0</span>
+      </button>
       <button class="theme-toggle" id="themeToggle" type="button" aria-label="Alternar modo claro e escuro">
         <span class="theme-toggle-icon" aria-hidden="true">
           <img src="https://api.iconify.design/lucide/sun.svg?color=%2300365B" alt="">

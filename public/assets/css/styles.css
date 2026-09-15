@@ -1,55 +1,4 @@
-:root {
-  color-scheme: light;
-  --bg: #fff8e4;
-  --surface: #ffffff;
-  --surface-soft: #fffaf0;
-  --surface-strong: #f8edcf;
-  --text: #00365b;
-  --muted: rgba(0, 54, 91, 0.65);
-  --line: rgba(201, 165, 91, 0.25);
-  --primary: #00365b;
-  --primary-dark: #002844;
-  --accent: #c9a55b;
-  --accent-soft: #eac78b;
-  --success: #226d4f;
-  --warning: #9a6500;
-  --danger: #a93838;
-  --shadow: 0 18px 44px rgba(0, 54, 91, 0.10);
-  --shadow-soft: 0 10px 24px rgba(0, 54, 91, 0.07);
-  --header-bg: rgba(255, 255, 255, 0.88);
-  --input-bg: #ffffff;
-  --hero-text: rgba(255,255,255,.84);
-  --radius: 12px;
-  --radius-small: 6px;
-  --max: 1320px;
-  --admin-sidebar-width: 256px;
-  --student-sidebar-width: 256px;
-  --topbar-height: 66px;
-  --admin-gap: clamp(14px, 1.35vw, 26px);
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #081c2d;
-  --surface: #0f2b41;
-  --surface-soft: #17384f;
-  --surface-strong: #1f4560;
-  --text: #fff8e4;
-  --muted: #bfd0da;
-  --line: rgba(234, 199, 139, .22);
-  --primary: #eac78b;
-  --primary-dark: #c9a55b;
-  --accent: #eac78b;
-  --accent-soft: #fff0bf;
-  --success: #7fc7a1;
-  --warning: #f2c36f;
-  --danger: #ff9b9b;
-  --shadow: 0 20px 50px rgba(0, 0, 0, .34);
-  --shadow-soft: 0 10px 30px rgba(0, 0, 0, .24);
-  --header-bg: rgba(8, 28, 45, .9);
-  --input-bg: #0a2235;
-  --hero-text: rgba(255,248,228,.84);
-}
+@import url("./tokens.css");
 
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -6601,25 +6550,6 @@ canvas {
   }
 }
 
-/* Supabase-inspired workspace layer */
-:root {
-  --workspace-bg: #0b0d0e;
-  --workspace-panel: #111414;
-  --workspace-panel-soft: #151919;
-  --workspace-elevated: #181c1c;
-  --workspace-text: #f4f7f6;
-  --workspace-muted: #9ca6a3;
-  --workspace-line: rgba(255, 255, 255, .09);
-  --workspace-line-strong: rgba(255, 255, 255, .16);
-  --workspace-accent: #3ecf8e;
-  --workspace-accent-dark: #2aa66f;
-  --workspace-warning: #d6a84f;
-  --workspace-danger: #ef6f6c;
-  --workspace-radius: 8px;
-  --admin-sidebar-width: 236px;
-  --student-sidebar-width: 236px;
-}
-
 body:has(.student-app-shell),
 body:has(.admin-layout),
 body:has(.lesson-layout),
@@ -7301,62 +7231,6 @@ textarea::placeholder {
   .admin-main {
     padding-top: clamp(18px, 2vw, 32px);
   }
-}
-
-/* Institutional workspace system
-   Final visual source of truth for the student and administration areas. */
-:root {
-  --bg: #fff8e4;
-  --surface: #ffffff;
-  --surface-soft: #fffaf0;
-  --surface-strong: #f8edcf;
-  --text: #00365b;
-  --muted: rgba(0, 54, 91, .66);
-  --line: rgba(201, 165, 91, .25);
-  --primary: #00365b;
-  --primary-dark: #002844;
-  --accent: #c9a55b;
-  --accent-soft: #eac78b;
-  --input-bg: #ffffff;
-  --header-bg: rgba(255, 255, 255, .96);
-  --shadow: 0 14px 34px rgba(0, 54, 91, .10);
-  --shadow-soft: 0 4px 14px rgba(0, 54, 91, .055);
-  --radius: 12px;
-  --radius-small: 6px;
-  --app-header-height: 56px;
-  --workspace-sidebar-expanded: 232px;
-  --workspace-content-max: 1320px;
-  --workspace-bg: var(--bg);
-  --workspace-panel: var(--surface);
-  --workspace-panel-soft: var(--surface-soft);
-  --workspace-elevated: var(--surface-strong);
-  --workspace-text: var(--text);
-  --workspace-muted: var(--muted);
-  --workspace-line: var(--line);
-  --workspace-line-strong: rgba(201, 165, 91, .38);
-  --workspace-accent: var(--accent);
-  --workspace-accent-dark: #a7843f;
-  --workspace-warning: var(--warning);
-  --workspace-danger: var(--danger);
-  --workspace-radius: var(--radius);
-}
-
-:root[data-theme="dark"] {
-  --bg: #071f31;
-  --surface: #0d2b40;
-  --surface-soft: #12364e;
-  --surface-strong: #19435d;
-  --text: #fff8e4;
-  --muted: rgba(255, 248, 228, .68);
-  --line: rgba(234, 199, 139, .22);
-  --primary: #eac78b;
-  --primary-dark: #c9a55b;
-  --accent: #eac78b;
-  --accent-soft: #fff0bf;
-  --input-bg: #09263a;
-  --header-bg: rgba(7, 31, 49, .96);
-  --shadow: 0 18px 40px rgba(0, 0, 0, .30);
-  --shadow-soft: 0 5px 16px rgba(0, 0, 0, .22);
 }
 
 html,
@@ -11606,11 +11480,6 @@ body:has(.admin-layout) .button-small {
   }
 }
 
-/* Compact action and status standard */
-:root {
-  --compact-control-height: 30px;
-}
-
 .button,
 .button-small,
 .hero-actions .button,
@@ -11701,13 +11570,6 @@ body:has(.admin-layout) .admin-identity {
 
 .student-view-overview .video-panel {
   display: block;
-}
-
-/* Final rhythm, identity and contrast pass */
-:root {
-  --section-gap: 24px;
-  --grid-gap: 16px;
-  --related-gap: 8px;
 }
 
 .student-content-area,
@@ -12444,18 +12306,6 @@ iframe {
     min-width: 124px;
     max-width: 124px;
   }
-}
-
-/* Universal responsive optimisation
-   This final layer consolidates viewport behaviour after the historical
-   component rules above. It deliberately changes presentation only. */
-:root {
-  --responsive-gutter: clamp(16px, 2.5vw, 32px);
-  --responsive-gutter-compact: clamp(12px, 3.8vw, 18px);
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-right: env(safe-area-inset-right, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-left: env(safe-area-inset-left, 0px);
 }
 
 html {

@@ -1,6 +1,7 @@
 import { CoursePlatformApi, ApiError } from './api.js';
 import { ChatWorkspace } from './chat.js';
 import { certificateWorkloadLabel, professionalCertificateTemplate } from './professional-certificate.js';
+import { isDashboardRoute, parseStudentRoute } from './student/routes.js';
 import {
   applyBrandFavicon,
   debounce,
@@ -632,8 +633,7 @@ function maybeShowPushRecommendation(force = false) {
 
 async function route() {
   closeMobileMenu();
-  const hash = location.hash.replace(/^#\/?/, '');
-  const [routeName, routeValue] = hash.split('/');
+  const { name: routeName, value: routeValue } = parseStudentRoute(location.hash);
 
   const passwordResetToken = consumePasswordResetToken();
   if (passwordResetToken) {
@@ -677,7 +677,7 @@ async function route() {
       return;
     }
 
-    if (['courses', 'lessons', 'submissions', 'grades'].includes(routeName)) {
+    if (isDashboardRoute(routeName)) {
       await renderDashboard(routeName);
       return;
     }

@@ -1,0 +1,16 @@
+ACTION_BINDINGS = (
+    ("health", "health"),
+    ("healthDiagnostics", "health_diagnostics"),
+    ("adminGetPlatformStatistics", "admin_platform_statistics"),
+    ("adminListStaff", "admin_list_staff"),
+    ("adminListStudents", "admin_list_students"),
+    ("adminGetStudentDetails", "admin_student_details"),
+    ("adminUploadBrandLogo", "admin_upload_brand_logo"),
+    ("adminSaveStaff", "admin_save_staff"),
+    ("adminSetStaffStatus", "admin_set_staff_status"),
+    ("adminCreateStudent", "admin_create_student"),
+    ("adminChangeStudentEmail", "admin_change_student_email"),
+    ("adminSetStudentStatus", "admin_set_student_status"),
+    ("adminResetStudentAccessCode", "admin_reset_student_access_code"),
+    ("adminRestoreCredentials", "admin_restore_credentials"),
+)

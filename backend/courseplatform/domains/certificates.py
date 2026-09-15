@@ -1,0 +1,17 @@
+ACTION_BINDINGS = (
+    ("verifyCertificate", "verify_certificate"),
+    ("getMyCertifications", "my_certifications"),
+    ("requestProfessionalCertificate", "request_professional_certificate"),
+    ("requestParticipationCertificate", "request_participation_certificate"),
+    ("recordCertificateDownload", "record_certificate_download"),
+    ("getMyCertificate", "my_certificate"),
+    ("adminListCertificates", "admin_list_certificates"),
+    ("adminSetCertificateStatus", "admin_set_certificate_status"),
+    ("adminRefreshCertificateFormat", "admin_refresh_certificate_format"),
+    ("adminDeleteCertificate", "admin_delete_certificate"),
+    ("adminGetCertificateSettings", "admin_get_certificate_settings"),
+    ("adminSaveCertificateSettings", "admin_save_certificate_settings"),
+    ("adminListCertificateSurveys", "admin_list_certificate_surveys"),
+    ("adminSaveCertificateSurvey", "admin_save_certificate_survey"),
+    ("adminUploadCertificateAsset", "admin_upload_certificate_asset"),
+)

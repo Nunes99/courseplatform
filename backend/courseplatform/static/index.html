@@ -54,6 +54,16 @@
 
     <div class="site-header-actions">
       <button class="header-user" id="headerUser" type="button" hidden></button>
+      <a class="mobile-header-action notification-button" id="mobileNotificationButton" href="#/notifications" data-notification-button
+        aria-label="Notificações" title="Notificações" hidden>
+        <img src="https://api.iconify.design/lucide/bell.svg?color=%2300365B" alt="">
+        <span class="notification-badge" data-notification-nav-badge hidden>0</span>
+      </a>
+      <a class="mobile-header-action notification-button" id="mobileChatButton" href="#/chat" data-chat-button
+        aria-label="Mensagens" title="Mensagens" hidden>
+        <img src="https://api.iconify.design/lucide/message-square.svg?color=%2300365B" alt="">
+        <span class="notification-badge" data-chat-nav-badge hidden>0</span>
+      </a>
       <button class="theme-toggle" id="themeToggle" type="button" aria-label="Alternar modo claro e escuro">
         <span class="theme-toggle-icon" aria-hidden="true">
           <img src="https://api.iconify.design/lucide/sun.svg?color=%2300365B" alt="">
@@ -71,8 +81,6 @@
       <button type="button" data-mobile-route="#/lessons">Aulas e módulos</button>
       <button type="button" data-mobile-route="#/submissions">Submissões</button>
       <button type="button" data-mobile-route="#/grades">Notas e feedback</button>
-      <button type="button" data-mobile-route="#/notifications">Notificações</button>
-      <button type="button" data-mobile-route="#/chat">Mensagens</button>
       <button type="button" data-mobile-route="#/certifications">Certificações</button>
       <button type="button" data-mobile-route="#/profile">Perfil</button>
       <button type="button" id="mobileThemeButton">Tema</button>

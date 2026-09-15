@@ -8,11 +8,13 @@ CoursePlatform é uma plataforma de aprendizagem com áreas de estudante e admin
 
 - `api/index.py`: entrada da função Python no Vercel.
 - `backend/courseplatform/app.py`: aplicação FastAPI, rotas e entrega dos ficheiros estáticos.
-- `backend/courseplatform/actions.py`: dispatcher e regras de negócio atuais.
+- `backend/courseplatform/actions.py`: adaptador compatível do dispatcher e regras ainda por extrair.
+- `backend/courseplatform/contracts.py`: respostas, erros, validação e paginação comuns da API.
+- `backend/courseplatform/domains/`: fronteiras e registo de ações dos nove domínios da LMS.
 - `backend/courseplatform/db.py`: ligação direta ao Postgres com psycopg.
 - `backend/courseplatform/certificate_pdf.py`: geração dos certificados PDF.
 - `public/`: frontend usado no deploy estático.
-- `backend/courseplatform/static/`: fallback estático empacotado com o backend.
+- `backend/courseplatform/static/`: cópia gerada do frontend para fallback empacotado.
 - `supabase/migrations/`: única fonte de verdade para criar e evoluir o esquema.
 - `supabase/schema.sql`: snapshot de consulta; não substitui a cadeia de migrações.
 - `backend/courseplatform/schema.sql`: snapshot legado do esquema, mantido para compatibilidade; pedidos da API não o executam.
@@ -20,7 +22,10 @@ CoursePlatform é uma plataforma de aprendizagem com áreas de estudante e admin
 - `tests/`: testes Python com `unittest`.
 - `scripts/`: smoke test, geração de previews e verificações de browser.
 
-As duas cópias do frontend continuam a exigir sincronização controlada. Para banco, alterações novas pertencem exclusivamente a `supabase/migrations/`; os snapshots SQL não são executados pela API.
+`public/` é a única fonte editável do frontend. A cópia em
+`backend/courseplatform/static/` é gerada automaticamente; não deve ser editada
+manualmente. Para banco, alterações novas pertencem exclusivamente a
+`supabase/migrations/`; os snapshots SQL não são executados pela API.
 
 ## Pré-requisitos
 
@@ -67,6 +72,17 @@ O ficheiro `.env` está ignorado pelo Git. Preencha apenas as integrações que 
 
 ## Executar os testes
 
+Antes dos testes ou de empacotar o backend, sincronize e confirme a paridade do
+frontend:
+
+```powershell
+node scripts/sync_frontend.cjs
+node scripts/sync_frontend.cjs --check
+```
+
+Com npm disponível, os mesmos comandos são `npm run sync:frontend` e
+`npm run check:frontend`.
+
 Suíte Python completa:
 
 ```powershell
@@ -95,6 +111,12 @@ Paginação e pesquisa administrativa da Etapa 7:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest tests.test_stage7_admin_lists -v
+```
+
+Contratos de modularização da Etapa 8:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_stage8_modular_monolith -v
 ```
 
 Integração das migrações numa base PostgreSQL local descartável:
@@ -247,6 +269,7 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 - [Endurecimento Supabase da Etapa 3](docs/stage3-supabase-hardening.md)
 - [Migrações e health checks](docs/database-migrations.md)
 - [Paginação e pesquisa administrativa da Etapa 7](docs/stage7-pagination-and-search.md)
+- [Monólito modular da Etapa 8](docs/stage8-modular-monolith.md)
 - [Auditoria e roteiro LMS](docs/auditoria-lms-2026-09-12.md)
 - [Instruções de evolução por etapas](docs/instrucoes-agente-evolucao-lms.md)
 - [Certificados](docs/certificate-layout.md)

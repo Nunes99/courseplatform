@@ -290,10 +290,12 @@ class AdministrativePaginationFrontendTests(unittest.TestCase):
 
     def test_admin_lists_send_and_render_cursor_metadata(self):
         source = (ROOT / "public" / "admin.js").read_text(encoding="utf-8")
+        pagination_source = (ROOT / "public" / "admin" / "pagination.js").read_text(encoding="utf-8")
         self.assertIn("cursor: state.submissionPagination.cursor", source)
         self.assertIn("cursor: state.certificatePagination.requests.cursor", source)
         self.assertIn("cursor: state.certificatePagination.certificates.cursor", source)
-        self.assertIn("function cursorPaginationTemplate", source)
+        self.assertIn("cursorPaginationTemplate", source)
+        self.assertIn("function cursorPaginationTemplate", pagination_source)
         self.assertIn("function scheduleCertificateRefresh", source)
 
 

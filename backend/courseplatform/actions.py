@@ -1,5 +1,4 @@
 import base64
-import binascii
 import hashlib
 import hmac
 import ipaddress
@@ -27,7 +26,35 @@ except ImportError:  # pragma: no cover - deployment validation reports this cle
     webpush = None
 
 from .config import get_settings
+from .contracts import (
+    ApiError,
+    as_bool,
+    cursor_page_limit,
+    cursor_pagination_result,
+    cursor_scope,
+    database_api_error,
+    decode_list_cursor,
+    encode_list_cursor,
+    float_value,
+    int_value,
+    iso,
+    pagination,
+    parse_datetime,
+    public_error,
+    require_fields,
+    storage_api_error,
+    str_value,
+    success,
+)
 from .db import EXPECTED_SCHEMA_VERSION, connection, fetch_all, fetch_one, schema_status
+from .domains.identity import (
+    normalize_email,
+    public_student_id,
+    serialize_admin,
+    serialize_student,
+    valid_password,
+)
+from .domains.registry import build_action_registry
 from .security import (
     constant_time_equals,
     generate_id,
@@ -48,88 +75,8 @@ from .storage import (
     validate_upload,
 )
 
-
-class ApiError(Exception):
-    def __init__(self, code: str, message: str, details: Any = None):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.details = details
-
-
 RASTER_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
 BRAND_LOGO_MAX_BYTES = 1024 * 1024
-
-
-def success(data: dict[str, Any]) -> dict[str, Any]:
-    return {"success": True, "data": data}
-
-
-def public_error(error: Exception) -> dict[str, Any]:
-    if isinstance(error, ApiError):
-        return {
-            "success": False,
-            "error": {
-                "code": error.code,
-                "message": error.message,
-                "details": error.details,
-            },
-        }
-    return {
-        "success": False,
-        "error": {
-            "code": "API_ERROR",
-            "message": "Ocorreu um erro interno ao processar o pedido.",
-            "details": None,
-        },
-    }
-
-
-def database_api_error(error: Exception) -> ApiError:
-    error_name = error.__class__.__name__
-    text = str(error).lower()
-    if "undefinedcolumn" in text or "undefinedtable" in text or error_name == "ProgrammingError":
-        return ApiError(
-            "DATABASE_SCHEMA_ERROR",
-            "A base de dados está ligada, mas o esquema e as tabelas da plataforma não estão completos.",
-            {"errorType": error_name},
-        )
-    if "authentication" in text or "password" in text or "ecircuitbreaker" in text:
-        return ApiError(
-            "DATABASE_AUTH_ERROR",
-            "A API não conseguiu autenticar no Postgres. Verifique POSTGRES_URL/POSTGRES_PASSWORD no Vercel.",
-            {"errorType": error_name},
-        )
-    if error_name == "InsufficientPrivilege" or "permission denied" in text:
-        return ApiError(
-            "DATABASE_PERMISSION_ERROR",
-            "A role de execução da API não possui uma permissão necessária.",
-            {"errorType": error_name},
-        )
-    return ApiError(
-        "DATABASE_UNAVAILABLE",
-        "A base de dados não está disponível neste momento.",
-        {"errorType": error_name},
-    )
-
-
-def storage_api_error(error: StorageError) -> ApiError:
-    return ApiError(error.code, error.message)
-
-
-def as_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value).lower() in {"true", "1", "yes", "sim"}
-
-
-def str_value(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def valid_password(value: str) -> bool:
-    text = str_value(value)
-    return len(text) >= 8
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
@@ -137,42 +84,6 @@ def verify_password(password: str, password_hash: str | None) -> bool:
         return False
     row = fetch_one("select %s = crypt(%s, %s) as ok", (password_hash, password, password_hash))
     return bool(row and row.get("ok"))
-
-
-def int_value(value: Any, fallback: int = 0) -> int:
-    try:
-        return int(float(str(value).strip()))
-    except (TypeError, ValueError):
-        return fallback
-
-
-def float_value(value: Any, fallback: float = 0.0) -> float:
-    try:
-        return float(str(value).strip())
-    except (TypeError, ValueError):
-        return fallback
-
-
-def parse_datetime(value: Any):
-    if value in (None, ""):
-        return None
-    if isinstance(value, datetime):
-        return value
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def iso(value: Any) -> str | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).isoformat()
-    return str(value)
 
 
 CONTENT_ACCESS_STATUSES = {"LOCKED", "AVAILABLE"}
@@ -226,156 +137,18 @@ def audit(conn, actor_type: str, actor_id: str, action: str, entity_type: str, e
     )
 
 
-def normalize_email(email: str) -> str:
-    return (email or "").strip().lower()
-
-
-def public_student_id() -> str:
-    import secrets
-
-    return f"STU-{secrets.randbelow(100000):05d}"
-
-
-def require_fields(payload: dict[str, Any], fields: list[str]) -> None:
-    missing = [field for field in fields if payload.get(field) in (None, "")]
-    if missing:
-        raise ApiError("REQUIRED_FIELDS", "Campos obrigatorios ausentes.", missing)
-
-
-def pagination(payload: dict[str, Any], default_limit: int = 100, max_limit: int = 500):
-    limit = int(payload.get("limit") or default_limit)
-    page = int(payload.get("page") or 1)
-    limit = max(1, min(limit, max_limit))
-    offset = payload.get("offset")
-    offset = int(offset) if offset not in (None, "") else (max(1, page) - 1) * limit
-    return limit, max(0, offset), max(1, page)
-
-
-def cursor_page_limit(payload: dict[str, Any], default_limit: int = 50, max_limit: int = 500) -> int:
-    return max(1, min(int_value(payload.get("limit"), default_limit), max_limit))
-
-
-def cursor_scope(kind: str, *values: Any) -> str:
-    serialized = json.dumps([kind, *values], ensure_ascii=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
-
-
-def encode_list_cursor(kind: str, scope: str, sort_at: Any, record_id: Any) -> str:
-    payload = {
-        "v": 1,
-        "kind": kind,
-        "scope": scope,
-        "sortAt": iso(sort_at),
-        "id": str_value(record_id),
-    }
-    encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
-
-
-def decode_list_cursor(
-    value: Any,
-    kind: str,
-    scope: str,
-    *,
-    allow_null_sort: bool = False,
-    sort_type: str = "datetime",
-) -> tuple[Any, str] | None:
-    text = str_value(value)
-    if not text:
-        return None
-    if len(text) > 1024:
-        raise ApiError("INVALID_CURSOR", "O cursor de paginação é inválido.")
-    try:
-        padding = "=" * ((4 - len(text) % 4) % 4)
-        decoded = json.loads(base64.urlsafe_b64decode(f"{text}{padding}").decode("utf-8"))
-    except (binascii.Error, ValueError, UnicodeDecodeError, json.JSONDecodeError):
-        raise ApiError("INVALID_CURSOR", "O cursor de paginação é inválido.") from None
-    if not isinstance(decoded, dict) or decoded.get("v") != 1:
-        raise ApiError("INVALID_CURSOR", "O cursor de paginação é inválido.")
-    if decoded.get("kind") != kind or not hmac.compare_digest(str(decoded.get("scope") or ""), scope):
-        raise ApiError("CURSOR_FILTER_MISMATCH", "Os filtros mudaram. Reinicie a paginação.")
-    record_id = str_value(decoded.get("id"))
-    raw_sort = decoded.get("sortAt")
-    if sort_type == "datetime":
-        sort_at = parse_datetime(raw_sort)
-    elif sort_type == "number":
-        try:
-            sort_at = float(raw_sort) if raw_sort not in (None, "") else None
-        except (TypeError, ValueError):
-            sort_at = None
-    elif sort_type == "text":
-        sort_at = str(raw_sort) if raw_sort is not None else None
-    else:
-        raise ValueError(f"Tipo de cursor não suportado: {sort_type}")
-    if not record_id or (sort_at is None and not allow_null_sort):
-        raise ApiError("INVALID_CURSOR", "O cursor de paginação é inválido.")
-    return sort_at, record_id
-
-
-def cursor_pagination_result(
-    rows: list[dict[str, Any]],
-    limit: int,
-    kind: str,
-    scope: str,
-    sort_field: str,
-    id_field: str,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    has_more = len(rows) > limit
-    visible_rows = rows[:limit]
-    next_cursor = ""
-    if has_more and visible_rows:
-        last = visible_rows[-1]
-        next_cursor = encode_list_cursor(kind, scope, last.get(sort_field), last.get(id_field))
-    return visible_rows, {
-        "limit": limit,
-        "returned": len(visible_rows),
-        "hasMore": has_more,
-        "nextCursor": next_cursor,
-    }
-
-
 def public_student(row: dict[str, Any] | None):
-    if not row:
-        return None
-    return {
-        "studentId": row["student_id"],
-        "publicStudentId": row.get("public_student_id") or "",
-        "fullName": row.get("full_name"),
-        "email": row.get("email"),
-        "status": row.get("status"),
-        "country": row.get("country"),
-        "organization": row.get("organization"),
-        "phone": row.get("phone"),
-        "jobTitle": row.get("job_title"),
-        "interests": row.get("interests"),
-        "profilePhotoUrl": row.get("profile_photo_url"),
-        "whatsappOptIn": as_bool(row.get("whatsapp_opt_in")),
-        "whatsappOptInAt": iso(row.get("whatsapp_opt_in_at")),
-        "emailOptIn": as_bool(row.get("email_opt_in")),
-        "emailOptInAt": iso(row.get("email_opt_in_at")),
-        "telegramLinked": bool(normalize_telegram_recipient(row.get("telegram_chat_id"))),
-        "telegramOptIn": as_bool(row.get("telegram_opt_in")),
-        "telegramOptInAt": iso(row.get("telegram_opt_in_at")),
-        "pushSubscriptionCount": int(row.get("push_subscription_count") or 0),
-        "notificationPreferences": notification_preferences(row),
-        "createdAt": iso(row.get("created_at")),
-        "updatedAt": iso(row.get("updated_at")),
-        "lastLoginAt": iso(row.get("last_login_at")),
-    }
+    return serialize_student(
+        row,
+        as_boolean=as_bool,
+        as_iso=iso,
+        telegram_recipient=normalize_telegram_recipient,
+        preferences=notification_preferences,
+    )
 
 
 def public_admin(row: dict[str, Any] | None):
-    if not row:
-        return None
-    return {
-        "adminId": row["admin_id"],
-        "fullName": row.get("full_name"),
-        "email": row.get("email"),
-        "role": row.get("role"),
-        "status": row.get("status"),
-        "createdAt": iso(row.get("created_at")),
-        "updatedAt": iso(row.get("updated_at")),
-    }
+    return serialize_admin(row, as_iso=iso)
 
 
 def public_course(row: dict[str, Any] | None):
@@ -11333,123 +11106,7 @@ def require_application_schema() -> None:
     _APPLICATION_SCHEMA_READY = True
 
 
-ACTIONS = {
-    "health": health,
-    "healthDiagnostics": health_diagnostics,
-    "publicCourseConfig": public_course_config,
-    "publicMediaConfig": public_media_config,
-    "getMediaConfig": student_media_config,
-    "verifyCertificate": verify_certificate,
-    "login": login,
-    "recoverStudentAccess": recover_student_access,
-    "completeStudentPasswordReset": complete_student_password_reset,
-    "logout": logout,
-    "adminLogin": admin_login,
-    "recoverAdminAccess": recover_admin_access,
-    "adminLogout": logout,
-    "adminMe": admin_me,
-    "adminGetMediaConfig": admin_media_config,
-    "adminListStaff": admin_list_staff,
-    "adminListSubmissions": admin_list_submissions,
-    "adminListPendingSubmissions": admin_list_submissions,
-    "getDashboard": dashboard,
-    "getStudentHome": student_home,
-    "getMyCourses": my_courses,
-    "studentStartTelegramLink": student_start_telegram_link,
-    "studentConfirmTelegramLink": student_confirm_telegram_link,
-    "studentUnlinkTelegram": student_unlink_telegram,
-    "getPushConfiguration": student_push_configuration,
-    "subscribePush": student_subscribe_push,
-    "unsubscribePush": student_unsubscribe_push,
-    "getLesson": get_lesson,
-    "getAttemptStatus": attempt_status,
-    "updateMyProfile": update_my_profile,
-    "getMyNotifications": my_notifications,
-    "markNotificationRead": mark_notification_read,
-    "getChatRealtimeConfiguration": chat_realtime_configuration,
-    "getChatRooms": chat_list_rooms,
-    "getChatContacts": chat_list_contacts,
-    "startDirectChat": chat_start_direct,
-    "updatePresence": chat_presence_heartbeat,
-    "getChatMessages": chat_list_messages,
-    "sendChatMessage": chat_send_message,
-    "editChatMessage": chat_edit_message,
-    "deleteChatMessage": chat_delete_message,
-    "markChatRoomRead": chat_mark_read,
-    "reportChatMessage": chat_report_message,
-    "changeMyAccessCode": change_my_access_code,
-    "changeMyEmail": change_my_email,
-    "getMyCertifications": my_certifications,
-    "requestProfessionalCertificate": request_professional_certificate,
-    "requestParticipationCertificate": request_participation_certificate,
-    "submitProfessionalCertificatePayment": submit_professional_certificate_payment,
-    "recordCertificateDownload": record_certificate_download,
-    "startAttempt": start_attempt,
-    "saveAnswer": save_answer,
-    "uploadFile": upload_file,
-    "deleteUploadedFile": delete_uploaded_file,
-    "submitAttempt": submit_attempt,
-    "getMyCertificate": my_certificate,
-    "adminGetPlatformStatistics": admin_platform_statistics,
-    "adminListCourses": admin_list_courses,
-    "adminGetCourseStructure": admin_course_structure,
-    "adminCreateCourseVersion": admin_create_course_version,
-    "adminPublishCourseVersion": admin_publish_course_version,
-    "adminSaveCourseOffering": admin_save_course_offering,
-    "adminEnrollStudentsInOffering": admin_enroll_students_in_offering,
-    "adminListCourseReconciliationIssues": admin_list_course_reconciliation_issues,
-    "adminListGroups": admin_list_groups,
-    "adminListStudents": admin_list_students,
-    "adminGetStudentDetails": admin_student_details,
-    "adminGetSubmission": admin_get_submission,
-    "adminReviewSubmission": admin_review_submission,
-    "adminAuthorizeRetry": admin_authorize_retry,
-    "adminUpdateAttempt": admin_update_attempt,
-    "adminListCertificateRequests": admin_list_certificate_requests,
-    "adminListCertificates": admin_list_certificates,
-    "adminSetCertificateStatus": admin_set_certificate_status,
-    "adminRefreshCertificateFormat": admin_refresh_certificate_format,
-    "adminDeleteCertificate": admin_delete_certificate,
-    "adminReviewCertificateRequest": admin_review_certificate_request,
-    "adminDeleteCertificateRequest": admin_delete_certificate_request,
-    "adminGetCertificateSettings": admin_get_certificate_settings,
-    "adminSaveCertificateSettings": admin_save_certificate_settings,
-    "adminListCertificateSurveys": admin_list_certificate_surveys,
-    "adminSaveCertificateSurvey": admin_save_certificate_survey,
-    "adminUploadCertificateAsset": admin_upload_certificate_asset,
-    "adminUploadBrandLogo": admin_upload_brand_logo,
-    "adminListNotifications": admin_list_notifications,
-    "adminListChatRooms": chat_list_rooms,
-    "adminGetChatRealtimeConfiguration": chat_realtime_configuration,
-    "adminUpdatePresence": chat_presence_heartbeat,
-    "adminGetChatMessages": chat_list_messages,
-    "adminSendChatMessage": chat_send_message,
-    "adminEditChatMessage": chat_edit_message,
-    "adminDeleteChatMessage": chat_delete_message,
-    "adminMarkChatRoomRead": chat_mark_read,
-    "adminCreateNotification": admin_create_notification,
-    "adminSaveNotificationTemplate": admin_save_notification_template,
-    "adminResetNotificationTemplate": admin_reset_notification_template,
-    "adminSaveWhatsAppConfiguration": admin_save_whatsapp_configuration,
-    "adminSaveEmailConfiguration": admin_save_email_configuration,
-    "adminSaveTelegramConfiguration": admin_save_telegram_configuration,
-    "adminRetryNotificationDeliveries": admin_retry_notification_deliveries,
-    "adminSaveMediaConfig": admin_save_media_config,
-    "adminSaveStaff": admin_save_staff,
-    "adminSetStaffStatus": admin_set_staff_status,
-    "adminCreateStudent": admin_create_student,
-    "adminChangeStudentEmail": admin_change_student_email,
-    "adminSetStudentStatus": admin_set_student_status,
-    "adminResetStudentAccessCode": admin_reset_student_access_code,
-    "adminRestoreCredentials": admin_restore_credentials,
-    "adminSaveCourse": admin_save_course,
-    "adminSaveLesson": admin_save_lesson,
-    "adminSaveLessonContent": admin_save_lesson_content,
-    "adminSaveGroup": admin_save_group,
-    "adminAssignStudentsToGroup": admin_assign_students_to_group,
-    "adminSetLessonAccess": admin_set_lesson_access,
-    "adminManageLessonProgress": admin_manage_lesson_progress,
-}
+ACTIONS = build_action_registry(globals())
 
 
 def dispatch(action: str, payload: dict[str, Any]):
