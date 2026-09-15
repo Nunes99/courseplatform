@@ -1,6 +1,6 @@
 import { CoursePlatformApi, ApiError } from './api.js';
 import { ChatWorkspace } from './chat.js';
-import { professionalCertificateTemplate } from './professional-certificate.js';
+import { certificateWorkloadLabel, professionalCertificateTemplate } from './professional-certificate.js';
 import {
   applyBrandFavicon,
   debounce,
@@ -4001,22 +4001,20 @@ function showCertificatePreview(certificateId) {
 function certificatePreviewTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
   const title = isProfessional ? 'CERTIFICADO PROFISSIONAL DE CONCLUSÃO' : 'CERTIFICADO DE PARTICIPAÇÃO';
-  const profile = certificate.templateSnapshot?.profile || {};
+  const snapshot = certificate.templateSnapshot || {};
+  const profile = snapshot.profile || {};
   const assets = profile.assets || {};
-  const logoUrl = assets.logoUrl || brandLogoUrl();
-  const summary = String(certificate.contentSummary || '')
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, 6);
-  const professionalHours = Number(certificate.templateSnapshot?.courseHours || 30);
+  const hasSnapshot = Object.keys(snapshot).length > 0;
+  const logoUrl = assets.logoUrl || (hasSnapshot ? '' : brandLogoUrl());
+  const issuerName = profile.issuerName || config.organizationName || 'LMTWEBNAIRS Summer School';
+  const workloadLabel = certificateWorkloadLabel(certificate);
   const finalScoreLabel = certificate.finalScore == null ? '--' : `${certificate.finalScore}%`;
   if (isProfessional) {
     return professionalCertificateTemplate({
       ...certificate,
-      issuerName: config.organizationName,
+      issuerName,
       templateSnapshot: {
-        ...certificate.templateSnapshot,
+        ...snapshot,
         profile: { ...profile, assets: { ...assets, logoUrl } }
       }
     });
@@ -4028,35 +4026,19 @@ function certificatePreviewTemplate(certificate) {
       <span class="certificate-corner certificate-corner-bl"></span>
       <span class="certificate-corner certificate-corner-br"></span>
       <div class="certificate-document-main">
-        <p class="certificate-institution">${escapeHtml(config.organizationName || 'LMTWEBNAIRS Summer School')}</p>
+        <p class="certificate-institution">${escapeHtml(issuerName)}</p>
         <h1>${escapeHtml(title)}</h1>
         <p class="certificate-preview-lead">certifica que</p>
         <h2>${escapeHtml(certificate.studentName || state.dashboard?.student?.fullName || '')}</h2>
-        <p>${isProfessional ? 'concluiu com êxito o programa profissional' : 'participou com sucesso do curso'}</p>
+        <p>participou com sucesso no curso</p>
         <h3>${escapeHtml(certificate.courseTitle || state.dashboard?.course?.title || '')}</h3>
-        ${isProfessional && summary.length ? `
-          <div class="certificate-content-summary">
-            <strong>O programa abordou:</strong>
-            <ul>
-              ${summary.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}
-            </ul>
-          </div>
-        ` : ''}
       </div>
-      ${isProfessional ? `
-        <div class="certificate-preview-metrics">
-          <span><small>Carga horária</small><strong>30 HORAS</strong></span>
-          <span><small>Data de emissão</small><strong>${escapeHtml(formatDate(certificate.issueDate))}</strong></span>
-          <span><small>Nota final</small><strong>${certificate.finalScore == null ? '--/100' : `${escapeHtml(certificate.finalScore)}/100`}</strong></span>
-        </div>
-      ` : ''}
+      <div class="certificate-preview-metrics">
+        <span><small>Resultado final</small><strong>${escapeHtml(finalScoreLabel)}</strong></span>
+        <span><small>Data de emissão</small><strong>${escapeHtml(formatDate(certificate.issueDate))}</strong></span>
+        <span><small>Carga horária</small><strong>${escapeHtml(workloadLabel)}</strong></span>
+      </div>
       <div class="certificate-preview-seal${logoUrl ? ' has-brand-logo' : ''}">${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="Logotipo institucional">` : 'LSS'}</div>
-      ${isProfessional ? `
-        <div class="certificate-signature-row">
-          <span>Direção académica</span>
-          <span>Coordenação do programa</span>
-        </div>
-      ` : ''}
       <div class="certificate-preview-meta">
         <span>N. do certificado: ${escapeHtml(certificateDisplayNumber(certificate) || '')}</span>
         <span>${escapeHtml(formatDate(certificate.issueDate))}</span>

@@ -62,7 +62,7 @@ def draw_participation_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> 
     draw_double_frame(pdf, NAVY, GOLD)
 
     draw_classic_brand(pdf, issuer(data), assets.get("logoUrl"))
-    centered(pdf, "CERTIFICADO DE CONCLUSÃO", 437, 10, FONT_BOLD, GOLD)
+    centered(pdf, "CERTIFICADO DE PARTICIPAÇÃO", 437, 10, FONT_BOLD, GOLD)
     centered(pdf, "Certificamos que", 407, 11, FONT_REGULAR, MUTED)
     draw_fitted_center_block(
         pdf,
@@ -76,7 +76,7 @@ def draw_participation_certificate(pdf: canvas.Canvas, data: dict[str, Any]) -> 
         NAVY,
         2,
     )
-    centered(pdf, "concluiu com aproveitamento o curso", 316, 10.5, FONT_REGULAR, MUTED)
+    centered(pdf, "participou com sucesso no curso", 316, 10.5, FONT_REGULAR, MUTED)
     course_bottom = draw_fitted_center_block(
         pdf,
         course_title(data),
@@ -113,6 +113,15 @@ class CertificateLayoutError(ValueError):
     pass
 
 
+def certificate_workload(data: dict[str, Any]) -> str:
+    value = clean_text(data.get("workload"))
+    if not value:
+        raise CertificateLayoutError(
+            "A carga horária não está definida. Atualize o formato do certificado antes de gerar o PDF."
+        )
+    return value
+
+
 def professional_layout() -> dict[str, Any]:
     path = Path(__file__).resolve().parent / "static/assets/certificate-layout.json"
     return json.loads(path.read_text(encoding="utf-8"))
@@ -137,7 +146,7 @@ def professional_fields(data: dict[str, Any]) -> dict[str, str]:
         "course": course_title(data),
         "description": "demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.",
         "topicsLabel": "O programa abordou:" if clean_text(data.get("content_summary")) else "",
-        "workload": f"Carga horária: {data.get('workload') or '30 horas'}",
+        "workload": f"Carga horária: {certificate_workload(data)}",
         "score": f"Resultado final: {score_percent(data)}",
         "director": profile.get("directorName") or data.get("director_name") or "Diretor Académico",
         "directorTitle": profile.get("directorTitle") or "Direção académica",
@@ -405,7 +414,7 @@ def draw_classic_metrics(pdf: canvas.Canvas, data: dict[str, Any]) -> None:
     details = [
         ("RESULTADO FINAL", score_percent(data)),
         ("DATA DE EMISSÃO", issue_date_long(data)),
-        ("CARGA DE REFERÊNCIA", clean_text(data.get("workload") or "10 horas")),
+        ("CARGA HORÁRIA", certificate_workload(data)),
     ]
     for index, (label, value) in enumerate(details):
         x = left + cell_width * index

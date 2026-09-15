@@ -11485,6 +11485,105 @@ body:has(.admin-layout) .button-small {
   }
 }
 
+/* Keep the complete participation certificate visible inside narrow dialogs. */
+@media (max-width: 760px) {
+  .certificate-preview-sheet:not(.is-professional) {
+    overflow: hidden;
+  }
+
+  .certificate-document-participation {
+    min-width: 0;
+    width: 100%;
+    grid-template-rows: minmax(0, 1fr) auto auto auto;
+    gap: 3px;
+    padding: 9px;
+    border-width: 4px;
+  }
+
+  .certificate-document-participation .certificate-document-main {
+    gap: 3px;
+  }
+
+  .certificate-document-participation .certificate-institution,
+  .certificate-document-participation p {
+    font-size: 5px;
+    line-height: 1.15;
+  }
+
+  .certificate-document-participation h1 {
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  .certificate-document-participation h2 {
+    font-size: 11px;
+    line-height: 1.05;
+  }
+
+  .certificate-document-participation h3 {
+    font-size: 8px;
+    line-height: 1.08;
+  }
+
+  .certificate-document-participation .certificate-preview-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 88%;
+    gap: 4px;
+  }
+
+  .certificate-document-participation .certificate-preview-metrics span {
+    gap: 1px;
+    padding: 3px 2px;
+  }
+
+  .certificate-document-participation .certificate-preview-metrics small {
+    font-size: 4.5px;
+  }
+
+  .certificate-document-participation .certificate-preview-metrics strong {
+    font-size: 5.5px;
+  }
+
+  .certificate-document-participation .certificate-preview-seal {
+    width: 22px;
+    height: 22px;
+    border-width: 3px;
+    font-size: 4px;
+  }
+
+  .certificate-document-participation .certificate-preview-meta {
+    flex-wrap: nowrap;
+    gap: 5px;
+    font-size: 4.5px;
+    line-height: 1.1;
+  }
+
+  .certificate-document-participation .certificate-corner {
+    width: 22px;
+    height: 22px;
+  }
+
+  .certificate-document-participation .certificate-corner-tl,
+  .certificate-document-participation .certificate-corner-tr {
+    top: 8px;
+  }
+
+  .certificate-document-participation .certificate-corner-bl,
+  .certificate-document-participation .certificate-corner-br {
+    bottom: 8px;
+  }
+
+  .certificate-document-participation .certificate-corner-tl,
+  .certificate-document-participation .certificate-corner-bl {
+    left: 8px;
+  }
+
+  .certificate-document-participation .certificate-corner-tr,
+  .certificate-document-participation .certificate-corner-br {
+    right: 8px;
+  }
+}
+
 /* Compact action and status standard */
 :root {
   --compact-control-height: 30px;
@@ -15138,5 +15237,15 @@ professional-certificate {
   .cursor-pagination > div {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .certificate-preview-sheet:not(.is-professional) {
+    overflow: hidden;
+  }
+
+  .certificate-preview-inner.certificate-document-participation {
+    min-width: 0;
   }
 }

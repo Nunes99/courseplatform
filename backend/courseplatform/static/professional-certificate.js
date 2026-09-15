@@ -7,11 +7,15 @@ function loadResources() {
       fetch(new URL('./assets/certificate-layout.json', import.meta.url)).then((response) => {
         if (!response.ok) throw new Error('Não foi possível carregar o modelo do certificado.');
         return response.json();
-      }),
-      import('./vendor/qrcode-generator.mjs'),
+      }).catch(() => { throw new Error('Não foi possível carregar o modelo do certificado.'); }),
+      import('./vendor/qrcode-generator.mjs').catch(() => { throw new Error('Não foi possível carregar o gerador do código QR.'); }),
       ...['Vera.ttf', 'VeraBd.ttf'].map(async (file, index) => {
-        const face = new FontFace('CertificateSans', `url(${new URL(`./assets/fonts/${file}`, import.meta.url)})`, { weight: index ? '700' : '400' });
-        document.fonts.add(await face.load());
+        try {
+          const face = new FontFace('CertificateSans', `url(${new URL(`./assets/fonts/${file}`, import.meta.url)})`, { weight: index ? '700' : '400' });
+          document.fonts.add(await face.load());
+        } catch {
+          return null;
+        }
       })
     ]).catch((error) => { resources = null; throw error; });
   }
@@ -24,6 +28,12 @@ const months = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'jul
 function dateLabel(value) {
   const match = String(value || new Date().toISOString()).match(/^(\d{4})-(\d{2})-(\d{2})/);
   return match ? `${Number(match[3])} de ${months[Number(match[2]) - 1]} de ${match[1]}` : clean(value);
+}
+
+export function certificateWorkloadLabel(certificate) {
+  const hours = Number(certificate?.templateSnapshot?.courseHours);
+  if (!Number.isFinite(hours) || hours <= 0) return 'Não definida';
+  return `${new Intl.NumberFormat('pt-PT', { maximumFractionDigits: 2 }).format(hours)} horas`;
 }
 
 function fieldsFor(certificate) {
@@ -43,7 +53,7 @@ function fieldsFor(certificate) {
     courseLabel: 'CURSO / PROGRAMA', course: certificate.courseTitle || 'Curso',
     description: 'demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.',
     topicsLabel: clean(summary) ? 'O programa abordou:' : '',
-    workload: `Carga horária: ${Math.trunc(Number(certificate.templateSnapshot?.courseHours || 30))} horas`,
+    workload: `Carga horária: ${certificateWorkloadLabel(certificate)}`,
     score: `Resultado final: ${score}`,
     director: profile.directorName || 'Diretor Académico', directorTitle: profile.directorTitle || 'Direção académica',
     coordinator: profile.coordinatorName || 'Coordenador do Programa', coordinatorTitle: profile.coordinatorTitle || 'Coordenação do programa',

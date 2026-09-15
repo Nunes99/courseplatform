@@ -197,6 +197,34 @@ class ParticipationPolicyTests(unittest.TestCase):
         self.assert_code('DOWNLOAD_LIMIT_REACHED', a.certificate_pdf_payload, {'certificateId': 'CERT1'})
         self.assertEqual(self.db.cert['download_count'], 1)
 
+    def test_student_and_admin_pdf_payloads_share_the_emission_snapshot(self):
+        self.db.cert.update(
+            course_title='Curso de teste', student_name='Estudante de Teste',
+            verification_code='LSS2026TEST123456', issue_date=NOW, final_score=87,
+            template_snapshot_json={
+                'courseHours': 24,
+                'profile': {'issuerName': 'Entidade Original', 'assets': {}},
+            },
+        )
+        student = a.certificate_pdf_payload({'certificateId': 'CERT1', 'verificationBaseUrl': 'https://example.test/verify'})
+        admin = a.admin_certificate_pdf_payload({'certificateId': 'CERT1', 'verificationBaseUrl': 'https://example.test/verify'})
+        self.assertEqual(student, admin)
+        self.assertEqual(student['pdfData']['workload'], '24 horas')
+        self.assertEqual(student['pdfData']['issuer_name'], 'Entidade Original')
+        self.assertEqual(student['pdfData']['final_score'], 87.0)
+
+    def test_legacy_snapshot_uses_real_course_hours_without_demo_default(self):
+        self.db.cert.update(
+            course_title='Curso de teste', student_name='Estudante de Teste',
+            course_hours=18.5,
+        )
+        result = a.certificate_pdf_payload({'certificateId': 'CERT1'})
+        self.assertEqual(result['pdfData']['workload'], '18,5 horas')
+
+    def test_missing_workload_fails_explicitly(self):
+        self.db.cert.update(course_title='Curso de teste', student_name='Estudante de Teste')
+        self.assert_code('CERTIFICATE_DATA_INCOMPLETE', a.certificate_pdf_payload, {'certificateId': 'CERT1'})
+
     def test_disabled_policy_applies_to_previously_issued_pdf(self):
         self.db.profile['participation']['enabled'] = False
         self.assert_code('PARTICIPATION_DISABLED', a.certificate_pdf_payload, {'certificateId': 'CERT1'})

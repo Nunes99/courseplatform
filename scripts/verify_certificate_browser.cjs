@@ -21,11 +21,14 @@ async function main() {
   const failures = [];
   try {
     for (const panel of ['admin', 'student']) {
-      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+      const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1, serviceWorkers: 'block' });
       page.on('pageerror', (error) => failures.push(`${panel}: ${error.message}`));
       // Run the real page modules with synthetic data and no production requests.
       await page.route('**/*', async (route) => {
         const requestUrl = new URL(route.request().url());
+        if (requestUrl.pathname === '/assets/css/styles.css') {
+          return route.fulfill({ contentType: 'text/css', body: await fs.readFile(path.join(root, 'public/assets/css/styles.css')) });
+        }
         if (requestUrl.origin !== new URL(base).origin) {
           const type = route.request().resourceType();
           if (type === 'script') return route.fulfill({ contentType: 'application/javascript', body: '' });
@@ -47,14 +50,20 @@ async function main() {
       });
       await page.addInitScript(({ base }) => { window.COURSE_PLATFORM_API_URL = `${base}/api/index`; }, { base });
       await page.goto(`${base}/${panel === 'admin' ? 'admin.html' : 'index.html'}`);
+      await page.waitForFunction(() => [...document.styleSheets].some((sheet) => {
+        if (!sheet.href?.includes('/assets/css/styles.css')) return false;
+        try { return sheet.cssRules.length > 0; } catch { return false; }
+      }), null, { timeout: 90000 });
       await page.waitForFunction(() => Boolean(window.__qaOpen));
       await page.evaluate((data) => window.__qaOpen(data), certificate);
       const component = page.locator('professional-certificate').last();
       await component.waitFor();
-      await page.waitForFunction(() => Boolean(document.querySelector('professional-certificate')?.dataset.ready));
-      assert.equal(await component.getAttribute('data-ready'), 'true', await component.textContent());
-      const inspect = async () => page.evaluate(async () => {
-        const host = document.querySelector('professional-certificate');
+      const componentHandle = await component.elementHandle();
+      await page.waitForFunction((node) => Boolean(node?.dataset.ready), componentHandle);
+      const componentStatus = await component.getAttribute('data-ready');
+      const componentMessage = await component.evaluate((node) => node.shadowRoot?.textContent?.replace(/\s+/g, ' ').trim() || '');
+      assert.equal(componentStatus, 'true', componentMessage);
+      const inspect = async (target = component) => target.evaluate(async (host) => {
         const layout = await fetch('/assets/certificate-layout.json').then((r) => r.json());
         const problems = [];
         const root = host.shadowRoot;
@@ -91,7 +100,7 @@ async function main() {
       long.courseTitle = 'Economia Industrial, Análise de Investimentos e Gestão de Projetos Energéticos';
       long.contentSummary += '\nAvaliação económica de projetos\nSegurança e responsabilidade social';
       await component.evaluate((node, data) => { node.dataset.ready = ''; node.dataset.certificate = JSON.stringify(data); }, long);
-      await page.waitForFunction(() => document.querySelector('professional-certificate')?.dataset.ready === 'true');
+      await page.waitForFunction((node) => node?.dataset.ready === 'true', componentHandle);
       const stress = await inspect();
       assert.deepEqual(stress.problems, []);
       assert.ok(stress.text.includes('Chissano'));
@@ -99,6 +108,41 @@ async function main() {
       await component.evaluate((node, data) => { node.dataset.ready = ''; node.dataset.certificate = JSON.stringify(data); }, { ...certificate, studentName: 'Nome muito longo '.repeat(40) });
       await component.getByRole('alert').waitFor();
       assert.ok(await component.getByRole('alert').textContent());
+
+      const participation = { ...certificate, certificateType: 'SIMPLE' };
+      await page.evaluate((data) => {
+        document.querySelectorAll('.dialog-overlay').forEach((node) => node.remove());
+        window.__qaOpen(data);
+      }, participation);
+      const participationDocument = page.locator('.certificate-document-participation').last();
+      await participationDocument.waitFor();
+      for (const [label, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
+        await page.setViewportSize({ width, height });
+        await page.waitForTimeout(100);
+        const result = await participationDocument.evaluate((node) => {
+          const bounds = node.getBoundingClientRect();
+          const sheet = node.closest('.certificate-preview-sheet');
+          return {
+            width: bounds.width,
+            height: bounds.height,
+            aspectRatio: getComputedStyle(node).aspectRatio,
+            ratio: bounds.width / bounds.height,
+            clipped: node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1,
+            pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+            sheetScrollable: sheet.scrollWidth >= node.scrollWidth,
+            text: node.textContent.replace(/\s+/g, ' ').trim()
+          };
+        });
+        assert.ok(Math.abs(result.ratio - 297 / 210) < .01, `${panel} ${label}: participation A4 ratio ${JSON.stringify(result)}`);
+        assert.ok(!result.clipped, `${panel} ${label}: participation content clipped`);
+        assert.ok(!result.pageOverflow, `${panel} ${label}: page overflow`);
+        assert.ok(result.sheetScrollable, `${panel} ${label}: preview sheet must contain the document`);
+        assert.match(result.text, /CERTIFICADO DE PARTICIPAÇÃO/);
+        assert.match(result.text, /36 horas/);
+        assert.doesNotMatch(result.text, /CERTIFICADO DE CONCLUSÃO/);
+        await page.screenshot({ path: path.join(output, `${panel}-participation-${label}.png`) });
+      }
+
       if (panel === 'admin') {
         await page.evaluate((data) => {
           document.querySelector('.dialog-overlay')?.remove();
@@ -109,18 +153,20 @@ async function main() {
           document.body.replaceChildren(container);
         }, certificate);
         const thumbnail = page.locator('professional-certificate');
-        await page.waitForFunction(() => document.querySelector('professional-certificate')?.dataset.ready === 'true');
-        assert.deepEqual((await inspect()).problems, []);
+        const thumbnailHandle = await thumbnail.elementHandle();
+        await page.waitForFunction((node) => node?.dataset.ready === 'true', thumbnailHandle);
+        assert.deepEqual((await inspect(thumbnail)).problems, []);
         assert.equal(await thumbnail.getByRole('button').count(), 0);
         await page.screenshot({ path: path.join(output, 'admin-inline.png') });
         await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
-        assert.deepEqual((await inspect()).problems, []);
+        assert.deepEqual((await inspect(thumbnail)).problems, []);
         await page.screenshot({ path: path.join(output, 'admin-inline-dark.png') });
       }
+
       await page.close();
     }
     assert.deepEqual(failures, [], 'Browser errors');
-    console.log('Admin + student: A4 proportions, bounded text, 3 viewport sizes, zoom and overflow validation passed.');
+    console.log('Admin + student: professional and participation previews passed A4, text, mobile and overflow validation.');
   } finally { await browser.close(); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

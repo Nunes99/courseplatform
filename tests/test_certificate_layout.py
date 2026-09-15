@@ -125,6 +125,20 @@ class CertificateLayoutTests(unittest.TestCase):
         links = [item.get_object().get("/A", {}).get("/URI") for item in page.get("/Annots", [])]
         self.assertIn(self.data["verification_url"], links)
 
+    def test_participation_pdf_uses_participation_semantics_and_real_workload(self):
+        reader = PdfReader(BytesIO(build_course_certificate_pdf(self.data, "participation")))
+        text = " ".join(reader.pages[0].extract_text().split())
+        self.assertIn("CERTIFICADO DE PARTICIPAÇÃO", text)
+        self.assertIn("participou com sucesso no curso", text)
+        self.assertIn("36 horas", text)
+        self.assertNotIn("CERTIFICADO DE CONCLUSÃO", text)
+
+    def test_both_models_reject_a_missing_workload(self):
+        self.data["workload"] = ""
+        for model in ("participation", "professional"):
+            with self.subTest(model=model), self.assertRaisesRegex(CertificateLayoutError, "carga horária"):
+                build_course_certificate_pdf(self.data, model)
+
     def test_zero_score_and_march_are_preserved(self):
         self.data.update(final_score=0, issue_date="2026-03-20T10:00:00Z")
         text = PdfReader(BytesIO(build_course_certificate_pdf(self.data, "professional"))).pages[0].extract_text()
@@ -154,6 +168,16 @@ class CertificateLayoutTests(unittest.TestCase):
     def test_public_and_packaged_layouts_match(self):
         public = Path(__file__).resolve().parents[1] / "public/assets/certificate-layout.json"
         self.assertEqual(json.loads(public.read_text(encoding="utf-8")), self.layout)
+
+    def test_frontend_previews_do_not_use_demonstration_workloads(self):
+        root = Path(__file__).resolve().parents[1]
+        for relative in ("public/app.js", "public/admin.js", "public/professional-certificate.js"):
+            source = (root / relative).read_text(encoding="utf-8")
+            self.assertNotIn("courseHours || 30", source, relative)
+            self.assertNotIn("?.course?.totalHours || 30", source, relative)
+            self.assertNotIn("10 horas", source, relative)
+        self.assertIn("certificateWorkloadLabel", (root / "public/app.js").read_text(encoding="utf-8"))
+        self.assertIn("certificateWorkloadLabel", (root / "public/admin.js").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

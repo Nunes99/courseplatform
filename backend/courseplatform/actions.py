@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import mimetypes
 import secrets
 import smtplib
@@ -5775,7 +5776,8 @@ def certificate_pdf_payload(payload: dict[str, Any]):
         ensure_certificate_feature_schema(conn)
         cert = conn.execute(
             """
-            select cert.*, c.title as course_title, s.full_name as student_name,
+            select cert.*, c.title as course_title, c.total_hours as course_hours,
+                   s.full_name as student_name,
                    e.final_score as enrollment_score
             from courseplatform.certificates cert
             join courseplatform.courses c on c.course_id = cert.course_id
@@ -5789,42 +5791,11 @@ def certificate_pdf_payload(payload: dict[str, Any]):
         if not cert:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
         require_certificate_download_access(conn, cert)
-        snapshot = cert.get("template_snapshot_json") or certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
-        media = read_media_config_with_conn(conn, cert.get("course_id")) if cert else {"logoUrl": ""}
+        snapshot = cert.get("template_snapshot_json") or certificate_template_snapshot(
+            conn, cert.get("course_id"), cert.get("certificate_type")
+        )
         conn.commit()
-    cert = {
-        **cert,
-        "course_title": cert.get("course_title"),
-        "student_name": cert.get("student_name"),
-        "final_score": cert.get("final_score") or cert.get("enrollment_score"),
-    }
-    certificate = public_certificate(cert)
-    model = "professional" if certificate.get("certificateType") == "PROFESSIONAL" else "participation"
-    verification_code = certificate.get("verificationCode") or certificate.get("certificateNumber") or ""
-    separator = "&" if "?" in verification_base_url else "?"
-    verification_url = f"{verification_base_url}{separator}code={verification_code}" if verification_code else verification_base_url
-    profile = normalize_certificate_profile((snapshot or {}).get("profile"), {"title": certificate.get("courseTitle")})
-    profile["assets"] = {**(profile.get("assets") or {})}
-    if not profile["assets"].get("logoUrl") and media.get("logoUrl"):
-        profile["assets"]["logoUrl"] = media["logoUrl"]
-    workload = f"{int((snapshot or {}).get('courseHours') or 30)} horas" if model == "professional" else "10 horas"
-    return {
-        "certificate": certificate,
-        "model": model,
-        "pdfData": {
-            "issuer_name": profile.get("issuerName") or "LMTWEBNAIRS Summer School",
-            "student_name": certificate.get("studentName"),
-            "course_title": certificate.get("courseTitle"),
-            "certificate_number": certificate.get("certificateNumber"),
-            "verification_code": verification_code,
-            "verification_url": verification_url,
-            "issue_date": certificate.get("issueDate"),
-            "final_score": certificate.get("finalScore"),
-            "content_summary": profile.get("certifiedContents") or certificate.get("contentSummary"),
-            "workload": workload,
-            "certificate_profile": profile,
-        },
-    }
+    return certificate_document_payload(cert, snapshot, verification_base_url)
 
 
 def admin_certificate_pdf_payload(payload: dict[str, Any]):
@@ -5835,7 +5806,8 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
         ensure_certificate_feature_schema(conn)
         cert = conn.execute(
             """
-            select cert.*, c.title as course_title, s.full_name as student_name,
+            select cert.*, c.title as course_title, c.total_hours as course_hours,
+                   s.full_name as student_name,
                    e.final_score as enrollment_score
             from courseplatform.certificates cert
             join courseplatform.courses c on c.course_id = cert.course_id
@@ -5849,28 +5821,52 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
         snapshot = cert.get("template_snapshot_json") if cert else None
         if cert and not snapshot:
             snapshot = certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
-        media = read_media_config_with_conn(conn, cert.get("course_id")) if cert else {"logoUrl": ""}
         conn.commit()
     if not cert:
         raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
     if cert.get("status") == "DELETED":
         raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-    cert = {
-        **cert,
-        "course_title": cert.get("course_title"),
-        "student_name": cert.get("student_name"),
-        "final_score": cert.get("final_score") or cert.get("enrollment_score"),
-    }
-    certificate = public_certificate(cert)
+    return certificate_document_payload(cert, snapshot, verification_base_url)
+
+
+def certificate_workload_label(snapshot: dict[str, Any] | None, course_hours: Any = None) -> str:
+    snapshot_hours = snapshot.get("courseHours") if isinstance(snapshot, dict) else None
+    raw_hours = snapshot_hours if snapshot_hours not in (None, "") else course_hours
+    try:
+        hours = float(raw_hours)
+    except (TypeError, ValueError):
+        hours = 0
+    if not math.isfinite(hours) or hours <= 0:
+        raise ApiError(
+            "CERTIFICATE_DATA_INCOMPLETE",
+            "A carga horária do certificado não está definida. Atualize o formato antes de gerar o PDF.",
+        )
+    value = str(int(hours)) if hours.is_integer() else f"{hours:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+    return f"{value} horas"
+
+
+def certificate_document_payload(
+    row: dict[str, Any],
+    snapshot: dict[str, Any] | None,
+    verification_base_url: str,
+) -> dict[str, Any]:
+    final_score = row.get("final_score")
+    if final_score is None:
+        final_score = row.get("enrollment_score")
+    certificate = public_certificate({**row, "final_score": final_score})
     model = "professional" if certificate.get("certificateType") == "PROFESSIONAL" else "participation"
     verification_code = certificate.get("verificationCode") or certificate.get("certificateNumber") or ""
     separator = "&" if "?" in verification_base_url else "?"
-    verification_url = f"{verification_base_url}{separator}code={verification_code}" if verification_code else verification_base_url
-    profile = normalize_certificate_profile((snapshot or {}).get("profile"), {"title": certificate.get("courseTitle")})
+    verification_url = (
+        f"{verification_base_url}{separator}code={verification_code}"
+        if verification_code
+        else verification_base_url
+    )
+    profile = normalize_certificate_profile(
+        (snapshot or {}).get("profile"),
+        {"title": certificate.get("courseTitle")},
+    )
     profile["assets"] = {**(profile.get("assets") or {})}
-    if not profile["assets"].get("logoUrl") and media.get("logoUrl"):
-        profile["assets"]["logoUrl"] = media["logoUrl"]
-    workload = f"{int((snapshot or {}).get('courseHours') or 30)} horas" if model == "professional" else "10 horas"
     return {
         "certificate": certificate,
         "model": model,
@@ -5884,7 +5880,7 @@ def admin_certificate_pdf_payload(payload: dict[str, Any]):
             "issue_date": certificate.get("issueDate"),
             "final_score": certificate.get("finalScore"),
             "content_summary": profile.get("certifiedContents") or certificate.get("contentSummary"),
-            "workload": workload,
+            "workload": certificate_workload_label(snapshot, row.get("course_hours")),
             "certificate_profile": profile,
         },
     }
