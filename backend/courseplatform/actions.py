@@ -278,7 +278,8 @@ def decode_list_cursor(
     scope: str,
     *,
     allow_null_sort: bool = False,
-) -> tuple[datetime | None, str] | None:
+    sort_type: str = "datetime",
+) -> tuple[Any, str] | None:
     text = str_value(value)
     if not text:
         return None
@@ -294,7 +295,18 @@ def decode_list_cursor(
     if decoded.get("kind") != kind or not hmac.compare_digest(str(decoded.get("scope") or ""), scope):
         raise ApiError("CURSOR_FILTER_MISMATCH", "Os filtros mudaram. Reinicie a paginação.")
     record_id = str_value(decoded.get("id"))
-    sort_at = parse_datetime(decoded.get("sortAt"))
+    raw_sort = decoded.get("sortAt")
+    if sort_type == "datetime":
+        sort_at = parse_datetime(raw_sort)
+    elif sort_type == "number":
+        try:
+            sort_at = float(raw_sort) if raw_sort not in (None, "") else None
+        except (TypeError, ValueError):
+            sort_at = None
+    elif sort_type == "text":
+        sort_at = str(raw_sort) if raw_sort is not None else None
+    else:
+        raise ValueError(f"Tipo de cursor não suportado: {sort_type}")
     if not record_id or (sort_at is None and not allow_null_sort):
         raise ApiError("INVALID_CURSOR", "O cursor de paginação é inválido.")
     return sort_at, record_id
@@ -6556,35 +6568,86 @@ def admin_platform_statistics(payload: dict[str, Any]):
 
 def admin_list_courses(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    limit, offset, page = pagination(payload)
-    query = f"%{(payload.get('query') or '').lower()}%"
+    limit = cursor_page_limit(payload)
+    query = str_value(payload.get("query")).lower()
     status = (payload.get("status") or "ALL").upper()
+    content = (payload.get("content") or "ALL").upper()
+    if content not in {"ALL", "WITH_MODULES", "WITHOUT_MODULES", "WITH_GROUPS", "WITHOUT_GROUPS"}:
+        raise ApiError("INVALID_COURSE_FILTER", "O filtro de conteúdo é inválido.")
+    scope = cursor_scope("admin-courses", status, content, query)
+    cursor = decode_list_cursor(payload.get("cursor"), "admin-courses", scope, sort_type="text")
     conditions = ["(%s = 'ALL' or c.status = %s)"]
     params: list[Any] = [status, status]
-    if payload.get("query"):
+    if query:
         conditions.append("(lower(c.course_id || ' ' || c.course_code || ' ' || c.title || ' ' || coalesce(c.description,'')) like %s)")
-        params.append(query)
+        params.append(f"%{query}%")
     where = " and ".join(conditions)
+    content_sql = {
+        "ALL": "true",
+        "WITH_MODULES": "lesson_count > 0",
+        "WITHOUT_MODULES": "lesson_count = 0",
+        "WITH_GROUPS": "group_count > 0",
+        "WITHOUT_GROUPS": "group_count = 0",
+    }[content]
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_title, cursor_id = cursor
+        cursor_sql = "where (pagination_sort_text > %s or (pagination_sort_text = %s and course_id > %s))"
+        cursor_params.extend((cursor_title, cursor_title, cursor_id))
     rows = fetch_all(
         f"""
-        select c.*,
-          count(distinct l.lesson_id) as lesson_count,
-          count(distinct g.group_id) as group_count,
-          count(distinct e.enrollment_id) as enrollment_count,
-          count(*) over() as total_count
-        from courseplatform.courses c
-        left join courseplatform.lessons l on l.course_id = c.course_id
-        left join courseplatform.groups g on g.course_id = c.course_id
-        left join courseplatform.enrollments e on e.course_id = c.course_id
-        where {where}
-        group by c.course_id
-        order by c.title
-        limit %s offset %s
+        with course_rows as (
+          select c.*,
+            count(distinct l.lesson_id) filter (where coalesce(l.status, 'ACTIVE') <> 'DELETED') as lesson_count,
+            count(distinct g.group_id) filter (where coalesce(g.status, 'ACTIVE') <> 'DELETED') as group_count,
+            count(distinct e.enrollment_id) filter (where coalesce(e.status, 'ACTIVE') <> 'CANCELLED') as enrollment_count,
+            lower(coalesce(c.title, '')) as pagination_sort_text
+          from courseplatform.courses c
+          left join courseplatform.lessons l on l.course_id = c.course_id
+          left join courseplatform.groups g on g.course_id = c.course_id
+          left join courseplatform.enrollments e on e.course_id = c.course_id
+          where {where}
+          group by c.course_id
+        ), filtered_courses as (
+          select * from course_rows where {content_sql}
+        ), numbered_courses as (
+          select *,
+            count(*) over() as total_count,
+            count(*) filter (where status = 'ACTIVE') over() as active_count,
+            count(*) filter (where status = 'INACTIVE') over() as inactive_count,
+            sum(lesson_count) over() as total_lessons,
+            sum(group_count) over() as total_groups
+          from filtered_courses
+        )
+        select * from numbered_courses
+        {cursor_sql}
+        order by pagination_sort_text, course_id
+        limit %s
         """,
-        (*params, limit, offset),
+        (*params, *cursor_params, limit + 1),
     )
-    total = int(rows[0]["total_count"]) if rows else 0
-    return success({"courses": [{"course": public_course(row), "lessonCount": int(row["lesson_count"]), "groupCount": int(row["group_count"]), "enrollmentCount": int(row["enrollment_count"])} for row in rows], "pagination": {"total": total, "page": page, "limit": limit, "offset": offset, "returned": len(rows), "hasMore": offset + len(rows) < total}})
+    summary_row = rows[0] if rows else {}
+    total = int(summary_row.get("total_count") or 0)
+    rows, page_info = cursor_pagination_result(
+        rows, limit, "admin-courses", scope, "pagination_sort_text", "course_id"
+    )
+    page_info["total"] = total
+    return success({
+        "courses": [{
+            "course": public_course(row),
+            "lessonCount": int(row["lesson_count"]),
+            "groupCount": int(row["group_count"]),
+            "enrollmentCount": int(row["enrollment_count"]),
+        } for row in rows],
+        "pagination": page_info,
+        "summary": {
+            "active": int(summary_row.get("active_count") or 0),
+            "inactive": int(summary_row.get("inactive_count") or 0),
+            "lessons": int(summary_row.get("total_lessons") or 0),
+            "groups": int(summary_row.get("total_groups") or 0),
+        },
+    })
 
 
 def admin_course_structure(payload: dict[str, Any]):
@@ -6652,53 +6715,154 @@ def admin_course_structure(payload: dict[str, Any]):
 
 def admin_list_groups(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    course_id = str_value(payload.get("courseId"))
+    status = str_value(payload.get("status") or "ALL").upper()
+    query = str_value(payload.get("query")).lower()
+    limit = cursor_page_limit(payload)
+    scope = cursor_scope("admin-groups", course_id, status, query)
+    cursor = decode_list_cursor(payload.get("cursor"), "admin-groups", scope, sort_type="text")
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_name, cursor_id = cursor
+        cursor_sql = "where (pagination_sort_text > %s or (pagination_sort_text = %s and group_id > %s))"
+        cursor_params.extend((cursor_name, cursor_name, cursor_id))
     rows = fetch_all(
-        """
-        select g.*, count(gm.group_member_id) filter (where gm.status = 'ACTIVE') as member_count
-        from courseplatform.groups g
-        left join courseplatform.group_members gm on gm.group_id = g.group_id
-        where (%s = '' or g.course_id = %s)
-        group by g.group_id
-        order by g.name
-        limit 500
+        f"""
+        with group_rows as (
+          select g.*, count(gm.group_member_id) filter (where gm.status = 'ACTIVE') as member_count,
+                 lower(coalesce(g.name, '')) as pagination_sort_text
+          from courseplatform.groups g
+          left join courseplatform.group_members gm on gm.group_id = g.group_id
+          where (%s = '' or g.course_id = %s)
+            and (%s = 'ALL' or (%s = 'NON_DELETED' and g.status <> 'DELETED') or g.status = %s)
+            and (%s = '' or lower(coalesce(g.name, '') || ' ' || coalesce(g.group_code, '') || ' ' || coalesce(g.group_id, '')) like %s)
+          group by g.group_id
+        ), numbered_groups as (
+          select *, count(*) over() as total_count from group_rows
+        )
+        select * from numbered_groups
+        {cursor_sql}
+        order by pagination_sort_text, group_id
+        limit %s
         """,
-        (payload.get("courseId") or "", payload.get("courseId") or ""),
+        (course_id, course_id, status, status, status, query, f"%{query}%", *cursor_params, limit + 1),
     )
-    return success({"groups": [{"group": {"groupId": row["group_id"], "groupCode": row.get("group_code"), "name": row.get("name"), "courseId": row.get("course_id"), "offeringId": row.get("offering_id"), "startDate": iso(row.get("start_date")), "endDate": iso(row.get("end_date")), "status": row.get("status"), "createdAt": iso(row.get("created_at")), "updatedAt": iso(row.get("updated_at"))}, "memberCount": int(row["member_count"] or 0)} for row in rows]})
+    total = int(rows[0]["total_count"]) if rows else 0
+    rows, page_info = cursor_pagination_result(
+        rows, limit, "admin-groups", scope, "pagination_sort_text", "group_id"
+    )
+    page_info["total"] = total
+    return success({
+        "groups": [{"group": {
+            "groupId": row["group_id"], "groupCode": row.get("group_code"),
+            "name": row.get("name"), "courseId": row.get("course_id"),
+            "offeringId": row.get("offering_id"), "startDate": iso(row.get("start_date")),
+            "endDate": iso(row.get("end_date")), "status": row.get("status"),
+            "createdAt": iso(row.get("created_at")), "updatedAt": iso(row.get("updated_at")),
+        }, "memberCount": int(row["member_count"] or 0)} for row in rows],
+        "pagination": page_info,
+    })
 
 
 def admin_list_students(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     prepare_notification_feature_schema()
     status = (payload.get("status") or "ALL").upper()
-    query = str_value(payload.get("query"))
-    limit = max(1, min(int_value(payload.get("limit"), 500), 2000))
+    query = str_value(payload.get("query")).lower()
+    progress = str_value(payload.get("progress") or "ALL").upper()
+    sort = str_value(payload.get("sort") or "name")
+    if progress not in {"ALL", "NOT_STARTED", "IN_PROGRESS", "COMPLETED"}:
+        raise ApiError("INVALID_STUDENT_FILTER", "O filtro de progresso é inválido.")
+    if sort not in {"name", "progressDesc", "progressAsc", "recentLogin"}:
+        raise ApiError("INVALID_STUDENT_SORT", "A ordenação de estudantes é inválida.")
+    limit = cursor_page_limit(payload)
+    scope = cursor_scope("admin-students", status, progress, sort, query)
+    sort_type = "text" if sort == "name" else "number" if sort.startswith("progress") else "datetime"
+    cursor = decode_list_cursor(
+        payload.get("cursor"), "admin-students", scope,
+        sort_type=sort_type, allow_null_sort=sort == "recentLogin",
+    )
+    progress_sql = {
+        "ALL": "true",
+        "NOT_STARTED": "primary_progress <= 0",
+        "IN_PROGRESS": "primary_progress > 0 and primary_progress < 100",
+        "COMPLETED": "primary_progress >= 100",
+    }[progress]
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if sort == "name":
+        sort_field = "pagination_sort_text"
+        order_sql = "pagination_sort_text, student_id"
+        if cursor:
+            cursor_value, cursor_id = cursor
+            cursor_sql = "where (pagination_sort_text > %s or (pagination_sort_text = %s and student_id > %s))"
+            cursor_params.extend((cursor_value, cursor_value, cursor_id))
+    elif sort == "progressAsc":
+        sort_field = "primary_progress"
+        order_sql = "primary_progress, student_id"
+        if cursor:
+            cursor_value, cursor_id = cursor
+            cursor_sql = "where (primary_progress > %s or (primary_progress = %s and student_id > %s))"
+            cursor_params.extend((cursor_value, cursor_value, cursor_id))
+    elif sort == "progressDesc":
+        sort_field = "primary_progress"
+        order_sql = "primary_progress desc, student_id desc"
+        if cursor:
+            cursor_value, cursor_id = cursor
+            cursor_sql = "where (primary_progress < %s or (primary_progress = %s and student_id < %s))"
+            cursor_params.extend((cursor_value, cursor_value, cursor_id))
+    else:
+        sort_field = "last_login_at"
+        order_sql = "last_login_at desc nulls last, student_id desc"
+        if cursor:
+            cursor_value, cursor_id = cursor
+            if cursor_value is None:
+                cursor_sql = "where last_login_at is null and student_id < %s"
+                cursor_params.append(cursor_id)
+            else:
+                cursor_sql = "where (last_login_at < %s or last_login_at is null or (last_login_at = %s and student_id < %s))"
+                cursor_params.extend((cursor_value, cursor_value, cursor_id))
     rows = fetch_all(
-        """
-        select s.*,
-          (select count(*) from courseplatform.push_subscriptions ps where ps.student_id = s.student_id and ps.enabled) as push_subscription_count,
-          coalesce(jsonb_agg(distinct to_jsonb(e)) filter (where e.enrollment_id is not null), '[]') as enrollments,
-          coalesce(jsonb_agg(distinct to_jsonb(gm)) filter (where gm.group_member_id is not null), '[]') as memberships
-        from courseplatform.students s
-        left join courseplatform.enrollments e on e.student_id = s.student_id
-        left join courseplatform.group_members gm on gm.student_id = s.student_id and gm.status = 'ACTIVE'
-        where (%s = 'ALL' or s.status = %s)
-          and (%s = '' or lower(s.full_name || ' ' || s.email || ' ' || coalesce(s.organization,'')) like %s)
-        group by s.student_id
-        order by s.full_name
+        f"""
+        with student_rows as (
+          select s.*,
+            (select count(*) from courseplatform.push_subscriptions ps where ps.student_id = s.student_id and ps.enabled) as push_subscription_count,
+            coalesce(jsonb_agg(distinct to_jsonb(e)) filter (where e.enrollment_id is not null), '[]') as enrollments,
+            coalesce(jsonb_agg(distinct to_jsonb(gm)) filter (where gm.group_member_id is not null), '[]') as memberships,
+            coalesce(max(e.progress_percent), 0) as primary_progress,
+            lower(coalesce(s.full_name, '')) as pagination_sort_text
+          from courseplatform.students s
+          left join courseplatform.enrollments e on e.student_id = s.student_id
+          left join courseplatform.group_members gm on gm.student_id = s.student_id and gm.status = 'ACTIVE'
+          where (%s = 'ALL' or s.status = %s)
+            and (%s = '' or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
+              coalesce(s.public_student_id, '') || ' ' || coalesce(s.country, '') || ' ' || coalesce(s.organization, '')) like %s)
+          group by s.student_id
+        ), filtered_students as (
+          select * from student_rows where {progress_sql}
+        ), numbered_students as (
+          select *,
+            count(*) over() as total_count,
+            count(*) filter (where status = 'ACTIVE') over() as active_count,
+            count(*) filter (where status = 'BLOCKED') over() as blocked_count,
+            count(*) filter (where primary_progress >= 100) over() as completed_count,
+            avg(primary_progress) over() as average_progress
+          from filtered_students
+        )
+        select * from numbered_students
+        {cursor_sql}
+        order by {order_sql}
         limit %s
         """,
-        (status, status, query, f"%{query.lower()}%", limit),
+        (status, status, query, f"%{query}%", *cursor_params, limit + 1),
     )
-    total = fetch_one(
-        """
-        select count(*) as total
-        from courseplatform.students s
-        where (%s = 'ALL' or s.status = %s)
-          and (%s = '' or lower(s.full_name || ' ' || s.email || ' ' || coalesce(s.organization,'')) like %s)
-        """,
-        (status, status, query, f"%{query.lower()}%"),
-    ) or {}
+    summary_row = rows[0] if rows else {}
+    total = int(summary_row.get("total_count") or 0)
+    rows, page_info = cursor_pagination_result(
+        rows, limit, "admin-students", scope, sort_field, "student_id"
+    )
+    page_info["total"] = total
     return success({
         "students": [
             {
@@ -6708,35 +6872,68 @@ def admin_list_students(payload: dict[str, Any]):
             }
             for row in rows
         ],
-        "total": int(total.get("total") or 0),
+        "total": total,
         "limit": limit,
+        "pagination": page_info,
+        "summary": {
+            "active": int(summary_row.get("active_count") or 0),
+            "blocked": int(summary_row.get("blocked_count") or 0),
+            "completed": int(summary_row.get("completed_count") or 0),
+            "averageProgress": round(float(summary_row.get("average_progress") or 0), 1),
+        },
     })
 
 
 def admin_list_staff(payload: dict[str, Any]):
     _, current_admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    status = str_value(payload.get("status") or "ALL").upper()
+    role = str_value(payload.get("role") or "ALL").upper()
+    query = str_value(payload.get("query")).lower()
+    limit = cursor_page_limit(payload)
+    scope = cursor_scope("admin-staff", status, role, query)
+    cursor = decode_list_cursor(payload.get("cursor"), "admin-staff", scope, sort_type="text")
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_name, cursor_id = cursor
+        cursor_sql = "where (pagination_sort_text > %s or (pagination_sort_text = %s and admin_id > %s))"
+        cursor_params.extend((cursor_name, cursor_name, cursor_id))
     rows = fetch_all(
-        """
-        select *
-        from courseplatform.admins
-        where (%s = 'ALL' or status = %s)
-          and (%s = '' or lower(full_name || ' ' || email || ' ' || role) like %s)
-        order by
-          case role when 'OWNER' then 1 when 'ADMIN' then 2 else 3 end,
-          full_name
+        f"""
+        with staff_rows as (
+          select *, lower(coalesce(full_name, '')) as pagination_sort_text
+          from courseplatform.admins
+          where (%s = 'ALL' or status = %s)
+            and (%s = 'ALL' or role = %s)
+            and (%s = '' or lower(coalesce(full_name, '') || ' ' || coalesce(email, '') || ' ' || coalesce(role, '')) like %s)
+        ), numbered_staff as (
+          select *,
+            count(*) over() as total_count,
+            count(*) filter (where status = 'ACTIVE') over() as active_count,
+            count(*) filter (where role = 'REVIEWER' and status = 'ACTIVE') over() as reviewer_count
+          from staff_rows
+        )
+        select * from numbered_staff
+        {cursor_sql}
+        order by pagination_sort_text, admin_id
         limit %s
         """,
-        (
-            (payload.get("status") or "ALL").upper(),
-            (payload.get("status") or "ALL").upper(),
-            payload.get("query") or "",
-            f"%{(payload.get('query') or '').lower()}%",
-            int(payload.get("limit") or 500),
-        ),
+        (status, status, role, role, query, f"%{query}%", *cursor_params, limit + 1),
     )
+    summary_row = rows[0] if rows else {}
+    total = int(summary_row.get("total_count") or 0)
+    rows, page_info = cursor_pagination_result(
+        rows, limit, "admin-staff", scope, "pagination_sort_text", "admin_id"
+    )
+    page_info["total"] = total
     return success({
         "staff": [public_admin(row) for row in rows],
         "currentAdmin": public_admin(current_admin),
+        "pagination": page_info,
+        "summary": {
+            "active": int(summary_row.get("active_count") or 0),
+            "reviewers": int(summary_row.get("reviewer_count") or 0),
+        },
     })
 
 
@@ -7118,15 +7315,32 @@ def admin_enroll_students_in_offering(payload: dict[str, Any]):
 
 def admin_list_course_reconciliation_issues(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN"})
-    rows = fetch_all(
+    status = str_value(payload.get("status") or "OPEN").upper()
+    limit = cursor_page_limit(payload)
+    scope = cursor_scope("admin-course-reconciliation", status)
+    cursor = decode_list_cursor(payload.get("cursor"), "admin-course-reconciliation", scope)
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_at, cursor_id = cursor
+        cursor_sql = """
+          and (detected_at > %s or (detected_at = %s and issue_id > %s))
         """
-        select * from courseplatform.migration_reconciliation_issues
+        cursor_params.extend((cursor_at, cursor_at, cursor_id))
+    rows = fetch_all(
+        f"""
+        select *, detected_at as pagination_sort_at
+        from courseplatform.migration_reconciliation_issues
         where migration_key = '20260915101047'
           and (%s = 'ALL' or status = %s)
-        order by detected_at, entity_type, entity_id
-        limit 1000
+          {cursor_sql}
+        order by detected_at, issue_id
+        limit %s
         """,
-        (str_value(payload.get("status") or "OPEN").upper(),) * 2,
+        (status, status, *cursor_params, limit + 1),
+    )
+    rows, page_info = cursor_pagination_result(
+        rows, limit, "admin-course-reconciliation", scope, "pagination_sort_at", "issue_id"
     )
     return success({
         "issues": [
@@ -7140,7 +7354,8 @@ def admin_list_course_reconciliation_issues(payload: dict[str, Any]):
                 "detectedAt": iso(row.get("detected_at")),
             }
             for row in rows
-        ]
+        ],
+        "pagination": page_info,
     })
 
 
@@ -8566,8 +8781,9 @@ def admin_list_certificate_requests(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     status = (payload.get("status") or "ALL").upper()
     query = (payload.get("query") or "").strip().lower()
+    survey_only = as_bool(payload.get("surveyOnly"))
     limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-certificate-requests", status, query)
+    scope = cursor_scope("admin-certificate-requests", status, query, survey_only)
     cursor = decode_list_cursor(payload.get("cursor"), "admin-certificate-requests", scope)
     cursor_sql = ""
     cursor_params: list[Any] = []
@@ -8596,6 +8812,7 @@ def admin_list_certificate_requests(payload: dict[str, Any]):
             join courseplatform.courses c on c.course_id = cr.course_id
             left join courseplatform.certificates cert on cert.certificate_id = cr.certificate_id
             where (%s = 'ALL' or cr.status = %s)
+              and (%s = false or coalesce(cr.survey_answers_json, '{{}}'::jsonb) <> '{{}}'::jsonb)
               and (
                 %s = ''
                 or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
@@ -8606,7 +8823,7 @@ def admin_list_certificate_requests(payload: dict[str, Any]):
                      cr.request_id desc
             limit %s
             """,
-            (status, status, query, f"%{query}%", *cursor_params, limit + 1),
+            (status, status, survey_only, query, f"%{query}%", *cursor_params, limit + 1),
         ).fetchall()
         conn.commit()
     rows, page_info = cursor_pagination_result(
@@ -9050,18 +9267,43 @@ def admin_save_certificate_settings(payload: dict[str, Any]):
 
 def admin_list_certificate_surveys(payload: dict[str, Any]):
     admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    query = str_value(payload.get("query")).lower()
+    limit = cursor_page_limit(payload)
+    scope = cursor_scope("admin-certificate-surveys", query)
+    cursor = decode_list_cursor(payload.get("cursor"), "admin-certificate-surveys", scope, sort_type="text")
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_title, cursor_id = cursor
+        cursor_sql = "and (lower(coalesce(c.title, '')) > %s or (lower(coalesce(c.title, '')) = %s and c.course_id > %s))"
+        cursor_params.extend((cursor_title, cursor_title, cursor_id))
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         rows = conn.execute(
-            """
-            select c.*, cs.survey_questions_json, cs.congratulations_message, cs.updated_at
-            from courseplatform.courses c
-            left join courseplatform.certificate_settings cs on cs.course_id = c.course_id
-            where coalesce(c.status, 'ACTIVE') <> 'DELETED'
-            order by c.title
-            """
+            f"""
+            with survey_rows as (
+              select c.*, cs.survey_questions_json, cs.congratulations_message, cs.updated_at,
+                     lower(coalesce(c.title, '')) as pagination_sort_text
+              from courseplatform.courses c
+              left join courseplatform.certificate_settings cs on cs.course_id = c.course_id
+              where coalesce(c.status, 'ACTIVE') <> 'DELETED'
+                and (%s = '' or lower(coalesce(c.title, '') || ' ' || coalesce(c.course_code, '') || ' ' || coalesce(c.course_id, '')) like %s)
+            ), numbered_surveys as (
+              select *, count(*) over() as total_count from survey_rows
+            )
+            select * from numbered_surveys c
+            where true {cursor_sql}
+            order by pagination_sort_text, course_id
+            limit %s
+            """,
+            (query, f"%{query}%", *cursor_params, limit + 1),
         ).fetchall()
         conn.commit()
+    total = int(rows[0]["total_count"]) if rows else 0
+    rows, page_info = cursor_pagination_result(
+        rows, limit, "admin-certificate-surveys", scope, "pagination_sort_text", "course_id"
+    )
+    page_info["total"] = total
     surveys = []
     for row in rows:
         settings = certificate_settings_payload(row, row)
@@ -9072,7 +9314,7 @@ def admin_list_certificate_surveys(payload: dict[str, Any]):
             "questionCount": len(settings.get("surveyQuestions") or []),
             "updatedAt": iso(row.get("updated_at")),
         })
-    return success({"surveys": surveys})
+    return success({"surveys": surveys, "pagination": page_info})
 
 
 def admin_save_certificate_survey(payload: dict[str, Any]):
@@ -9209,10 +9451,21 @@ def verify_certificate(payload: dict[str, Any]):
 def admin_list_notifications(payload: dict[str, Any]):
     _, _admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
     prepare_notification_feature_schema()
-    limit, offset, page = pagination(payload, default_limit=80, max_limit=200)
+    limit = cursor_page_limit(payload, default_limit=80, max_limit=200)
+    query = str_value(payload.get("query")).lower()
+    category = str_value(payload.get("category") or "ALL").upper()
+    scope = cursor_scope("admin-notifications", category, query)
+    cursor = decode_list_cursor(payload.get("cursor"), "admin-notifications", scope)
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_at, cursor_id = cursor
+        cursor_sql = "and (n.created_at < %s or (n.created_at = %s and n.notification_id < %s))"
+        cursor_params.extend((cursor_at, cursor_at, cursor_id))
     rows = fetch_all(
-        """
+        f"""
         select n.*, s.full_name as student_name,
+               n.created_at as pagination_sort_at,
                w.status as whatsapp_status, w.recipient as whatsapp_recipient,
                w.provider_message_id as whatsapp_provider_message_id,
                w.attempt_count as whatsapp_attempt_count, w.last_error as whatsapp_last_error,
@@ -9239,10 +9492,16 @@ def admin_list_notifications(payload: dict[str, Any]):
           on t.notification_id = n.notification_id and t.channel = 'TELEGRAM'
         left join courseplatform.notification_deliveries p
           on p.notification_id = n.notification_id and p.channel = 'PUSH'
-        order by n.created_at desc
-        limit %s offset %s
+        where (%s = 'ALL' or n.category = %s)
+          and (%s = '' or lower(coalesce(s.full_name, '') || ' ' || coalesce(n.title, '') || ' ' || coalesce(n.message, '')) like %s)
+          {cursor_sql}
+        order by n.created_at desc, n.notification_id desc
+        limit %s
         """,
-        (limit, offset),
+        (category, category, query, f"%{query}%", *cursor_params, limit + 1),
+    )
+    rows, page_info = cursor_pagination_result(
+        rows, limit, "admin-notifications", scope, "pagination_sort_at", "notification_id"
     )
     totals = fetch_one(
         """
@@ -9293,8 +9552,8 @@ def admin_list_notifications(payload: dict[str, Any]):
         "telegramConfiguration": telegram_configuration(),
         "pushConfiguration": web_push_configuration(),
         "notificationTemplates": notification_templates_payload(),
-        "page": page,
         "limit": limit,
+        "pagination": page_info,
     })
 
 

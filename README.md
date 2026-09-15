@@ -91,6 +91,12 @@ Contrato de migrações e health checks:
 .\.venv\Scripts\python.exe -m unittest tests.test_schema_migrations_and_health -v
 ```
 
+Paginação e pesquisa administrativa da Etapa 7:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_stage7_admin_lists -v
+```
+
 Integração das migrações numa base PostgreSQL local descartável:
 
 ```powershell
@@ -149,6 +155,7 @@ node scripts/verify_assessment_feedback.cjs
 node scripts/verify_submission_retry.cjs
 node scripts/verify_participation_policy.cjs
 node scripts/verify_course_editions_browser.cjs
+node scripts/verify_stage7_admin_lists.cjs
 Remove-Item Env:PREVIEW_URL
 ```
 
@@ -239,6 +246,7 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 - [Matriz inicial de acessos](docs/access-control-matrix.md)
 - [Endurecimento Supabase da Etapa 3](docs/stage3-supabase-hardening.md)
 - [Migrações e health checks](docs/database-migrations.md)
+- [Paginação e pesquisa administrativa da Etapa 7](docs/stage7-pagination-and-search.md)
 - [Auditoria e roteiro LMS](docs/auditoria-lms-2026-09-12.md)
 - [Instruções de evolução por etapas](docs/instrucoes-agente-evolucao-lms.md)
 - [Certificados](docs/certificate-layout.md)

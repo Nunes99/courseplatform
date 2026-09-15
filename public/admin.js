@@ -65,8 +65,28 @@ let submissionSearchTimer;
 let certificateSearchTimer;
 let studentSearchTimer;
 let courseSearchTimer;
+let staffSearchTimer;
+let surveySearchTimer;
+let notificationSearchTimer;
 let submissionRequestVersion = 0;
 let certificateRequestVersion = 0;
+let studentRequestVersion = 0;
+let courseRequestVersion = 0;
+let staffRequestVersion = 0;
+let surveyRequestVersion = 0;
+let notificationRequestVersion = 0;
+const listRequestControllers = new Map();
+
+function beginListRequest(name) {
+  listRequestControllers.get(name)?.abort();
+  const controller = new AbortController();
+  listRequestControllers.set(name, controller);
+  return controller;
+}
+
+function isCancelledRequest(error) {
+  return error?.code === 'REQUEST_ABORTED' || error?.name === 'AbortError';
+}
 const state = {
   admin: null,
   statistics: null,
@@ -84,9 +104,20 @@ const state = {
     history: []
   },
   students: [],
+  studentSummary: {},
+  studentPagination: {
+    cursor: '', nextCursor: '', hasMore: false, returned: 0, total: 0, limit: 50, history: []
+  },
   courseStructure: null,
   courses: [],
+  courseSummary: {},
   groups: [],
+  coursePagination: {
+    cursor: '', nextCursor: '', hasMore: false, returned: 0, total: 0, limit: 24, history: []
+  },
+  groupPagination: {
+    cursor: '', nextCursor: '', hasMore: false, returned: 0, total: 0, limit: 50, history: []
+  },
   selectedCourseId: config.courseId,
   courseMode: 'list',
   courseView: 'overview',
@@ -101,6 +132,13 @@ const state = {
   certificates: [],
   certificateSurveys: [],
   certificateSurveyResponses: [],
+  surveyFilters: {
+    query: ''
+  },
+  surveyPagination: {
+    definitions: { cursor: '', nextCursor: '', hasMore: false, returned: 0, total: 0, limit: 30, history: [] },
+    responses: { cursor: '', nextCursor: '', hasMore: false, returned: 0, total: 0, limit: 30, history: [] }
+  },
   certificateFilters: {
     status: 'ALL',
     certificateStatus: 'ACTIVE',
@@ -126,8 +164,21 @@ const state = {
     videos: []
   },
   staff: [],
+  staffSummary: {},
+  staffFilters: {
+    query: '', status: 'ALL', role: 'ALL'
+  },
+  staffPagination: {
+    cursor: '', nextCursor: '', hasMore: false, returned: 0, total: 0, limit: 50, history: []
+  },
   notificationLog: null,
   notificationStudentTotal: 0,
+  notificationFilters: {
+    query: '', category: 'ALL'
+  },
+  notificationPagination: {
+    cursor: '', nextCursor: '', hasMore: false, returned: 0, limit: 80, history: []
+  },
   notificationTemplateKey: ''
 };
 
@@ -896,17 +947,36 @@ function notificationTemplateEditor(templates = []) {
 
 async function loadNotificationManagement(options = {}) {
   const main = document.querySelector('#adminMain');
-  main.innerHTML = loadingTemplate('A carregar notificações...');
+  const requestVersion = ++notificationRequestVersion;
+  const requestOptions = { ...options, signal: beginListRequest('notifications').signal };
+  const requestKey = JSON.stringify({
+    filters: state.notificationFilters,
+    cursor: state.notificationPagination.cursor
+  });
+  if (!options.silent) main.innerHTML = loadingTemplate('A carregar notificações...');
   try {
     const [notificationLog, studentResult] = await Promise.all([
-      api.adminNotifications({ limit: 120 }, options),
-      api.adminStudents({ status: 'ACTIVE', limit: 2000 }, options)
+      api.adminNotifications({
+        ...state.notificationFilters,
+        limit: state.notificationPagination.limit,
+        cursor: state.notificationPagination.cursor
+      }, requestOptions),
+      api.adminStudents({ status: 'ACTIVE', sort: 'name', limit: 100 }, requestOptions)
     ]);
+    if (requestVersion !== notificationRequestVersion || requestKey !== JSON.stringify({
+      filters: state.notificationFilters,
+      cursor: state.notificationPagination.cursor
+    })) return false;
     state.notificationLog = notificationLog;
     state.students = studentResult.students || [];
     state.notificationStudentTotal = Number(studentResult.total ?? state.students.length);
-    renderNotificationManagement();
+    Object.assign(state.notificationPagination, notificationLog.pagination || {
+      nextCursor: '', hasMore: false, returned: (notificationLog.notifications || []).length
+    });
+    if (!options.silent) renderNotificationManagement();
+    return true;
   } catch (error) {
+    if (isCancelledRequest(error)) return false;
     handleAdminError(error);
   }
 }
@@ -1283,6 +1353,23 @@ function renderNotificationManagement() {
 
     <section class="admin-content-panel notification-history-panel">
       <div class="section-heading"><div><p class="eyebrow">Histórico</p><h2>Atualizações enviadas</h2></div></div>
+      <div class="student-admin-toolbar notification-history-toolbar" aria-label="Filtros do histórico">
+        <label class="student-search-field">
+          <span>Pesquisar</span>
+          <input id="notificationHistorySearch" type="search" value="${escapeHtml(state.notificationFilters.query)}"
+            placeholder="Estudante, título ou mensagem">
+        </label>
+        <label>
+          <span>Categoria</span>
+          <select id="notificationCategoryFilter">
+            ${studentFilterOption('ALL', 'Todas as categorias', state.notificationFilters.category)}
+            ${studentFilterOption('GENERAL', 'Comunicados gerais', state.notificationFilters.category)}
+            ${studentFilterOption('MODULE_AVAILABLE', 'Módulos e exercícios', state.notificationFilters.category)}
+            ${studentFilterOption('SUBMISSION_STATUS', 'Estado de submissão', state.notificationFilters.category)}
+            ${studentFilterOption('REVIEW_FEEDBACK', 'Avaliação e feedback', state.notificationFilters.category)}
+          </select>
+        </label>
+      </div>
       <div class="admin-table-wrap">
         <table class="admin-table notification-admin-table">
           <thead><tr><th>Estudante</th><th>Atualização</th><th>Interna</th><th>Email</th><th>WhatsApp</th><th>Telegram</th><th>Push</th><th>Data</th></tr></thead>
@@ -1302,6 +1389,7 @@ function renderNotificationManagement() {
           </tbody>
         </table>
       </div>
+      ${cursorPaginationTemplate('notifications', state.notificationPagination)}
     </section>
   `;
 
@@ -1318,7 +1406,37 @@ function renderNotificationManagement() {
   document.querySelector('#notificationTemplateForm')?.addEventListener('submit', saveNotificationTemplate);
   document.querySelector('#resetNotificationTemplate')?.addEventListener('click', resetNotificationTemplate);
   document.querySelector('#retryNotificationDeliveries')?.addEventListener('click', retryNotificationDeliveries);
+  document.querySelector('#notificationHistorySearch')?.addEventListener('input', (event) => {
+    state.notificationFilters.query = event.currentTarget.value;
+    resetCursorPagination(state.notificationPagination);
+    scheduleNotificationRefresh();
+  });
+  document.querySelector('#notificationCategoryFilter')?.addEventListener('change', (event) => {
+    state.notificationFilters.category = event.currentTarget.value;
+    resetCursorPagination(state.notificationPagination);
+    loadNotificationManagement({ force: true });
+  });
+  root.querySelectorAll('[data-cursor-pagination="notifications"]').forEach((button) => {
+    button.addEventListener('click', () => moveCursorPage(
+      state.notificationPagination,
+      button.dataset.direction,
+      () => loadNotificationManagement({ force: true })
+    ));
+  });
   reportHeight();
+}
+
+function scheduleNotificationRefresh(delay = 400) {
+  clearTimeout(notificationSearchTimer);
+  const expectedFilters = JSON.stringify(state.notificationFilters);
+  notificationSearchTimer = setTimeout(() => {
+    if (expectedFilters !== JSON.stringify(state.notificationFilters)) return;
+    loadNotificationManagement({ force: true, silent: true }).then((loaded) => {
+      if (loaded && expectedFilters === JSON.stringify(state.notificationFilters) && document.querySelector('#notificationHistorySearch')) {
+        renderPreservingFocus(renderNotificationManagement);
+      }
+    });
+  }, delay);
 }
 
 function bindNotificationRecipientPicker(form) {
@@ -1669,14 +1787,34 @@ function renderCredentialsManagement() {
 
 async function loadStaff(options = {}) {
   const main = document.querySelector('#adminMain');
-  main.innerHTML = loadingTemplate('A carregar staff...');
+  const requestVersion = ++staffRequestVersion;
+  const requestOptions = { ...options, signal: beginListRequest('staff').signal };
+  const requestKey = JSON.stringify({ filters: state.staffFilters, cursor: state.staffPagination.cursor });
+  if (!options.silent) main.innerHTML = loadingTemplate('A carregar staff...');
 
   try {
-    const result = await (typeof api.adminStaff === 'function' ? api.adminStaff(options) : api.adminstaff(options));
+    const filters = {
+      ...state.staffFilters,
+      limit: state.staffPagination.limit,
+      cursor: state.staffPagination.cursor
+    };
+    const result = await (typeof api.adminStaff === 'function'
+      ? api.adminStaff(filters, requestOptions)
+      : api.adminstaff(filters, requestOptions));
+    if (requestVersion !== staffRequestVersion || requestKey !== JSON.stringify({
+      filters: state.staffFilters,
+      cursor: state.staffPagination.cursor
+    })) return false;
     state.staff = result.staff || [];
+    state.staffSummary = result.summary || {};
+    Object.assign(state.staffPagination, result.pagination || {
+      nextCursor: '', hasMore: false, returned: state.staff.length
+    });
     state.admin = result.currentAdmin || state.admin;
-    renderStaff();
+    if (!options.silent) renderStaff();
+    return true;
   } catch (error) {
+    if (isCancelledRequest(error)) return false;
     if (options.silent) {
       console.warn('Falha ao atualizar staff em segundo plano:', error);
       return;
@@ -1687,8 +1825,9 @@ async function loadStaff(options = {}) {
 
 function renderStaff() {
   const main = document.querySelector('#adminMain');
-  const activeCount = state.staff.filter((admin) => admin.status === 'ACTIVE').length;
-  const reviewerCount = state.staff.filter((admin) => admin.role === 'REVIEWER' && admin.status === 'ACTIVE').length;
+  const activeCount = Number(state.staffSummary.active || 0);
+  const reviewerCount = Number(state.staffSummary.reviewers || 0);
+  const totalStaff = Number(state.staffPagination.total || 0);
 
   main.innerHTML = `
     <div class="admin-page-heading">
@@ -1707,7 +1846,7 @@ function renderStaff() {
     <section class="admin-summary-grid">
       <article class="insight-card">
         <img src="${iconUrl('conference-call', goldIcon)}" alt="">
-        <div><span>Total</span><strong>${state.staff.length}</strong></div>
+        <div><span>Total</span><strong>${totalStaff}</strong></div>
       </article>
       <article class="insight-card">
         <img src="${iconUrl('ok', goldIcon)}" alt="">
@@ -1717,6 +1856,32 @@ function renderStaff() {
         <img src="${iconUrl('inspection', goldIcon)}" alt="">
         <div><span>Revisores</span><strong>${reviewerCount}</strong></div>
       </article>
+    </section>
+
+    <section class="student-admin-toolbar" aria-label="Filtros de staff">
+      <label class="student-search-field">
+        <span>Pesquisar</span>
+        <input id="staffSearch" type="search" value="${escapeHtml(state.staffFilters.query)}"
+          placeholder="Nome, email ou função">
+      </label>
+      <label>
+        <span>Estado</span>
+        <select id="staffStatusFilter">
+          ${studentFilterOption('ALL', 'Todos os estados', state.staffFilters.status)}
+          ${studentFilterOption('ACTIVE', 'Ativos', state.staffFilters.status)}
+          ${studentFilterOption('INACTIVE', 'Inativos', state.staffFilters.status)}
+          ${studentFilterOption('DELETED', 'Eliminados', state.staffFilters.status)}
+        </select>
+      </label>
+      <label>
+        <span>Permissão</span>
+        <select id="staffRoleFilter">
+          ${studentFilterOption('ALL', 'Todas as permissões', state.staffFilters.role)}
+          ${studentFilterOption('OWNER', 'Proprietário', state.staffFilters.role)}
+          ${studentFilterOption('ADMIN', 'Administrador', state.staffFilters.role)}
+          ${studentFilterOption('REVIEWER', 'Revisor', state.staffFilters.role)}
+        </select>
+      </label>
     </section>
 
     <div class="admin-table-wrap">
@@ -1738,6 +1903,7 @@ function renderStaff() {
         </tbody>
       </table>
     </div>
+    ${cursorPaginationTemplate('staff', state.staffPagination)}
   `;
 
   document.querySelector('#newStaff')?.addEventListener('click', () => showStaffDialog());
@@ -1748,7 +1914,42 @@ function renderStaff() {
   root.querySelectorAll('[data-staff-status]').forEach((button) => {
     button.addEventListener('click', () => setStaffStatus(button.dataset.staffStatus, button.dataset.status));
   });
+  document.querySelector('#staffSearch')?.addEventListener('input', (event) => {
+    state.staffFilters.query = event.currentTarget.value;
+    resetCursorPagination(state.staffPagination);
+    scheduleStaffRefresh();
+  });
+  document.querySelector('#staffStatusFilter')?.addEventListener('change', (event) => {
+    state.staffFilters.status = event.currentTarget.value;
+    resetCursorPagination(state.staffPagination);
+    loadStaff();
+  });
+  document.querySelector('#staffRoleFilter')?.addEventListener('change', (event) => {
+    state.staffFilters.role = event.currentTarget.value;
+    resetCursorPagination(state.staffPagination);
+    loadStaff();
+  });
+  root.querySelectorAll('[data-cursor-pagination="staff"]').forEach((button) => {
+    button.addEventListener('click', () => moveCursorPage(
+      state.staffPagination,
+      button.dataset.direction,
+      () => loadStaff({ force: true })
+    ));
+  });
   reportHeight();
+}
+
+function scheduleStaffRefresh(delay = 400) {
+  clearTimeout(staffSearchTimer);
+  const expectedFilters = JSON.stringify(state.staffFilters);
+  staffSearchTimer = setTimeout(() => {
+    if (expectedFilters !== JSON.stringify(state.staffFilters)) return;
+    loadStaff({ force: true, silent: true }).then((loaded) => {
+      if (loaded && expectedFilters === JSON.stringify(state.staffFilters) && document.querySelector('#staffSearch')) {
+        renderPreservingFocus(renderStaff);
+      }
+    });
+  }, delay);
 }
 
 function staffRowTemplate(admin) {
@@ -1920,7 +2121,7 @@ async function showCredentialRecoveryDialog(defaultTarget = 'STUDENTS') {
         </label>
 
         <div class="select-all-toolbar">
-          <button class="button button-small button-secondary" type="button" data-select-credentials="all">Selecionar todos</button>
+          <button class="button button-small button-secondary" type="button" data-select-credentials="all">Selecionar apresentados</button>
           <button class="button button-small button-secondary" type="button" data-select-credentials="none">Limpar seleção</button>
         </div>
 
@@ -2205,6 +2406,7 @@ function renderAdminProfile() {
 async function loadCertifications(options = {}) {
   const main = document.querySelector('#adminMain');
   const requestVersion = ++certificateRequestVersion;
+  const requestOptions = { ...options, signal: beginListRequest('certifications').signal };
   const requestKey = JSON.stringify({
     filters: state.certificateFilters,
     certificateCursor: state.certificatePagination.certificates.cursor,
@@ -2221,14 +2423,14 @@ async function loadCertifications(options = {}) {
         query: state.certificateFilters.query,
         limit: state.certificatePagination.requests.limit,
         cursor: state.certificatePagination.requests.cursor
-      }, options),
+      }, requestOptions),
       api.adminCertificates({
         status: state.certificateFilters.certificateStatus,
         query: state.certificateFilters.query,
         limit: state.certificatePagination.certificates.limit,
         cursor: state.certificatePagination.certificates.cursor
-      }, options),
-      api.adminCourses({ limit: 500 }, options)
+      }, requestOptions),
+      api.adminCourses({ limit: 500 }, requestOptions)
     ]);
     if (requestVersion !== certificateRequestVersion || requestKey !== JSON.stringify({
       filters: state.certificateFilters,
@@ -2246,13 +2448,14 @@ async function loadCertifications(options = {}) {
     state.courses = coursesResult.courses || state.courses || [];
     const firstCourse = state.courses.find((item) => item.course?.status !== 'DELETED')?.course;
     state.selectedCourseId = state.selectedCourseId || firstCourse?.courseId || config.courseId;
-    const settingsResult = await api.adminCertificateSettings(state.selectedCourseId, options);
+    const settingsResult = await api.adminCertificateSettings(state.selectedCourseId, requestOptions);
     if (requestVersion !== certificateRequestVersion) return false;
     state.certificateSettings = settingsResult.settings || {};
     if (options.silent) renderPreservingFocus(renderCertifications);
     else renderCertifications();
     return true;
   } catch (error) {
+    if (isCancelledRequest(error)) return false;
     if (requestVersion !== certificateRequestVersion) return false;
     if (options.silent) {
       console.warn('Falha ao atualizar certificações em segundo plano:', error);
@@ -2919,19 +3122,48 @@ function surveyQuestionsFromSettingsForm(form) {
 
 async function loadCertificateSurveys(options = {}) {
   const main = document.querySelector('#adminMain');
+  const requestVersion = ++surveyRequestVersion;
+  const requestOptions = { ...options, signal: beginListRequest('surveys').signal };
+  const requestKey = JSON.stringify({
+    filters: state.surveyFilters,
+    definitionCursor: state.surveyPagination.definitions.cursor,
+    responseCursor: state.surveyPagination.responses.cursor
+  });
   if (!options.silent) {
     main.innerHTML = loadingTemplate('A carregar inquéritos...');
   }
   try {
     const [result, responsesResult] = await Promise.all([
-      api.adminCertificateSurveys(options),
-      api.adminCertificateRequests({ status: 'ALL', query: '', limit: 300 }, options)
+      api.adminCertificateSurveys({
+        query: state.surveyFilters.query,
+        limit: state.surveyPagination.definitions.limit,
+        cursor: state.surveyPagination.definitions.cursor
+      }, requestOptions),
+      api.adminCertificateRequests({
+        status: 'ALL',
+        query: state.surveyFilters.query,
+        surveyOnly: true,
+        limit: state.surveyPagination.responses.limit,
+        cursor: state.surveyPagination.responses.cursor
+      }, requestOptions)
     ]);
+    if (requestVersion !== surveyRequestVersion || requestKey !== JSON.stringify({
+      filters: state.surveyFilters,
+      definitionCursor: state.surveyPagination.definitions.cursor,
+      responseCursor: state.surveyPagination.responses.cursor
+    })) return false;
     state.certificateSurveys = result.surveys || [];
-    state.certificateSurveyResponses = (responsesResult.requests || [])
-      .filter((request) => Object.keys(request.surveyAnswers || {}).length);
-    renderCertificateSurveys();
+    state.certificateSurveyResponses = responsesResult.requests || [];
+    Object.assign(state.surveyPagination.definitions, result.pagination || {
+      nextCursor: '', hasMore: false, returned: state.certificateSurveys.length
+    });
+    Object.assign(state.surveyPagination.responses, responsesResult.pagination || {
+      nextCursor: '', hasMore: false, returned: state.certificateSurveyResponses.length
+    });
+    if (!options.silent) renderCertificateSurveys();
+    return true;
   } catch (error) {
+    if (isCancelledRequest(error)) return false;
     handleAdminError(error);
   }
 }
@@ -2950,6 +3182,14 @@ function renderCertificateSurveys() {
       <button class="button button-secondary" id="refreshSurveys" type="button">Atualizar lista</button>
     </div>
 
+    <section class="student-admin-toolbar survey-admin-toolbar" aria-label="Pesquisa de inquéritos">
+      <label class="student-search-field">
+        <span>Pesquisar</span>
+        <input id="surveySearch" type="search" value="${escapeHtml(state.surveyFilters.query)}"
+          placeholder="Curso, código, estudante ou email">
+      </label>
+    </section>
+
     <section class="admin-content-panel survey-admin-panel">
       <div class="course-section-heading">
         <div>
@@ -2963,6 +3203,7 @@ function renderCertificateSurveys() {
           <div class="student-empty-state">Ainda não existem cursos para configurar inquéritos.</div>
         `}
       </div>
+      ${cursorPaginationTemplate('survey-definitions', state.surveyPagination.definitions)}
     </section>
 
     <section class="admin-content-panel survey-admin-panel">
@@ -2978,13 +3219,47 @@ function renderCertificateSurveys() {
           <div class="student-empty-state">Ainda não existem respostas de inquéritos.</div>
         `}
       </div>
+      ${cursorPaginationTemplate('survey-responses', state.surveyPagination.responses)}
     </section>
   `;
   document.querySelector('#refreshSurveys')?.addEventListener('click', () => loadCertificateSurveys({ force: true }));
+  document.querySelector('#surveySearch')?.addEventListener('input', (event) => {
+    state.surveyFilters.query = event.currentTarget.value;
+    resetCursorPagination(state.surveyPagination.definitions);
+    resetCursorPagination(state.surveyPagination.responses);
+    scheduleSurveyRefresh();
+  });
   root.querySelectorAll('[data-edit-certificate-survey]').forEach((button) => {
     button.addEventListener('click', () => openCertificateSurveyDialog(button.dataset.editCertificateSurvey));
   });
+  root.querySelectorAll('[data-cursor-pagination="survey-definitions"]').forEach((button) => {
+    button.addEventListener('click', () => moveCursorPage(
+      state.surveyPagination.definitions,
+      button.dataset.direction,
+      () => loadCertificateSurveys({ force: true })
+    ));
+  });
+  root.querySelectorAll('[data-cursor-pagination="survey-responses"]').forEach((button) => {
+    button.addEventListener('click', () => moveCursorPage(
+      state.surveyPagination.responses,
+      button.dataset.direction,
+      () => loadCertificateSurveys({ force: true })
+    ));
+  });
   reportHeight();
+}
+
+function scheduleSurveyRefresh(delay = 400) {
+  clearTimeout(surveySearchTimer);
+  const expectedFilters = JSON.stringify(state.surveyFilters);
+  surveySearchTimer = setTimeout(() => {
+    if (expectedFilters !== JSON.stringify(state.surveyFilters)) return;
+    loadCertificateSurveys({ force: true, silent: true }).then((loaded) => {
+      if (loaded && expectedFilters === JSON.stringify(state.surveyFilters) && document.querySelector('#surveySearch')) {
+        renderPreservingFocus(renderCertificateSurveys);
+      }
+    });
+  }, delay);
 }
 
 function certificateSurveyResponseTemplate(request) {
@@ -3444,6 +3719,7 @@ function resetCursorPagination(pagination) {
   pagination.nextCursor = '';
   pagination.hasMore = false;
   pagination.returned = 0;
+  if ('total' in pagination) pagination.total = 0;
   pagination.history = [];
 }
 
@@ -3508,6 +3784,7 @@ function scheduleCertificateRefresh(delay = 400) {
 async function loadPending(options = {}) {
   const main = document.querySelector('#adminMain');
   const requestVersion = ++submissionRequestVersion;
+  const requestOptions = { ...options, signal: beginListRequest('submissions').signal };
   const requestKey = JSON.stringify({
     filters: state.submissionFilters,
     cursor: state.submissionPagination.cursor
@@ -3522,7 +3799,7 @@ async function loadPending(options = {}) {
       query: state.submissionFilters.query,
       limit: state.submissionPagination.limit,
       cursor: state.submissionPagination.cursor
-    }, options);
+    }, requestOptions);
     if (requestVersion !== submissionRequestVersion || requestKey !== JSON.stringify({
       filters: state.submissionFilters,
       cursor: state.submissionPagination.cursor
@@ -3531,13 +3808,14 @@ async function loadPending(options = {}) {
     Object.assign(state.submissionPagination, result.pagination || {
       nextCursor: '', hasMore: false, returned: state.pending.length
     });
-    await loadAccessContext(options);
+    await loadAccessContext(requestOptions);
     if (requestVersion !== submissionRequestVersion) return false;
     if (!options.silent) {
       renderSubmissionsV2();
     }
     return true;
   } catch (error) {
+    if (isCancelledRequest(error)) return false;
     if (requestVersion !== submissionRequestVersion) return false;
     if (options.silent) {
       console.warn('Falha ao atualizar submissões em segundo plano:', error);
@@ -3973,7 +4251,7 @@ function selectAllToolbar(inputName) {
   return `
     <div class="select-all-toolbar">
       <button class="button button-secondary button-small" type="button"
-        data-select-all="${escapeHtml(inputName)}">Selecionar todos</button>
+        data-select-all="${escapeHtml(inputName)}">Selecionar esta página</button>
       <button class="button button-secondary button-small" type="button"
         data-clear-all="${escapeHtml(inputName)}">Limpar seleção</button>
       <span data-selected-count="${escapeHtml(inputName)}">0 selecionados</span>
@@ -4578,6 +4856,9 @@ async function revokeRetryAuthorization(event) {
 
 async function loadStudents(options = {}) {
   const main = document.querySelector('#adminMain');
+  const requestVersion = ++studentRequestVersion;
+  const requestOptions = { ...options, signal: beginListRequest('students').signal };
+  const requestKey = JSON.stringify({ filters: state.studentFilters, cursor: state.studentPagination.cursor });
   if (!options.silent) {
     main.innerHTML = loadingTemplate('A carregar estudantes...');
   }
@@ -4588,13 +4869,24 @@ async function loadStudents(options = {}) {
       status: state.studentFilters.status,
       progress: state.studentFilters.progress,
       sort: state.studentFilters.sort,
-      limit: 500
-    }, options);
-    state.students = result.students;
+      limit: state.studentPagination.limit,
+      cursor: state.studentPagination.cursor
+    }, requestOptions);
+    if (requestVersion !== studentRequestVersion || requestKey !== JSON.stringify({
+      filters: state.studentFilters,
+      cursor: state.studentPagination.cursor
+    })) return false;
+    state.students = result.students || [];
+    state.studentSummary = result.summary || {};
+    Object.assign(state.studentPagination, result.pagination || {
+      nextCursor: '', hasMore: false, returned: state.students.length, total: Number(result.total || 0)
+    });
     if (!options.silent) {
       renderStudentsV2();
     }
+    return true;
   } catch (error) {
+    if (isCancelledRequest(error)) return false;
     if (options.silent) {
       console.warn('Falha ao atualizar estudantes em segundo plano:', error);
       return;
@@ -4696,18 +4988,12 @@ function renderStudents() {
 
 function renderStudentsV2() {
   const main = document.querySelector('#adminMain');
-  const activeStudents = state.students.filter(({ student }) => student.status === 'ACTIVE').length;
-  const blockedStudents = state.students.filter(({ student }) => student.status === 'BLOCKED').length;
-  const completedStudents = state.students.filter(({ enrollments }) => {
-    return enrollments.some((enrollment) => (
-      enrollment.status === 'COMPLETED' ||
-      Number(enrollment.progressPercent || 0) >= 100
-    ));
-  }).length;
-  const avgProgress = state.students.length
-    ? Math.round(state.students.reduce((sum, { enrollments }) => sum + primaryProgress(enrollments), 0) / state.students.length)
-    : 0;
+  const activeStudents = Number(state.studentSummary.active || 0);
+  const blockedStudents = Number(state.studentSummary.blocked || 0);
+  const completedStudents = Number(state.studentSummary.completed || 0);
+  const avgProgress = Math.round(Number(state.studentSummary.averageProgress || 0));
   const visibleStudents = filteredStudents();
+  const totalStudents = Number(state.studentPagination.total || 0);
 
   main.innerHTML = `
     <div class="admin-page-heading">
@@ -4730,7 +5016,7 @@ function renderStudentsV2() {
         <img src="${iconUrl('conference-call', goldIcon)}" alt="">
         <div>
           <span>Total</span>
-          <strong>${state.students.length}</strong>
+          <strong>${totalStudents}</strong>
         </div>
       </article>
       <article class="insight-card">
@@ -4797,13 +5083,13 @@ function renderStudentsV2() {
         </select>
       </label>
       <button class="button button-secondary" id="exportStudents" type="button">
-        Exportar CSV
+        Exportar página CSV
       </button>
     </section>
 
     <div class="student-list-meta">
       <strong>${visibleStudents.length}</strong>
-      <span>de ${state.students.length} estudantes visíveis</span>
+      <span>nesta página · ${totalStudents} resultados</span>
     </div>
 
     <div class="student-admin-list">
@@ -4831,25 +5117,30 @@ function renderStudentsV2() {
         </div>
       `}
     </div>
+    ${cursorPaginationTemplate('students', state.studentPagination)}
   `;
 
   document.querySelector('#newStudent').addEventListener('click', showStudentDialog);
   document.querySelector('#restoreStudentCredentials').addEventListener('click', () => showCredentialRecoveryDialog('STUDENTS'));
   document.querySelector('#studentSearch').addEventListener('input', (event) => {
     state.studentFilters.query = event.currentTarget.value;
+    resetCursorPagination(state.studentPagination);
     renderPreservingFocus(renderStudentsV2);
     scheduleStudentRefresh();
   });
   document.querySelector('#studentStatusFilter').addEventListener('change', (event) => {
     state.studentFilters.status = event.currentTarget.value;
+    resetCursorPagination(state.studentPagination);
     loadStudents();
   });
   document.querySelector('#studentProgressFilter').addEventListener('change', (event) => {
     state.studentFilters.progress = event.currentTarget.value;
+    resetCursorPagination(state.studentPagination);
     loadStudents();
   });
   document.querySelector('#studentSort').addEventListener('change', (event) => {
     state.studentFilters.sort = event.currentTarget.value;
+    resetCursorPagination(state.studentPagination);
     loadStudents();
   });
   document.querySelector('#exportStudents').addEventListener('click', () => {
@@ -4885,6 +5176,13 @@ function renderStudentsV2() {
     button.addEventListener('click', () => toggleStudent(
       button.dataset.toggleStudent,
       button.dataset.currentStatus
+    ));
+  });
+  root.querySelectorAll('[data-cursor-pagination="students"]').forEach((button) => {
+    button.addEventListener('click', () => moveCursorPage(
+      state.studentPagination,
+      button.dataset.direction,
+      () => loadStudents({ force: true })
     ));
   });
 
@@ -5572,56 +5870,72 @@ function csvCell(value) {
 
 async function loadCourses(options = {}) {
   const main = document.querySelector('#adminMain');
+  const requestVersion = ++courseRequestVersion;
+  const requestOptions = { ...options, signal: beginListRequest('courses').signal };
+  const requestKey = JSON.stringify({
+    mode: state.courseMode,
+    selectedCourseId: state.selectedCourseId,
+    filters: state.courseFilters,
+    courseCursor: state.coursePagination.cursor,
+    groupCursor: state.groupPagination.cursor
+  });
   if (!options.silent) {
     main.innerHTML = loadingTemplate('A carregar cursos...');
   }
 
   try {
-    const coursePayload = state.courseMode === 'detail'
-      ? { limit: 500 }
-      : {
-          query: state.courseFilters.query,
-          status: state.courseFilters.status,
-          content: state.courseFilters.content,
-          limit: 500
-        };
-    const coursesResult = await api.adminCourses(coursePayload, options);
-    state.courses = coursesResult.courses || [];
-
     if (state.courseMode !== 'detail') {
+      const coursesResult = await api.adminCourses({
+        query: state.courseFilters.query,
+        status: state.courseFilters.status,
+        content: state.courseFilters.content,
+        limit: state.coursePagination.limit,
+        cursor: state.coursePagination.cursor
+      }, requestOptions);
+      if (requestVersion !== courseRequestVersion || requestKey !== JSON.stringify({
+        mode: state.courseMode,
+        selectedCourseId: state.selectedCourseId,
+        filters: state.courseFilters,
+        courseCursor: state.coursePagination.cursor,
+        groupCursor: state.groupPagination.cursor
+      })) return false;
+      state.courses = coursesResult.courses || [];
+      state.courseSummary = coursesResult.summary || {};
+      Object.assign(state.coursePagination, coursesResult.pagination || {
+        nextCursor: '', hasMore: false, returned: state.courses.length
+      });
       state.courseStructure = null;
       state.groups = [];
       if (!options.silent) {
         renderCourseList();
       }
-      return;
+      return true;
     }
 
-    const activeCourses = state.courses.filter((item) => item.course.status !== 'DELETED');
-    if (!activeCourses.length) {
-      state.selectedCourseId = '';
-      state.courseStructure = null;
-      state.groups = [];
-      state.courseMode = 'list';
-      if (!options.silent) {
-        renderCourseList();
-      }
-      return;
-    }
-    if (
-      (!state.selectedCourseId || !activeCourses.some((item) => item.course.courseId === state.selectedCourseId)) &&
-      activeCourses.length
-    ) {
-      state.selectedCourseId = activeCourses[0].course.courseId;
-    }
-    state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId, options);
-    const groupsResult = await api.adminGroups(state.courseStructure.course.courseId, { limit: 500 }, options);
+    state.courseStructure = await api.adminCourseStructureFor(state.selectedCourseId || config.courseId, requestOptions);
+    const groupsResult = await api.adminGroups(state.courseStructure.course.courseId, {
+      status: 'ALL',
+      limit: state.groupPagination.limit,
+      cursor: state.groupPagination.cursor
+    }, requestOptions);
+    if (requestVersion !== courseRequestVersion || requestKey !== JSON.stringify({
+      mode: state.courseMode,
+      selectedCourseId: state.selectedCourseId,
+      filters: state.courseFilters,
+      courseCursor: state.coursePagination.cursor,
+      groupCursor: state.groupPagination.cursor
+    })) return false;
     state.groups = groupsResult.groups || [];
-    await ensureStudentsForMedia(options);
+    Object.assign(state.groupPagination, groupsResult.pagination || {
+      nextCursor: '', hasMore: false, returned: state.groups.length
+    });
+    await ensureStudentsForMedia(requestOptions);
     if (!options.silent) {
       renderCourses();
     }
+    return true;
   } catch (error) {
+    if (isCancelledRequest(error)) return false;
     if (options.silent) {
       console.warn('Falha ao atualizar cursos em segundo plano:', error);
       return;
@@ -5633,10 +5947,11 @@ async function loadCourses(options = {}) {
 function renderCourseList() {
   const main = document.querySelector('#adminMain');
   const visibleCourses = filteredAdminCourses();
-  const activeCount = state.courses.filter((item) => item.course?.status === 'ACTIVE').length;
-  const inactiveCount = state.courses.filter((item) => item.course?.status === 'INACTIVE').length;
-  const moduleCount = state.courses.reduce((sum, item) => sum + Number(item.lessonCount || 0), 0);
-  const groupCount = state.courses.reduce((sum, item) => sum + Number(item.groupCount || 0), 0);
+  const activeCount = Number(state.courseSummary.active || 0);
+  const inactiveCount = Number(state.courseSummary.inactive || 0);
+  const moduleCount = Number(state.courseSummary.lessons || 0);
+  const groupCount = Number(state.courseSummary.groups || 0);
+  const totalCourses = Number(state.coursePagination.total || 0);
 
   main.innerHTML = `
     <div class="admin-page-heading">
@@ -5652,7 +5967,7 @@ function renderCourseList() {
     <section class="admin-content-overview">
       <article class="content-metric-card">
         <span>Total</span>
-        <strong>${state.courses.length}</strong>
+        <strong>${totalCourses}</strong>
         <small>Cursos registados</small>
       </article>
       <article class="content-metric-card">
@@ -5705,6 +6020,7 @@ function renderCourseList() {
         ? visibleCourses.map(courseListCardTemplate).join('')
         : '<div class="student-empty-state">Nenhum curso encontrado para os filtros atuais.</div>'}
     </section>
+    ${cursorPaginationTemplate('courses', state.coursePagination)}
   `;
 
   document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
@@ -5713,10 +6029,12 @@ function renderCourseList() {
     state.courseFilters.query = document.querySelector('#courseSearch').value;
     state.courseFilters.status = document.querySelector('#courseStatusFilter').value;
     state.courseFilters.content = document.querySelector('#courseContentFilter').value;
+    resetCursorPagination(state.coursePagination);
     loadCourses();
   });
   document.querySelector('#courseSearch').addEventListener('input', (event) => {
     state.courseFilters.query = event.currentTarget.value;
+    resetCursorPagination(state.coursePagination);
     renderPreservingFocus(renderCourseList);
     scheduleCourseRefresh();
   });
@@ -5724,6 +6042,7 @@ function renderCourseList() {
     state.courseFilters.query = document.querySelector('#courseSearch').value;
     state.courseFilters.status = event.currentTarget.value;
     state.courseFilters.content = document.querySelector('#courseContentFilter').value;
+    resetCursorPagination(state.coursePagination);
     renderPreservingFocus(renderCourseList);
     scheduleCourseRefresh(0);
   });
@@ -5731,6 +6050,7 @@ function renderCourseList() {
     state.courseFilters.query = document.querySelector('#courseSearch').value;
     state.courseFilters.status = document.querySelector('#courseStatusFilter').value;
     state.courseFilters.content = event.currentTarget.value;
+    resetCursorPagination(state.coursePagination);
     renderPreservingFocus(renderCourseList);
     scheduleCourseRefresh(0);
   });
@@ -5739,6 +6059,13 @@ function renderCourseList() {
   });
   root.querySelectorAll('[data-restore-course]').forEach((button) => {
     button.addEventListener('click', () => restoreCourse(button.dataset.restoreCourse));
+  });
+  root.querySelectorAll('[data-cursor-pagination="courses"]').forEach((button) => {
+    button.addEventListener('click', () => moveCursorPage(
+      state.coursePagination,
+      button.dataset.direction,
+      () => loadCourses({ force: true })
+    ));
   });
 
   reportHeight();
@@ -5829,6 +6156,7 @@ async function openCourseDetail(courseId) {
   state.selectedCourseId = courseId;
   state.courseMode = 'detail';
   state.courseView = 'overview';
+  resetCursorPagination(state.groupPagination);
   await loadCourses();
 }
 
@@ -5954,6 +6282,13 @@ function renderCourses() {
   root.querySelectorAll('[data-restore-group]').forEach((button) => {
     button.addEventListener('click', () => restoreGroup(button.dataset.restoreGroup));
   });
+  root.querySelectorAll('[data-cursor-pagination="groups"]').forEach((button) => {
+    button.addEventListener('click', () => moveCursorPage(
+      state.groupPagination,
+      button.dataset.direction,
+      () => loadCourses({ force: true })
+    ));
+  });
   document.querySelector('#toggleDeletedItems')?.addEventListener('click', () => {
     state.courseFilters.showDeletedItems = !state.courseFilters.showDeletedItems;
     renderCourses();
@@ -6045,6 +6380,7 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
             <div class="student-empty-state">Nenhuma turma registada para este curso.</div>
           `}
         </div>
+        ${cursorPaginationTemplate('groups', state.groupPagination)}
       </section>
     `;
   }

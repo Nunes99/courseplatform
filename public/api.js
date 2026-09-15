@@ -74,7 +74,7 @@ export class CoursePlatformApi {
     return this.parseResponse(response);
   }
 
-  async request(action, payload = {}) {
+  async request(action, payload = {}, options = {}) {
     let response;
 
     try {
@@ -85,6 +85,7 @@ export class CoursePlatformApi {
         headers: {
           'Content-Type': 'text/plain;charset=utf-8'
         },
+        signal: options.signal,
         body: JSON.stringify({ action, ...payload })
       });
     } catch (error) {
@@ -95,6 +96,9 @@ export class CoursePlatformApi {
   }
 
   networkError(error) {
+    if (error?.name === 'AbortError') {
+      return new ApiError('Pedido cancelado.', 'REQUEST_ABORTED');
+    }
     return new ApiError(
       'Não foi possível comunicar com a API. Confirme a URL em config.js e as variáveis do backend.',
       'NETWORK_ERROR',
@@ -535,12 +539,13 @@ export class CoursePlatformApi {
     return this.adminRequest('adminMe');
   }
 
-  adminStaff(options = {}) {
-    return this.cachedAdminRequest('adminListStaff', {}, options);
+  adminStaff(filters = {}, options = {}) {
+    const [payload, cacheOptions] = splitPayloadOptions(filters, options);
+    return this.cachedAdminRequest('adminListStaff', payload, cacheOptions);
   }
 
-  adminstaff(options = {}) {
-    return this.adminStaff(options);
+  adminstaff(filters = {}, options = {}) {
+    return this.adminStaff(filters, options);
   }
 
   adminSaveStaff(payload) {
@@ -653,8 +658,9 @@ export class CoursePlatformApi {
     });
   }
 
-  adminCourseReconciliationIssues(status = 'OPEN', options = {}) {
-    return this.cachedAdminRequest('adminListCourseReconciliationIssues', { status }, options);
+  adminCourseReconciliationIssues(status = 'OPEN', filters = {}, options = {}) {
+    const [payload, cacheOptions] = splitPayloadOptions(filters, options);
+    return this.cachedAdminRequest('adminListCourseReconciliationIssues', { status, ...payload }, cacheOptions);
   }
 
   adminSaveCourse(payload) {
@@ -797,8 +803,9 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminSaveCertificateSettings', payload);
   }
 
-  adminCertificateSurveys(options = {}) {
-    return this.cachedAdminRequest('adminListCertificateSurveys', {}, options);
+  adminCertificateSurveys(filters = {}, options = {}) {
+    const [payload, cacheOptions] = splitPayloadOptions(filters, options);
+    return this.cachedAdminRequest('adminListCertificateSurveys', payload, cacheOptions);
   }
 
   adminSaveCertificateSurvey(payload) {
@@ -844,7 +851,7 @@ export class CoursePlatformApi {
       if (cached.expiresAt > now) return Promise.resolve(cached.data);
     }
 
-    const promise = this.adminRequest(action, payload)
+    const promise = this.adminRequest(action, payload, options)
       .then((data) => {
         if (this.cacheVersion === cacheVersion) {
           this.cache.set(key, {
@@ -874,11 +881,11 @@ export class CoursePlatformApi {
     });
   }
 
-  adminRequest(action, payload = {}) {
+  adminRequest(action, payload = {}, options = {}) {
     return this.request(action, {
       adminToken: this.adminToken(),
       ...payload
-    });
+    }, options);
   }
 
   cacheKey(scope, action, payload = {}) {

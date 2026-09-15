@@ -12,7 +12,8 @@
     "qa:assessment-feedback": "node scripts/verify_assessment_feedback.cjs",
     "qa:submission-retry": "node scripts/verify_submission_retry.cjs",
     "qa:participation-policy": "node scripts/verify_participation_policy.cjs",
-    "qa:course-editions": "node scripts/verify_course_editions_browser.cjs"
+    "qa:course-editions": "node scripts/verify_course_editions_browser.cjs",
+    "qa:stage7-lists": "node scripts/verify_stage7_admin_lists.cjs"
   },
   "devDependencies": {
     "playwright": "1.62.1"
