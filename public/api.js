@@ -95,6 +95,59 @@ export class CoursePlatformApi {
     return this.parseResponse(response);
   }
 
+  async versionedGet(path, params = {}, headers = {}) {
+    const apiUrl = new URL(this.apiUrl);
+    const url = new URL(path, apiUrl.origin);
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, String(value));
+      }
+    });
+
+    let response;
+    try {
+      response = await fetch(url.toString(), {
+        method: 'GET',
+        redirect: 'follow',
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          ...headers
+        }
+      });
+    } catch (error) {
+      throw this.networkError(error);
+    }
+
+    if (response.status === 404 || response.status === 405) {
+      let body = null;
+      try {
+        body = await response.clone().json();
+      } catch {
+        // An older deployment may return its static HTML 404 page.
+      }
+      const code = body?.error?.code || '';
+      if (!code || code === 'NOT_FOUND' || code === 'METHOD_NOT_ALLOWED') {
+        throw new ApiError(
+          'A rota tipada ainda não está disponível neste ambiente.',
+          'VERSIONED_ROUTE_UNAVAILABLE',
+          { status: response.status }
+        );
+      }
+    }
+
+    return this.parseResponse(response);
+  }
+
+  async versionedRead(path, params, headers, legacyRead) {
+    try {
+      return await this.versionedGet(path, params, headers);
+    } catch (error) {
+      if (error?.code !== 'VERSIONED_ROUTE_UNAVAILABLE') throw error;
+      return legacyRead();
+    }
+  }
+
   networkError(error) {
     if (error?.name === 'AbortError') {
       return new ApiError('Pedido cancelado.', 'REQUEST_ABORTED');
@@ -140,7 +193,14 @@ export class CoursePlatformApi {
   }
 
   publicMediaConfig() {
-    return this.publicGet('publicMediaConfig', { courseId: this.courseId });
+    const legacyRead = () => this.publicGet('publicMediaConfig', { courseId: this.courseId });
+    if (!this.courseId) return legacyRead();
+    return this.versionedRead(
+      `/api/v1/catalog/courses/${encodeURIComponent(this.courseId)}/media`,
+      {},
+      {},
+      legacyRead
+    );
   }
 
   verifyCertificate(code) {

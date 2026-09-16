@@ -15,6 +15,9 @@ ações.
 Em 16 de setembro começou também uma superfície HTTP versionada em `/api/v1`.
 Ela possui contratos Pydantic por domínio e reutiliza o dispatcher existente,
 permitindo migração gradual sem criar uma segunda implementação das regras.
+As primeiras leituras de catálogo e aprendizagem já possuem rotas tipadas; o
+cliente utiliza a rota de media e conserva fallback controlado para deploys
+anteriores.
 
 ## Âmbito
 
@@ -65,11 +68,17 @@ concretas no domínio em tempo de chamada.
 - `api/index.py` importa e expõe `backend.courseplatform.app:app`.
 - `GET /`, `GET /api` e `GET /api/index` chamam o dispatcher. Sem `action` na raiz, `/` entrega `index.html`; nas rotas de API, o action padrão é `health`.
 - `POST /`, `POST /api` e `POST /api/index` recebem JSON com `action` e respetivo payload.
-- `/api/v1/auth/*`, `/api/v1/students/*` e `/api/v1/admin/*` iniciam a
-  superfície tipada. Nesta fase cobrem sessões, cursos do estudante e listas de
-  estudantes/staff, chamando os mesmos handlers do dispatcher legado.
+- `/api/v1/auth/*`, `/api/v1/catalog/*`, `/api/v1/students/*` e
+  `/api/v1/admin/*` compõem a superfície tipada. Nesta fase cobrem sessões,
+  catálogo/media, cursos, home, dashboard, aula e listas de estudantes/staff,
+  chamando os mesmos handlers do dispatcher legado.
 - `GET /docs` e `GET /openapi.json` documentam apenas os contratos HTTP
   declarados; o dispatcher legado continua documentado neste ficheiro.
+
+O método `publicMediaConfig` em `public/api.js` é o primeiro consumidor dessas
+rotas. Ele repete a leitura pelo action apenas para `404/405` que identifique uma
+rota ainda não instalada. Erros de domínio e infraestrutura são devolvidos sem
+fallback, evitando duplicação de carga e diagnósticos enganadores.
 - `GET /api/certificates/{certificate_id}/pdf` gera o PDF. Aceita sessão de estudante ou sessão administrativa nos headers/query params tratados pela rota.
 - `GET /api/files/{file_id}/content` entrega trabalhos após validar a sessão e a propriedade ou papel administrativo.
 - `GET /api/certificate-requests/{request_id}/receipt` entrega comprovativos após validar estudante proprietário ou OWNER/ADMIN.

@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import call, patch
 
 from fastapi.testclient import TestClient
@@ -7,6 +8,9 @@ from backend.courseplatform.api import executor
 from backend.courseplatform import app as application
 from backend.courseplatform.app import app
 from backend.courseplatform.contracts import ApiError
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class TypedApiRouteTests(unittest.TestCase):
@@ -20,7 +24,35 @@ class TypedApiRouteTests(unittest.TestCase):
         self.assertIn("/api/v1/students/me/courses", paths)
         self.assertIn("/api/v1/admin/students", paths)
         self.assertIn("/api/v1/admin/staff", paths)
+        self.assertIn("/api/v1/catalog/courses/{course_id}", paths)
+        self.assertIn("/api/v1/catalog/courses/{course_id}/media", paths)
+        self.assertIn("/api/v1/students/me/home", paths)
+        self.assertIn("/api/v1/students/me/dashboard", paths)
+        self.assertIn("/api/v1/students/me/lessons/{lesson_id}", paths)
         self.assertIn("/api", paths)
+
+    def test_catalog_reads_use_existing_public_actions(self):
+        course_result = {"success": True, "data": {"course": None, "lessons": []}}
+        media_result = {
+            "success": True,
+            "data": {"mediaConfig": {"logoUrl": "", "videos": []}},
+        }
+        with patch.object(
+            executor.actions,
+            "dispatch",
+            side_effect=[course_result, media_result],
+        ) as dispatch:
+            course_response = self.client.get("/api/v1/catalog/courses/COURSE-1")
+            media_response = self.client.get("/api/v1/catalog/courses/COURSE-1/media")
+        self.assertEqual(200, course_response.status_code)
+        self.assertEqual(200, media_response.status_code)
+        self.assertEqual(
+            [
+                call("publicCourseConfig", {"courseId": "COURSE-1"}),
+                call("publicMediaConfig", {"courseId": "COURSE-1"}),
+            ],
+            dispatch.call_args_list,
+        )
 
     def test_student_login_uses_typed_contract_and_legacy_action(self):
         result = {
@@ -115,6 +147,80 @@ class TypedApiRouteTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(result, response.json())
         dispatch.assert_called_once_with("getMyCourses", {"sessionToken": "student-session"})
+
+    def test_learning_reads_map_context_to_existing_actions(self):
+        home_result = {
+            "success": True,
+            "data": {
+                "student": {},
+                "courses": [],
+                "selectedCourseId": "COURSE-1",
+                "selectedEnrollmentId": "ENR-1",
+                "dashboard": {},
+                "mediaConfig": {},
+            },
+        }
+        dashboard_result = {
+            "success": True,
+            "data": {
+                "student": {},
+                "course": {},
+                "courseVersion": {},
+                "offering": {},
+                "enrollment": {},
+                "lessons": [],
+            },
+        }
+        lesson_result = {
+            "success": True,
+            "data": {
+                "lesson": {},
+                "enrollment": {},
+                "courseVersion": {},
+                "progress": {},
+                "content": [],
+                "questions": [],
+            },
+        }
+        params = {"courseId": "COURSE-1", "enrollmentId": "ENR-1"}
+        headers = {"x-session-token": "student-session"}
+        with patch.object(
+            executor.actions,
+            "dispatch",
+            side_effect=[home_result, dashboard_result, lesson_result],
+        ) as dispatch:
+            home_response = self.client.get("/api/v1/students/me/home", params=params, headers=headers)
+            dashboard_response = self.client.get(
+                "/api/v1/students/me/dashboard", params=params, headers=headers
+            )
+            lesson_response = self.client.get(
+                "/api/v1/students/me/lessons/LESSON-1",
+                params={"enrollmentId": "ENR-1"},
+                headers=headers,
+            )
+        self.assertEqual(200, home_response.status_code)
+        self.assertEqual(200, dashboard_response.status_code)
+        self.assertEqual(200, lesson_response.status_code)
+        context = {
+            "sessionToken": "student-session",
+            "courseId": "COURSE-1",
+            "enrollmentId": "ENR-1",
+        }
+        self.assertEqual(
+            [
+                call("getStudentHome", context),
+                call("getDashboard", context),
+                call(
+                    "getLesson",
+                    {
+                        "sessionToken": "student-session",
+                        "lessonId": "LESSON-1",
+                        "enrollmentId": "ENR-1",
+                    },
+                ),
+            ],
+            dispatch.call_args_list,
+        )
 
     def test_admin_students_maps_typed_filters_to_existing_action(self):
         result = {
@@ -226,6 +332,34 @@ class TypedApiRouteTests(unittest.TestCase):
                 },
             },
             response.json(),
+        )
+
+    def test_locked_lesson_is_forbidden_on_typed_route(self):
+        with patch.object(
+            executor.actions,
+            "dispatch",
+            side_effect=ApiError("LESSON_LOCKED", "Módulo ainda indisponível."),
+        ):
+            response = self.client.get(
+                "/api/v1/students/me/lessons/LESSON-1",
+                headers={"x-session-token": "student-session"},
+            )
+        self.assertEqual(403, response.status_code)
+        self.assertEqual("LESSON_LOCKED", response.json()["error"]["code"])
+
+    def test_frontend_migrates_one_read_and_keeps_legacy_fallback(self):
+        source = (ROOT / "public" / "api.js").read_text(encoding="utf-8")
+        self.assertIn("async versionedGet(", source)
+        self.assertIn("async versionedRead(", source)
+        self.assertIn("VERSIONED_ROUTE_UNAVAILABLE", source)
+        self.assertIn("/api/v1/catalog/courses/${encodeURIComponent(this.courseId)}/media", source)
+        self.assertRegex(
+            source,
+            r"publicCourseConfig\(\)\s*\{\s*return this\.publicGet\('publicCourseConfig'",
+        )
+        self.assertRegex(
+            source,
+            r"dashboard\([^)]*\)\s*\{\s*return this\.studentRequest\('getDashboard'",
         )
 
 

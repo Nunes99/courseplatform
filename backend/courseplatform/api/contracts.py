@@ -93,3 +93,39 @@ class AdminStaffData(BaseModel):
     currentAdmin: dict[str, Any]
     pagination: CursorPageInfo
     summary: dict[str, Any]
+
+
+class CourseCatalogData(BaseModel):
+    course: dict[str, Any] | None = None
+    lessons: list[dict[str, Any]]
+
+
+class MediaConfigData(BaseModel):
+    mediaConfig: dict[str, Any]
+
+
+class LearningDashboardData(BaseModel):
+    student: dict[str, Any]
+    course: dict[str, Any]
+    courseVersion: dict[str, Any]
+    offering: dict[str, Any]
+    enrollment: dict[str, Any]
+    lessons: list[dict[str, Any]]
+
+
+class StudentHomeData(BaseModel):
+    student: dict[str, Any]
+    courses: list[dict[str, Any]]
+    selectedCourseId: str
+    selectedEnrollmentId: str
+    dashboard: dict[str, Any]
+    mediaConfig: dict[str, Any]
+
+
+class LessonReadData(BaseModel):
+    lesson: dict[str, Any]
+    enrollment: dict[str, Any]
+    courseVersion: dict[str, Any]
+    progress: dict[str, Any]
+    content: list[dict[str, Any]]
+    questions: list[dict[str, Any]]

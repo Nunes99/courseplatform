@@ -22,6 +22,11 @@ oferta, matrícula e associação a grupo foram movidos para `serializers.py`.
 As novas rotas chamam os mesmos nomes no dispatcher, portanto não duplicam
 autorização, transações nem regras de domínio.
 
+A décima fatia adicionou routers de catálogo e aprendizagem para configuração
+pública do curso, media, home, dashboard e leitura de aula. A primeira migração
+do cliente foi limitada a `publicMediaConfig`: a rota tipada é preferida e o
+action legado é usado somente quando um deploy antigo não possui essa rota.
+
 Verificado nesta entrega:
 
 - as 115 ações externas continuam registadas e têm handlers chamáveis;
@@ -65,6 +70,16 @@ Verificado nesta entrega:
 - `POST /api` e as 115 ações legadas permanecem disponíveis sem alteração;
 - cinco serializadores académicos partilhados saíram de `actions.py`, mantendo
   adaptadores para os testes e clientes internos existentes.
+- catálogo expõe leituras em `/api/v1/catalog/courses/{course_id}` e respetiva
+  configuração pública de media;
+- aprendizagem expõe home, dashboard e aula sob `/api/v1/students/me`, exigindo
+  o token opaco no header `X-Session-Token`;
+- os parâmetros externos `courseId` e `enrollmentId` preservam a nomenclatura
+  atual, embora os handlers Python usem nomes internos em snake case;
+- o frontend migrou apenas `publicMediaConfig`; curso, dashboard, home e aula
+  continuam deliberadamente no dispatcher legado nesta fatia;
+- o fallback não é usado para falhas reais, evitando repetir consultas ou
+  esconder indisponibilidade da base de dados.
 
 Não verificado nesta entrega: produção, staging, Supabase remoto, Vercel,
 desempenho sob carga e fluxos com dados reais.
@@ -107,8 +122,8 @@ pagina listas e conserva transações e auditoria nas mutações de contas.
 `api/contracts.py` define apenas contratos HTTP; `contracts.py` continua a
 concentrar erros e helpers internos. `api/executor.py` liga as rotas versionadas
 ao dispatcher e traduz erros de domínio para estados HTTP. Os routers de
-identidade, matrículas e administração são agregados por `api/router.py` antes
-do fallback de ficheiros estáticos.
+identidade, catálogo, matrículas, aprendizagem e administração são agregados por
+`api/router.py` antes do fallback de ficheiros estáticos.
 
 ## Frontend
 
@@ -135,10 +150,10 @@ dependências em `actions`, o adaptador construirá essas dependências em tempo
 chamada. Isso mantém os contratos observáveis sem criar um repositório genérico
 que esconda SQL ou autorização.
 
-A próxima etapa recomendada é adicionar rotas tipadas de leitura para catálogo
-e aprendizagem e migrar o cliente frontend uma operação de cada vez. O fallback
-por ação deve permanecer até os fluxos equivalentes terem testes HTTP e uma
-janela de compatibilidade definida.
+A próxima etapa recomendada é observar `publicMediaConfig` em Preview e migrar
+`publicCourseConfig` como segunda leitura. Depois, home, dashboard e aula podem
+ser migrados individualmente com testes dos seus estados de sessão, bloqueio e
+conteúdo, mantendo o fallback até existir uma janela de compatibilidade.
 
 ## Impacto operacional
 

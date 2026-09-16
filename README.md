@@ -123,6 +123,7 @@ Contratos e rotas HTTP tipadas em adoção incremental:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest tests.test_typed_api_routes -v
+node scripts/verify_versioned_api_client.cjs
 ```
 
 Os fluxos de login, sessão, recuperação de acesso e perfil estão em
@@ -149,6 +150,12 @@ continuam compatíveis com `POST /api` e os nomes de ação existentes. Os
 serializadores académicos partilhados residem em
 `backend/courseplatform/serializers.py`, com adaptadores temporários em
 `actions.py`.
+
+As leituras tipadas cobrem agora configuração pública de curso/media, home,
+dashboard e aula do estudante. `publicMediaConfig` é a primeira operação do
+cliente migrada: tenta `/api/v1` e volta ao action legado somente quando a rota
+versionada não existe no ambiente. Falhas reais de autenticação, autorização ou
+infraestrutura não acionam uma segunda chamada.
 
 Integração das migrações numa base PostgreSQL local descartável:
 
