@@ -23,9 +23,9 @@ As novas rotas chamam os mesmos nomes no dispatcher, portanto não duplicam
 autorização, transações nem regras de domínio.
 
 A décima fatia adicionou routers de catálogo e aprendizagem para configuração
-pública do curso, media, home, dashboard e leitura de aula. A primeira migração
-do cliente foi limitada a `publicMediaConfig`: a rota tipada é preferida e o
-action legado é usado somente quando um deploy antigo não possui essa rota.
+pública do curso, media, home, dashboard e leitura de aula. O cliente migrou as
+cinco operações para preferir a rota tipada; cada operação usa o respetivo
+action legado somente quando um deploy antigo não possui essa rota.
 
 Verificado nesta entrega:
 
@@ -76,8 +76,8 @@ Verificado nesta entrega:
   o token opaco no header `X-Session-Token`;
 - os parâmetros externos `courseId` e `enrollmentId` preservam a nomenclatura
   atual, embora os handlers Python usem nomes internos em snake case;
-- o frontend migrou apenas `publicMediaConfig`; curso, dashboard, home e aula
-  continuam deliberadamente no dispatcher legado nesta fatia;
+- o frontend migrou `publicCourseConfig`, `publicMediaConfig`, home, dashboard
+  e aula, preservando um fallback isolado por operação;
 - o fallback não é usado para falhas reais, evitando repetir consultas ou
   esconder indisponibilidade da base de dados.
 
@@ -150,10 +150,11 @@ dependências em `actions`, o adaptador construirá essas dependências em tempo
 chamada. Isso mantém os contratos observáveis sem criar um repositório genérico
 que esconda SQL ou autorização.
 
-A próxima etapa recomendada é observar `publicMediaConfig` em Preview e migrar
-`publicCourseConfig` como segunda leitura. Depois, home, dashboard e aula podem
-ser migrados individualmente com testes dos seus estados de sessão, bloqueio e
-conteúdo, mantendo o fallback até existir uma janela de compatibilidade.
+A próxima etapa recomendada é validar em Preview, individualmente,
+`publicCourseConfig`, home, dashboard e aula, incluindo sessão expirada, aula
+bloqueada, estados vazios e conteúdo permitido. Após essa validação, a leitura
+de cursos do estudante pode ser migrada mantendo a mesma janela de
+compatibilidade.
 
 ## Impacto operacional
 

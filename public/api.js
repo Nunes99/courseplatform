@@ -189,7 +189,14 @@ export class CoursePlatformApi {
   }
 
   publicCourseConfig() {
-    return this.publicGet('publicCourseConfig', { courseId: this.courseId });
+    const legacyRead = () => this.publicGet('publicCourseConfig', { courseId: this.courseId });
+    if (!this.courseId) return legacyRead();
+    return this.versionedRead(
+      `/api/v1/catalog/courses/${encodeURIComponent(this.courseId)}`,
+      {},
+      {},
+      legacyRead
+    );
   }
 
   publicMediaConfig() {
@@ -240,11 +247,33 @@ export class CoursePlatformApi {
   }
 
   dashboard(courseId = this.courseId, enrollmentId = '') {
-    return this.studentRequest('getDashboard', { courseId, enrollmentId });
+    const sessionToken = this.studentToken();
+    const legacyRead = () => this.request('getDashboard', {
+      sessionToken,
+      courseId,
+      enrollmentId
+    });
+    return this.versionedRead(
+      '/api/v1/students/me/dashboard',
+      { courseId, enrollmentId },
+      { 'x-session-token': sessionToken },
+      legacyRead
+    );
   }
 
   studentHome(courseId = this.courseId, enrollmentId = '') {
-    return this.studentRequest('getStudentHome', { courseId, enrollmentId });
+    const sessionToken = this.studentToken();
+    const legacyRead = () => this.request('getStudentHome', {
+      sessionToken,
+      courseId,
+      enrollmentId
+    });
+    return this.versionedRead(
+      '/api/v1/students/me/home',
+      { courseId, enrollmentId },
+      { 'x-session-token': sessionToken },
+      legacyRead
+    );
   }
 
   myCourses() {
@@ -382,7 +411,18 @@ export class CoursePlatformApi {
   }
 
   getLesson(lessonId, enrollmentId = '') {
-    return this.studentRequest('getLesson', { lessonId, enrollmentId });
+    const sessionToken = this.studentToken();
+    const legacyRead = () => this.request('getLesson', {
+      sessionToken,
+      lessonId,
+      enrollmentId
+    });
+    return this.versionedRead(
+      `/api/v1/students/me/lessons/${encodeURIComponent(lessonId)}`,
+      { enrollmentId },
+      { 'x-session-token': sessionToken },
+      legacyRead
+    );
   }
 
   startAttempt(lessonId, enrollmentId = '') {

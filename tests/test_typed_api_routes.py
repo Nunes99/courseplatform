@@ -347,20 +347,24 @@ class TypedApiRouteTests(unittest.TestCase):
         self.assertEqual(403, response.status_code)
         self.assertEqual("LESSON_LOCKED", response.json()["error"]["code"])
 
-    def test_frontend_migrates_one_read_and_keeps_legacy_fallback(self):
+    def test_frontend_migrates_catalog_and_learning_reads_with_legacy_fallback(self):
         source = (ROOT / "public" / "api.js").read_text(encoding="utf-8")
         self.assertIn("async versionedGet(", source)
         self.assertIn("async versionedRead(", source)
         self.assertIn("VERSIONED_ROUTE_UNAVAILABLE", source)
+        self.assertIn("/api/v1/catalog/courses/${encodeURIComponent(this.courseId)}`", source)
         self.assertIn("/api/v1/catalog/courses/${encodeURIComponent(this.courseId)}/media", source)
-        self.assertRegex(
-            source,
-            r"publicCourseConfig\(\)\s*\{\s*return this\.publicGet\('publicCourseConfig'",
-        )
-        self.assertRegex(
-            source,
-            r"dashboard\([^)]*\)\s*\{\s*return this\.studentRequest\('getDashboard'",
-        )
+        self.assertIn("'/api/v1/students/me/home'", source)
+        self.assertIn("'/api/v1/students/me/dashboard'", source)
+        self.assertIn("/api/v1/students/me/lessons/${encodeURIComponent(lessonId)}", source)
+        for action in (
+            "publicCourseConfig",
+            "publicMediaConfig",
+            "getStudentHome",
+            "getDashboard",
+            "getLesson",
+        ):
+            self.assertIn(f"'{action}'", source)
 
 
 if __name__ == "__main__":
