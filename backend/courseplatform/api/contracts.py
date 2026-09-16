@@ -129,3 +129,12 @@ class LessonReadData(BaseModel):
     progress: dict[str, Any]
     content: list[dict[str, Any]]
     questions: list[dict[str, Any]]
+
+
+class AttemptStatusData(BaseModel):
+    attempt: dict[str, Any]
+    questions: list[dict[str, Any]]
+    answers: list[dict[str, Any]]
+    files: list[dict[str, Any]]
+    latestReview: dict[str, Any] | None = None
+    feedbackPolicy: dict[str, Any]

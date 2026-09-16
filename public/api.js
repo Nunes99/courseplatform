@@ -467,7 +467,18 @@ export class CoursePlatformApi {
   }
 
   attemptStatus(attemptId) {
-    return this.studentRequest('getAttemptStatus', { attemptId });
+    const sessionToken = this.studentToken();
+    const legacyRead = () => this.request('getAttemptStatus', {
+      sessionToken,
+      attemptId
+    });
+    if (!attemptId) return legacyRead();
+    return this.versionedRead(
+      `/api/v1/students/me/attempts/${encodeURIComponent(attemptId)}`,
+      {},
+      { 'x-session-token': sessionToken },
+      legacyRead
+    );
   }
 
   studentFileContent(fileId, download = false) {

@@ -24,9 +24,10 @@ autorização, transações nem regras de domínio.
 
 A décima fatia adicionou routers de catálogo, matrículas e aprendizagem para
 configuração pública do curso, media, home, dashboard e leitura de aula. O
-cliente migrou as sete operações, incluindo a lista de cursos e a media
-autorizada do estudante, para preferir a rota tipada; cada operação usa o
-respetivo action legado somente quando um deploy antigo não possui essa rota.
+cliente migrou oito operações, incluindo lista de cursos, media autorizada e
+estado da tentativa do estudante, para preferir a rota tipada; cada operação
+usa o respetivo action legado somente quando um deploy antigo não possui essa
+rota.
 
 Verificado nesta entrega:
 
@@ -83,8 +84,10 @@ Verificado nesta entrega:
 - o fallback não é usado para falhas reais, evitando repetir consultas ou
   esconder indisponibilidade da base de dados.
 
-Não verificado nesta entrega: produção, staging, Supabase remoto, Vercel,
-desempenho sob carga e fluxos com dados reais.
+Implementado sem validação nesta entrega: a rota de avaliações
+`/api/v1/students/me/attempts/{attempt_id}` e a migração de `attemptStatus` com
+fallback legado. Não foram verificados produção, staging, Supabase remoto,
+Vercel, desempenho sob carga ou fluxos com dados reais.
 
 ## Fronteiras atuais
 
@@ -154,9 +157,9 @@ que esconda SQL ou autorização.
 
 A próxima etapa recomendada é validar em Preview, individualmente,
 `publicCourseConfig`, home, dashboard e aula, incluindo sessão expirada, aula
-bloqueada, estados vazios e conteúdo permitido. A lista de cursos e a media
-autorizada também devem ser validadas com zero, uma e várias matrículas antes de
-retirar qualquer fallback.
+bloqueada, estados vazios e conteúdo permitido. A lista de cursos, a media
+autorizada e os estados da tentativa também devem ser validados antes de retirar
+qualquer fallback.
 
 ## Impacto operacional
 

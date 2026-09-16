@@ -15,10 +15,10 @@ ações.
 Em 16 de setembro começou também uma superfície HTTP versionada em `/api/v1`.
 Ela possui contratos Pydantic por domínio e reutiliza o dispatcher existente,
 permitindo migração gradual sem criar uma segunda implementação das regras.
-As primeiras leituras de catálogo, matrículas e aprendizagem já possuem rotas
-tipadas. O cliente utiliza essas rotas para curso, media pública, lista de
-cursos, media autorizada, home, dashboard e aula, com fallback controlado por
-operação para deploys anteriores.
+As primeiras leituras de catálogo, matrículas, aprendizagem e avaliações já
+possuem rotas tipadas. O cliente utiliza essas rotas para curso, media pública,
+lista de cursos, media autorizada, home, dashboard, aula e estado da tentativa,
+com fallback controlado por operação para deploys anteriores.
 
 ## Âmbito
 
@@ -71,16 +71,18 @@ concretas no domínio em tempo de chamada.
 - `POST /`, `POST /api` e `POST /api/index` recebem JSON com `action` e respetivo payload.
 - `/api/v1/auth/*`, `/api/v1/catalog/*`, `/api/v1/students/*` e
   `/api/v1/admin/*` compõem a superfície tipada. Nesta fase cobrem sessões,
-  catálogo/media, cursos, media autorizada, home, dashboard, aula e listas de
-  estudantes/staff, chamando os mesmos handlers do dispatcher legado.
+  catálogo/media, cursos, media autorizada, home, dashboard, aula, estado da
+  tentativa e listas de estudantes/staff, chamando os mesmos handlers do
+  dispatcher legado.
 - `GET /docs` e `GET /openapi.json` documentam apenas os contratos HTTP
   declarados; o dispatcher legado continua documentado neste ficheiro.
 
 Os métodos `publicCourseConfig`, `publicMediaConfig`, `myCourses`, `mediaConfig`,
-`studentHome`, `dashboard` e `getLesson` em `public/api.js` consomem essas rotas.
-Cada um repete a leitura pelo seu action apenas para `404/405` que identifique
-uma rota ainda não instalada. Erros de domínio e infraestrutura são devolvidos
-sem fallback, evitando duplicação de carga e diagnósticos enganadores.
+`studentHome`, `dashboard`, `getLesson` e `attemptStatus` em `public/api.js`
+consomem essas rotas. Cada um repete a leitura pelo seu action apenas para
+`404/405` que identifique uma rota ainda não instalada. Erros de domínio e
+infraestrutura são devolvidos sem fallback, evitando duplicação de carga e
+diagnósticos enganadores.
 - `GET /api/certificates/{certificate_id}/pdf` gera o PDF. Aceita sessão de estudante ou sessão administrativa nos headers/query params tratados pela rota.
 - `GET /api/files/{file_id}/content` entrega trabalhos após validar a sessão e a propriedade ou papel administrativo.
 - `GET /api/certificate-requests/{request_id}/receipt` entrega comprovativos após validar estudante proprietário ou OWNER/ADMIN.
