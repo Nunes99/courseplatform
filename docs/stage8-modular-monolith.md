@@ -1,13 +1,26 @@
 # Etapa 8: monólito modular
 
-Data: 15 de setembro de 2026.
+Data: 16 de setembro de 2026.
 
 ## Objetivo e estado
 
-Esta primeira fatia estabelece fronteiras internas sem alterar contratos HTTP,
-regras de autorização, SQL, dados ou URLs. A Etapa 8 ainda não está concluída:
-os handlers com regras e consultas continuam maioritariamente em `actions.py` e
-serão extraídos verticalmente, com testes, nas fatias seguintes.
+A primeira fatia estabeleceu fronteiras internas sem alterar contratos HTTP,
+regras de autorização, dados ou URLs. A segunda extraiu identidade e recuperação
+de acesso; a terceira extraiu os handlers de avaliações e submissões para
+`domains/assessments.py`; a quarta extraiu certificados e pagamentos para
+`domains/certificates.py` e `domains/financial.py`; a quinta extraiu catálogo e
+matrículas para `domains/catalog.py` e `domains/enrollments.py`; a sexta extraiu
+comunicação e chat para `domains/communication.py`; a sétima extraiu
+aprendizagem para `domains/learning.py`; a oitava extraiu administração para
+`domains/administration.py`. A extração vertical dos handlers dos nove
+domínios está concluída; `actions.py` permanece como adaptador público de
+compatibilidade enquanto as rotas e testes dependem desses nomes.
+
+A nona fatia iniciou a redução desse adaptador: contratos Pydantic e rotas
+versionadas foram separados em `api/`, e os serializadores de curso, versão,
+oferta, matrícula e associação a grupo foram movidos para `serializers.py`.
+As novas rotas chamam os mesmos nomes no dispatcher, portanto não duplicam
+autorização, transações nem regras de domínio.
 
 Verificado nesta entrega:
 
@@ -16,8 +29,42 @@ Verificado nesta entrega:
 - `actions.ApiError` e os helpers públicos usados pelos testes continuam
   disponíveis por compatibilidade;
 - imports de `app.py`, dispatcher e domínios não formam ciclos;
+- os dez handlers únicos das onze ações de identidade são adaptadores sem SQL;
+- validação, regras, transações e serialização de identidade residem no domínio;
+- dependências substituíveis nos testes são resolvidas em tempo de chamada;
+- os onze handlers únicos das doze ações de avaliações são adaptadores sem SQL;
+- início, resposta, upload, submissão, revisão, reenvio e gestão de estado foram
+  movidos para o domínio, incluindo o resolvedor privado de downloads;
+- os handlers de certificados são adaptadores sem SQL, incluindo emissão,
+  configuração, inquéritos, estado, pré-visualização e downloads;
+- pedidos profissionais, comprovativos privados e decisões administrativas
+  residem no domínio financeiro, preservando transações e auditoria;
+- catálogo concentra cursos, módulos, conteúdos, media e snapshots imutáveis
+  das versões publicadas;
+- matrículas concentra ofertas/turmas, grupos, inscrições, resolução de contexto
+  e inicialização idempotente do progresso a partir da versão contratada;
+- comunicação concentra notificações internas, preferências, templates, email,
+  Push, Telegram, WhatsApp, filas de entrega, chat e tokens Realtime;
+- os 27 handlers únicos das 35 ações de comunicação são adaptadores sem SQL;
+- auxiliares de autorização de salas, serialização e entrega também permanecem
+  disponíveis por adaptadores compatíveis para os testes existentes;
+- aprendizagem concentra dashboard, resolução da matrícula, leitura do snapshot
+  publicado, acesso aos módulos e recomputação do progresso da matrícula;
+- os cinco handlers de aprendizagem são adaptadores sem SQL e o contrato do
+  estudante continua a omitir gabaritos, explicações e pesos não autorizados;
+- administração concentra health, diagnósticos protegidos, estatísticas,
+  estudantes, staff, permissões e identidade visual;
+- os 14 handlers administrativos são adaptadores sem SQL, mantendo OWNER para
+  gestão de staff e OWNER/ADMIN nos fluxos operacionais correspondentes;
 - `public/` e a distribuição empacotada têm paridade integral;
 - os entrypoints e URLs do frontend não mudaram.
+- login de estudante/admin, logout, cursos do estudante e listas de estudantes
+  e staff possuem agora rotas tipadas em `/api/v1` e documentação OpenAPI;
+- validação estrutural rejeita campos desconhecidos antes de chegar ao domínio;
+- erros das rotas tipadas usam códigos HTTP coerentes sem expor detalhes internos;
+- `POST /api` e as 115 ações legadas permanecem disponíveis sem alteração;
+- cinco serializadores académicos partilhados saíram de `actions.py`, mantendo
+  adaptadores para os testes e clientes internos existentes.
 
 Não verificado nesta entrega: produção, staging, Supabase remoto, Vercel,
 desempenho sob carga e fluxos com dados reais.
@@ -38,9 +85,30 @@ desempenho sob carga e fluxos com dados reais.
 
 `domains/registry.py` valida duplicações e handlers ausentes ao importar a
 aplicação. O dispatcher continua mutável para preservar testes e aliases atuais.
-Os helpers de contratos e paginação foram movidos para `contracts.py`; identidade
-já contém normalização, política mínima de senha, geração do ID público e
-serializadores com dependências explícitas.
+Os helpers de contratos e paginação foram movidos para `contracts.py`. Identidade
+contém normalização, política mínima de senha, geração do ID público,
+serializadores e os fluxos de login, logout, recuperação, perfil e alteração de
+credenciais. Avaliações contém os fluxos transacionais de tentativas, respostas,
+ficheiros, submissão, revisão e reenvio. Certificados contém emissão, políticas,
+configuração, inquéritos, documentos e gestão de acesso. Financeiro contém
+pedidos, comprovativos e aprovação ou rejeição administrativa. Catálogo contém
+os cursos editáveis e os snapshots publicados; matrículas mantém ofertas,
+grupos, inscrições e progresso inicial ligados à versão escolhida. `actions.py`
+injeta dependências nomeadas pelos nove objetos `*Runtime` para preservar
+temporariamente os pontos de substituição usados pelos testes. Comunicação
+contém preferências e configurações públicas sem segredos, consentimento por
+canal, filas com lease, entrega pelos fornecedores, ligação Telegram, tokens
+Realtime de curta duração e regras de acesso às salas. Aprendizagem resolve a
+matrícula e a versão publicada antes de montar dashboard/aula, separa acesso ao
+conteúdo do estado de avaliação e atualiza progresso sem substituir históricos.
+Administração mantém o health público mínimo, protege diagnósticos detalhados,
+pagina listas e conserva transações e auditoria nas mutações de contas.
+
+`api/contracts.py` define apenas contratos HTTP; `contracts.py` continua a
+concentrar erros e helpers internos. `api/executor.py` liga as rotas versionadas
+ao dispatcher e traduz erros de domínio para estados HTTP. Os routers de
+identidade, matrículas e administração são agregados por `api/router.py` antes
+do fallback de ficheiros estáticos.
 
 ## Frontend
 
@@ -67,9 +135,10 @@ dependências em `actions`, o adaptador construirá essas dependências em tempo
 chamada. Isso mantém os contratos observáveis sem criar um repositório genérico
 que esconda SQL ou autorização.
 
-A próxima fatia recomendada é identidade e recuperação de acesso completas.
-Depois seguem avaliações/submissões, certificados/pagamentos, catálogo/matrículas
-e comunicação/chat. Nenhuma dessas extrações foi iniciada aqui.
+A próxima etapa recomendada é adicionar rotas tipadas de leitura para catálogo
+e aprendizagem e migrar o cliente frontend uma operação de cada vez. O fallback
+por ação deve permanecer até os fluxos equivalentes terem testes HTTP e uma
+janela de compatibilidade definida.
 
 ## Impacto operacional
 

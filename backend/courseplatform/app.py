@@ -20,6 +20,7 @@ from .actions import (
 )
 from .certificate_pdf import CertificateLayoutError, build_course_certificate_pdf
 from .config import get_settings
+from .api.router import router as typed_api_router
 from .storage import safe_download_name
 
 settings = get_settings()
@@ -238,6 +239,8 @@ app.add_api_route(
     handle_certificate_receipt,
     methods=["GET"],
 )
+
+app.include_router(typed_api_router)
 
 
 def static_file_response(raw_path: str):

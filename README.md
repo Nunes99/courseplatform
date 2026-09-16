@@ -119,6 +119,37 @@ Contratos de modularização da Etapa 8:
 .\.venv\Scripts\python.exe -m unittest tests.test_stage8_modular_monolith -v
 ```
 
+Contratos e rotas HTTP tipadas em adoção incremental:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_typed_api_routes -v
+```
+
+Os fluxos de login, sessão, recuperação de acesso e perfil estão em
+`backend/courseplatform/domains/identity.py`. Tentativas, respostas, ficheiros,
+submissões, revisão e reenvios estão em
+`backend/courseplatform/domains/assessments.py`. Emissão, configuração e acesso
+a certificados estão em `backend/courseplatform/domains/certificates.py`; os
+pedidos, comprovativos e decisões de pagamento estão em
+`backend/courseplatform/domains/financial.py`. Cursos, módulos, conteúdos,
+media e versões publicadas estão em `backend/courseplatform/domains/catalog.py`;
+ofertas, grupos, matrículas e inicialização do progresso estão em
+`backend/courseplatform/domains/enrollments.py`. Notificações internas,
+preferências, Push, Telegram, WhatsApp, email, filas de entrega, chat e tokens
+Realtime estão em `backend/courseplatform/domains/communication.py`.
+Dashboard, acesso aos conteúdos, serialização segura das aulas e gestão do
+progresso estão em `backend/courseplatform/domains/learning.py`. `actions.py`
+mantém adaptadores compatíveis. Health operacional, estatísticas, gestão de
+estudantes e staff, permissões administrativas e identidade visual estão em
+`backend/courseplatform/domains/administration.py`.
+
+As primeiras rotas tipadas e versionadas estão em `backend/courseplatform/api/`.
+Elas reutilizam o dispatcher e os mesmos serviços de domínio; os clientes atuais
+continuam compatíveis com `POST /api` e os nomes de ação existentes. Os
+serializadores académicos partilhados residem em
+`backend/courseplatform/serializers.py`, com adaptadores temporários em
+`actions.py`.
+
 Integração das migrações numa base PostgreSQL local descartável:
 
 ```powershell
@@ -160,6 +191,8 @@ Páginas e endpoints locais:
 - `http://127.0.0.1:8765/verify.html`
 - `http://127.0.0.1:8765/connection-test.html`
 - `http://127.0.0.1:8765/health/live`
+- `http://127.0.0.1:8765/docs`
+- `http://127.0.0.1:8765/openapi.json`
 - `http://127.0.0.1:8765/health/ready`
 - `http://127.0.0.1:8765/health/diagnostics` com `X-Admin-Token`
 - `http://127.0.0.1:8765/api/index?action=health` como alias legado de readiness

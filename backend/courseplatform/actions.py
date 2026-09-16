@@ -47,6 +47,15 @@ from .contracts import (
     success,
 )
 from .db import EXPECTED_SCHEMA_VERSION, connection, fetch_all, fetch_one, schema_status
+from .domains import administration as administration_domain
+from .domains import assessments as assessment_domain
+from .domains import catalog as catalog_domain
+from .domains import certificates as certificate_domain
+from .domains import communication as communication_domain
+from .domains import enrollments as enrollment_domain
+from .domains import financial as financial_domain
+from .domains import identity as identity_domain
+from .domains import learning as learning_domain
 from .domains.identity import (
     normalize_email,
     public_student_id,
@@ -55,6 +64,7 @@ from .domains.identity import (
     valid_password,
 )
 from .domains.registry import build_action_registry
+from . import serializers as shared_serializers
 from .security import (
     constant_time_equals,
     generate_id,
@@ -77,6 +87,7 @@ from .storage import (
 
 RASTER_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
 BRAND_LOGO_MAX_BYTES = 1024 * 1024
+PASSWORD_RESET_GENERIC_MESSAGE = identity_domain.PASSWORD_RESET_GENERIC_MESSAGE
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
@@ -106,24 +117,15 @@ _APPLICATION_SCHEMA_READY = False
 
 
 def progress_access_status(row: dict[str, Any] | None) -> str:
-    source = row or {}
-    explicit = str_value(source.get("content_access_status")).upper()
-    if explicit in CONTENT_ACCESS_STATUSES:
-        return explicit
-    return "LOCKED" if str_value(source.get("status")).upper() == "LOCKED" else "AVAILABLE"
+    return learning_domain.progress_access_status_action(row, runtime=_learning_runtime())
 
 
 def progress_evaluation_status(row: dict[str, Any] | None) -> str:
-    source = row or {}
-    explicit = str_value(source.get("evaluation_status")).upper()
-    if explicit in EVALUATION_STATUSES:
-        return explicit
-    legacy = str_value(source.get("status")).upper()
-    return legacy if legacy in EVALUATION_STATUSES else "NOT_STARTED"
+    return learning_domain.progress_evaluation_status_action(row, runtime=_learning_runtime())
 
 
 def legacy_progress_status(access_status: str, evaluation_status: str) -> str:
-    return evaluation_status if evaluation_status != "NOT_STARTED" else access_status
+    return learning_domain.legacy_progress_status_action(access_status, evaluation_status, runtime=_learning_runtime())
 
 
 def audit(conn, actor_type: str, actor_id: str, action: str, entity_type: str, entity_id: str, details: dict[str, Any] | None = None):
@@ -148,142 +150,35 @@ def public_student(row: dict[str, Any] | None):
 
 
 def public_admin(row: dict[str, Any] | None):
-    return serialize_admin(row, as_iso=iso)
+    return administration_domain.public_admin_action(row, runtime=_administration_runtime())
 
 
 def public_course(row: dict[str, Any] | None):
-    if not row:
-        return None
-    return {
-        "courseId": row["course_id"],
-        "courseCode": row.get("course_code"),
-        "title": row.get("title"),
-        "description": row.get("description"),
-        "totalHours": float(row.get("total_hours") or 0),
-        "passingScore": float(row.get("passing_score") or 0),
-        "status": row.get("status"),
-        "createdAt": iso(row.get("created_at")),
-        "updatedAt": iso(row.get("updated_at")),
-    }
+    return shared_serializers.serialize_course(row, as_iso=iso)
 
 
 def public_course_version(row: dict[str, Any] | None):
-    if not row:
-        return None
-    return {
-        "courseVersionId": row.get("course_version_id"),
-        "courseId": row.get("course_id"),
-        "versionNumber": int(row.get("version_number") or 0),
-        "status": row.get("status"),
-        "title": row.get("title"),
-        "description": row.get("description"),
-        "totalHours": float(row.get("total_hours") or 0),
-        "passingScore": float(row.get("passing_score") or 0),
-        "createdBy": row.get("created_by"),
-        "publishedBy": row.get("published_by"),
-        "createdAt": iso(row.get("created_at")),
-        "updatedAt": iso(row.get("updated_at")),
-        "publishedAt": iso(row.get("published_at")),
-    }
+    return shared_serializers.serialize_course_version(row, as_iso=iso)
 
 
 def public_course_offering(row: dict[str, Any] | None):
-    if not row:
-        return None
-    return {
-        "offeringId": row.get("offering_id"),
-        "courseId": row.get("course_id"),
-        "courseVersionId": row.get("course_version_id"),
-        "offeringCode": row.get("offering_code"),
-        "name": row.get("name"),
-        "startDate": iso(row.get("start_date")),
-        "endDate": iso(row.get("end_date")),
-        "capacity": None if row.get("capacity") is None else int(row.get("capacity")),
-        "status": row.get("status"),
-        "leadAdminId": row.get("lead_admin_id"),
-        "rules": row.get("rules_json") or {},
-        "calendar": row.get("calendar_json") or [],
-        "enrollmentCount": int(row.get("enrollment_count") or 0),
-        "createdAt": iso(row.get("created_at")),
-        "updatedAt": iso(row.get("updated_at")),
-    }
+    return shared_serializers.serialize_course_offering(row, as_iso=iso)
 
 
 def public_lesson(row: dict[str, Any] | None):
-    if not row:
-        return None
-    configured_duration = int_value(row.get("submission_duration_minutes"))
-    fallback_duration = int_value(row.get("exercise_minutes")) + int_value(row.get("individual_minutes"))
-    submission_duration = configured_duration or fallback_duration or 180
-    return {
-        "lessonId": row["lesson_id"],
-        "courseId": row.get("course_id"),
-        "lessonNumber": int(row.get("lesson_number") or 0),
-        "title": row.get("title"),
-        "slug": row.get("slug"),
-        "summary": row.get("summary"),
-        "theoryMinutes": float(row.get("theory_minutes") or 0),
-        "exerciseMinutes": float(row.get("exercise_minutes") or 0),
-        "individualMinutes": float(row.get("individual_minutes") or 0),
-        "submissionDurationMinutes": submission_duration,
-        "passingScore": float(row.get("passing_score") or 0),
-        "feedbackReleaseMode": feedback_release_mode(row.get("feedback_release_mode")),
-        "showCorrectAnswers": as_bool(row.get("show_correct_answers")),
-        "showExplanations": as_bool(row.get("show_explanations")),
-        "prerequisiteLessonId": row.get("prerequisite_lesson_id"),
-        "status": row.get("status"),
-        "createdAt": iso(row.get("created_at")),
-        "updatedAt": iso(row.get("updated_at")),
-    }
+    return learning_domain.public_lesson_action(row, runtime=_learning_runtime())
 
 
 def public_enrollment(row: dict[str, Any] | None):
-    if not row:
-        return None
-    return {
-        "enrollmentId": row["enrollment_id"],
-        "studentId": row.get("student_id"),
-        "courseId": row.get("course_id"),
-        "courseVersionId": row.get("course_version_id"),
-        "offeringId": row.get("offering_id"),
-        "groupId": row.get("group_id"),
-        "status": row.get("status"),
-        "enrolledAt": iso(row.get("enrolled_at")),
-        "completedAt": iso(row.get("completed_at")),
-        "progressPercent": float(row.get("progress_percent") or 0),
-        "finalScore": None if row.get("final_score") is None else float(row["final_score"]),
-        "certificateId": row.get("certificate_id"),
-    }
+    return shared_serializers.serialize_enrollment(row, as_iso=iso)
 
 
 def public_group_member(row: dict[str, Any] | None):
-    if not row:
-        return None
-    return {
-        "groupMemberId": row["group_member_id"],
-        "groupId": row.get("group_id"),
-        "enrollmentId": row.get("enrollment_id"),
-        "studentId": row.get("student_id"),
-        "status": row.get("status"),
-        "joinedAt": iso(row.get("joined_at")),
-        "updatedAt": iso(row.get("updated_at")),
-    }
+    return shared_serializers.serialize_group_member(row, as_iso=iso)
 
 
 def public_content(row: dict[str, Any] | None):
-    if not row:
-        return None
-    return {
-        "contentId": row["content_id"],
-        "lessonId": row.get("lesson_id"),
-        "sectionOrder": int(row.get("section_order") or 0),
-        "sectionType": row.get("section_type"),
-        "title": row.get("title"),
-        "bodyHtml": row.get("body_html"),
-        "estimatedMinutes": float(row.get("estimated_minutes") or 0),
-        "isRequired": as_bool(row.get("is_required")),
-        "status": row.get("status"),
-    }
+    return learning_domain.public_content_action(row, runtime=_learning_runtime())
 
 
 def staff_question(row: dict[str, Any] | None):
@@ -317,23 +212,7 @@ def staff_option(row: dict[str, Any] | None):
 
 
 def public_progress(row: dict[str, Any] | None):
-    if not row:
-        return None
-    access_status = progress_access_status(row)
-    evaluation_status = progress_evaluation_status(row)
-    return {
-        "progressId": row["progress_id"],
-        "lessonId": row.get("lesson_id"),
-        "status": legacy_progress_status(access_status, evaluation_status),
-        "contentAccessStatus": access_status,
-        "evaluationStatus": evaluation_status,
-        "unlockedAt": iso(row.get("unlocked_at")),
-        "startedAt": iso(row.get("started_at")),
-        "submittedAt": iso(row.get("submitted_at")),
-        "approvedAt": iso(row.get("approved_at")),
-        "score": None if row.get("score") is None else float(row["score"]),
-        "attemptCount": int(row.get("attempt_count") or 0),
-    }
+    return learning_domain.public_progress_action(row, runtime=_learning_runtime())
 
 
 def student_attempt(row: dict[str, Any] | None):
@@ -511,43 +390,12 @@ def feedback_policy(row: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def student_question(
-    row: dict[str, Any] | None,
-    *,
-    reveal_answers: bool = False,
-    reveal_explanations: bool = False,
-):
-    if not row:
-        return None
-    result = {
-        "questionId": row["question_id"],
-        "lessonId": row.get("lesson_id"),
-        "questionOrder": int(row.get("question_order") or 0),
-        "questionType": row.get("question_type"),
-        "prompt": row.get("prompt"),
-        "isRequired": as_bool(row.get("is_required")),
-        "status": row.get("status"),
-    }
-    if reveal_answers:
-        result["correctAnswer"] = row.get("correct_answer")
-    if reveal_explanations:
-        result["explanation"] = row.get("explanation")
-    return result
+def student_question(row: dict[str, Any] | None, *, reveal_answers: bool=False, reveal_explanations: bool=False):
+    return learning_domain.student_question_action(row, reveal_answers=reveal_answers, reveal_explanations=reveal_explanations, runtime=_learning_runtime())
 
 
-def student_option(row: dict[str, Any] | None, *, reveal_answers: bool = False):
-    if not row:
-        return None
-    result = {
-        "optionId": row["option_id"],
-        "questionId": row.get("question_id"),
-        "optionOrder": int(row.get("option_order") or 0),
-        "optionLabel": row.get("option_label"),
-        "optionText": row.get("option_text"),
-    }
-    if reveal_answers:
-        result["isCorrect"] = as_bool(row.get("is_correct"))
-    return result
+def student_option(row: dict[str, Any] | None, *, reveal_answers: bool=False):
+    return learning_domain.student_option_action(row, reveal_answers=reveal_answers, runtime=_learning_runtime())
 
 
 def student_answer(row: dict[str, Any] | None, *, reveal_answers: bool = False):
@@ -733,23 +581,11 @@ NOTIFICATION_STATUS_LABELS = {
 
 
 def notification_status_label(value: Any) -> str:
-    normalized = str_value(value).upper()
-    return NOTIFICATION_STATUS_LABELS.get(normalized, normalized.replace("_", " ").title())
+    return communication_domain.notification_status_label_action(value, runtime=_communication_runtime())
 
 
 def notification_preferences(row: dict[str, Any] | None) -> dict[str, bool]:
-    source = (row or {}).get("notification_preferences_json") or {}
-    if isinstance(source, str):
-        try:
-            source = json.loads(source)
-        except json.JSONDecodeError:
-            source = {}
-    if not isinstance(source, dict):
-        source = {}
-    return {
-        key: as_bool(source.get(key, default_value))
-        for key, default_value in DEFAULT_NOTIFICATION_PREFERENCES.items()
-    }
+    return communication_domain.notification_preferences_action(row, runtime=_communication_runtime())
 
 
 def require_schema_capabilities(
@@ -800,38 +636,11 @@ def require_schema_capabilities(
 
 
 def ensure_notification_feature_schema(conn) -> None:
-    global _NOTIFICATION_SCHEMA_READY
-    if _NOTIFICATION_SCHEMA_READY:
-        return
-    require_schema_capabilities(
-        conn,
-        "notificações",
-        (
-            "courseplatform.notifications",
-            "courseplatform.notification_deliveries",
-            "courseplatform.notification_channel_settings",
-            "courseplatform.notification_templates",
-            "courseplatform.push_subscriptions",
-            "courseplatform.telegram_link_tokens",
-            "courseplatform.notification_channel_state",
-        ),
-        (
-            "courseplatform.students.whatsapp_opt_in",
-            "courseplatform.students.email_opt_in",
-            "courseplatform.students.telegram_chat_id",
-            "courseplatform.students.notification_preferences_json",
-            "courseplatform.notifications.template_key",
-            "courseplatform.notifications.template_variables_json",
-        ),
-    )
-    _NOTIFICATION_SCHEMA_READY = True
+    return communication_domain.ensure_notification_feature_schema_action(conn, runtime=_communication_runtime())
 
 
 def prepare_notification_feature_schema() -> None:
-    if _NOTIFICATION_SCHEMA_READY:
-        return
-    with connection() as conn:
-        ensure_notification_feature_schema(conn)
+    return communication_domain.prepare_notification_feature_schema_action(runtime=_communication_runtime())
 
 
 _NOTIFICATION_TEMPLATE_COLUMNS = {
@@ -845,157 +654,35 @@ _NOTIFICATION_TEMPLATE_COLUMNS = {
 
 
 def _template_tokens(value: Any) -> set[str]:
-    return set(re.findall(r"{{\s*([a-z_][a-z0-9_]*)\s*}}", str(value or ""), flags=re.IGNORECASE))
+    return communication_domain._template_tokens_action(value, runtime=_communication_runtime())
 
 
 def _render_notification_template(value: Any, variables: dict[str, Any], fallback: str, limit: int) -> str:
-    source = str(value or fallback)
-    normalized = {key: str_value(item) for key, item in variables.items() if key in NOTIFICATION_TEMPLATE_VARIABLES}
-
-    def replace(match: re.Match) -> str:
-        return normalized.get(match.group(1).lower(), "")
-
-    return re.sub(r"{{\s*([a-z_][a-z0-9_]*)\s*}}", replace, source, flags=re.IGNORECASE).strip()[:limit]
+    return communication_domain._render_notification_template_action(value, variables, fallback, limit, runtime=_communication_runtime())
 
 
-def notification_template_payload(template_key: str, row: dict[str, Any] | None = None) -> dict[str, Any]:
-    definition = NOTIFICATION_TEMPLATE_DEFINITIONS[template_key]
-    row = row or {}
-    payload = {
-        "templateKey": template_key,
-        "label": definition["label"],
-        "category": definition["category"],
-        "customized": bool(row),
-        "updatedAt": iso(row.get("updated_at")),
-        "allowedVariables": sorted(NOTIFICATION_TEMPLATE_VARIABLES),
-    }
-    for public_name, column_name in _NOTIFICATION_TEMPLATE_COLUMNS.items():
-        payload[public_name] = row.get(column_name) if row.get(column_name) is not None else definition[public_name]
-        payload[f"default{public_name[0].upper()}{public_name[1:]}"] = definition[public_name]
-    return payload
+def notification_template_payload(template_key: str, row: dict[str, Any] | None=None) -> dict[str, Any]:
+    return communication_domain.notification_template_payload_action(template_key, row, runtime=_communication_runtime())
 
 
 def notification_templates_payload() -> list[dict[str, Any]]:
-    prepare_notification_feature_schema()
-    rows = {
-        row["template_key"]: row
-        for row in fetch_all("select * from courseplatform.notification_templates")
-        if row.get("template_key") in NOTIFICATION_TEMPLATE_DEFINITIONS
-    }
-    return [
-        notification_template_payload(template_key, rows.get(template_key))
-        for template_key in NOTIFICATION_TEMPLATE_DEFINITIONS
-    ]
+    return communication_domain.notification_templates_payload_action(runtime=_communication_runtime())
 
 
-def resolve_notification_content(
-    conn,
-    template_key: str,
-    variables: dict[str, Any] | None,
-    title: str,
-    message: str,
-    *,
-    email_subject: str = "",
-    email_message: str = "",
-    push_title: str = "",
-    push_message: str = "",
-) -> dict[str, Any]:
-    normalized_key = str_value(template_key).upper()
-    context = {
-        key: str_value(value)[:1800]
-        for key, value in (variables or {}).items()
-        if key in NOTIFICATION_TEMPLATE_VARIABLES
-    }
-    if normalized_key not in NOTIFICATION_TEMPLATE_DEFINITIONS:
-        return {
-            "templateKey": "",
-            "variables": context,
-            "title": str_value(title)[:180],
-            "message": str_value(message)[:1800],
-            "emailSubject": str_value(email_subject or title)[:180],
-            "emailMessage": str_value(email_message or message)[:5000],
-            "pushTitle": str_value(push_title or title)[:120],
-            "pushMessage": str_value(push_message or message)[:300],
-        }
-    row = conn.execute(
-        "select * from courseplatform.notification_templates where template_key = %s",
-        (normalized_key,),
-    ).fetchone() or {}
-    template = notification_template_payload(normalized_key, row)
-    return {
-        "templateKey": normalized_key,
-        "variables": context,
-        "title": _render_notification_template(template["internalTitleTemplate"], context, title, 180),
-        "message": _render_notification_template(template["internalMessageTemplate"], context, message, 1800),
-        "emailSubject": _render_notification_template(template["emailSubjectTemplate"], context, email_subject or title, 180),
-        "emailMessage": _render_notification_template(template["emailMessageTemplate"], context, email_message or message, 5000),
-        "pushTitle": _render_notification_template(template["pushTitleTemplate"], context, push_title or title, 120),
-        "pushMessage": _render_notification_template(template["pushMessageTemplate"], context, push_message or message, 300),
-    }
+def resolve_notification_content(conn, template_key: str, variables: dict[str, Any] | None, title: str, message: str, *, email_subject: str='', email_message: str='', push_title: str='', push_message: str='') -> dict[str, Any]:
+    return communication_domain.resolve_notification_content_action(conn, template_key, variables, title, message, email_subject=email_subject, email_message=email_message, push_title=push_title, push_message=push_message, runtime=_communication_runtime())
 
 
 def public_notification(row: dict[str, Any] | None):
-    if not row:
-        return None
-    def delivery(channel: str) -> dict[str, Any]:
-        prefix = channel.lower()
-        # Legacy WhatsApp-only selects expose unprefixed delivery columns.
-        fallback = channel == "WHATSAPP"
-        status = row.get(f"{prefix}_status") or (row.get("delivery_status") if fallback else None) or "NOT_REQUESTED"
-        if status == "PROCESSING":
-            status = "PENDING"
-        recipient = row.get(f"{prefix}_recipient") or (row.get("delivery_recipient") if fallback else None)
-        return {
-            "status": status,
-            # Telegram chat IDs are private provider identifiers and are never
-            # part of an API response, including administrative history.
-            "recipient": None if channel in {"TELEGRAM", "PUSH"} else recipient,
-            "providerMessageId": row.get(f"{prefix}_provider_message_id") or (row.get("provider_message_id") if fallback else None),
-            "attemptCount": int(row.get(f"{prefix}_attempt_count") or (row.get("attempt_count") if fallback else 0) or 0),
-            "lastError": row.get(f"{prefix}_last_error") or (row.get("last_error") if fallback else None),
-            "sentAt": iso(row.get(f"{prefix}_sent_at") or (row.get("sent_at") if fallback else None)),
-        }
-    return {
-        "notificationId": row.get("notification_id"),
-        "studentId": row.get("student_id"),
-        "studentName": row.get("student_name") or row.get("full_name"),
-        "category": row.get("category") or "GENERAL",
-        "title": row.get("title"),
-        "message": row.get("message"),
-        "actionUrl": row.get("action_url"),
-        "entityType": row.get("entity_type"),
-        "entityId": row.get("entity_id"),
-        "priority": row.get("priority") or "NORMAL",
-        "readAt": iso(row.get("read_at")),
-        "createdAt": iso(row.get("created_at")),
-        "templateKey": row.get("template_key") or "",
-        "whatsapp": delivery("WHATSAPP"),
-        "email": delivery("EMAIL"),
-        "telegram": delivery("TELEGRAM"),
-        "push": delivery("PUSH"),
-    }
+    return communication_domain.public_notification_action(row, runtime=_communication_runtime())
 
 
 def normalize_whatsapp_recipient(value: Any) -> str:
-    text = re.sub(r"[^0-9+]", "", str_value(value))
-    if text.startswith("00"):
-        text = f"+{text[2:]}"
-    digits = re.sub(r"\D", "", text)
-    return digits if 8 <= len(digits) <= 15 else ""
+    return communication_domain.normalize_whatsapp_recipient_action(value, runtime=_communication_runtime())
 
 
 def normalize_email_recipient(value: Any) -> str:
-    text = normalize_email(str_value(value))
-    if len(text) > 254 or "\r" in text or "\n" in text:
-        return ""
-    local, separator, domain = text.rpartition("@")
-    if not separator or not local or not domain or "." not in domain:
-        return ""
-    if len(local) > 64 or not re.fullmatch(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+", local, re.IGNORECASE):
-        return ""
-    if not re.fullmatch(r"[a-z0-9.-]+", domain, re.IGNORECASE) or domain.startswith((".", "-")):
-        return ""
-    return text
+    return communication_domain.normalize_email_recipient_action(value, runtime=_communication_runtime())
 
 
 def validated_email_change(payload: dict[str, Any]) -> str:
@@ -1111,1427 +798,211 @@ def secure_student_email_update(
 
 
 def normalize_telegram_recipient(value: Any) -> str:
-    text = str_value(value)
-    # Student accounts are linked only to private chats. Negative IDs identify
-    # groups/channels and must never become a personal notification endpoint.
-    return text if re.fullmatch(r"\d{5,20}", text) else ""
+    return communication_domain.normalize_telegram_recipient_action(value, runtime=_communication_runtime())
 
 
 def redact_notification_error(value: Any, *secrets_to_hide: Any) -> str:
-    text = str(value)
-    for secret in secrets_to_hide:
-        secret_text = str_value(secret)
-        if secret_text:
-            text = text.replace(secret_text, "[redacted]")
-    text = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+\-/=]+", "Bearer [redacted]", text)
-    text = re.sub(r"(?i)(?:bot)?\d{5,20}:[A-Za-z0-9_-]{20,}", "[redacted]", text)
-    return text[:700]
+    return communication_domain.redact_notification_error_action(value, *secrets_to_hide, runtime=_communication_runtime())
 
 
-def notification_encryption_key(settings: Any | None = None) -> str:
-    settings = settings or get_settings()
-    return str_value(
-        getattr(settings, "notification_config_encryption_key", "")
-        or getattr(settings, "whatsapp_config_encryption_key", "")
-    )
+def notification_encryption_key(settings: Any | None=None) -> str:
+    return communication_domain.notification_encryption_key_action(settings, runtime=_communication_runtime())
 
 
 def decrypt_notification_secret(channel: str, column: str, encryption_key: str) -> str:
-    if channel not in {"WHATSAPP", "EMAIL", "TELEGRAM"} or column not in {
-        "access_token_encrypted", "smtp_password_encrypted"
-    }:
-        raise ValueError("Canal ou coluna de segredo inválidos.")
-    row = fetch_one(
-        f"""
-        select pgp_sym_decrypt({column}, %s)::text as secret
-        from courseplatform.notification_channel_settings
-        where channel = %s
-        """,
-        (encryption_key, channel),
-    ) or {}
-    return str_value(row.get("secret"))
+    return communication_domain.decrypt_notification_secret_action(channel, column, encryption_key, runtime=_communication_runtime())
 
 
 def valid_whatsapp_platform_url(value: Any) -> bool:
-    text = str_value(value)
-    if not text or len(text) > 1000:
-        return False
-    try:
-        parsed = urlsplit(text)
-        return bool(
-            parsed.scheme in {"https", "http"}
-            and parsed.hostname
-            and not parsed.username
-            and not parsed.password
-        )
-    except ValueError:
-        return False
+    return communication_domain.valid_whatsapp_platform_url_action(value, runtime=_communication_runtime())
 
 
 def valid_notification_host(value: Any) -> bool:
-    text = str_value(value)
-    if not text or len(text) > 253 or "\r" in text or "\n" in text:
-        return False
-    # SMTP accepts DNS names and literal IPv4/IPv6 addresses. It must not
-    # contain a scheme, path, credentials or an embedded port.
-    if "://" in text or any(character in text for character in "/@?#"):
-        return False
-    candidate = text[1:-1] if text.startswith("[") and text.endswith("]") else text
-    try:
-        # Prevent the administration form from being used to probe local or
-        # private network services through the SMTP client.
-        return ipaddress.ip_address(candidate).is_global
-    except ValueError:
-        normalized = candidate.lower().rstrip(".")
-        if normalized == "localhost" or normalized.endswith(".localhost"):
-            return False
-        return bool(re.fullmatch(r"[a-zA-Z0-9.-]+", candidate) and not candidate.startswith((".", "-")))
+    return communication_domain.valid_notification_host_action(value, runtime=_communication_runtime())
 
 
 def valid_telegram_bot_token(value: Any) -> bool:
-    return bool(re.fullmatch(r"\d{5,20}:[A-Za-z0-9_-]{20,}", str_value(value)))
+    return communication_domain.valid_telegram_bot_token_action(value, runtime=_communication_runtime())
 
 
 def normalize_telegram_parse_mode(value: Any) -> str:
-    normalized = str_value(value).upper()
-    if normalized in {"", "NONE", "PLAIN"}:
-        return ""
-    if normalized == "HTML":
-        return "HTML"
-    if normalized in {"MARKDOWNV2", "MARKDOWN_V2"}:
-        return "MarkdownV2"
-    return "HTML"
+    return communication_domain.normalize_telegram_parse_mode_action(value, runtime=_communication_runtime())
 
 
 def safe_notification_action_url(value: Any) -> str:
-    text = str_value(value)
-    if text.startswith("#/") or text.startswith("https://") or text.startswith("http://"):
-        return text[:1000]
-    return "#/notifications"
+    return communication_domain.safe_notification_action_url_action(value, runtime=_communication_runtime())
 
 
 def whatsapp_runtime_configuration() -> dict[str, Any]:
-    """Resolve the admin-managed WhatsApp configuration without exposing its token."""
-    prepare_notification_feature_schema()
-    settings = get_settings()
-    row = fetch_one(
-        """
-        select channel, enabled, phone_number_id, graph_api_version, template_name,
-               template_language, platform_url,
-               access_token_encrypted is not null as stored_token_configured,
-               updated_at
-        from courseplatform.notification_channel_settings
-        where channel = 'WHATSAPP'
-        """
-    )
-    managed_by_admin = bool(row)
-    source = row or {}
-    enabled = as_bool(source.get("enabled")) if managed_by_admin else settings.whatsapp_enabled
-    phone_number_id = str_value(source.get("phone_number_id")) if managed_by_admin else settings.whatsapp_phone_number_id
-    graph_api_version = str_value(source.get("graph_api_version")) if managed_by_admin else settings.whatsapp_graph_api_version
-    template_name = str_value(source.get("template_name")) if managed_by_admin else settings.whatsapp_template_name
-    template_language = str_value(source.get("template_language")) if managed_by_admin else settings.whatsapp_template_language
-    platform_url = str_value(source.get("platform_url")) if managed_by_admin else settings.whatsapp_platform_url
-    stored_token_configured = as_bool(source.get("stored_token_configured"))
-    encryption_key = notification_encryption_key(settings)
-    encryption_key_configured = len(encryption_key.encode("utf-8")) >= 32
-    access_token = settings.whatsapp_access_token
-    token_source = "ENV" if access_token else "NONE"
-    token_error = ""
-
-    if stored_token_configured:
-        if encryption_key_configured:
-            try:
-                decrypted_token = decrypt_notification_secret(
-                    "WHATSAPP", "access_token_encrypted", encryption_key
-                )
-                if decrypted_token:
-                    access_token = decrypted_token
-                    token_source = "ADMIN"
-            except Exception:
-                token_error = "O token guardado não pôde ser desencriptado. Confirme a chave do servidor."
-        elif not access_token:
-            token_error = "Defina WHATSAPP_CONFIG_ENCRYPTION_KEY com pelo menos 32 bytes para utilizar o token guardado."
-
-    configured = bool(
-        enabled
-        and access_token
-        and phone_number_id
-        and template_name
-        and valid_whatsapp_platform_url(platform_url)
-    )
-    return {
-        "enabled": enabled,
-        "configured": configured,
-        "phoneNumberId": phone_number_id,
-        "phoneNumberConfigured": bool(phone_number_id),
-        "graphApiVersion": graph_api_version or "v23.0",
-        "templateConfigured": bool(template_name),
-        "templateName": template_name,
-        "templateLanguage": template_language or "pt_PT",
-        "platformUrl": platform_url,
-        "accessToken": access_token,
-        "tokenConfigured": bool(access_token),
-        "storedTokenConfigured": stored_token_configured,
-        "tokenSource": token_source,
-        "tokenError": token_error,
-        "encryptionKeyConfigured": encryption_key_configured,
-        "source": "ADMIN" if managed_by_admin else "ENV",
-        "updatedAt": iso(source.get("updated_at")),
-        "timeoutSeconds": settings.whatsapp_timeout_seconds,
-    }
+    return communication_domain.whatsapp_runtime_configuration_action(runtime=_communication_runtime())
 
 
 def whatsapp_configuration() -> dict[str, Any]:
-    configuration = whatsapp_runtime_configuration()
-    return {
-        key: value
-        for key, value in configuration.items()
-        if key not in {"accessToken", "timeoutSeconds"}
-    }
+    return communication_domain.whatsapp_configuration_action(runtime=_communication_runtime())
 
 
-def email_runtime_configuration(*, prepare_schema: bool = True) -> dict[str, Any]:
-    """Resolve SMTP settings while keeping the password server-side."""
-    if prepare_schema:
-        prepare_notification_feature_schema()
-    settings = get_settings()
-    row = fetch_one(
-        """
-        select channel, enabled, smtp_host, smtp_port, smtp_username,
-               from_email, from_name, use_tls,
-               smtp_password_encrypted is not null as stored_password_configured,
-               updated_at
-        from courseplatform.notification_channel_settings
-        where channel = 'EMAIL'
-        """
-    )
-    managed_by_admin = bool(row)
-    source = row or {}
-    enabled = as_bool(source.get("enabled")) if managed_by_admin else settings.email_enabled
-    smtp_host = str_value(source.get("smtp_host")) if managed_by_admin else settings.smtp_host
-    smtp_port = int_value(source.get("smtp_port"), 587) if managed_by_admin else settings.smtp_port
-    smtp_username = str_value(source.get("smtp_username")) if managed_by_admin else settings.smtp_username
-    from_email = normalize_email_recipient(source.get("from_email")) if managed_by_admin else normalize_email_recipient(settings.smtp_from_email)
-    from_name = str_value(source.get("from_name")) if managed_by_admin else settings.smtp_from_name
-    use_tls = as_bool(source.get("use_tls")) if managed_by_admin else settings.smtp_use_tls
-    stored_password_configured = as_bool(source.get("stored_password_configured"))
-    encryption_key = notification_encryption_key(settings)
-    encryption_key_configured = len(encryption_key.encode("utf-8")) >= 32
-    smtp_password = settings.smtp_password
-    password_source = "ENV" if smtp_password else "NONE"
-    password_error = ""
-    if stored_password_configured:
-        if encryption_key_configured:
-            try:
-                decrypted = decrypt_notification_secret("EMAIL", "smtp_password_encrypted", encryption_key)
-                if decrypted:
-                    smtp_password = decrypted
-                    password_source = "ADMIN"
-            except Exception:
-                password_error = "A palavra-passe SMTP guardada não pôde ser desencriptada. Confirme a chave do servidor."
-        elif not smtp_password:
-            password_error = "Defina NOTIFICATION_CONFIG_ENCRYPTION_KEY com pelo menos 32 bytes."
-    authentication_ready = not smtp_username or bool(smtp_password)
-    configured = bool(
-        enabled
-        and valid_notification_host(smtp_host)
-        and 1 <= smtp_port <= 65535
-        and (smtp_port == 465 or use_tls)
-        and from_email
-        and authentication_ready
-    )
-    return {
-        "enabled": enabled,
-        "configured": configured,
-        "smtpHost": smtp_host,
-        "smtpPort": smtp_port,
-        "smtpUsername": smtp_username,
-        "smtpPassword": smtp_password,
-        "fromEmail": from_email,
-        "fromName": from_name,
-        "useTls": use_tls,
-        "platformUrl": settings.platform_url,
-        "passwordConfigured": bool(smtp_password),
-        "storedPasswordConfigured": stored_password_configured,
-        "passwordSource": password_source,
-        "passwordError": password_error,
-        "encryptionKeyConfigured": encryption_key_configured,
-        "source": "ADMIN" if managed_by_admin else "ENV",
-        "updatedAt": iso(source.get("updated_at")),
-        "timeoutSeconds": settings.smtp_timeout_seconds,
-    }
+def email_runtime_configuration(*, prepare_schema: bool=True) -> dict[str, Any]:
+    return communication_domain.email_runtime_configuration_action(prepare_schema=prepare_schema, runtime=_communication_runtime())
 
 
 def email_configuration() -> dict[str, Any]:
-    configuration = email_runtime_configuration()
-    return {
-        key: value
-        for key, value in configuration.items()
-        if key not in {"smtpPassword", "timeoutSeconds"}
-    }
+    return communication_domain.email_configuration_action(runtime=_communication_runtime())
 
 
 def telegram_runtime_configuration() -> dict[str, Any]:
-    """Resolve Telegram Bot API settings without exposing the bot token."""
-    prepare_notification_feature_schema()
-    settings = get_settings()
-    row = fetch_one(
-        """
-        select channel, enabled, bot_username, parse_mode,
-               access_token_encrypted is not null as stored_token_configured,
-               updated_at
-        from courseplatform.notification_channel_settings
-        where channel = 'TELEGRAM'
-        """
-    )
-    managed_by_admin = bool(row)
-    source = row or {}
-    enabled = as_bool(source.get("enabled")) if managed_by_admin else settings.telegram_enabled
-    bot_username = str_value(source.get("bot_username")) if managed_by_admin else settings.telegram_bot_username
-    parse_mode = normalize_telegram_parse_mode(source.get("parse_mode") if managed_by_admin else settings.telegram_parse_mode)
-    stored_token_configured = as_bool(source.get("stored_token_configured"))
-    encryption_key = notification_encryption_key(settings)
-    encryption_key_configured = len(encryption_key.encode("utf-8")) >= 32
-    bot_token = settings.telegram_bot_token
-    token_source = "ENV" if bot_token else "NONE"
-    token_error = ""
-    if stored_token_configured:
-        if encryption_key_configured:
-            try:
-                decrypted = decrypt_notification_secret("TELEGRAM", "access_token_encrypted", encryption_key)
-                if decrypted:
-                    bot_token = decrypted
-                    token_source = "ADMIN"
-            except Exception:
-                token_error = "O token do bot guardado não pôde ser desencriptado. Confirme a chave do servidor."
-        elif not bot_token:
-            token_error = "Defina NOTIFICATION_CONFIG_ENCRYPTION_KEY com pelo menos 32 bytes."
-    configured = bool(enabled and valid_telegram_bot_token(bot_token))
-    return {
-        "enabled": enabled,
-        "configured": configured,
-        "botToken": bot_token,
-        "botUsername": bot_username,
-        "parseMode": parse_mode,
-        "platformUrl": settings.platform_url,
-        "tokenConfigured": bool(bot_token),
-        "storedTokenConfigured": stored_token_configured,
-        "tokenSource": token_source,
-        "tokenError": token_error,
-        "encryptionKeyConfigured": encryption_key_configured,
-        "source": "ADMIN" if managed_by_admin else "ENV",
-        "updatedAt": iso(source.get("updated_at")),
-        "timeoutSeconds": settings.telegram_timeout_seconds,
-    }
+    return communication_domain.telegram_runtime_configuration_action(runtime=_communication_runtime())
 
 
 def telegram_configuration() -> dict[str, Any]:
-    configuration = telegram_runtime_configuration()
-    return {
-        key: value
-        for key, value in configuration.items()
-        if key not in {"botToken", "timeoutSeconds"}
-    }
+    return communication_domain.telegram_configuration_action(runtime=_communication_runtime())
 
 
 def valid_vapid_subject(value: Any) -> bool:
-    text = str_value(value)
-    if text.startswith("mailto:"):
-        return bool(normalize_email_recipient(text[7:]))
-    try:
-        parsed = urlsplit(text)
-        return parsed.scheme == "https" and bool(parsed.hostname) and not parsed.username and not parsed.password
-    except ValueError:
-        return False
+    return communication_domain.valid_vapid_subject_action(value, runtime=_communication_runtime())
 
 
 def valid_push_endpoint(value: Any) -> bool:
-    text = str_value(value)
-    if not text or len(text) > 4096:
-        return False
-    try:
-        parsed = urlsplit(text)
-        return bool(parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password)
-    except ValueError:
-        return False
+    return communication_domain.valid_push_endpoint_action(value, runtime=_communication_runtime())
 
 
 def valid_push_key(value: Any, minimum: int, maximum: int) -> bool:
-    text = str_value(value)
-    return minimum <= len(text) <= maximum and bool(re.fullmatch(r"[A-Za-z0-9_-]+", text))
+    return communication_domain.valid_push_key_action(value, minimum, maximum, runtime=_communication_runtime())
 
 
-def valid_vapid_key(value: Any, expected_bytes: int, require_uncompressed_point: bool = False) -> bool:
-    text = str_value(value)
-    if not valid_push_key(text, 40, 100):
-        return False
-    try:
-        padding = "=" * ((4 - len(text) % 4) % 4)
-        decoded = base64.urlsafe_b64decode(f"{text}{padding}")
-    except (ValueError, TypeError):
-        return False
-    if len(decoded) != expected_bytes:
-        return False
-    return not require_uncompressed_point or decoded[0] == 4
+def valid_vapid_key(value: Any, expected_bytes: int, require_uncompressed_point: bool=False) -> bool:
+    return communication_domain.valid_vapid_key_action(value, expected_bytes, require_uncompressed_point, runtime=_communication_runtime())
 
 
 def web_push_runtime_configuration() -> dict[str, Any]:
-    settings = get_settings()
-    encryption_key = notification_encryption_key(settings)
-    encryption_ready = len(encryption_key.encode("utf-8")) >= 32
-    dependency_ready = webpush is not None
-    enabled = as_bool(getattr(settings, "web_push_enabled", False))
-    public_key = str_value(getattr(settings, "vapid_public_key", ""))
-    private_key = str_value(getattr(settings, "vapid_private_key", ""))
-    subject = str_value(getattr(settings, "vapid_subject", ""))
-    configured = bool(
-        enabled
-        and valid_vapid_key(public_key, 65, require_uncompressed_point=True)
-        and valid_vapid_key(private_key, 32)
-        and valid_vapid_subject(subject)
-        and encryption_ready
-        and dependency_ready
-    )
-    return {
-        "enabled": enabled,
-        "configured": configured,
-        "publicKey": public_key,
-        "privateKey": private_key,
-        "subject": subject,
-        "platformUrl": str_value(getattr(settings, "platform_url", "")),
-        "ttlSeconds": max(60, min(int_value(getattr(settings, "web_push_ttl_seconds", 86400), 86400), 2419200)),
-        "timeoutSeconds": max(3, min(int_value(getattr(settings, "web_push_timeout_seconds", 12), 12), 60)),
-        "encryptionKey": encryption_key,
-        "encryptionKeyConfigured": encryption_ready,
-        "dependencyConfigured": dependency_ready,
-    }
+    return communication_domain.web_push_runtime_configuration_action(runtime=_communication_runtime())
 
 
 def web_push_configuration() -> dict[str, Any]:
-    configuration = web_push_runtime_configuration()
-    return {
-        key: value
-        for key, value in configuration.items()
-        if key not in {"privateKey", "encryptionKey", "ttlSeconds", "timeoutSeconds"}
-    }
+    return communication_domain.web_push_configuration_action(runtime=_communication_runtime())
 
 
 def student_notification_channel_info() -> dict[str, Any]:
-    """Student-safe provider discovery; credentials and SMTP topology stay private."""
-    email = email_configuration()
-    telegram = telegram_configuration()
-    whatsapp = whatsapp_configuration()
-    push = web_push_configuration()
-    return {
-        "whatsapp": {"enabled": bool(whatsapp.get("enabled")), "configured": bool(whatsapp.get("configured"))},
-        "email": {"enabled": bool(email.get("enabled")), "configured": bool(email.get("configured"))},
-        "telegram": {
-            "enabled": bool(telegram.get("enabled")),
-            "configured": bool(telegram.get("configured")),
-            "botUsername": telegram.get("botUsername") or "",
-            "linkingAvailable": bool(
-                telegram.get("enabled") and telegram.get("configured") and telegram.get("botUsername")
-            ),
-        },
-        "push": {
-            "enabled": bool(push.get("enabled")),
-            "configured": bool(push.get("configured")),
-            "publicKey": push.get("publicKey") or "",
-        },
-    }
+    return communication_domain.student_notification_channel_info_action(runtime=_communication_runtime())
 
 
-def create_student_notification(
-    conn,
-    student_id: str,
-    category: str,
-    title: str,
-    message: str,
-    *,
-    admin_id: str | None = None,
-    action_url: str = "#/notifications",
-    entity_type: str = "",
-    entity_id: str = "",
-    priority: str = "NORMAL",
-    template_key: str = "",
-    template_variables: dict[str, Any] | None = None,
-    email_subject: str = "",
-    email_message: str = "",
-    push_title: str = "",
-    push_message: str = "",
-    send_whatsapp: bool = True,
-    send_email: bool = True,
-    send_telegram: bool = True,
-    send_push: bool = True,
-) -> str | None:
-    student = conn.execute(
-        "select * from courseplatform.students where student_id = %s",
-        (student_id,),
-    ).fetchone()
-    if not student:
-        return None
-    normalized_category = str_value(category).upper() or "GENERAL"
-    normalized_action_url = safe_notification_action_url(action_url)
-    variables = dict(template_variables or {})
-    variables["student_name"] = str_value(student.get("full_name")) or "Estudante"
-    variables["action_url"] = normalized_action_url
-    content = resolve_notification_content(
-        conn,
-        template_key,
-        variables,
-        title,
-        message,
-        email_subject=email_subject,
-        email_message=email_message,
-        push_title=push_title,
-        push_message=push_message,
-    )
-    notification_id = generate_id("NTF")
-    conn.execute(
-        """
-        insert into courseplatform.notifications
-          (notification_id, student_id, created_by_admin_id, category, title, message,
-           action_url, entity_type, entity_id, priority, template_key,
-           template_variables_json, email_subject, email_message, push_title,
-           push_message, created_at)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s::jsonb, %s, %s, %s, %s, now())
-        """,
-        (
-            notification_id,
-            student_id,
-            admin_id,
-            normalized_category,
-            content["title"],
-            content["message"],
-            normalized_action_url,
-            str_value(entity_type)[:80],
-            str_value(entity_id)[:160],
-            str_value(priority).upper() or "NORMAL",
-            content["templateKey"] or None,
-            json.dumps(content["variables"]),
-            content["emailSubject"],
-            content["emailMessage"],
-            content["pushTitle"],
-            content["pushMessage"],
-        ),
-    )
-    preferences = notification_preferences(student)
-
-    def queue_delivery(
-        channel: str,
-        recipient: str,
-        opted_in: bool,
-        provider: str,
-        missing_contact_message: str,
-    ) -> None:
-        consented = opted_in and preferences.get(normalized_category, True)
-        delivery_status = "PENDING" if consented and recipient else "SKIPPED"
-        skip_reason = "" if delivery_status == "PENDING" else (
-            f"Consentimento de {channel.title()} não concedido para este tipo de atualização."
-            if not consented else missing_contact_message
-        )
-        conn.execute(
-            """
-            insert into courseplatform.notification_deliveries
-              (delivery_id, notification_id, channel, recipient, status, provider,
-               attempt_count, last_error, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, 0, %s, now(), now())
-            on conflict (notification_id, channel) do nothing
-            """,
-            (
-                generate_id("NDL"), notification_id, channel, recipient or None,
-                delivery_status, provider, skip_reason or None,
-            ),
-        )
-
-    if send_whatsapp:
-        queue_delivery(
-            "WHATSAPP", normalize_whatsapp_recipient(student.get("phone")),
-            as_bool(student.get("whatsapp_opt_in")), "META_CLOUD_API",
-            "Telefone inválido ou sem indicativo internacional.",
-        )
-    if send_email:
-        queue_delivery(
-            "EMAIL", normalize_email_recipient(student.get("email")),
-            as_bool(student.get("email_opt_in")), "SMTP",
-            "Endereço de email inválido ou em falta.",
-        )
-    if send_telegram:
-        queue_delivery(
-            "TELEGRAM", normalize_telegram_recipient(student.get("telegram_chat_id")),
-            as_bool(student.get("telegram_opt_in")), "TELEGRAM_BOT_API",
-            "Chat ID do Telegram inválido ou em falta.",
-        )
-    if send_push:
-        active_push = conn.execute(
-            "select count(*) as count from courseplatform.push_subscriptions where student_id = %s and enabled",
-            (student_id,),
-        ).fetchone() or {}
-        queue_delivery(
-            "PUSH",
-            student_id,
-            int(active_push.get("count") or 0) > 0,
-            "WEB_PUSH",
-            "Nenhum dispositivo possui notificações Push ativas.",
-        )
-    return notification_id
+def create_student_notification(conn, student_id: str, category: str, title: str, message: str, *, admin_id: str | None=None, action_url: str='#/notifications', entity_type: str='', entity_id: str='', priority: str='NORMAL', template_key: str='', template_variables: dict[str, Any] | None=None, email_subject: str='', email_message: str='', push_title: str='', push_message: str='', send_whatsapp: bool=True, send_email: bool=True, send_telegram: bool=True, send_push: bool=True) -> str | None:
+    return communication_domain.create_student_notification_action(conn, student_id, category, title, message, admin_id=admin_id, action_url=action_url, entity_type=entity_type, entity_id=entity_id, priority=priority, template_key=template_key, template_variables=template_variables, email_subject=email_subject, email_message=email_message, push_title=push_title, push_message=push_message, send_whatsapp=send_whatsapp, send_email=send_email, send_telegram=send_telegram, send_push=send_push, runtime=_communication_runtime())
 
 
-def send_whatsapp_template(delivery: dict[str, Any], configuration: dict[str, Any] | None = None) -> str:
-    configuration = configuration or whatsapp_runtime_configuration()
-    if not configuration["configured"]:
-        raise RuntimeError("Integração WhatsApp ainda não configurada no servidor.")
-    endpoint = (
-        f"https://graph.facebook.com/{configuration['graphApiVersion']}/"
-        f"{configuration['phoneNumberId']}/messages"
-    )
-    action_url = str_value(delivery.get("action_url"))
-    if not action_url.startswith(("https://", "http://")):
-        base = str_value(configuration.get("platformUrl")).rstrip("/")
-        action_url = f"{base}/{action_url}" if action_url.startswith("#/") else base
-    body = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": delivery["recipient"],
-        "type": "template",
-        "template": {
-            "name": configuration["templateName"],
-            "language": {"code": configuration["templateLanguage"]},
-            "components": [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": str_value(delivery.get("student_name"))[:120] or "Estudante"},
-                    {"type": "text", "text": str_value(delivery.get("title"))[:180]},
-                    {"type": "text", "text": str_value(delivery.get("message"))[:900]},
-                    {"type": "text", "text": action_url[:1000]},
-                ],
-            }],
-        },
-    }
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {configuration['accessToken']}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=max(3, int(configuration.get("timeoutSeconds") or 12))) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        response_text = error.read().decode("utf-8", errors="replace")[:700]
-        safe_error = redact_notification_error(response_text, configuration.get("accessToken"))
-        raise RuntimeError(f"WhatsApp Cloud API HTTP {error.code}: {safe_error}") from error
-    messages = result.get("messages") if isinstance(result, dict) else []
-    provider_message_id = str_value(messages[0].get("id")) if messages else ""
-    if not provider_message_id:
-        raise RuntimeError("A API do WhatsApp não devolveu o identificador da mensagem.")
-    return provider_message_id
+def send_whatsapp_template(delivery: dict[str, Any], configuration: dict[str, Any] | None=None) -> str:
+    return communication_domain.send_whatsapp_template_action(delivery, configuration, runtime=_communication_runtime())
 
 
 def resolved_notification_action_url(delivery: dict[str, Any], configuration: dict[str, Any]) -> str:
-    action_url = str_value(delivery.get("action_url"))
-    if action_url.startswith(("https://", "http://")):
-        return action_url
-    base = str_value(configuration.get("platformUrl")).rstrip("/")
-    if base and action_url.startswith("#/"):
-        return f"{base}/{action_url}"
-    return ""
+    return communication_domain.resolved_notification_action_url_action(delivery, configuration, runtime=_communication_runtime())
 
 
-def _notification_plain_text(delivery: dict[str, Any], action_url: str = "") -> str:
-    parts = [
-        str_value(delivery.get("student_name")) or "Estudante",
-        "",
-        str_value(delivery.get("email_subject") or delivery.get("title")) or "Atualização académica",
-        "",
-        str_value(delivery.get("email_message") or delivery.get("message")),
-    ]
-    if action_url:
-        parts.extend(["", f"Abrir na plataforma: {action_url}"])
-    return "\n".join(parts).strip()
+def _notification_plain_text(delivery: dict[str, Any], action_url: str='') -> str:
+    return communication_domain._notification_plain_text_action(delivery, action_url, runtime=_communication_runtime())
 
 
-def send_email_notification(delivery: dict[str, Any], configuration: dict[str, Any] | None = None) -> str:
-    configuration = configuration or email_runtime_configuration()
-    if not configuration["configured"]:
-        raise RuntimeError("Integração de email ainda não configurada no servidor.")
-    recipient = normalize_email_recipient(delivery.get("recipient"))
-    if not recipient:
-        raise RuntimeError("Endereço de email do destinatário inválido.")
-
-    title = re.sub(r"[\r\n]+", " ", str_value(delivery.get("email_subject") or delivery.get("title")))[:180] or "Atualização académica"
-    body_message = str_value(delivery.get("email_message") or delivery.get("message"))[:5000]
-    action_url = resolved_notification_action_url(delivery, configuration)
-    message = EmailMessage()
-    message_id = make_msgid(domain=configuration["fromEmail"].partition("@")[2] or None)
-    message["Message-ID"] = message_id
-    message["Subject"] = title
-    message["From"] = formataddr((configuration.get("fromName") or "", configuration["fromEmail"]))
-    message["To"] = recipient
-    message.set_content(_notification_plain_text(delivery, action_url))
-    student_name = html_escape(str_value(delivery.get("student_name")) or "Estudante")
-    brand_name = html_escape(configuration.get("fromName") or "Plataforma de ensino")
-    safe_body = html_escape(body_message).replace(chr(10), "<br>")
-    action_html = (
-        '<p style="margin:28px 0 8px">'
-        f'<a href="{html_escape(action_url, quote=True)}" style="display:inline-block;background:#00365B;color:#FFFFFF;text-decoration:none;padding:11px 18px;border-radius:6px;font:600 14px Inter,Arial,sans-serif">Abrir na plataforma</a>'
-        "</p>"
-        if action_url.startswith(("https://", "http://")) else ""
-    )
-    message.add_alternative(
-        "<!doctype html><html lang=\"pt\"><body style=\"margin:0;background:#FFF8E4;padding:24px\">"
-        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center">'
-        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#FFFFFF;border:1px solid rgba(201,165,91,.35);border-radius:12px;overflow:hidden">'
-        f'<tr><td style="background:#00365B;padding:20px 24px;color:#FFF8E4;font:600 16px Manrope,Arial,sans-serif">{brand_name}</td></tr>'
-        '<tr><td style="padding:28px 24px;color:#00365B;font:15px/1.6 Inter,Arial,sans-serif">'
-        f'<p style="margin:0 0 12px">Olá, {student_name}.</p>'
-        f'<h1 style="margin:0 0 16px;font:600 24px/1.25 Manrope,Arial,sans-serif;color:#00365B">{html_escape(title)}</h1>'
-        f'<p style="margin:0">{safe_body}</p>{action_html}'
-        '</td></tr><tr><td style="border-top:1px solid rgba(201,165,91,.25);padding:16px 24px;color:rgba(0,54,91,.68);font:12px/1.5 Inter,Arial,sans-serif">Mensagem académica automática. Pode gerir os canais e categorias no seu perfil.</td></tr>'
-        "</table></td></tr></table></body></html>",
-        subtype="html",
-    )
-
-    try:
-        port = int(configuration["smtpPort"])
-        smtp_class = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
-        smtp_options: dict[str, Any] = {
-            "host": configuration["smtpHost"],
-            "port": port,
-            "timeout": max(3, int(configuration.get("timeoutSeconds") or 12)),
-        }
-        if port == 465:
-            smtp_options["context"] = ssl.create_default_context()
-        with smtp_class(**smtp_options) as smtp:
-            smtp.ehlo()
-            if port != 465 and configuration.get("useTls"):
-                smtp.starttls(context=ssl.create_default_context())
-                smtp.ehlo()
-            if configuration.get("smtpUsername"):
-                smtp.login(configuration["smtpUsername"], configuration.get("smtpPassword") or "")
-            smtp.send_message(message)
-    except (smtplib.SMTPException, OSError, TimeoutError) as error:
-        safe_error = redact_notification_error(error, configuration.get("smtpPassword"))
-        raise RuntimeError(f"Falha no envio SMTP: {safe_error}") from error
-    return message_id.strip("<>")
+def send_email_notification(delivery: dict[str, Any], configuration: dict[str, Any] | None=None) -> str:
+    return communication_domain.send_email_notification_action(delivery, configuration, runtime=_communication_runtime())
 
 
-def dispatch_student_password_reset(reset_id: str, token: str, request_base_url: str = "") -> None:
-    """Deliver one reset link without persisting or returning its plaintext token."""
-    if not reset_id or not token:
-        return
-    token_hash = hash_secret(token)
-    try:
-        row = fetch_one(
-            """
-            select r.reset_id, r.student_id, r.status, r.expires_at,
-                   s.full_name, s.email, s.status as student_status
-            from courseplatform.student_password_resets r
-            join courseplatform.students s on s.student_id = r.student_id
-            where r.reset_id = %s and r.token_hash = %s
-              and r.consumed_at is null and r.invalidated_at is null
-              and r.expires_at > now()
-            """,
-            (reset_id, token_hash),
-        )
-        if not row or row.get("status") not in {"PENDING", "DELIVERED"} or row.get("student_status") != "ACTIVE":
-            return
-        configuration = email_runtime_configuration(prepare_schema=False)
-        base_url = str_value(configuration.get("platformUrl") or request_base_url).rstrip("/")
-        if not base_url.startswith(("https://", "http://")):
-            raise RuntimeError("PLATFORM_URL is not configured for password recovery.")
-        action_url = f"{base_url}/#/reset-access?{urlencode({'token': token})}"
-        send_email_notification(
-            {
-                "recipient": row.get("email"),
-                "student_name": row.get("full_name"),
-                "email_subject": "Definir uma nova palavra-passe",
-                "email_message": (
-                    "Recebemos um pedido para recuperar o acesso à sua conta. "
-                    "Use o botão abaixo para definir uma nova palavra-passe. "
-                    "O link é de utilização única e expira em breve. Se não fez este pedido, ignore esta mensagem."
-                ),
-                "action_url": action_url,
-            },
-            configuration,
-        )
-        with connection() as conn:
-            conn.execute(
-                """
-                update courseplatform.student_password_resets
-                set status = 'DELIVERED', delivery_attempted_at = now(),
-                    delivered_at = now(), delivery_error_code = null
-                where reset_id = %s and token_hash = %s
-                  and consumed_at is null and invalidated_at is null
-                """,
-                (reset_id, token_hash),
-            )
-            conn.commit()
-    except Exception as error:
-        try:
-            with connection() as conn:
-                conn.execute(
-                    """
-                    update courseplatform.student_password_resets
-                    set status = 'DELIVERY_FAILED', delivery_attempted_at = now(),
-                        invalidated_at = coalesce(invalidated_at, now()),
-                        delivery_error_code = %s
-                    where reset_id = %s and token_hash = %s and consumed_at is null
-                    """,
-                    (error.__class__.__name__[:80], reset_id, token_hash),
-                )
-                conn.commit()
-        except Exception:
-            pass
+def dispatch_student_password_reset(reset_id: str, token: str, request_base_url: str='') -> None:
+    return communication_domain.dispatch_student_password_reset_action(reset_id, token, request_base_url, runtime=_communication_runtime())
 
 
 def _telegram_markdown_v2(value: Any) -> str:
-    return re.sub(r"([_\*\[\]\(\)~`>#+\-=|{}.!])", r"\\\1", str_value(value))
+    return communication_domain._telegram_markdown_v2_action(value, runtime=_communication_runtime())
 
 
-def send_telegram_notification(delivery: dict[str, Any], configuration: dict[str, Any] | None = None) -> str:
-    configuration = configuration or telegram_runtime_configuration()
-    if not configuration["configured"]:
-        raise RuntimeError("Integração Telegram ainda não configurada no servidor.")
-    recipient = normalize_telegram_recipient(delivery.get("recipient"))
-    if not recipient:
-        raise RuntimeError("Chat ID do Telegram inválido.")
-
-    name = str_value(delivery.get("student_name")) or "Estudante"
-    title = str_value(delivery.get("title"))[:180]
-    body_message = str_value(delivery.get("message"))[:3000]
-    action_url = resolved_notification_action_url(delivery, configuration)
-    parse_mode = normalize_telegram_parse_mode(configuration.get("parseMode"))
-    if parse_mode == "HTML":
-        text = f"<b>{html_escape(title)}</b>\n\n{html_escape(name)},\n{html_escape(body_message)}"
-        if action_url:
-            text += f"\n\n{html_escape(action_url)}"
-    elif parse_mode == "MarkdownV2":
-        text = f"*{_telegram_markdown_v2(title)}*\n\n{_telegram_markdown_v2(name)},\n{_telegram_markdown_v2(body_message)}"
-        if action_url:
-            text += f"\n\n{_telegram_markdown_v2(action_url)}"
-    else:
-        text = f"{title}\n\n{name},\n{body_message}"
-        if action_url:
-            text += f"\n\n{action_url}"
-    if len(text) > 4096:
-        # Avoid cutting an HTML entity or a Markdown escape sequence. Oversized
-        # formatted content is safely downgraded to plain text.
-        parse_mode = ""
-        text = f"{title}\n\n{name},\n{body_message}"
-        if action_url:
-            text += f"\n\n{action_url}"
-    request_body: dict[str, Any] = {
-        "chat_id": recipient,
-        "text": text[:4096],
-        "disable_web_page_preview": True,
-    }
-    if parse_mode:
-        request_body["parse_mode"] = parse_mode
-    request = urllib.request.Request(
-        f"https://api.telegram.org/bot{configuration['botToken']}/sendMessage",
-        data=json.dumps(request_body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=max(3, int(configuration.get("timeoutSeconds") or 12)),
-        ) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        response_text = error.read().decode("utf-8", errors="replace")[:700]
-        safe_error = redact_notification_error(response_text, configuration.get("botToken"))
-        raise RuntimeError(f"Telegram Bot API HTTP {error.code}: {safe_error}") from error
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-        safe_error = redact_notification_error(error, configuration.get("botToken"))
-        raise RuntimeError(f"Falha no envio pelo Telegram: {safe_error}") from error
-    message_id = str_value((result.get("result") or {}).get("message_id")) if isinstance(result, dict) else ""
-    if not isinstance(result, dict) or not result.get("ok") or not message_id:
-        description = str_value(result.get("description")) if isinstance(result, dict) else "Resposta inválida"
-        safe_error = redact_notification_error(description, configuration.get("botToken"))
-        raise RuntimeError(f"A API do Telegram rejeitou a mensagem: {safe_error}")
-    return message_id
+def send_telegram_notification(delivery: dict[str, Any], configuration: dict[str, Any] | None=None) -> str:
+    return communication_domain.send_telegram_notification_action(delivery, configuration, runtime=_communication_runtime())
 
 
 def push_subscriptions_for_student(student_id: str, encryption_key: str) -> list[dict[str, Any]]:
-    return fetch_all(
-        """
-        select subscription_id,
-               pgp_sym_decrypt(endpoint_encrypted, %s)::text as endpoint,
-               pgp_sym_decrypt(p256dh_encrypted, %s)::text as p256dh,
-               pgp_sym_decrypt(auth_encrypted, %s)::text as auth
-        from courseplatform.push_subscriptions
-        where student_id = %s and enabled
-        order by updated_at desc
-        """,
-        (encryption_key, encryption_key, encryption_key, student_id),
-    )
+    return communication_domain.push_subscriptions_for_student_action(student_id, encryption_key, runtime=_communication_runtime())
 
 
-def update_push_subscription_delivery(subscription_id: str, success_result: bool, expired: bool = False) -> None:
-    with connection() as conn:
-        if success_result:
-            conn.execute(
-                """
-                update courseplatform.push_subscriptions
-                set last_success_at = now(), failure_count = 0, updated_at = now()
-                where subscription_id = %s
-                """,
-                (subscription_id,),
-            )
-        else:
-            conn.execute(
-                """
-                update courseplatform.push_subscriptions
-                set failure_count = failure_count + 1,
-                    enabled = case when %s or failure_count >= 4 then false else enabled end,
-                    updated_at = now()
-                where subscription_id = %s
-                """,
-                (expired, subscription_id),
-            )
-        conn.commit()
+def update_push_subscription_delivery(subscription_id: str, success_result: bool, expired: bool=False) -> None:
+    return communication_domain.update_push_subscription_delivery_action(subscription_id, success_result, expired, runtime=_communication_runtime())
 
 
-def send_web_push_notification(delivery: dict[str, Any], configuration: dict[str, Any] | None = None) -> str:
-    configuration = configuration or web_push_runtime_configuration()
-    if not configuration.get("configured") or webpush is None:
-        raise RuntimeError("Integração Web Push ainda não configurada no servidor.")
-    student_id = str_value(delivery.get("student_id") or delivery.get("recipient"))
-    if not student_id:
-        raise RuntimeError("Destinatário Push inválido.")
-    subscriptions = push_subscriptions_for_student(student_id, configuration["encryptionKey"])
-    if not subscriptions:
-        raise RuntimeError("Nenhum dispositivo possui notificações Push ativas.")
-    action_url = resolved_notification_action_url(delivery, configuration) or str_value(delivery.get("action_url")) or "#/notifications"
-    payload = json.dumps({
-        "title": str_value(delivery.get("push_title") or delivery.get("title"))[:120],
-        "body": str_value(delivery.get("push_message") or delivery.get("message"))[:300],
-        "url": action_url,
-        "icon": "/assets/app-icon-192.png",
-        "badge": "/assets/app-icon-192.png",
-        "tag": f"courseplatform-{str_value(delivery.get('notification_id'))[:80]}",
-        "notificationId": str_value(delivery.get("notification_id")),
-        "priority": str_value(delivery.get("priority") or "NORMAL"),
-        "badgeCount": student_unread_badge_count(student_id),
-    }, ensure_ascii=False)
-    delivered = 0
-    failures: list[str] = []
-    for subscription in subscriptions:
-        try:
-            response = webpush(
-                subscription_info={
-                    "endpoint": subscription["endpoint"],
-                    "keys": {"p256dh": subscription["p256dh"], "auth": subscription["auth"]},
-                },
-                data=payload,
-                vapid_private_key=configuration["privateKey"],
-                vapid_claims={"sub": configuration["subject"]},
-                ttl=configuration["ttlSeconds"],
-                timeout=configuration["timeoutSeconds"],
-            )
-            status_code = int(getattr(response, "status_code", 201) or 201)
-            if status_code >= 400:
-                raise RuntimeError(f"Serviço Push HTTP {status_code}.")
-            delivered += 1
-            update_push_subscription_delivery(subscription["subscription_id"], True)
-        except Exception as error:
-            response = getattr(error, "response", None)
-            status_code = int(getattr(response, "status_code", 0) or 0)
-            expired = status_code in {404, 410}
-            update_push_subscription_delivery(subscription["subscription_id"], False, expired)
-            failures.append(redact_notification_error(error, subscription.get("endpoint")))
-    if not delivered:
-        raise RuntimeError(failures[-1] if failures else "A notificação Push não foi entregue.")
-    return f"{delivered} dispositivo(s)"
+def send_web_push_notification(delivery: dict[str, Any], configuration: dict[str, Any] | None=None) -> str:
+    return communication_domain.send_web_push_notification_action(delivery, configuration, runtime=_communication_runtime())
 
 
 def student_unread_badge_count(student_id: str) -> int:
-    """Return the exact application badge without exposing private content."""
-    try:
-        with connection() as conn:
-            notifications = conn.execute(
-                """
-                select count(*) as count
-                from courseplatform.notifications
-                where student_id = %s and read_at is null
-                """,
-                (student_id,),
-            ).fetchone() or {}
-            messages = conn.execute(
-                """
-                select count(*) as count
-                from courseplatform.chat_messages message
-                join courseplatform.chat_rooms room on room.room_id = message.room_id
-                left join courseplatform.chat_reads room_read
-                  on room_read.room_id = room.room_id and room_read.student_id = %s
-                where message.status = 'ACTIVE'
-                  and room.status = 'ACTIVE'
-                  and message.sender_student_id is distinct from %s
-                  and message.created_at > coalesce(room_read.last_read_at, 'epoch'::timestamptz)
-                  and (
-                    room.room_type = 'COMMUNITY'
-                    or (room.room_type = 'SUPPORT' and room.owner_student_id = %s)
-                    or (
-                      room.room_type = 'DIRECT'
-                      and (room.direct_student_one_id = %s or room.direct_student_two_id = %s)
-                    )
-                    or (
-                      room.room_type = 'COURSE'
-                      and exists (
-                        select 1 from courseplatform.enrollments enrollment
-                        where enrollment.student_id = %s
-                          and enrollment.course_id = room.course_id
-                          and enrollment.status in ('ACTIVE', 'COMPLETED')
-                      )
-                    )
-                    or (
-                      room.room_type = 'GROUP'
-                      and (
-                        exists (
-                          select 1 from courseplatform.group_members member
-                          where member.student_id = %s
-                            and member.group_id = room.group_id
-                            and member.status = 'ACTIVE'
-                        )
-                        or exists (
-                          select 1 from courseplatform.enrollments enrollment
-                          where enrollment.student_id = %s
-                            and enrollment.group_id = room.group_id
-                            and enrollment.status in ('ACTIVE', 'COMPLETED')
-                        )
-                      )
-                    )
-                  )
-                """,
-                (
-                    student_id, student_id, student_id, student_id,
-                    student_id, student_id, student_id, student_id,
-                ),
-            ).fetchone() or {}
-        return max(0, int(notifications.get("count") or 0) + int(messages.get("count") or 0))
-    except Exception:
-        # An older schema must not prevent delivery while the application is
-        # being upgraded. The open client reconciles the exact value.
-        return 0
+    return communication_domain.student_unread_badge_count_action(student_id, runtime=_communication_runtime())
 
 
-def telegram_get_updates(configuration: dict[str, Any], offset: int = 0) -> list[dict[str, Any]]:
-    """Read pending bot updates without long polling (used by account linking)."""
-    if not configuration.get("configured"):
-        raise RuntimeError("Integração Telegram ainda não configurada no servidor.")
-    query = urlencode({
-        "offset": max(0, int(offset)),
-        "limit": 100,
-        "timeout": 0,
-        "allowed_updates": json.dumps(["message"]),
-    })
-    request = urllib.request.Request(
-        f"https://api.telegram.org/bot{configuration['botToken']}/getUpdates?{query}",
-        headers={"Accept": "application/json"},
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=max(3, int(configuration.get("timeoutSeconds") or 12)),
-        ) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        response_text = error.read().decode("utf-8", errors="replace")[:700]
-        safe_error = redact_notification_error(response_text, configuration.get("botToken"))
-        raise RuntimeError(f"Telegram Bot API HTTP {error.code}: {safe_error}") from error
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-        safe_error = redact_notification_error(error, configuration.get("botToken"))
-        raise RuntimeError(f"Falha ao confirmar a ligação ao Telegram: {safe_error}") from error
-    updates = result.get("result") if isinstance(result, dict) else None
-    if not isinstance(result, dict) or not result.get("ok") or not isinstance(updates, list):
-        description = str_value(result.get("description")) if isinstance(result, dict) else "Resposta inválida"
-        safe_error = redact_notification_error(description, configuration.get("botToken"))
-        raise RuntimeError(f"A API do Telegram rejeitou a consulta: {safe_error}")
-    return [item for item in updates if isinstance(item, dict)]
+def telegram_get_updates(configuration: dict[str, Any], offset: int=0) -> list[dict[str, Any]]:
+    return communication_domain.telegram_get_updates_action(configuration, offset, runtime=_communication_runtime())
 
 
-def process_telegram_link_updates(configuration: dict[str, Any] | None = None) -> int:
-    """Associate every valid /start token in the queue before advancing its offset."""
-    configuration = configuration or telegram_runtime_configuration()
-    state = fetch_one(
-        "select cursor_value from courseplatform.notification_channel_state where channel = 'TELEGRAM'"
-    ) or {}
-    offset = int_value(state.get("cursor_value"))
-    updates = telegram_get_updates(configuration, offset)
-    if not updates:
-        return 0
-    linked = 0
-    highest_update_id = offset - 1
-    with connection() as conn:
-        for update in updates:
-            update_id = int_value(update.get("update_id"), -1)
-            highest_update_id = max(highest_update_id, update_id)
-            message = update.get("message") if isinstance(update.get("message"), dict) else {}
-            chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
-            match = re.fullmatch(
-                r"/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{20,64})",
-                str_value(message.get("text")),
-            )
-            chat_id = normalize_telegram_recipient(chat.get("id"))
-            if not match or not chat_id or str_value(chat.get("type")) != "private":
-                continue
-            token_hash = hash_secret(match.group(1))
-            link = conn.execute(
-                """
-                select * from courseplatform.telegram_link_tokens
-                where token_hash = %s and consumed_at is null and expires_at > now()
-                for update
-                """,
-                (token_hash,),
-            ).fetchone()
-            if not link:
-                continue
-            conn.execute(
-                """
-                update courseplatform.students
-                set telegram_chat_id = %s, telegram_opt_in = true,
-                    telegram_opt_in_at = coalesce(telegram_opt_in_at, now()), updated_at = now()
-                where student_id = %s
-                """,
-                (chat_id, link["student_id"]),
-            )
-            conn.execute(
-                """
-                update courseplatform.telegram_link_tokens
-                set consumed_at = now(), telegram_update_id = %s
-                where token_hash = %s
-                """,
-                (update_id, token_hash),
-            )
-            audit(
-                conn,
-                "STUDENT",
-                link["student_id"],
-                "TELEGRAM_LINKED",
-                "STUDENT",
-                link["student_id"],
-                {"channel": "TELEGRAM"},
-            )
-            linked += 1
-        if highest_update_id >= offset:
-            conn.execute(
-                """
-                insert into courseplatform.notification_channel_state(channel, cursor_value, updated_at)
-                values ('TELEGRAM', %s, now())
-                on conflict (channel) do update set
-                  cursor_value = greatest(courseplatform.notification_channel_state.cursor_value, excluded.cursor_value),
-                  updated_at = now()
-                """,
-                (highest_update_id + 1,),
-            )
-        conn.commit()
-    return linked
+def process_telegram_link_updates(configuration: dict[str, Any] | None=None) -> int:
+    return communication_domain.process_telegram_link_updates_action(configuration, runtime=_communication_runtime())
 
 
-def claim_notification_deliveries(
-    channel: str,
-    notification_ids: list[str] | None,
-    limit: int,
-) -> list[dict[str, Any]]:
-    """Atomically lease one channel's queue so workers cannot send duplicates."""
-    normalized_channel = str_value(channel).upper()
-    if normalized_channel not in {"WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"}:
-        raise ValueError("Canal de notificação inválido.")
-    notification_filter = ""
-    params: list[Any] = [normalized_channel]
-    if notification_ids:
-        notification_filter = " and d.notification_id = any(%s)"
-        params.append(notification_ids)
-    params.append(max(1, min(int(limit), 200)))
-    query = f"""
-        with candidates as (
-          select d.delivery_id
-          from courseplatform.notification_deliveries d
-          where d.channel = %s
-            and (
-              d.status in ('PENDING', 'FAILED')
-              or (
-                d.status = 'PROCESSING'
-                and coalesce(d.updated_at, d.created_at) < now() - interval '5 minutes'
-              )
-            )
-            and d.attempt_count < 3
-            {notification_filter}
-          order by d.created_at
-          limit %s
-          for update of d skip locked
-        ), claimed as (
-          update courseplatform.notification_deliveries d
-          set status = 'PROCESSING',
-              attempt_count = d.attempt_count + 1,
-              last_error = null,
-              updated_at = now()
-          from candidates c
-          where d.delivery_id = c.delivery_id
-          returning d.*
-        )
-        select claimed.*, n.student_id, n.notification_id, n.title, n.message,
-               n.email_subject, n.email_message, n.push_title, n.push_message,
-               n.action_url, n.priority, s.full_name as student_name
-        from claimed
-        join courseplatform.notifications n on n.notification_id = claimed.notification_id
-        join courseplatform.students s on s.student_id = n.student_id
-        order by claimed.created_at
-    """
-    with connection() as conn:
-        rows = conn.execute(query, tuple(params)).fetchall()
-        conn.commit()
-    return rows
+def claim_notification_deliveries(channel: str, notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
+    return communication_domain.claim_notification_deliveries_action(channel, notification_ids, limit, runtime=_communication_runtime())
 
 
 def claim_whatsapp_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    return claim_notification_deliveries("WHATSAPP", notification_ids, limit)
+    return communication_domain.claim_whatsapp_deliveries_action(notification_ids, limit, runtime=_communication_runtime())
 
 
 def claim_email_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    return claim_notification_deliveries("EMAIL", notification_ids, limit)
+    return communication_domain.claim_email_deliveries_action(notification_ids, limit, runtime=_communication_runtime())
 
 
 def claim_telegram_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    return claim_notification_deliveries("TELEGRAM", notification_ids, limit)
+    return communication_domain.claim_telegram_deliveries_action(notification_ids, limit, runtime=_communication_runtime())
 
 
 def claim_push_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    return claim_notification_deliveries("PUSH", notification_ids, limit)
+    return communication_domain.claim_push_deliveries_action(notification_ids, limit, runtime=_communication_runtime())
 
 
-def deliver_pending_channel(
-    channel: str,
-    configuration_loader,
-    sender,
-    notification_ids: list[str] | None = None,
-    limit: int = 50,
-) -> dict[str, int]:
-    configuration = configuration_loader()
-    if not configuration["configured"]:
-        return {"sent": 0, "failed": 0, "pending": 0}
-    prepare_notification_feature_schema()
-    rows = claim_notification_deliveries(channel, notification_ids, limit)
-    delivery_results: list[tuple[dict[str, Any], str, str]] = []
-    if rows:
-        worker_count = min(5, len(rows))
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {executor.submit(sender, delivery, configuration): delivery for delivery in rows}
-            for future in as_completed(futures):
-                delivery = futures[future]
-                try:
-                    delivery_results.append((delivery, "SENT", future.result()))
-                except Exception as error:
-                    delivery_results.append((
-                        delivery,
-                        "FAILED",
-                        redact_notification_error(
-                            error,
-                            configuration.get("accessToken"),
-                            configuration.get("smtpPassword"),
-                            configuration.get("botToken"),
-                            configuration.get("privateKey"),
-                            configuration.get("encryptionKey"),
-                        ),
-                    ))
-
-    sent = 0
-    failed = 0
-    with connection() as conn:
-        for delivery, result_status, result_value in delivery_results:
-            if result_status == "SENT":
-                conn.execute(
-                    """
-                    update courseplatform.notification_deliveries
-                    set status = 'SENT', provider_message_id = %s,
-                        last_error = null, sent_at = now(), updated_at = now()
-                    where delivery_id = %s and status = 'PROCESSING'
-                    """,
-                    (result_value or None, delivery["delivery_id"]),
-                )
-                sent += 1
-            else:
-                conn.execute(
-                    """
-                    update courseplatform.notification_deliveries
-                    set status = 'FAILED', last_error = %s, updated_at = now()
-                    where delivery_id = %s and status = 'PROCESSING'
-                    """,
-                    (result_value, delivery["delivery_id"]),
-                )
-                failed += 1
-        conn.commit()
-    return {"sent": sent, "failed": failed, "pending": max(0, len(rows) - sent - failed)}
+def deliver_pending_channel(channel: str, configuration_loader, sender, notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
+    return communication_domain.deliver_pending_channel_action(channel, configuration_loader, sender, notification_ids, limit, runtime=_communication_runtime())
 
 
-def deliver_pending_whatsapp(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
-    return deliver_pending_channel(
-        "WHATSAPP", whatsapp_runtime_configuration, send_whatsapp_template,
-        notification_ids, limit,
-    )
+def deliver_pending_whatsapp(notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
+    return communication_domain.deliver_pending_whatsapp_action(notification_ids, limit, runtime=_communication_runtime())
 
 
-def deliver_pending_email(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
-    return deliver_pending_channel(
-        "EMAIL", email_runtime_configuration, send_email_notification,
-        notification_ids, limit,
-    )
+def deliver_pending_email(notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
+    return communication_domain.deliver_pending_email_action(notification_ids, limit, runtime=_communication_runtime())
 
 
-def deliver_pending_telegram(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
-    return deliver_pending_channel(
-        "TELEGRAM", telegram_runtime_configuration, send_telegram_notification,
-        notification_ids, limit,
-    )
+def deliver_pending_telegram(notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
+    return communication_domain.deliver_pending_telegram_action(notification_ids, limit, runtime=_communication_runtime())
 
 
-def deliver_pending_push(notification_ids: list[str] | None = None, limit: int = 50) -> dict[str, int]:
-    return deliver_pending_channel(
-        "PUSH", web_push_runtime_configuration, send_web_push_notification,
-        notification_ids, limit,
-    )
+def deliver_pending_push(notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
+    return communication_domain.deliver_pending_push_action(notification_ids, limit, runtime=_communication_runtime())
 
 
 def dispatch_notification_deliveries(notification_ids: list[str]) -> None:
-    if not notification_ids:
-        return
-    for delivery_function in (
-        deliver_pending_whatsapp,
-        deliver_pending_email,
-        deliver_pending_telegram,
-        deliver_pending_push,
-    ):
-        try:
-            # Keep the request bounded while covering a typical class in one
-            # operation. Larger campaigns remain safely queued and are exposed
-            # through the administrative retry control.
-            delivery_function(notification_ids, limit=20)
-        except Exception:
-            # Internal notifications are the source of truth; a provider outage
-            # must never roll back the administrative transaction.
-            continue
+    return communication_domain.dispatch_notification_deliveries_action(notification_ids, runtime=_communication_runtime())
 
 
 def ensure_chat_feature_schema(conn) -> None:
-    global _CHAT_SCHEMA_READY
-    if _CHAT_SCHEMA_READY:
-        return
-    require_schema_capabilities(
-        conn,
-        "chat",
-        (
-            "courseplatform.chat_rooms",
-            "courseplatform.chat_messages",
-            "courseplatform.chat_reads",
-            "courseplatform.chat_message_receipts",
-            "courseplatform.chat_presence",
-            "courseplatform.chat_message_reports",
-        ),
-        (
-            "courseplatform.chat_rooms.direct_student_one_id",
-            "courseplatform.chat_rooms.direct_student_two_id",
-        ),
-    )
-    _CHAT_SCHEMA_READY = True
+    return communication_domain.ensure_chat_feature_schema_action(conn, runtime=_communication_runtime())
 
 
 def prepare_chat_feature_schema() -> None:
-    if _CHAT_SCHEMA_READY:
-        return
-    with connection() as conn:
-        ensure_chat_feature_schema(conn)
+    return communication_domain.prepare_chat_feature_schema_action(runtime=_communication_runtime())
 
 
 def ensure_chat_realtime_schema(conn) -> bool:
-    if _CHAT_REALTIME_SCHEMA_READY:
-        return True
-    capabilities = conn.execute(
-        """
-        select
-          to_regclass('realtime.messages') is not null as messages_ready,
-          exists (
-            select 1 from pg_proc procedure
-            join pg_namespace namespace on namespace.oid = procedure.pronamespace
-            where namespace.nspname = 'realtime' and procedure.proname = 'send'
-          ) as broadcast_ready,
-          exists (
-            select 1 from pg_proc procedure
-            join pg_namespace namespace on namespace.oid = procedure.pronamespace
-            where namespace.nspname = 'realtime' and procedure.proname = 'topic'
-          ) as topic_ready,
-          exists (
-            select 1 from pg_proc procedure
-            join pg_namespace namespace on namespace.oid = procedure.pronamespace
-            where namespace.nspname = 'courseplatform'
-              and procedure.proname = 'chat_realtime_topic_allowed'
-              and pg_get_functiondef(procedure.oid) like '%chat:actor:%'
-              and pg_get_functiondef(procedure.oid) like '%active_group.status%'
-          ) as access_policy_function_ready,
-          exists (
-            select 1 from pg_proc procedure
-            join pg_namespace namespace on namespace.oid = procedure.pronamespace
-            where namespace.nspname = 'courseplatform'
-              and procedure.proname = 'broadcast_chat_message_change'
-              and pg_get_functiondef(procedure.oid) like '%ROOMS_CHANGED%'
-              and pg_get_functiondef(procedure.oid) like '%realtime.send%'
-          ) as broadcast_function_ready,
-          exists (
-            select 1 from pg_trigger trigger_row
-            where trigger_row.tgrelid = 'courseplatform.chat_messages'::regclass
-              and trigger_row.tgname = 'chat_messages_realtime_broadcast'
-              and not trigger_row.tgisinternal
-          ) as trigger_ready,
-          exists (
-            select 1 from pg_policies
-            where schemaname = 'realtime'
-              and tablename = 'messages'
-              and policyname = 'courseplatform_chat_broadcast_select'
-          ) as rls_policy_ready
-        """
-    ).fetchone() or {}
-    return all(capabilities.get(key) for key in (
-        "messages_ready",
-        "broadcast_ready",
-        "topic_ready",
-        "access_policy_function_ready",
-        "broadcast_function_ready",
-        "trigger_ready",
-        "rls_policy_ready",
-    ))
+    return communication_domain.ensure_chat_realtime_schema_action(conn, runtime=_communication_runtime())
 
 
 def _jwt_segment(value: dict[str, Any]) -> str:
-    encoded = json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+    return communication_domain._jwt_segment_action(value, runtime=_communication_runtime())
 
 
 def chat_realtime_token(actor: dict[str, Any], secret: str, lifetime_minutes: int) -> tuple[str, datetime]:
-    issued_at = utc_now()
-    expires_at = issued_at + timedelta(minutes=max(5, min(int(lifetime_minutes or 30), 120)))
-    header = _jwt_segment({"alg": "HS256", "typ": "JWT"})
-    claims = _jwt_segment({
-        "sub": f"{actor['type'].lower()}:{actor['id']}",
-        "role": "authenticated",
-        "aud": "authenticated",
-        "iat": int(issued_at.timestamp()),
-        "exp": int(expires_at.timestamp()),
-        "actor_type": actor["type"],
-        "actor_id": actor["id"],
-    })
-    signing_input = f"{header}.{claims}".encode("ascii")
-    signature = base64.urlsafe_b64encode(
-        hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
-    ).decode("ascii").rstrip("=")
-    return f"{header}.{claims}.{signature}", expires_at
+    return communication_domain.chat_realtime_token_action(actor, secret, lifetime_minutes, runtime=_communication_runtime())
 
 
 def ensure_assessment_feature_schema(conn) -> None:
@@ -3023,81 +1494,12 @@ def course_completion_snapshot(
     return enrollment, document_course, version, total, approved, completed
 
 
-def sync_enrollment_completion(conn, enrollment: dict[str, Any] | None, completed: bool, final_score: float | None = None):
-    if not enrollment or not completed:
-        return enrollment
-    if enrollment.get("status") == "COMPLETED" and float(enrollment.get("progress_percent") or 0) >= 100:
-        return enrollment
-    return conn.execute(
-        """
-        update courseplatform.enrollments
-        set status = 'COMPLETED',
-            progress_percent = 100,
-            final_score = coalesce(%s, final_score),
-            completed_at = coalesce(completed_at, now()),
-            updated_at = now()
-        where enrollment_id = %s
-        returning *
-        """,
-        (final_score, enrollment["enrollment_id"]),
-    ).fetchone()
+def sync_enrollment_completion(conn, enrollment: dict[str, Any] | None, completed: bool, final_score: float | None=None):
+    return learning_domain.sync_enrollment_completion_action(conn, enrollment, completed, final_score, runtime=_learning_runtime())
 
 
 def refresh_enrollment_progress(conn, progress_id: str | None):
-    if not progress_id:
-        return None
-    progress = conn.execute(
-        "select enrollment_id from courseplatform.lesson_progress where progress_id = %s",
-        (progress_id,),
-    ).fetchone()
-    if not progress:
-        return None
-    summary = conn.execute(
-        """
-        select
-          count(*) filter (where coalesce(l.status, 'ACTIVE') = 'ACTIVE') as lesson_total,
-          count(*) filter (
-            where coalesce(l.status, 'ACTIVE') = 'ACTIVE'
-              and coalesce(p.evaluation_status, p.status) = 'APPROVED'
-          ) as approved_total,
-          avg(p.score) filter (
-            where coalesce(l.status, 'ACTIVE') = 'ACTIVE' and p.score is not null
-          ) as average_score
-        from courseplatform.enrollments e
-        join courseplatform.lessons l on l.course_id = e.course_id
-        left join courseplatform.lesson_progress p
-          on p.enrollment_id = e.enrollment_id and p.lesson_id = l.lesson_id
-        where e.enrollment_id = %s
-        """,
-        (progress["enrollment_id"],),
-    ).fetchone()
-    total = int((summary or {}).get("lesson_total") or 0)
-    approved = int((summary or {}).get("approved_total") or 0)
-    percent = round((approved / total) * 100, 2) if total else 0
-    completed = total > 0 and approved >= total
-    return conn.execute(
-        """
-        update courseplatform.enrollments
-        set progress_percent = %s,
-            final_score = %s,
-            status = case
-              when status in ('BLOCKED', 'INACTIVE') then status
-              when %s then 'COMPLETED'
-              else 'ACTIVE'
-            end,
-            completed_at = case when %s then coalesce(completed_at, now()) else null end,
-            updated_at = now()
-        where enrollment_id = %s
-        returning *
-        """,
-        (
-            percent,
-            None if (summary or {}).get("average_score") is None else float(summary["average_score"]),
-            completed,
-            completed,
-            progress["enrollment_id"],
-        ),
-    ).fetchone()
+    return learning_domain.refresh_enrollment_progress_action(conn, progress_id, runtime=_learning_runtime())
 
 
 def ensure_simple_certificate(
@@ -3106,66 +1508,13 @@ def ensure_simple_certificate(
     course_id: str,
     enrollment_id: str = "",
 ):
-    ensure_certificate_feature_schema(conn)
-    # Serialize issuance and participation requests for this enrollment.
-    conn.execute(
-        """
-        select enrollment_id from courseplatform.enrollments
-        where student_id = %s and course_id = %s
-          and (%s = '' or enrollment_id = %s)
-        for update
-        """,
-        (student["student_id"], course_id, enrollment_id, enrollment_id),
-    ).fetchone()
-    enrollment, course, version, _, _, completed = course_completion_snapshot(
-        conn, student["student_id"], course_id, enrollment_id
+    return certificate_domain.ensure_simple_certificate_action(
+        conn,
+        student,
+        course_id,
+        enrollment_id,
+        runtime=_certificate_runtime(),
     )
-    enrollment = sync_enrollment_completion(conn, enrollment, completed, (enrollment or {}).get("final_score"))
-    if not completed:
-        return None, enrollment, course, False
-    if not participation_policy(conn, course_id)["enabled"]:
-        return None, enrollment, course, True
-    existing = conn.execute(
-        """
-        select cert.*, c.title as course_title, s.full_name as student_name
-        from courseplatform.certificates cert
-        join courseplatform.courses c on c.course_id = cert.course_id
-        join courseplatform.students s on s.student_id = cert.student_id
-        where cert.student_id = %s and cert.course_id = %s and cert.enrollment_id = %s
-          and coalesce(cert.certificate_type, 'SIMPLE') = 'SIMPLE'
-        order by cert.issue_date desc nulls last
-        limit 1
-        """,
-        (student["student_id"], course_id, enrollment["enrollment_id"]),
-    ).fetchone()
-    if existing:
-        return existing, enrollment, course, True
-    cert = conn.execute(
-        """
-        insert into courseplatform.certificates
-          (certificate_id, student_id, course_id, enrollment_id, offering_id, course_version_id,
-           certificate_number, verification_code,
-           issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
-           recognition_level, content_summary, template_snapshot_json, max_downloads, payment_status)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, now(), %s, '', '', 'ISSUED', 'SIMPLE',
-                'PARTICIPATION', %s, %s, null, 'NOT_REQUIRED')
-        returning *
-        """,
-        (
-            generate_id("CERT"),
-            student["student_id"],
-            course_id,
-            enrollment["enrollment_id"],
-            enrollment["offering_id"],
-            enrollment["course_version_id"],
-            certificate_number(),
-            certificate_verification_code(),
-            (enrollment or {}).get("final_score"),
-            certificate_content_summary(conn, course_id, version),
-            json.dumps(certificate_template_snapshot(conn, course_id, "SIMPLE", version)),
-        ),
-    ).fetchone()
-    return {**cert, "course_title": (course or {}).get("title"), "student_name": student.get("full_name")}, enrollment, course, True
 
 
 def create_session(conn, subject_id: str, user_agent: str = "", ip_hash: str = ""):
@@ -3287,583 +1636,505 @@ def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None
 
 
 def health(_: dict[str, Any]):
-    """Compatibility action for the public readiness check."""
-    try:
-        status = schema_status()
-    except Exception:
-        return success({"status": "not_ready"})
-    return success({"status": "ready" if status["compatible"] else "not_ready"})
+    return administration_domain.health_action(_, runtime=_administration_runtime())
 
 
 def health_diagnostics(payload: dict[str, Any]):
-    """Return operational detail only to active owners and administrators."""
-    admin_context(payload, {"OWNER", "ADMIN"})
-    data_diagnostics = {
-        "students": 0,
-        "studentsWithPassword": 0,
-        "admins": 0,
-        "adminsWithPassword": 0,
-        "courses": 0,
-        "lessons": 0,
-        "dataReady": False,
-    }
-    try:
-        status = schema_status()
-        if status["compatible"]:
-            data_row = fetch_one(
-                """
-                select
-                  (select count(*) from courseplatform.students) as students,
-                  (select count(*) from courseplatform.students where password_hash is not null) as students_with_password,
-                  (select count(*) from courseplatform.admins) as admins,
-                  (select count(*) from courseplatform.admins where password_hash is not null) as admins_with_password,
-                  (select count(*) from courseplatform.courses) as courses,
-                  (select count(*) from courseplatform.lessons) as lessons
-                """
-            ) or {}
-            data_diagnostics = {
-                "students": int(data_row.get("students") or 0),
-                "studentsWithPassword": int(data_row.get("students_with_password") or 0),
-                "admins": int(data_row.get("admins") or 0),
-                "adminsWithPassword": int(data_row.get("admins_with_password") or 0),
-                "courses": int(data_row.get("courses") or 0),
-                "lessons": int(data_row.get("lessons") or 0),
-                "dataReady": bool((data_row.get("students") or 0) and (data_row.get("admins") or 0)),
-            }
-        dependency_error = ""
-    except Exception as error:
-        status = {
-            "compatible": False,
-            "installedVersion": None,
-            "expectedVersion": EXPECTED_SCHEMA_VERSION,
-            "reason": "DATABASE_UNAVAILABLE",
-        }
-        dependency_error = error.__class__.__name__
-
-    return success({
-        "status": "ready" if status["compatible"] else "not_ready",
-        "schema": status,
-        "dependencyError": dependency_error,
-        "data": data_diagnostics,
-        "authentication": {
-            "mode": "supabase_postgres_bcrypt",
-            "configured": status["compatible"]
-            and data_diagnostics["studentsWithPassword"] > 0
-            and data_diagnostics["adminsWithPassword"] > 0,
-            "adminRecoveryConfigured": bool(configured_admin_recovery_hashes()),
-        },
-    })
+    return administration_domain.health_diagnostics_action(payload, runtime=_administration_runtime())
 
 
 def public_course_config(payload: dict[str, Any]):
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    course = fetch_one(
-        "select * from courseplatform.courses where course_id = %s and status = 'ACTIVE'",
-        (course_id,),
-    )
-    lessons = fetch_all(
-        """
-        select * from courseplatform.lessons
-        where course_id = %s and status = 'ACTIVE'
-        order by lesson_number
-        """,
-        (course_id,),
-    )
-    return success({"course": public_course(course), "lessons": [public_lesson(row) for row in lessons]})
+    return catalog_domain.public_course_config_action(payload, runtime=_catalog_runtime())
 
 
 def read_media_config(course_id: str):
-    key = f"MEDIA_CONFIG:{course_id or get_settings().default_course_id}"
-    row = fetch_one("select value from courseplatform.settings where key = %s", (key,))
-    if not row:
-        row = fetch_one("select value from courseplatform.settings where key = 'MEDIA_CONFIG'")
-    if not row or not row.get("value"):
-        return {"logoUrl": "", "videos": []}
-    try:
-        return json.loads(row["value"])
-    except json.JSONDecodeError:
-        return {"logoUrl": "", "videos": []}
+    return catalog_domain.read_media_config_action(course_id, runtime=_catalog_runtime())
 
 
 def read_media_config_with_conn(conn, course_id: str):
-    key = f"MEDIA_CONFIG:{course_id or get_settings().default_course_id}"
-    row = conn.execute("select value from courseplatform.settings where key = %s", (key,)).fetchone()
-    if not row:
-        row = conn.execute("select value from courseplatform.settings where key = 'MEDIA_CONFIG'").fetchone()
-    if not row or not row.get("value"):
-        return {"logoUrl": "", "videos": []}
-    try:
-        return json.loads(row["value"])
-    except json.JSONDecodeError:
-        return {"logoUrl": "", "videos": []}
+    return catalog_domain.read_media_config_with_conn_action(conn, course_id, runtime=_catalog_runtime())
 
 
 def persist_media_config(conn, media: dict[str, Any]):
-    conn.execute(
-        """
-        insert into courseplatform.settings (key, value, value_type, description, updated_at)
-        values ('MEDIA_CONFIG', %s, 'JSON', 'Logotipo e galeria de vídeos da plataforma.', now())
-        on conflict (key) do update
-        set value = excluded.value, value_type = excluded.value_type,
-            description = excluded.description, updated_at = excluded.updated_at
-        """,
-        (json.dumps(media),),
-    )
+    return catalog_domain.persist_media_config_action(conn, media, runtime=_catalog_runtime())
 
 
 def decode_raster_data_url(data_url: Any, mime_type: Any, max_bytes: int) -> tuple[str, str, bytes]:
-    normalized_mime = str_value(mime_type).lower()
-    if normalized_mime not in RASTER_IMAGE_MIME_TYPES:
-        raise ApiError("INVALID_FILE_TYPE", "Use PNG, JPEG ou WebP.")
-
-    normalized_data_url = str_value(data_url)
-    prefix = f"data:{normalized_mime};base64,"
-    if not normalized_data_url.startswith(prefix):
-        raise ApiError("INVALID_FILE_DATA", "O conteúdo da imagem não corresponde ao formato indicado.")
-
-    encoded = normalized_data_url[len(prefix):]
-    if not encoded or len(encoded) > ((max_bytes + 2) // 3) * 4 + 8:
-        raise ApiError("FILE_TOO_LARGE", f"O ficheiro deve ter até {max_bytes // (1024 * 1024)} MB.")
-    try:
-        file_bytes = base64.b64decode(encoded, validate=True)
-    except Exception as exc:
-        raise ApiError("INVALID_FILE_DATA", "O ficheiro de imagem é inválido.") from exc
-    if not file_bytes:
-        raise ApiError("INVALID_FILE_DATA", "O ficheiro de imagem está vazio.")
-    if len(file_bytes) > max_bytes:
-        raise ApiError("FILE_TOO_LARGE", f"O ficheiro deve ter até {max_bytes // (1024 * 1024)} MB.")
-    if not raster_signature_matches(normalized_mime, file_bytes):
-        raise ApiError("INVALID_FILE_DATA", "A assinatura do ficheiro não corresponde a PNG, JPEG ou WebP.")
-
-    canonical_data = base64.b64encode(file_bytes).decode("ascii")
-    return normalized_mime, f"data:{normalized_mime};base64,{canonical_data}", file_bytes
+    return administration_domain.decode_raster_data_url_action(data_url, mime_type, max_bytes, runtime=_administration_runtime())
 
 
 def raster_signature_matches(mime_type: str, file_bytes: bytes) -> bool:
-    if mime_type == "image/png":
-        return file_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-    if mime_type == "image/jpeg":
-        return file_bytes.startswith(b"\xff\xd8\xff")
-    if mime_type == "image/webp":
-        return len(file_bytes) >= 12 and file_bytes[:4] == b"RIFF" and file_bytes[8:12] == b"WEBP"
-    return False
+    return administration_domain.raster_signature_matches_action(mime_type, file_bytes, runtime=_administration_runtime())
 
 
 def normalize_brand_logo_url(value: Any) -> str:
-    logo_url = str_value(value)
-    if not logo_url:
-        return ""
-    if logo_url.startswith("data:image/"):
-        match = re.match(r"^data:(image/(?:png|jpeg|webp));base64,", logo_url, flags=re.IGNORECASE)
-        if not match:
-            raise ApiError("INVALID_BRAND_LOGO", "O logotipo guardado possui um formato inválido.")
-        _, normalized_data_url, _ = decode_raster_data_url(logo_url, match.group(1), BRAND_LOGO_MAX_BYTES)
-        return normalized_data_url
-
-    parsed = urlsplit(logo_url)
-    if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
-        return logo_url
-    raise ApiError("INVALID_BRAND_LOGO", "O logotipo deve ser um ficheiro carregado ou um link HTTPS legado válido.")
+    return administration_domain.normalize_brand_logo_url_action(value, runtime=_administration_runtime())
 
 
 def upload_raster_asset_to_storage(file_bytes: bytes, mime_type: str, object_path: str) -> tuple[bool, str]:
-    settings = get_settings()
-    service_headers = storage_service_headers(settings)
-    if not settings.supabase_url or not service_headers:
-        return False, ""
-    try:
-        request = urllib.request.Request(
-            f"{settings.supabase_url}/storage/v1/object/{settings.supabase_storage_bucket}/{object_path}",
-            data=file_bytes,
-            method="POST",
-            headers={
-                **service_headers,
-                "Content-Type": mime_type,
-                "x-upsert": "true",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=15) as response:
-            return 200 <= response.status < 300, ""
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
-        return False, str(exc)
+    return administration_domain.upload_raster_asset_to_storage_action(file_bytes, mime_type, object_path, runtime=_administration_runtime())
 
 
 def student_visible_media(media: dict[str, Any], student: dict[str, Any]):
-    email = normalize_email(student.get("email") or "")
-    videos = []
-    for video in media.get("videos", []):
-        if video.get("status", "ACTIVE") != "ACTIVE":
-            continue
-        if video.get("visibility") == "SELECTED":
-            allowed = [normalize_email(item) for item in video.get("allowedEmails", [])]
-            if email not in allowed:
-                continue
-            videos.append({**video, "allowedEmails": [email]})
-        else:
-            videos.append({**video, "allowedEmails": []})
-    return {**media, "videos": videos}
+    return catalog_domain.student_visible_media_action(media, student, runtime=_catalog_runtime())
 
 
 def student_media_config(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
-    return success({"mediaConfig": student_visible_media(media, student)})
+    return catalog_domain.student_media_config_action(payload, runtime=_catalog_runtime())
 
 
 def public_media_config(payload: dict[str, Any]):
-    media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
-    videos = [
-        video
-        for video in media.get("videos", [])
-        if video.get("status", "ACTIVE") == "ACTIVE" and video.get("visibility") != "SELECTED"
-    ]
-    return success({"mediaConfig": {**media, "videos": videos}})
+    return catalog_domain.public_media_config_action(payload, runtime=_catalog_runtime())
 
 
 def admin_media_config(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
-    return success({"mediaConfig": media})
+    return catalog_domain.admin_media_config_action(payload, runtime=_catalog_runtime())
+
+
+def _administration_runtime() -> administration_domain.AdministrationRuntime:
+    return administration_domain.AdministrationRuntime(
+        BRAND_LOGO_MAX_BYTES=BRAND_LOGO_MAX_BYTES,
+        EXPECTED_SCHEMA_VERSION=EXPECTED_SCHEMA_VERSION,
+        RASTER_IMAGE_MIME_TYPES=RASTER_IMAGE_MIME_TYPES,
+        admin_context=admin_context,
+        as_bool=as_bool,
+        audit=audit,
+        certificate_token=certificate_token,
+        configured_admin_recovery_hashes=configured_admin_recovery_hashes,
+        connection=connection,
+        credential_restore_item=credential_restore_item,
+        cursor_page_limit=cursor_page_limit,
+        cursor_pagination_result=cursor_pagination_result,
+        cursor_scope=cursor_scope,
+        database_api_error=database_api_error,
+        decode_list_cursor=decode_list_cursor,
+        decode_raster_data_url=decode_raster_data_url,
+        ensure_certificate_feature_schema=ensure_certificate_feature_schema,
+        fetch_all=fetch_all,
+        fetch_one=fetch_one,
+        generate_access_code=generate_access_code,
+        generate_id=generate_id,
+        get_settings=get_settings,
+        iso=iso,
+        normalize_email=normalize_email,
+        persist_media_config=persist_media_config,
+        prepare_assessment_feature_schema=prepare_assessment_feature_schema,
+        prepare_chat_feature_schema=prepare_chat_feature_schema,
+        prepare_notification_feature_schema=prepare_notification_feature_schema,
+        public_admin=public_admin,
+        public_certificate=public_certificate,
+        public_certificate_request=public_certificate_request,
+        public_enrollment=public_enrollment,
+        public_group_member=public_group_member,
+        public_progress=public_progress,
+        public_student=public_student,
+        public_student_id=public_student_id,
+        raster_signature_matches=raster_signature_matches,
+        read_media_config=read_media_config,
+        require_fields=require_fields,
+        schema_status=schema_status,
+        secure_student_email_update=secure_student_email_update,
+        serialize_admin=serialize_admin,
+        staff_attempt=staff_attempt,
+        storage_service_headers=storage_service_headers,
+        str_value=str_value,
+        success=success,
+        upload_raster_asset_to_storage=upload_raster_asset_to_storage,
+        utc_now=utc_now,
+        valid_password=valid_password,
+        validated_email_change=validated_email_change,
+        verify_password_with_conn=verify_password_with_conn,
+    )
+
+
+def _learning_runtime() -> learning_domain.LearningRuntime:
+    return learning_domain.LearningRuntime(
+        ATTEMPT_STATUSES=ATTEMPT_STATUSES,
+        CONTENT_ACCESS_STATUSES=CONTENT_ACCESS_STATUSES,
+        EVALUATION_STATUSES=EVALUATION_STATUSES,
+        admin_context=admin_context,
+        as_bool=as_bool,
+        audit=audit,
+        connection=connection,
+        create_student_notification=create_student_notification,
+        dashboard_payload=dashboard_payload,
+        dispatch_notification_deliveries=dispatch_notification_deliveries,
+        ensure_offering_enrollment_with_conn=ensure_offering_enrollment_with_conn,
+        feedback_release_mode=feedback_release_mode,
+        fetch_all=fetch_all,
+        generate_id=generate_id,
+        get_settings=get_settings,
+        int_value=int_value,
+        iso=iso,
+        legacy_progress_status=legacy_progress_status,
+        notification_status_label=notification_status_label,
+        prepare_assessment_feature_schema=prepare_assessment_feature_schema,
+        prepare_notification_feature_schema=prepare_notification_feature_schema,
+        progress_access_status=progress_access_status,
+        progress_evaluation_status=progress_evaluation_status,
+        public_content=public_content,
+        public_course=public_course,
+        public_course_offering=public_course_offering,
+        public_course_version=public_course_version,
+        public_enrollment=public_enrollment,
+        public_lesson=public_lesson,
+        public_progress=public_progress,
+        public_student=public_student,
+        read_media_config_with_conn=read_media_config_with_conn,
+        refresh_enrollment_progress=refresh_enrollment_progress,
+        require_fields=require_fields,
+        require_session_token=require_session_token,
+        resolve_course_offering_with_conn=resolve_course_offering_with_conn,
+        resolve_student_enrollment_with_conn=resolve_student_enrollment_with_conn,
+        str_value=str_value,
+        student_attempt=student_attempt,
+        student_context=student_context,
+        student_context_with_conn=student_context_with_conn,
+        student_courses_payload=student_courses_payload,
+        student_courses_rows=student_courses_rows,
+        student_option=student_option,
+        student_question=student_question,
+        student_visible_media=student_visible_media,
+        success=success,
+    )
+
+
+def _communication_runtime() -> communication_domain.CommunicationRuntime:
+    return communication_domain.CommunicationRuntime(
+        DEFAULT_NOTIFICATION_PREFERENCES=DEFAULT_NOTIFICATION_PREFERENCES,
+        NOTIFICATION_STATUS_LABELS=NOTIFICATION_STATUS_LABELS,
+        NOTIFICATION_TEMPLATE_DEFINITIONS=NOTIFICATION_TEMPLATE_DEFINITIONS,
+        NOTIFICATION_TEMPLATE_VARIABLES=NOTIFICATION_TEMPLATE_VARIABLES,
+        _NOTIFICATION_TEMPLATE_COLUMNS=_NOTIFICATION_TEMPLATE_COLUMNS,
+        _jwt_segment=_jwt_segment,
+        _notification_plain_text=_notification_plain_text,
+        _render_notification_template=_render_notification_template,
+        _telegram_markdown_v2=_telegram_markdown_v2,
+        _template_tokens=_template_tokens,
+        accessible_chat_room=accessible_chat_room,
+        admin_context=admin_context,
+        as_bool=as_bool,
+        audit=audit,
+        chat_actor_with_conn=chat_actor_with_conn,
+        chat_direct_pair=chat_direct_pair,
+        chat_message_body=chat_message_body,
+        chat_message_row=chat_message_row,
+        chat_message_rows=chat_message_rows,
+        chat_realtime_token=chat_realtime_token,
+        chat_room_participant_count=chat_room_participant_count,
+        chat_room_summary_context=chat_room_summary_context,
+        claim_notification_deliveries=claim_notification_deliveries,
+        connection=connection,
+        create_student_notification=create_student_notification,
+        cursor_page_limit=cursor_page_limit,
+        cursor_pagination_result=cursor_pagination_result,
+        cursor_scope=cursor_scope,
+        decode_list_cursor=decode_list_cursor,
+        decrypt_notification_secret=decrypt_notification_secret,
+        deliver_pending_channel=deliver_pending_channel,
+        deliver_pending_email=deliver_pending_email,
+        deliver_pending_push=deliver_pending_push,
+        deliver_pending_telegram=deliver_pending_telegram,
+        deliver_pending_whatsapp=deliver_pending_whatsapp,
+        dispatch_notification_deliveries=dispatch_notification_deliveries,
+        email_configuration=email_configuration,
+        email_runtime_configuration=email_runtime_configuration,
+        ensure_chat_feature_schema=ensure_chat_feature_schema,
+        ensure_chat_realtime_schema=ensure_chat_realtime_schema,
+        ensure_notification_feature_schema=ensure_notification_feature_schema,
+        fetch_all=fetch_all,
+        fetch_one=fetch_one,
+        generate_id=generate_id,
+        get_settings=get_settings,
+        hash_secret=hash_secret,
+        int_value=int_value,
+        iso=iso,
+        mark_chat_room_read_with_conn=mark_chat_room_read_with_conn,
+        normalize_email=normalize_email,
+        normalize_email_recipient=normalize_email_recipient,
+        normalize_telegram_parse_mode=normalize_telegram_parse_mode,
+        normalize_telegram_recipient=normalize_telegram_recipient,
+        normalize_whatsapp_recipient=normalize_whatsapp_recipient,
+        notification_encryption_key=notification_encryption_key,
+        notification_preferences=notification_preferences,
+        notification_template_payload=notification_template_payload,
+        notification_templates_payload=notification_templates_payload,
+        pagination=pagination,
+        parse_datetime=parse_datetime,
+        prepare_chat_feature_schema=prepare_chat_feature_schema,
+        prepare_notification_feature_schema=prepare_notification_feature_schema,
+        process_telegram_link_updates=process_telegram_link_updates,
+        public_chat_message=public_chat_message,
+        public_chat_room=public_chat_room,
+        public_notification=public_notification,
+        public_student=public_student,
+        push_subscriptions_for_student=push_subscriptions_for_student,
+        record_chat_message_receipts=record_chat_message_receipts,
+        redact_notification_error=redact_notification_error,
+        require_fields=require_fields,
+        require_schema_capabilities=require_schema_capabilities,
+        resolve_notification_content=resolve_notification_content,
+        resolved_notification_action_url=resolved_notification_action_url,
+        safe_notification_action_url=safe_notification_action_url,
+        send_email_notification=send_email_notification,
+        send_telegram_notification=send_telegram_notification,
+        send_web_push_notification=send_web_push_notification,
+        send_whatsapp_template=send_whatsapp_template,
+        str_value=str_value,
+        student_can_access_chat_room=student_can_access_chat_room,
+        student_context=student_context,
+        student_context_with_conn=student_context_with_conn,
+        student_unread_badge_count=student_unread_badge_count,
+        success=success,
+        sync_chat_rooms=sync_chat_rooms,
+        telegram_configuration=telegram_configuration,
+        telegram_get_updates=telegram_get_updates,
+        telegram_runtime_configuration=telegram_runtime_configuration,
+        touch_chat_presence=touch_chat_presence,
+        update_push_subscription_delivery=update_push_subscription_delivery,
+        upsert_chat_room=upsert_chat_room,
+        upsert_chat_room_read_cursor=upsert_chat_room_read_cursor,
+        utc_now=utc_now,
+        valid_notification_host=valid_notification_host,
+        valid_push_endpoint=valid_push_endpoint,
+        valid_push_key=valid_push_key,
+        valid_telegram_bot_token=valid_telegram_bot_token,
+        valid_vapid_key=valid_vapid_key,
+        valid_vapid_subject=valid_vapid_subject,
+        valid_whatsapp_platform_url=valid_whatsapp_platform_url,
+        validate_session_with_conn=validate_session_with_conn,
+        web_push_configuration=web_push_configuration,
+        web_push_runtime_configuration=web_push_runtime_configuration,
+        webpush=webpush,
+        whatsapp_configuration=whatsapp_configuration,
+        whatsapp_runtime_configuration=whatsapp_runtime_configuration,
+    )
+
+
+def _catalog_runtime() -> catalog_domain.CatalogRuntime:
+    return catalog_domain.CatalogRuntime(
+        FEEDBACK_RELEASE_MODES=FEEDBACK_RELEASE_MODES,
+        admin_context=admin_context,
+        as_bool=as_bool,
+        audit=audit,
+        connection=connection,
+        course_structure_snapshot_with_conn=course_structure_snapshot_with_conn,
+        cursor_page_limit=cursor_page_limit,
+        cursor_pagination_result=cursor_pagination_result,
+        cursor_scope=cursor_scope,
+        decode_list_cursor=decode_list_cursor,
+        feedback_release_mode=feedback_release_mode,
+        fetch_all=fetch_all,
+        fetch_one=fetch_one,
+        float_value=float_value,
+        generate_id=generate_id,
+        get_settings=get_settings,
+        int_value=int_value,
+        iso=iso,
+        normalize_brand_logo_url=normalize_brand_logo_url,
+        normalize_email=normalize_email,
+        persist_media_config=persist_media_config,
+        prepare_assessment_feature_schema=prepare_assessment_feature_schema,
+        public_content=public_content,
+        public_course=public_course,
+        public_course_offering=public_course_offering,
+        public_course_version=public_course_version,
+        public_lesson=public_lesson,
+        read_media_config=read_media_config,
+        require_fields=require_fields,
+        staff_option=staff_option,
+        staff_question=staff_question,
+        str_value=str_value,
+        student_context=student_context,
+        student_visible_media=student_visible_media,
+        success=success,
+        utc_now=utc_now,
+    )
+
+
+def _enrollment_runtime() -> enrollment_domain.EnrollmentRuntime:
+    return enrollment_domain.EnrollmentRuntime(
+        admin_context=admin_context,
+        audit=audit,
+        connection=connection,
+        cursor_page_limit=cursor_page_limit,
+        cursor_pagination_result=cursor_pagination_result,
+        cursor_scope=cursor_scope,
+        decode_list_cursor=decode_list_cursor,
+        ensure_offering_enrollment_with_conn=ensure_offering_enrollment_with_conn,
+        fetch_all=fetch_all,
+        generate_id=generate_id,
+        initialize_enrollment_progress_with_conn=initialize_enrollment_progress_with_conn,
+        int_value=int_value,
+        iso=iso,
+        parse_datetime=parse_datetime,
+        public_course=public_course,
+        public_course_offering=public_course_offering,
+        public_course_version=public_course_version,
+        public_enrollment=public_enrollment,
+        public_student=public_student,
+        require_fields=require_fields,
+        require_session_token=require_session_token,
+        resolve_course_offering_with_conn=resolve_course_offering_with_conn,
+        str_value=str_value,
+        student_context_with_conn=student_context_with_conn,
+        student_courses_payload=student_courses_payload,
+        student_courses_rows=student_courses_rows,
+        student_notification_channel_info=student_notification_channel_info,
+        success=success,
+    )
+
+
+def _certificate_runtime() -> certificate_domain.CertificateRuntime:
+    return certificate_domain.CertificateRuntime(
+        admin_context=admin_context,
+        as_bool=as_bool,
+        audit=audit,
+        certificate_content_summary=certificate_content_summary,
+        certificate_document_payload=certificate_document_payload,
+        certificate_download_access=certificate_download_access,
+        certificate_number=certificate_number,
+        certificate_settings_payload=certificate_settings_payload,
+        certificate_template_snapshot=certificate_template_snapshot,
+        certificate_token=certificate_token,
+        certificate_verification_code=certificate_verification_code,
+        connection=connection,
+        course_completion_snapshot=course_completion_snapshot,
+        cursor_page_limit=cursor_page_limit,
+        cursor_pagination_result=cursor_pagination_result,
+        cursor_scope=cursor_scope,
+        decode_list_cursor=decode_list_cursor,
+        decode_raster_data_url=decode_raster_data_url,
+        default_certificate_profile=default_certificate_profile,
+        ensure_certificate_feature_schema=ensure_certificate_feature_schema,
+        ensure_simple_certificate=ensure_simple_certificate,
+        fetch_one=fetch_one,
+        generate_id=generate_id,
+        get_settings=get_settings,
+        iso=iso,
+        normalize_certificate_profile=normalize_certificate_profile,
+        normalize_participation_policy=normalize_participation_policy,
+        normalize_survey_questions=normalize_survey_questions,
+        participation_policy=participation_policy,
+        public_certificate=public_certificate,
+        public_certificate_request=public_certificate_request,
+        public_course=public_course,
+        public_enrollment=public_enrollment,
+        public_student=public_student,
+        require_certificate_download_access=require_certificate_download_access,
+        require_fields=require_fields,
+        str_value=str_value,
+        student_certificate_payload=student_certificate_payload,
+        student_context=student_context,
+        success=success,
+        sync_enrollment_completion=sync_enrollment_completion,
+        upload_raster_asset_to_storage=upload_raster_asset_to_storage,
+    )
+
+
+def _financial_runtime() -> financial_domain.FinancialRuntime:
+    return financial_domain.FinancialRuntime(
+        _private_content_payload=_private_content_payload,
+        admin_context=admin_context,
+        approve_participation_request=approve_participation_request,
+        as_bool=as_bool,
+        audit=audit,
+        certificate_content_summary=certificate_content_summary,
+        certificate_number=certificate_number,
+        certificate_template_snapshot=certificate_template_snapshot,
+        certificate_verification_code=certificate_verification_code,
+        connection=connection,
+        cursor_page_limit=cursor_page_limit,
+        cursor_pagination_result=cursor_pagination_result,
+        cursor_scope=cursor_scope,
+        decode_list_cursor=decode_list_cursor,
+        ensure_certificate_feature_schema=ensure_certificate_feature_schema,
+        ensure_simple_certificate=ensure_simple_certificate,
+        fetch_one=fetch_one,
+        generate_id=generate_id,
+        get_settings=get_settings,
+        public_certificate=public_certificate,
+        public_certificate_request=public_certificate_request,
+        require_fields=require_fields,
+        resolve_student_enrollment_with_conn=resolve_student_enrollment_with_conn,
+        storage_api_error=storage_api_error,
+        storage_object_path=storage_object_path,
+        str_value=str_value,
+        student_context=student_context,
+        success=success,
+        upload_private_object=upload_private_object,
+        validate_upload=validate_upload,
+    )
+
+
+def _identity_runtime() -> identity_domain.IdentityRuntime:
+    return identity_domain.IdentityRuntime(
+        require_fields=require_fields,
+        fetch_one=fetch_one,
+        database_api_error=database_api_error,
+        verify_password=verify_password,
+        connection=connection,
+        revoke_sessions=revoke_sessions,
+        create_session=create_session,
+        public_student=public_student,
+        public_admin=public_admin,
+        iso=iso,
+        success=success,
+        get_settings=get_settings,
+        utc_now=utc_now,
+        generate_id=generate_id,
+        hash_secret=hash_secret,
+        audit=audit,
+        parse_datetime=parse_datetime,
+        create_student_notification=create_student_notification,
+        configured_admin_recovery_hashes=configured_admin_recovery_hashes,
+        verify_admin_recovery_key=verify_admin_recovery_key,
+        generate_access_code=generate_access_code,
+        mask_email=mask_email,
+        prepare_chat_feature_schema=prepare_chat_feature_schema,
+        admin_context=admin_context,
+        student_context=student_context,
+        prepare_notification_feature_schema=prepare_notification_feature_schema,
+        as_bool=as_bool,
+        normalize_whatsapp_recipient=normalize_whatsapp_recipient,
+        normalize_email_recipient=normalize_email_recipient,
+        normalize_telegram_recipient=normalize_telegram_recipient,
+        notification_preferences=notification_preferences,
+        default_notification_preferences=DEFAULT_NOTIFICATION_PREFERENCES,
+        student_notification_channel_info=student_notification_channel_info,
+        validated_email_change=validated_email_change,
+        student_context_with_conn=student_context_with_conn,
+        verify_password_with_conn=verify_password_with_conn,
+        secure_student_email_update=secure_student_email_update,
+    )
 
 
 def login(payload: dict[str, Any]):
-    require_fields(payload, ["email", "accessCode"])
-    email = normalize_email(payload["email"])
-    try:
-        student = fetch_one("select * from courseplatform.students where email = %s", (email,))
-    except Exception as error:
-        raise database_api_error(error) from error
-    if not student or student.get("status") != "ACTIVE":
-        total = fetch_one("select count(*) as total from courseplatform.students")
-        if int(total.get("total") or 0) == 0:
-            raise ApiError(
-                "DATABASE_EMPTY",
-                "A base de dados ligada ainda não tem estudantes. Confirme se o POSTGRES_URL aponta para a base migrada.",
-            )
-        raise ApiError("INVALID_CREDENTIALS", "Email ou código de acesso inválido.")
-    try:
-        if not verify_password(payload["accessCode"], student.get("password_hash")):
-            raise ApiError("INVALID_CREDENTIALS", "Email ou código de acesso inválido.")
-        with connection() as conn:
-            revoke_sessions(conn, student["student_id"])
-            session = create_session(conn, student["student_id"], payload.get("userAgent", ""), payload.get("ipHash", ""))
-            conn.execute(
-                "update courseplatform.students set last_login_at = now(), updated_at = now() where student_id = %s",
-                (student["student_id"],),
-            )
-            conn.commit()
-    except ApiError:
-        raise
-    except Exception as error:
-        raise database_api_error(error) from error
-    return success({"sessionToken": session["token"], "expiresAt": iso(session["expiresAt"]), "student": public_student(student)})
+    return identity_domain.login_action(payload, _identity_runtime())
 
 
 def mask_email(email: str) -> str:
-    local, separator, domain = (email or "").partition("@")
-    if not separator:
-        return email
-    visible = local[:2] if len(local) > 2 else local[:1]
-    return f"{visible}{'*' * max(2, len(local) - len(visible))}@{domain}"
-
-
-PASSWORD_RESET_GENERIC_MESSAGE = (
-    "Se existir uma conta ativa associada a esse email, receberá uma mensagem "
-    "com as instruções para definir uma nova palavra-passe."
-)
+    return identity_domain.mask_email(email)
 
 
 def password_reset_private_digest(kind: str, value: str) -> str:
-    key = get_settings().password_reset_hash_key.encode("utf-8")
-    if len(key) < 32:
-        raise RuntimeError("PASSWORD_RESET_HASH_KEY is not configured securely.")
-    return hmac.new(key, f"{kind}:{value}".encode("utf-8"), hashlib.sha256).hexdigest()
+    return identity_domain.password_reset_private_digest(kind, value, get_settings())
 
 
 def password_reset_public_result() -> dict[str, Any]:
-    return success({"message": PASSWORD_RESET_GENERIC_MESSAGE})
+    return identity_domain.password_reset_public_result(success)
 
 
 def recover_student_access(payload: dict[str, Any]):
-    require_fields(payload, ["email"])
-    email = normalize_email(payload["email"])
-    settings = get_settings()
-    if len(settings.password_reset_hash_key.encode("utf-8")) < 32:
-        return password_reset_public_result()
-
-    source = str_value(payload.get("_requestSource"))[:256] or "unknown"
-    email_hash = password_reset_private_digest("email", email)
-    source_hash = password_reset_private_digest("source", source)
-    token = secrets.token_urlsafe(48)
-    reset_id = generate_id("PWR")
-    expires_at = utc_now() + timedelta(minutes=max(5, settings.password_reset_ttl_minutes))
-    delivery = None
-    try:
-        with connection() as conn:
-            # Stable lock ordering serializes both account and source limits.
-            for lock_key in sorted({email_hash, source_hash}):
-                conn.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,))
-            source_count = conn.execute(
-                """
-                select count(*) as count
-                from courseplatform.student_password_resets
-                where source_hash = %s
-                  and created_at >= now() - (%s * interval '1 minute')
-                """,
-                (source_hash, max(1, settings.password_reset_source_window_minutes)),
-            ).fetchone() or {}
-            email_count = conn.execute(
-                """
-                select count(*) as count
-                from courseplatform.student_password_resets
-                where email_hash = %s
-                  and created_at >= now() - (%s * interval '1 minute')
-                """,
-                (email_hash, max(1, settings.password_reset_account_window_minutes)),
-            ).fetchone() or {}
-            throttled = (
-                int(source_count.get("count") or 0) >= max(1, settings.password_reset_source_limit)
-                or int(email_count.get("count") or 0) >= max(1, settings.password_reset_account_limit)
-            )
-            student = None if throttled else conn.execute(
-                """
-                select student_id, full_name, email, status
-                from courseplatform.students
-                where email = %s
-                """,
-                (email,),
-            ).fetchone()
-            eligible = bool(student and student.get("status") == "ACTIVE")
-            if not throttled:
-                if eligible:
-                    conn.execute(
-                        """
-                        update courseplatform.student_password_resets
-                        set invalidated_at = now(), status = 'INVALIDATED'
-                        where student_id = %s and consumed_at is null
-                          and invalidated_at is null and expires_at > now()
-                        """,
-                        (student["student_id"],),
-                    )
-                conn.execute(
-                    """
-                    insert into courseplatform.student_password_resets
-                      (reset_id, student_id, email_hash, source_hash, token_hash,
-                       status, expires_at, created_at)
-                    values (%s, %s, %s, %s, %s, %s, %s, now())
-                    """,
-                    (
-                        reset_id,
-                        student["student_id"] if eligible else None,
-                        email_hash,
-                        source_hash,
-                        hash_secret(token) if eligible else None,
-                        "PENDING" if eligible else "IGNORED",
-                        expires_at,
-                    ),
-                )
-                if eligible:
-                    audit(
-                        conn,
-                        "SYSTEM",
-                        student["student_id"],
-                        "STUDENT_PASSWORD_RESET_REQUESTED",
-                        "STUDENT",
-                        student["student_id"],
-                        {"resetId": reset_id, "expiresAt": iso(expires_at)},
-                    )
-                    delivery = {"resetId": reset_id, "token": token}
-            conn.commit()
-    except Exception as error:
-        raise database_api_error(error) from error
-
-    result = password_reset_public_result()
-    if delivery:
-        result["_passwordResetDelivery"] = delivery
-    return result
+    return identity_domain.recover_student_access_action(payload, _identity_runtime())
 
 
 def complete_student_password_reset(payload: dict[str, Any]):
-    require_fields(payload, ["token", "newPassword", "confirmPassword"])
-    token = str_value(payload.get("token"))
-    new_password = str(payload.get("newPassword") or "")
-    confirmation = str(payload.get("confirmPassword") or "")
-    if new_password != confirmation:
-        raise ApiError("PASSWORD_CONFIRMATION_MISMATCH", "A confirmação da nova palavra-passe não corresponde.")
-    if not valid_password(new_password) or len(new_password) > 128:
-        raise ApiError("INVALID_NEW_PASSWORD", "A nova palavra-passe deve ter entre 8 e 128 caracteres.")
-    if not token or len(token) > 256:
-        raise ApiError("PASSWORD_RESET_TOKEN_INVALID", "O link de recuperação é inválido ou já expirou.")
-
-    settings = get_settings()
-    if len(settings.password_reset_hash_key.encode("utf-8")) < 32:
-        raise ApiError("PASSWORD_RESET_UNAVAILABLE", "A recuperação de acesso não está disponível neste momento.")
-    source = str_value(payload.get("_requestSource"))[:256] or "unknown"
-    source_hash = password_reset_private_digest("source", source)
-    token_hash = hash_secret(token)
-    reset_error = None
-    student_id = ""
-    try:
-        with connection() as conn:
-            conn.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (source_hash,))
-            attempts = conn.execute(
-                """
-                select count(*) as count
-                from courseplatform.student_password_reset_attempts
-                where source_hash = %s
-                  and created_at >= now() - (%s * interval '1 minute')
-                """,
-                (source_hash, max(1, settings.password_reset_completion_window_minutes)),
-            ).fetchone() or {}
-            if int(attempts.get("count") or 0) >= max(1, settings.password_reset_completion_limit):
-                reset_error = ApiError(
-                    "PASSWORD_RESET_RATE_LIMITED",
-                    "Foram feitas demasiadas tentativas. Aguarde antes de tentar novamente.",
-                )
-            else:
-                attempt_id = generate_id("PWA")
-                conn.execute(
-                    """
-                    insert into courseplatform.student_password_reset_attempts
-                      (attempt_id, source_hash, token_hash, succeeded, created_at)
-                    values (%s, %s, %s, false, now())
-                    """,
-                    (attempt_id, source_hash, token_hash),
-                )
-                reset = conn.execute(
-                    """
-                    select r.*, s.status as student_status
-                    from courseplatform.student_password_resets r
-                    join courseplatform.students s on s.student_id = r.student_id
-                    where r.token_hash = %s
-                    for update of r, s
-                    """,
-                    (token_hash,),
-                ).fetchone()
-                valid_reset = bool(
-                    reset
-                    and reset.get("status") in {"PENDING", "DELIVERED"}
-                    and not reset.get("consumed_at")
-                    and not reset.get("invalidated_at")
-                    and parse_datetime(reset.get("expires_at"))
-                    and parse_datetime(reset.get("expires_at")) > utc_now()
-                    and reset.get("student_status") == "ACTIVE"
-                )
-                if not valid_reset:
-                    if reset and parse_datetime(reset.get("expires_at")) and parse_datetime(reset.get("expires_at")) <= utc_now():
-                        conn.execute(
-                            """
-                            update courseplatform.student_password_resets
-                            set status = 'EXPIRED', invalidated_at = coalesce(invalidated_at, now())
-                            where reset_id = %s
-                            """,
-                            (reset["reset_id"],),
-                        )
-                    reset_error = ApiError(
-                        "PASSWORD_RESET_TOKEN_INVALID",
-                        "O link de recuperação é inválido ou já expirou.",
-                    )
-                else:
-                    student_id = reset["student_id"]
-                    conn.execute(
-                        """
-                        update courseplatform.students
-                        set password_hash = crypt(%s, gen_salt('bf', 12)),
-                            password_changed_at = now(), password_reset_required = false,
-                            access_code = null, updated_at = now()
-                        where student_id = %s
-                        """,
-                        (new_password, student_id),
-                    )
-                    revoke_sessions(conn, student_id)
-                    conn.execute(
-                        """
-                        update courseplatform.student_password_resets
-                        set status = 'CONSUMED', consumed_at = now()
-                        where reset_id = %s
-                        """,
-                        (reset["reset_id"],),
-                    )
-                    conn.execute(
-                        """
-                        update courseplatform.student_password_resets
-                        set status = 'INVALIDATED', invalidated_at = now()
-                        where student_id = %s and reset_id <> %s
-                          and consumed_at is null and invalidated_at is null
-                        """,
-                        (student_id, reset["reset_id"]),
-                    )
-                    conn.execute(
-                        """
-                        update courseplatform.student_password_reset_attempts
-                        set succeeded = true
-                        where attempt_id = %s
-                        """,
-                        (attempt_id,),
-                    )
-                    create_student_notification(
-                        conn,
-                        student_id,
-                        "GENERAL",
-                        "Palavra-passe alterada",
-                        "A palavra-passe da sua conta foi alterada através do processo de recuperação.",
-                        action_url="#/profile",
-                        entity_type="STUDENT",
-                        entity_id=student_id,
-                        priority="HIGH",
-                        send_whatsapp=False,
-                        send_email=False,
-                        send_telegram=False,
-                        send_push=False,
-                    )
-                    audit(
-                        conn,
-                        "SYSTEM",
-                        student_id,
-                        "STUDENT_PASSWORD_RESET_COMPLETED",
-                        "STUDENT",
-                        student_id,
-                        {"resetId": reset["reset_id"], "sessionsRevoked": True},
-                    )
-            conn.commit()
-    except ApiError:
-        raise
-    except Exception as error:
-        raise database_api_error(error) from error
-
-    if reset_error:
-        raise reset_error
-    return success({"passwordChanged": True, "sessionsRevoked": True})
+    return identity_domain.complete_student_password_reset_action(payload, _identity_runtime())
 
 
 def admin_login(payload: dict[str, Any]):
-    require_fields(payload, ["email", "adminKey"])
-    email = normalize_email(payload["email"])
-    try:
-        admin = fetch_one("select * from courseplatform.admins where email = %s", (email,))
-    except Exception as error:
-        raise database_api_error(error) from error
-    if not admin or admin.get("status") != "ACTIVE":
-        total = fetch_one("select count(*) as total from courseplatform.admins")
-        if int(total.get("total") or 0) == 0:
-            raise ApiError(
-                "DATABASE_EMPTY",
-                "A base de dados ligada ainda não tem administradores. Confirme se o POSTGRES_URL aponta para a base migrada.",
-            )
-        raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
-    try:
-        if not verify_password(payload["adminKey"], admin.get("password_hash")):
-            raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
-        subject_id = f"ADMIN:{admin['admin_id']}"
-        with connection() as conn:
-            revoke_sessions(conn, subject_id)
-            session = create_session(conn, subject_id, payload.get("userAgent", ""), payload.get("ipHash", ""))
-            conn.commit()
-    except ApiError:
-        raise
-    except Exception as error:
-        raise database_api_error(error) from error
-    return success({"adminToken": session["token"], "expiresAt": iso(session["expiresAt"]), "admin": public_admin(admin)})
+    return identity_domain.admin_login_action(payload, _identity_runtime())
 
 
 def configured_admin_recovery_hashes() -> list[str]:
@@ -3882,195 +2153,32 @@ def verify_admin_recovery_key(recovery_key: str) -> bool:
 
 
 def recover_admin_access(payload: dict[str, Any]):
-    require_fields(payload, ["email", "recoveryKey"])
-    if not configured_admin_recovery_hashes():
-        raise ApiError(
-            "ADMIN_RECOVERY_NOT_CONFIGURED",
-            "A recuperação administrativa ainda não está configurada. Defina ADMIN_RECOVERY_KEY_HASH na Vercel.",
-        )
-    if not verify_admin_recovery_key(payload.get("recoveryKey")):
-        raise ApiError("INVALID_ADMIN_RECOVERY_KEY", "Chave de recuperação administrativa inválida.")
-
-    email = normalize_email(payload["email"])
-    try:
-        admin = fetch_one("select * from courseplatform.admins where email = %s", (email,))
-    except Exception as error:
-        raise database_api_error(error) from error
-    if not admin or admin.get("status") != "ACTIVE":
-        raise ApiError("ADMIN_RECOVERY_NOT_FOUND", "Não encontramos uma conta administrativa ativa com esse email.")
-
-    admin_password = generate_access_code(14)
-    try:
-        with connection() as conn:
-            row = conn.execute(
-                """
-                update courseplatform.admins
-                set password_hash = crypt(%s, gen_salt('bf', 12)),
-                    password_changed_at = now(), password_reset_required = true,
-                    updated_at = now()
-                where admin_id = %s
-                returning *
-                """,
-                (admin_password, admin["admin_id"]),
-            ).fetchone()
-            conn.execute(
-                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                (f"ADMIN:{admin['admin_id']}",),
-            )
-            audit(
-                conn,
-                "SYSTEM",
-                "ADMIN_RECOVERY",
-                "ADMIN_ACCESS_RECOVERED",
-                "ADMIN",
-                admin["admin_id"],
-                {"role": row.get("role"), "email": mask_email(row.get("email") or email)},
-            )
-            conn.commit()
-    except Exception as error:
-        raise database_api_error(error) from error
-
-    return success({
-        "admin": public_admin(row),
-        "email": mask_email(row.get("email") or email),
-        "temporaryAdminKey": admin_password,
-    })
+    return identity_domain.recover_admin_access_action(payload, _identity_runtime())
 
 
 def logout(payload: dict[str, Any]):
-    token = payload.get("sessionToken") or payload.get("adminToken")
-    if token:
-        prepare_chat_feature_schema()
-        with connection() as conn:
-            session = conn.execute(
-                "select subject_id from courseplatform.sessions where session_token = %s",
-                (hash_secret(token),),
-            ).fetchone() or {}
-            conn.execute(
-                "update courseplatform.sessions set active = false, revoked_at = now() where session_token = %s",
-                (hash_secret(token),),
-            )
-            subject_id = str_value(session.get("subject_id"))
-            actor_type = "ADMIN" if subject_id.startswith("ADMIN:") else "STUDENT"
-            actor_id = subject_id.replace("ADMIN:", "", 1) if actor_type == "ADMIN" else subject_id
-            if actor_id:
-                conn.execute(
-                    "delete from courseplatform.chat_presence where actor_type = %s and actor_id = %s",
-                    (actor_type, actor_id),
-                )
-            conn.commit()
-    return success({"loggedOut": True})
+    return identity_domain.logout_action(payload, _identity_runtime())
 
 
 def admin_me(payload: dict[str, Any]):
-    _, admin = admin_context(payload)
-    return success({"admin": public_admin(admin)})
+    return identity_domain.admin_me_action(payload, _identity_runtime())
 
 
 def course_structure_snapshot_with_conn(conn, course_id: str) -> dict[str, Any]:
-    course = conn.execute(
-        "select * from courseplatform.courses where course_id = %s",
-        (course_id,),
-    ).fetchone()
-    if not course:
-        raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
-    lessons = conn.execute(
-        "select * from courseplatform.lessons where course_id = %s order by lesson_number, lesson_id",
-        (course_id,),
-    ).fetchall()
-    lesson_ids = [row["lesson_id"] for row in lessons]
-    content_rows = []
-    question_rows = []
-    option_rows = []
-    if lesson_ids:
-        content_rows = conn.execute(
-            "select * from courseplatform.lesson_content where lesson_id = any(%s) order by section_order, content_id",
-            (lesson_ids,),
-        ).fetchall()
-        question_rows = conn.execute(
-            "select * from courseplatform.questions where lesson_id = any(%s) order by question_order, question_id",
-            (lesson_ids,),
-        ).fetchall()
-        question_ids = [row["question_id"] for row in question_rows]
-        if question_ids:
-            option_rows = conn.execute(
-                "select * from courseplatform.question_options where question_id = any(%s) order by option_order, option_id",
-                (question_ids,),
-            ).fetchall()
-
-    content_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
-    questions_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
-    options_by_question: dict[str, list[dict[str, Any]]] = {
-        row["question_id"]: [] for row in question_rows
-    }
-    for row in content_rows:
-        content_by_lesson[row["lesson_id"]].append({key: iso(value) if isinstance(value, datetime) else value for key, value in row.items()})
-    for row in option_rows:
-        options_by_question.setdefault(row["question_id"], []).append(
-            {key: iso(value) if isinstance(value, datetime) else value for key, value in row.items()}
-        )
-    for row in question_rows:
-        question = {key: iso(value) if isinstance(value, datetime) else value for key, value in row.items() if key != "lesson_id"}
-        question["options"] = options_by_question.get(row["question_id"], [])
-        questions_by_lesson[row["lesson_id"]].append(question)
-
-    snapshot_lessons = []
-    for row in lessons:
-        lesson = {key: iso(value) if isinstance(value, datetime) else value for key, value in row.items() if key != "course_id"}
-        lesson["content"] = content_by_lesson.get(row["lesson_id"], [])
-        lesson["questions"] = questions_by_lesson.get(row["lesson_id"], [])
-        snapshot_lessons.append(lesson)
-    return {
-        "schemaVersion": 1,
-        "capturedAt": iso(utc_now()),
-        "course": {
-            "course_id": course["course_id"],
-            "course_code": course.get("course_code"),
-            "title": course.get("title"),
-            "description": course.get("description"),
-            "total_hours": float(course.get("total_hours") or 0),
-            "passing_score": float(course.get("passing_score") or 0),
-        },
-        "lessons": snapshot_lessons,
-    }
+    return catalog_domain.course_structure_snapshot_with_conn_action(
+        conn,
+        course_id,
+        runtime=_catalog_runtime(),
+    )
 
 
 def resolve_course_offering_with_conn(conn, course_id: str, offering_id: str = "") -> dict[str, Any]:
-    if offering_id:
-        offering = conn.execute(
-            "select * from courseplatform.course_offerings where offering_id = %s and course_id = %s",
-            (offering_id, course_id),
-        ).fetchone()
-        if not offering:
-            raise ApiError("OFFERING_NOT_FOUND", "Edição/turma não encontrada para este curso.")
-        return offering
-    rows = conn.execute(
-        """
-        select * from courseplatform.course_offerings
-        where course_id = %s and status in ('OPEN', 'ACTIVE')
-        order by start_date desc nulls last, created_at desc
-        limit 2
-        """,
-        (course_id,),
-    ).fetchall()
-    if len(rows) == 1:
-        return rows[0]
-    if len(rows) > 1:
-        raise ApiError("OFFERING_REQUIRED", "Selecione a edição/turma do curso.")
-    fallback = conn.execute(
-        """
-        select * from courseplatform.course_offerings
-        where course_id = %s and status <> 'ARCHIVED'
-        order by start_date desc nulls last, created_at desc
-        limit 2
-        """,
-        (course_id,),
-    ).fetchall()
-    if len(fallback) == 1:
-        return fallback[0]
-    if len(fallback) > 1:
-        raise ApiError("OFFERING_REQUIRED", "Selecione a edição/turma do curso.")
-    raise ApiError("OFFERING_NOT_FOUND", "Este curso ainda não possui uma edição/turma.")
+    return enrollment_domain.resolve_course_offering_with_conn_action(
+        conn,
+        course_id,
+        offering_id,
+        runtime=_enrollment_runtime(),
+    )
 
 
 def resolve_student_enrollment_with_conn(
@@ -4079,33 +2187,13 @@ def resolve_student_enrollment_with_conn(
     course_id: str = "",
     enrollment_id: str = "",
 ) -> dict[str, Any]:
-    if enrollment_id:
-        enrollment = conn.execute(
-            """
-            select * from courseplatform.enrollments
-            where enrollment_id = %s and student_id = %s
-              and (%s = '' or course_id = %s)
-            """,
-            (enrollment_id, student_id, course_id, course_id),
-        ).fetchone()
-        if not enrollment:
-            raise ApiError("ENROLLMENT_NOT_FOUND", "Matrícula não encontrada.")
-        return enrollment
-    rows = conn.execute(
-        """
-        select * from courseplatform.enrollments
-        where student_id = %s and (%s = '' or course_id = %s)
-          and status in ('ACTIVE', 'COMPLETED')
-        order by enrolled_at desc nulls last, updated_at desc nulls last
-        limit 2
-        """,
-        (student_id, course_id, course_id),
-    ).fetchall()
-    if len(rows) == 1:
-        return rows[0]
-    if len(rows) > 1:
-        raise ApiError("ENROLLMENT_REQUIRED", "Selecione a matrícula/edição do curso.")
-    raise ApiError("ENROLLMENT_NOT_FOUND", "Matrícula não encontrada.")
+    return enrollment_domain.resolve_student_enrollment_with_conn_action(
+        conn,
+        student_id,
+        course_id,
+        enrollment_id,
+        runtime=_enrollment_runtime(),
+    )
 
 
 def ensure_offering_enrollment_with_conn(
@@ -4114,981 +2202,168 @@ def ensure_offering_enrollment_with_conn(
     offering: dict[str, Any],
     group_id: str | None = None,
 ) -> dict[str, Any]:
-    enrollment = conn.execute(
-        """
-        select * from courseplatform.enrollments
-        where student_id = %s and offering_id = %s
-        for update
-        """,
-        (student_id, offering["offering_id"]),
-    ).fetchone()
-    if enrollment:
-        if group_id and enrollment.get("group_id") != group_id:
-            enrollment = conn.execute(
-                """
-                update courseplatform.enrollments
-                set group_id = %s, updated_at = now()
-                where enrollment_id = %s
-                returning *
-                """,
-                (group_id, enrollment["enrollment_id"]),
-            ).fetchone()
-        initialize_enrollment_progress_with_conn(conn, enrollment)
-        return enrollment
-    capacity = int_value(offering.get("capacity"))
-    if capacity:
-        current = conn.execute(
-            "select count(*) as total from courseplatform.enrollments where offering_id = %s and status <> 'CANCELLED'",
-            (offering["offering_id"],),
-        ).fetchone() or {}
-        if int(current.get("total") or 0) >= capacity:
-            raise ApiError("OFFERING_CAPACITY_REACHED", "A edição/turma atingiu a capacidade definida.")
-    enrollment = conn.execute(
-        """
-        insert into courseplatform.enrollments
-          (enrollment_id, student_id, course_id, course_version_id, offering_id,
-           group_id, status, enrolled_at, progress_percent, updated_at)
-        values (%s, %s, %s, %s, %s, %s, 'ACTIVE', now(), 0, now())
-        returning *
-        """,
-        (
-            generate_id("ENR"),
-            student_id,
-            offering["course_id"],
-            offering["course_version_id"],
-            offering["offering_id"],
-            group_id,
-        ),
-    ).fetchone()
-    initialize_enrollment_progress_with_conn(conn, enrollment)
-    return enrollment
+    return enrollment_domain.ensure_offering_enrollment_with_conn_action(
+        conn,
+        student_id,
+        offering,
+        group_id,
+        runtime=_enrollment_runtime(),
+    )
 
 
 def initialize_enrollment_progress_with_conn(conn, enrollment: dict[str, Any]) -> int:
-    version = conn.execute(
-        """
-        select content_snapshot_json
-        from courseplatform.course_versions
-        where course_version_id = %s
-        """,
-        (enrollment["course_version_id"],),
-    ).fetchone() or {}
-    snapshot = version.get("content_snapshot_json") or {}
-    lessons = snapshot.get("lessons") if isinstance(snapshot, dict) else []
-    if not isinstance(lessons, list):
-        return 0
-    active_lessons = sorted(
-        (
-            lesson for lesson in lessons
-            if isinstance(lesson, dict)
-            and str_value(lesson.get("lesson_id"))
-            and str_value(lesson.get("status") or "ACTIVE").upper() == "ACTIVE"
-        ),
-        key=lambda lesson: (int_value(lesson.get("lesson_number")), str_value(lesson.get("lesson_id"))),
+    return enrollment_domain.initialize_enrollment_progress_with_conn_action(
+        conn,
+        enrollment,
+        runtime=_enrollment_runtime(),
     )
-    initialized = 0
-    for lesson in active_lessons:
-        access_status = "LOCKED" if str_value(lesson.get("prerequisite_lesson_id")) else "AVAILABLE"
-        row = conn.execute(
-            """
-            insert into courseplatform.lesson_progress
-              (progress_id, enrollment_id, student_id, lesson_id, status,
-               content_access_status, evaluation_status, unlocked_at,
-               attempt_count, updated_at)
-            values (%s, %s, %s, %s, %s, %s, 'NOT_STARTED',
-                    case when %s = 'AVAILABLE' then now() else null end, 0, now())
-            on conflict (enrollment_id, lesson_id) do nothing
-            returning progress_id
-            """,
-            (
-                generate_id("PRG"),
-                enrollment["enrollment_id"],
-                enrollment["student_id"],
-                lesson["lesson_id"],
-                access_status,
-                access_status,
-                access_status,
-            ),
-        ).fetchone()
-        initialized += 1 if row else 0
-    return initialized
 
 
 def my_courses(payload: dict[str, Any]):
-    require_session_token(payload)
-    with connection() as conn:
-        _, student = student_context_with_conn(conn, payload)
-        rows = student_courses_rows(conn, student["student_id"])
-    return success({
-        "student": public_student(student),
-        "courses": student_courses_payload(rows),
-        "notificationChannelInfo": student_notification_channel_info(),
-    })
+    return enrollment_domain.my_courses_action(payload, runtime=_enrollment_runtime())
 
 
 def student_courses_rows(conn, student_id: str):
-    return conn.execute(
-        """
-        select
-          e.enrollment_id, e.student_id, e.course_id as enrollment_course_id,
-          e.course_version_id, e.offering_id,
-          e.group_id, e.status as enrollment_status, e.enrolled_at, e.completed_at,
-          e.progress_percent, e.final_score, e.certificate_id,
-          c.course_id, c.course_code, c.title, c.description, c.total_hours,
-          c.passing_score, c.status as course_status, c.created_at, c.updated_at,
-          cv.version_number, cv.status as version_status, cv.title as version_title,
-          cv.description as version_description, cv.total_hours as version_total_hours,
-          cv.passing_score as version_passing_score, cv.published_at,
-          o.offering_code, o.name as offering_name, o.start_date as offering_start_date,
-          o.end_date as offering_end_date, o.capacity as offering_capacity,
-          o.status as offering_status, o.lead_admin_id, o.rules_json, o.calendar_json,
-          g.name as group_name, g.start_date, g.end_date,
-          coalesce(jsonb_array_length(cv.content_snapshot_json -> 'lessons'), 0) as lesson_count
-        from courseplatform.enrollments e
-        join courseplatform.courses c on c.course_id = e.course_id
-        join courseplatform.course_versions cv on cv.course_version_id = e.course_version_id
-        join courseplatform.course_offerings o on o.offering_id = e.offering_id
-        left join courseplatform.groups g on g.group_id = e.group_id
-        where e.student_id = %s and c.status <> 'DELETED'
-        order by coalesce(o.start_date, e.enrolled_at) desc nulls last, c.title
-        """,
-        (student_id,),
-    ).fetchall()
+    return enrollment_domain.student_courses_rows_action(conn, student_id, runtime=_enrollment_runtime())
 
 
 def student_courses_payload(rows: list[dict[str, Any]]):
-    courses = []
-    for row in rows:
-        enrollment_row = {
-            **row,
-            "course_id": row.get("enrollment_course_id"),
-            "status": row.get("enrollment_status"),
-        }
-        course_row = {
-            **row,
-            "title": row.get("version_title") or row.get("title"),
-            "description": row.get("version_description") or row.get("description"),
-            "total_hours": row.get("version_total_hours"),
-            "passing_score": row.get("version_passing_score"),
-            "status": row.get("course_status"),
-        }
-        version_row = {
-            **row,
-            "status": row.get("version_status"),
-            "title": row.get("version_title"),
-            "description": row.get("version_description"),
-            "total_hours": row.get("version_total_hours"),
-            "passing_score": row.get("version_passing_score"),
-        }
-        offering_row = {
-            **row,
-            "name": row.get("offering_name"),
-            "start_date": row.get("offering_start_date"),
-            "end_date": row.get("offering_end_date"),
-            "capacity": row.get("offering_capacity"),
-            "status": row.get("offering_status"),
-        }
-        courses.append({
-            "course": public_course(course_row),
-            "courseVersion": public_course_version(version_row),
-            "offering": public_course_offering(offering_row),
-            "enrollment": public_enrollment(enrollment_row),
-            "group": {
-                "name": row.get("group_name"),
-                "startDate": iso(row.get("start_date")),
-                "endDate": iso(row.get("end_date")),
-            } if row.get("group_name") else None,
-            "lessonCount": int(row.get("lesson_count") or 0),
-        })
-    return courses
+    return enrollment_domain.student_courses_payload_action(rows, runtime=_enrollment_runtime())
 
 
-def dashboard_payload(conn, student: dict[str, Any], course_id: str = "", enrollment_id: str = ""):
-    enrollment = resolve_student_enrollment_with_conn(
-        conn, student["student_id"], course_id, enrollment_id
-    )
-    course = conn.execute(
-        "select * from courseplatform.courses where course_id = %s",
-        (enrollment["course_id"],),
-    ).fetchone()
-    version = conn.execute(
-        "select * from courseplatform.course_versions where course_version_id = %s",
-        (enrollment["course_version_id"],),
-    ).fetchone()
-    offering = conn.execute(
-        "select * from courseplatform.course_offerings where offering_id = %s",
-        (enrollment["offering_id"],),
-    ).fetchone()
-    if not course or not version or not offering:
-        raise ApiError("ENROLLMENT_STRUCTURE_INVALID", "A matrícula não está ligada a uma edição válida.")
-    snapshot = version.get("content_snapshot_json") or {}
-    snapshot_lessons = snapshot.get("lessons") if isinstance(snapshot, dict) else []
-    if not isinstance(snapshot_lessons, list):
-        snapshot_lessons = []
-    lesson_ids = [str_value(item.get("lesson_id")) for item in snapshot_lessons if isinstance(item, dict)]
-    progress_rows = []
-    if lesson_ids:
-        progress_rows = conn.execute(
-            """
-            select p.*,
-                   a.attempt_id, a.attempt_number, a.started_at as attempt_started_at,
-                   a.deadline_at, a.submitted_at as attempt_submitted_at,
-                   a.status as attempt_status, a.score as attempt_score,
-                   a.reviewed_at, a.review_comments, a.retry_authorized
-            from courseplatform.lesson_progress p
-            left join lateral (
-              select * from courseplatform.attempts a
-              where a.progress_id = p.progress_id
-              order by coalesce(a.started_at, a.created_at) desc nulls last
-              limit 1
-            ) a on true
-            where p.enrollment_id = %s and p.lesson_id = any(%s)
-            """,
-            (enrollment["enrollment_id"], lesson_ids),
-        ).fetchall()
-    progress_by_lesson = {row["lesson_id"]: row for row in progress_rows}
-    version_course = {
-        **course,
-        "title": version.get("title") or course.get("title"),
-        "description": version.get("description") or course.get("description"),
-        "total_hours": version.get("total_hours"),
-        "passing_score": version.get("passing_score"),
-    }
-    return {
-        "student": public_student(student),
-        "course": public_course(version_course),
-        "courseVersion": public_course_version(version),
-        "offering": public_course_offering(offering),
-        "enrollment": public_enrollment(enrollment),
-        "lessons": [
-            {
-                "lesson": public_lesson(lesson),
-                "progress": public_progress({
-                    "progress_id": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("progress_id"),
-                    "lesson_id": lesson.get("lesson_id"),
-                    "status": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("status") or "LOCKED",
-                    "content_access_status": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("content_access_status"),
-                    "evaluation_status": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("evaluation_status"),
-                    "score": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("score"),
-                    "attempt_count": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_count"),
-                    "unlocked_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("unlocked_at"),
-                    "started_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("started_at"),
-                    "submitted_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("submitted_at"),
-                    "approved_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("approved_at"),
-                }),
-                "activeAttempt": student_attempt({
-                    "attempt_id": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_id"),
-                    "progress_id": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("progress_id"),
-                    "lesson_id": lesson.get("lesson_id"),
-                    "attempt_number": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_number"),
-                    "started_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_started_at"),
-                    "deadline_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("deadline_at"),
-                    "submitted_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_submitted_at"),
-                    "status": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_status"),
-                    "score": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_score"),
-                    "reviewed_at": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("reviewed_at"),
-                    "review_comments": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("review_comments"),
-                    "retry_authorized": progress_by_lesson.get(lesson.get("lesson_id"), {}).get("retry_authorized"),
-                }) if progress_by_lesson.get(lesson.get("lesson_id"), {}).get("attempt_id") else None,
-            }
-            for lesson in snapshot_lessons
-            if isinstance(lesson, dict) and str_value(lesson.get("status") or "ACTIVE").upper() == "ACTIVE"
-        ],
-    }
+def dashboard_payload(conn, student: dict[str, Any], course_id: str='', enrollment_id: str=''):
+    return learning_domain.dashboard_payload_action(conn, student, course_id, enrollment_id, runtime=_learning_runtime())
 
 
 def student_home(payload: dict[str, Any]):
-    require_session_token(payload)
-    prepare_assessment_feature_schema()
-    with connection() as conn:
-        _, student = student_context_with_conn(conn, payload)
-        course_rows = student_courses_rows(conn, student["student_id"])
-        courses = student_courses_payload(course_rows)
-        requested_enrollment_id = str_value(payload.get("enrollmentId"))
-        requested_course_id = payload.get("courseId") or get_settings().default_course_id
-        selected_entry = next(
-            (item for item in courses if item.get("enrollment", {}).get("enrollmentId") == requested_enrollment_id),
-            None,
-        )
-        if not selected_entry:
-            selected_entry = next(
-                (item for item in courses if item.get("course", {}).get("courseId") == requested_course_id),
-                courses[0] if courses else None,
-            )
-        selected_enrollment_id = selected_entry.get("enrollment", {}).get("enrollmentId") if selected_entry else ""
-        selected_course_id = selected_entry.get("course", {}).get("courseId") if selected_entry else requested_course_id
-        dashboard_data = dashboard_payload(conn, student, selected_course_id, selected_enrollment_id)
-        media = read_media_config_with_conn(conn, selected_course_id)
-    return success({
-        "student": public_student(student),
-        "courses": courses,
-        "selectedCourseId": selected_course_id,
-        "selectedEnrollmentId": selected_enrollment_id,
-        "dashboard": dashboard_data,
-        "mediaConfig": student_visible_media(media, student),
-    })
+    return learning_domain.student_home_action(payload, runtime=_learning_runtime())
 
 
 def dashboard(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    enrollment_id = str_value(payload.get("enrollmentId"))
-    prepare_assessment_feature_schema()
-    with connection() as conn:
-        return success(dashboard_payload(conn, student, course_id, enrollment_id))
+    return learning_domain.dashboard_action(payload, runtime=_learning_runtime())
 
 
 def get_lesson(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["lessonId"])
-    prepare_assessment_feature_schema()
-    lesson_id = payload["lessonId"]
-    enrollment_id = str_value(payload.get("enrollmentId"))
-    with connection() as conn:
-        live_lesson = conn.execute(
-            "select course_id from courseplatform.lessons where lesson_id = %s",
-            (lesson_id,),
-        ).fetchone()
-        course_id = live_lesson.get("course_id") if live_lesson else ""
-        enrollment = resolve_student_enrollment_with_conn(
-            conn, student["student_id"], course_id, enrollment_id
-        )
-        version = conn.execute(
-            "select * from courseplatform.course_versions where course_version_id = %s",
-            (enrollment["course_version_id"],),
-        ).fetchone()
-        snapshot = (version or {}).get("content_snapshot_json") or {}
-        snapshot_lessons = snapshot.get("lessons") if isinstance(snapshot, dict) else []
-        lesson = next(
-            (
-                item for item in snapshot_lessons
-                if isinstance(item, dict) and item.get("lesson_id") == lesson_id
-            ),
-            None,
-        )
-        if not lesson:
-            raise ApiError("LESSON_NOT_FOUND", "Módulo não encontrado nesta edição do curso.")
-        progress = conn.execute(
-            """
-            select * from courseplatform.lesson_progress
-            where enrollment_id = %s and lesson_id = %s
-            """,
-            (enrollment["enrollment_id"], lesson_id),
-        ).fetchone()
-    if not progress or progress_access_status(progress) != "AVAILABLE":
-        raise ApiError("LESSON_LOCKED", "Este módulo ainda não está disponível para leitura.")
-    content = [
-        row for row in (lesson.get("content") or [])
-        if isinstance(row, dict) and str_value(row.get("status") or "ACTIVE").upper() == "ACTIVE"
-    ]
-    questions = [
-        row for row in (lesson.get("questions") or [])
-        if isinstance(row, dict) and str_value(row.get("status") or "ACTIVE").upper() == "ACTIVE"
-    ]
-    return success({
-        "lesson": public_lesson(lesson),
-        "enrollment": public_enrollment(enrollment),
-        "courseVersion": public_course_version(version),
-        "progress": public_progress(progress or {
-            "progress_id": "",
-            "lesson_id": lesson_id,
-            "status": "LOCKED",
-            "attempt_count": 0,
-        }),
-        "content": [public_content(row) for row in content],
-        "questions": [
-            {
-                **student_question(question),
-                "options": [student_option(option) for option in question.get("options", [])],
-            }
-            for question in questions
-        ],
-    })
+    return learning_domain.get_lesson_action(payload, runtime=_learning_runtime())
+
+
+def _assessment_runtime() -> assessment_domain.AssessmentRuntime:
+    return assessment_domain.AssessmentRuntime(
+        ATTEMPT_STATUSES=ATTEMPT_STATUSES,
+        CONTENT_ACCESS_STATUSES=CONTENT_ACCESS_STATUSES,
+        _private_content_payload=_private_content_payload,
+        admin_context=admin_context,
+        admin_review_submission=admin_review_submission,
+        as_bool=as_bool,
+        assessment_snapshot_from_version_lesson=assessment_snapshot_from_version_lesson,
+        audit=audit,
+        connection=connection,
+        correction_deadline=correction_deadline,
+        create_student_notification=create_student_notification,
+        cursor_page_limit=cursor_page_limit,
+        cursor_pagination_result=cursor_pagination_result,
+        cursor_scope=cursor_scope,
+        decode_list_cursor=decode_list_cursor,
+        dispatch_notification_deliveries=dispatch_notification_deliveries,
+        editable_attempt=editable_attempt,
+        expire_attempt_if_needed=expire_attempt_if_needed,
+        expire_overdue_attempts=expire_overdue_attempts,
+        feedback_policy=feedback_policy,
+        feedback_visibility=feedback_visibility,
+        fetch_all=fetch_all,
+        fetch_one=fetch_one,
+        float_value=float_value,
+        generate_id=generate_id,
+        get_settings=get_settings,
+        grade_objective_answers=grade_objective_answers,
+        int_value=int_value,
+        iso=iso,
+        legacy_progress_status=legacy_progress_status,
+        notification_status_label=notification_status_label,
+        parse_assessment_snapshot=parse_assessment_snapshot,
+        parse_datetime=parse_datetime,
+        prepare_assessment_feature_schema=prepare_assessment_feature_schema,
+        prepare_notification_feature_schema=prepare_notification_feature_schema,
+        progress_access_status=progress_access_status,
+        progress_evaluation_status=progress_evaluation_status,
+        public_file=public_file,
+        public_lesson=public_lesson,
+        public_progress=public_progress,
+        public_review=public_review,
+        public_student=public_student,
+        refresh_enrollment_progress=refresh_enrollment_progress,
+        require_fields=require_fields,
+        require_latest_attempt=require_latest_attempt,
+        selected_option_ids=selected_option_ids,
+        selected_option_storage=selected_option_storage,
+        snapshot_for_attempt_with_conn=snapshot_for_attempt_with_conn,
+        staff_answer=staff_answer,
+        staff_attempt=staff_attempt,
+        staff_option=staff_option,
+        staff_question=staff_question,
+        start_attempt_with_conn=start_attempt_with_conn,
+        storage_api_error=storage_api_error,
+        storage_object_path=storage_object_path,
+        str_value=str_value,
+        student_answer=student_answer,
+        student_attempt=student_attempt,
+        student_context=student_context,
+        student_review=student_review,
+        student_snapshot_questions=student_snapshot_questions,
+        submission_item=submission_item,
+        success=success,
+        upload_private_object=upload_private_object,
+        utc_now=utc_now,
+        validate_upload=validate_upload,
+    )
 
 
 def attempt_status(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["attemptId"])
-    prepare_assessment_feature_schema()
-    attempt = fetch_one(
-        """
-        select *
-        from courseplatform.attempts
-        where attempt_id = %s and student_id = %s
-        """,
-        (payload["attemptId"], student["student_id"]),
-    )
-    attempt = expire_attempt_if_needed(attempt)
-    if not attempt:
-        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
-    with connection() as conn:
-        answers = conn.execute(
-            "select * from courseplatform.answers where attempt_id = %s order by saved_at",
-            (attempt["attempt_id"],),
-        ).fetchall()
-        files = conn.execute(
-            """
-            select *
-            from courseplatform.files
-            where attempt_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'
-            order by uploaded_at
-            """,
-            (attempt["attempt_id"],),
-        ).fetchall()
-        latest_review = conn.execute(
-            """
-            select *
-            from courseplatform.reviews
-            where attempt_id = %s
-            order by reviewed_at desc nulls last
-            limit 1
-            """,
-            (attempt["attempt_id"],),
-        ).fetchone()
-        snapshot = snapshot_for_attempt_with_conn(conn, attempt)
-    reveal_answers, reveal_explanations = feedback_visibility(attempt, snapshot)
-    policy = feedback_policy(snapshot.get("feedbackPolicy"))
-    return success({
-        "attempt": student_attempt(attempt),
-        "questions": student_snapshot_questions(attempt, snapshot),
-        "answers": [student_answer(row, reveal_answers=reveal_answers) for row in answers],
-        "files": [public_file(row) for row in files],
-        "latestReview": student_review(latest_review) if attempt.get("submitted_at") or attempt.get("reviewed_at") else None,
-        "feedbackPolicy": {
-            "releaseMode": policy["releaseMode"],
-            "correctAnswersVisible": reveal_answers,
-            "explanationsVisible": reveal_explanations,
-        },
-    })
+    return assessment_domain.attempt_status_action(payload, _assessment_runtime())
 
 
 def student_push_configuration(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    _, student = student_context(payload)
-    configuration = web_push_configuration()
-    subscription = fetch_one(
-        """
-        select count(*) as count, max(updated_at) as updated_at
-        from courseplatform.push_subscriptions
-        where student_id = %s and enabled
-        """,
-        (student["student_id"],),
-    ) or {}
-    return success({
-        "pushConfiguration": configuration,
-        "subscriptionCount": int(subscription.get("count") or 0),
-        "updatedAt": iso(subscription.get("updated_at")),
-    })
+    return communication_domain.student_push_configuration_action(payload, runtime=_communication_runtime())
 
 
 def student_subscribe_push(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    _, student = student_context(payload)
-    configuration = web_push_runtime_configuration()
-    if not configuration.get("configured"):
-        raise ApiError(
-            "WEB_PUSH_NOT_CONFIGURED",
-            "As notificações Push ainda não estão configuradas no servidor.",
-        )
-    subscription = payload.get("subscription") if isinstance(payload.get("subscription"), dict) else payload
-    endpoint = str_value(subscription.get("endpoint"))
-    keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
-    p256dh = str_value(keys.get("p256dh") or subscription.get("p256dh"))
-    auth_key = str_value(keys.get("auth") or subscription.get("auth"))
-    if not valid_push_endpoint(endpoint):
-        raise ApiError("INVALID_PUSH_ENDPOINT", "A subscrição Push possui um endereço inválido.")
-    if not valid_push_key(p256dh, 60, 200) or not valid_push_key(auth_key, 10, 100):
-        raise ApiError("INVALID_PUSH_KEYS", "As chaves da subscrição Push são inválidas.")
-    encryption_key = str_value(configuration.get("encryptionKey"))
-    if len(encryption_key.encode("utf-8")) < 32:
-        raise ApiError(
-            "WEAK_NOTIFICATION_ENCRYPTION_KEY",
-            "NOTIFICATION_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
-        )
-    endpoint_hash = hash_secret(endpoint)
-    device_label = str_value(payload.get("deviceLabel"))[:120]
-    user_agent = str_value(payload.get("userAgent"))[:500]
-    with connection() as conn:
-        row = conn.execute(
-            """
-            insert into courseplatform.push_subscriptions
-              (subscription_id, student_id, endpoint_hash, endpoint_encrypted,
-               p256dh_encrypted, auth_encrypted, user_agent, device_label,
-               enabled, failure_count, created_at, updated_at)
-            values (
-              %s, %s, %s,
-              pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
-              pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
-              pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
-              %s, %s, true, 0, now(), now()
-            )
-            on conflict (endpoint_hash) do update set
-              student_id = excluded.student_id,
-              endpoint_encrypted = excluded.endpoint_encrypted,
-              p256dh_encrypted = excluded.p256dh_encrypted,
-              auth_encrypted = excluded.auth_encrypted,
-              user_agent = excluded.user_agent,
-              device_label = excluded.device_label,
-              enabled = true,
-              failure_count = 0,
-              updated_at = now()
-            returning subscription_id, device_label, enabled, created_at, updated_at
-            """,
-            (
-                generate_id("PSH"), student["student_id"], endpoint_hash,
-                endpoint, encryption_key, p256dh, encryption_key, auth_key, encryption_key,
-                user_agent or None, device_label or None,
-            ),
-        ).fetchone()
-        audit(
-            conn, "STUDENT", student["student_id"], "PUSH_SUBSCRIBED",
-            "PUSH_SUBSCRIPTION", row["subscription_id"],
-            {"deviceLabel": device_label, "endpointHash": endpoint_hash[:16]},
-        )
-        conn.commit()
-    return success({
-        "subscribed": True,
-        "subscription": {
-            "subscriptionId": row["subscription_id"],
-            "deviceLabel": row.get("device_label") or "",
-            "enabled": as_bool(row.get("enabled")),
-            "updatedAt": iso(row.get("updated_at")),
-        },
-    })
+    return communication_domain.student_subscribe_push_action(payload, runtime=_communication_runtime())
 
 
 def student_unsubscribe_push(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    _, student = student_context(payload)
-    endpoint = str_value(payload.get("endpoint"))
-    all_devices = as_bool(payload.get("allDevices"))
-    if not endpoint and not all_devices:
-        raise ApiError("PUSH_SUBSCRIPTION_REQUIRED", "Informe a subscrição Push deste dispositivo.")
-    with connection() as conn:
-        if all_devices:
-            result = conn.execute(
-                """
-                update courseplatform.push_subscriptions
-                set enabled = false, updated_at = now()
-                where student_id = %s and enabled
-                """,
-                (student["student_id"],),
-            )
-        else:
-            result = conn.execute(
-                """
-                update courseplatform.push_subscriptions
-                set enabled = false, updated_at = now()
-                where student_id = %s and endpoint_hash = %s and enabled
-                """,
-                (student["student_id"], hash_secret(endpoint)),
-            )
-        audit(
-            conn, "STUDENT", student["student_id"], "PUSH_UNSUBSCRIBED",
-            "PUSH_SUBSCRIPTION", "ALL" if all_devices else hash_secret(endpoint)[:16],
-            {"allDevices": all_devices, "updatedCount": result.rowcount},
-        )
-        conn.commit()
-    return success({"unsubscribed": True, "updatedCount": result.rowcount})
+    return communication_domain.student_unsubscribe_push_action(payload, runtime=_communication_runtime())
 
 
 def student_start_telegram_link(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    _, student = student_context(payload)
-    configuration = telegram_runtime_configuration()
-    bot_username = str_value(configuration.get("botUsername")).lstrip("@")
-    if not configuration.get("configured") or not bot_username:
-        raise ApiError(
-            "TELEGRAM_LINK_UNAVAILABLE",
-            "A ligação ao Telegram ainda não está disponível. Contacte a administração.",
-        )
-    token = secrets.token_urlsafe(24)
-    with connection() as conn:
-        conn.execute(
-            """
-            update courseplatform.telegram_link_tokens
-            set consumed_at = coalesce(consumed_at, now())
-            where student_id = %s and consumed_at is null
-            """,
-            (student["student_id"],),
-        )
-        conn.execute(
-            """
-            insert into courseplatform.telegram_link_tokens
-              (token_hash, student_id, expires_at, created_at)
-            values (%s, %s, now() + interval '15 minutes', now())
-            """,
-            (hash_secret(token), student["student_id"]),
-        )
-        conn.commit()
-    return success({
-        "linkUrl": f"https://t.me/{bot_username}?start={token}",
-        "linkToken": token,
-        "botUsername": bot_username,
-        "expiresInSeconds": 900,
-    })
+    return communication_domain.student_start_telegram_link_action(payload, runtime=_communication_runtime())
 
 
 def student_confirm_telegram_link(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    _, student = student_context(payload)
-    link_token = str_value(payload.get("linkToken"))
-    if not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", link_token):
-        raise ApiError("INVALID_TELEGRAM_LINK_TOKEN", "A ligação ao Telegram é inválida ou expirou.")
-    pending = fetch_one(
-        """
-        select token_hash from courseplatform.telegram_link_tokens
-        where token_hash = %s and student_id = %s and consumed_at is null and expires_at > now()
-        """,
-        (hash_secret(link_token), student["student_id"]),
-    )
-    if not pending:
-        raise ApiError("TELEGRAM_LINK_EXPIRED", "A ligação ao Telegram é inválida ou expirou. Gere uma nova ligação.")
-    try:
-        process_telegram_link_updates()
-    except RuntimeError as error:
-        raise ApiError("TELEGRAM_LINK_CHECK_FAILED", str(error)) from error
-    linked_student = fetch_one(
-        "select * from courseplatform.students where student_id = %s",
-        (student["student_id"],),
-    ) or student
-    consumed = fetch_one(
-        "select consumed_at from courseplatform.telegram_link_tokens where token_hash = %s and student_id = %s",
-        (hash_secret(link_token), student["student_id"]),
-    ) or {}
-    if not consumed.get("consumed_at") or not normalize_telegram_recipient(linked_student.get("telegram_chat_id")):
-        return success({
-            "linked": False,
-            "student": public_student(linked_student),
-            "message": "Abra o bot, toque em Iniciar e volte a confirmar.",
-        })
-    return success({"linked": True, "student": public_student(linked_student)})
+    return communication_domain.student_confirm_telegram_link_action(payload, runtime=_communication_runtime())
 
 
 def student_unlink_telegram(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    _, student = student_context(payload)
-    with connection() as conn:
-        row = conn.execute(
-            """
-            update courseplatform.students
-            set telegram_chat_id = null, telegram_opt_in = false,
-                telegram_opt_in_at = null, updated_at = now()
-            where student_id = %s
-            returning *
-            """,
-            (student["student_id"],),
-        ).fetchone()
-        conn.execute(
-            """
-            update courseplatform.telegram_link_tokens
-            set consumed_at = coalesce(consumed_at, now())
-            where student_id = %s and consumed_at is null
-            """,
-            (student["student_id"],),
-        )
-        audit(
-            conn,
-            "STUDENT",
-            student["student_id"],
-            "TELEGRAM_UNLINKED",
-            "STUDENT",
-            student["student_id"],
-            {"channel": "TELEGRAM"},
-        )
-        conn.commit()
-    return success({"unlinked": True, "student": public_student(row)})
+    return communication_domain.student_unlink_telegram_action(payload, runtime=_communication_runtime())
 
 
 def update_my_profile(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    _, student = student_context(payload)
-    photo_url = str_value(payload.get("profilePhotoUrl") or student.get("profile_photo_url"))
-    if str_value(payload.get("profilePhotoBase64")):
-        mime_type = str_value(payload.get("profilePhotoMimeType") or "image/jpeg") or "image/jpeg"
-        base64_data = str_value(payload.get("profilePhotoBase64"))
-        photo_url = f"data:{mime_type};base64,{base64_data}"
-    if as_bool(payload.get("removeProfilePhoto")):
-        photo_url = ""
-
-    whatsapp_opt_in = (
-        as_bool(payload.get("whatsappOptIn"))
-        if "whatsappOptIn" in payload else as_bool(student.get("whatsapp_opt_in"))
-    )
-    email_opt_in = (
-        as_bool(payload.get("emailOptIn"))
-        if "emailOptIn" in payload else as_bool(student.get("email_opt_in"))
-    )
-    telegram_opt_in = (
-        as_bool(payload.get("telegramOptIn"))
-        if "telegramOptIn" in payload else as_bool(student.get("telegram_opt_in"))
-    )
-    phone = str_value(payload.get("phone"))
-    if whatsapp_opt_in and not normalize_whatsapp_recipient(phone):
-        raise ApiError(
-            "INVALID_WHATSAPP_PHONE",
-            "Para ativar o WhatsApp, informe um telefone com indicativo internacional, por exemplo +258.",
-        )
-    if email_opt_in and not normalize_email_recipient(student.get("email")):
-        raise ApiError("INVALID_NOTIFICATION_EMAIL", "A conta não possui um endereço de email válido.")
-    if telegram_opt_in and not normalize_telegram_recipient(student.get("telegram_chat_id")):
-        raise ApiError(
-            "TELEGRAM_LINK_REQUIRED",
-            "Ligue primeiro a sua conta ao bot oficial do Telegram.",
-        )
-    preferences = notification_preferences(student)
-    supplied_preferences = payload.get("notificationPreferences")
-    if isinstance(supplied_preferences, dict):
-        for key in DEFAULT_NOTIFICATION_PREFERENCES:
-            if key in supplied_preferences:
-                preferences[key] = as_bool(supplied_preferences[key])
-
-    patch = {
-        "full_name": str_value(payload.get("fullName") or student.get("full_name")),
-        "country": str_value(payload.get("country")),
-        "organization": str_value(payload.get("organization")),
-        "phone": phone,
-        "job_title": str_value(payload.get("jobTitle")),
-        "interests": str_value(payload.get("interests")),
-        "profile_photo_url": photo_url,
-    }
-    with connection() as conn:
-        row = conn.execute(
-            """
-            update courseplatform.students
-            set full_name = %s, country = %s, organization = %s, phone = %s,
-                job_title = %s, interests = %s, profile_photo_url = %s,
-                whatsapp_opt_in = %s,
-                whatsapp_opt_in_at = case
-                  when %s and not coalesce(whatsapp_opt_in, false) then now()
-                  when not %s then null
-                  else whatsapp_opt_in_at
-                end,
-                email_opt_in = %s,
-                email_opt_in_at = case
-                  when %s and not coalesce(email_opt_in, false) then now()
-                  when not %s then null
-                  else email_opt_in_at
-                end,
-                telegram_opt_in = %s,
-                telegram_opt_in_at = case
-                  when %s and not coalesce(telegram_opt_in, false) then now()
-                  when not %s then null
-                  else telegram_opt_in_at
-                end,
-                notification_preferences_json = %s::jsonb,
-                updated_at = now()
-            where student_id = %s
-            returning *
-            """,
-            (
-                patch["full_name"],
-                patch["country"],
-                patch["organization"],
-                patch["phone"],
-                patch["job_title"],
-                patch["interests"],
-                patch["profile_photo_url"],
-                whatsapp_opt_in,
-                whatsapp_opt_in,
-                whatsapp_opt_in,
-                email_opt_in,
-                email_opt_in,
-                email_opt_in,
-                telegram_opt_in,
-                telegram_opt_in,
-                telegram_opt_in,
-                json.dumps(preferences),
-                student["student_id"],
-            ),
-        ).fetchone()
-        audit(
-            conn,
-            "STUDENT",
-            student["student_id"],
-            "PROFILE_UPDATED",
-            "STUDENT",
-            student["student_id"],
-            {
-                "notificationConsent": {
-                    "whatsapp": whatsapp_opt_in,
-                    "email": email_opt_in,
-                    "telegram": telegram_opt_in,
-                }
-            },
-        )
-        conn.commit()
-    return success({
-        "student": public_student(row),
-        "notificationChannelInfo": student_notification_channel_info(),
-    })
+    return identity_domain.update_my_profile_action(payload, _identity_runtime())
 
 
 def my_notifications(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    _, student = student_context(payload)
-    limit, offset, page = pagination(payload, default_limit=40, max_limit=100)
-    unread_only = as_bool(payload.get("unreadOnly"))
-    where_unread = "and n.read_at is null" if unread_only else ""
-    rows = fetch_all(
-        f"""
-        select n.*,
-               w.status as whatsapp_status, w.recipient as whatsapp_recipient,
-               w.provider_message_id as whatsapp_provider_message_id,
-               w.attempt_count as whatsapp_attempt_count, w.last_error as whatsapp_last_error,
-               w.sent_at as whatsapp_sent_at,
-               e.status as email_status, e.recipient as email_recipient,
-               e.provider_message_id as email_provider_message_id,
-               e.attempt_count as email_attempt_count, e.last_error as email_last_error,
-               e.sent_at as email_sent_at,
-               t.status as telegram_status, t.recipient as telegram_recipient,
-               t.provider_message_id as telegram_provider_message_id,
-               t.attempt_count as telegram_attempt_count, t.last_error as telegram_last_error,
-               t.sent_at as telegram_sent_at,
-               p.status as push_status,
-               p.provider_message_id as push_provider_message_id,
-               p.attempt_count as push_attempt_count, p.last_error as push_last_error,
-               p.sent_at as push_sent_at
-        from courseplatform.notifications n
-        left join courseplatform.notification_deliveries w
-          on w.notification_id = n.notification_id and w.channel = 'WHATSAPP'
-        left join courseplatform.notification_deliveries e
-          on e.notification_id = n.notification_id and e.channel = 'EMAIL'
-        left join courseplatform.notification_deliveries t
-          on t.notification_id = n.notification_id and t.channel = 'TELEGRAM'
-        left join courseplatform.notification_deliveries p
-          on p.notification_id = n.notification_id and p.channel = 'PUSH'
-        where n.student_id = %s {where_unread}
-        order by n.created_at desc
-        limit %s offset %s
-        """,
-        (student["student_id"], limit, offset),
-    )
-    unread = fetch_one(
-        "select count(*) as count from courseplatform.notifications where student_id = %s and read_at is null",
-        (student["student_id"],),
-    )
-    total = fetch_one(
-        "select count(*) as count from courseplatform.notifications where student_id = %s",
-        (student["student_id"],),
-    )
-    return success({
-        "notifications": [public_notification(row) for row in rows],
-        "unreadCount": int((unread or {}).get("count") or 0),
-        "total": int((total or {}).get("count") or 0),
-        "page": page,
-        "limit": limit,
-    })
+    return communication_domain.my_notifications_action(payload, runtime=_communication_runtime())
 
 
 def mark_notification_read(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    _, student = student_context(payload)
-    notification_id = str_value(payload.get("notificationId"))
-    mark_all = as_bool(payload.get("markAll"))
-    if not notification_id and not mark_all:
-        raise ApiError("NOTIFICATION_REQUIRED", "Selecione uma notificação.")
-    with connection() as conn:
-        if mark_all:
-            result = conn.execute(
-                "update courseplatform.notifications set read_at = coalesce(read_at, now()) where student_id = %s",
-                (student["student_id"],),
-            )
-        else:
-            result = conn.execute(
-                """
-                update courseplatform.notifications
-                set read_at = coalesce(read_at, now())
-                where notification_id = %s and student_id = %s
-                """,
-                (notification_id, student["student_id"]),
-            )
-        updated_count = result.rowcount
-        conn.commit()
-    return success({"updatedCount": updated_count})
+    return communication_domain.mark_notification_read_action(payload, runtime=_communication_runtime())
 
 
 def change_my_access_code(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["currentAccessCode", "newAccessCode"])
-    if not verify_password(payload["currentAccessCode"], student.get("password_hash")):
-        raise ApiError("INVALID_CURRENT_ACCESS_CODE", "A palavra-passe atual não está correta.")
-    new_code = str_value(payload.get("newAccessCode"))
-    if not valid_password(new_code):
-        raise ApiError("WEAK_ACCESS_CODE", "A nova palavra-passe deve ter pelo menos 8 caracteres.")
-    if verify_password(new_code, student.get("password_hash")):
-        raise ApiError("ACCESS_CODE_UNCHANGED", "A nova palavra-passe deve ser diferente da atual.")
-    with connection() as conn:
-        conn.execute(
-            """
-            update courseplatform.students
-            set password_hash = crypt(%s, gen_salt('bf', 12)),
-                password_changed_at = now(), password_reset_required = false,
-                access_code = null, updated_at = now()
-            where student_id = %s
-            """,
-            (new_code, student["student_id"]),
-        )
-        conn.execute(
-            "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-            (student["student_id"],),
-        )
-        audit(conn, "STUDENT", student["student_id"], "ACCESS_CODE_CHANGED", "STUDENT", student["student_id"])
-        conn.commit()
-    return success({"requiresLogin": True})
+    return identity_domain.change_my_access_code_action(payload, _identity_runtime())
 
 
 def change_my_email(payload: dict[str, Any]):
-    prepare_notification_feature_schema()
-    require_fields(payload, ["currentAccessCode", "newEmail", "confirmEmail"])
-    if not as_bool(payload.get("acknowledgeSecurityImpact")):
-        raise ApiError(
-            "EMAIL_CHANGE_ACKNOWLEDGEMENT_REQUIRED",
-            "Confirme que compreende o encerramento das sessões e a suspensão das notificações por email.",
-        )
-    new_email = validated_email_change(payload)
-    current_password = str_value(payload.get("currentAccessCode"))
-    if len(current_password) > 1024:
-        raise ApiError("INVALID_CURRENT_ACCESS_CODE", "A palavra-passe atual não está correta.")
-    try:
-        with connection() as conn:
-            _, session_student = student_context_with_conn(conn, payload)
-            student = conn.execute(
-                "select * from courseplatform.students where student_id = %s for update",
-                (session_student["student_id"],),
-            ).fetchone()
-            if not student or student.get("status") != "ACTIVE":
-                raise ApiError("STUDENT_NOT_ACTIVE", "A conta do estudante não está ativa.")
-            if not verify_password_with_conn(
-                conn,
-                current_password,
-                student.get("password_hash"),
-            ):
-                raise ApiError("INVALID_CURRENT_ACCESS_CODE", "A palavra-passe atual não está correta.")
-            row = secure_student_email_update(
-                conn,
-                student,
-                new_email,
-                actor_type="STUDENT",
-                actor_id=student["student_id"],
-                reason="Alteração solicitada no perfil pessoal.",
-            )
-            conn.commit()
-    except ApiError:
-        raise
-    except Exception as error:
-        text = str(error).lower()
-        if "unique" in text or "duplicate" in text:
-            raise ApiError(
-                "EMAIL_ALREADY_IN_USE",
-                "Este endereço de email já está associado a outro estudante.",
-            ) from error
-        raise database_api_error(error) from error
-    return success({
-        "student": public_student(row),
-        "email": new_email,
-        "requiresLogin": True,
-    })
+    return identity_domain.change_my_email_action(payload, _identity_runtime())
 
 
 def correction_deadline(payload: dict[str, Any]):
@@ -5317,611 +2592,53 @@ def grade_objective_answers(
 
 
 def start_attempt(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["lessonId"])
-    prepare_assessment_feature_schema()
-    lesson_id = payload["lessonId"]
-    enrollment_id = str_value(payload.get("enrollmentId"))
-    with connection() as conn:
-        return start_attempt_with_conn(conn, student, lesson_id, enrollment_id)
+    return assessment_domain.start_attempt_action(payload, _assessment_runtime())
 
 
 def start_attempt_with_conn(conn, student, lesson_id, enrollment_id: str = ""):
-    # Serialize starts and consume each retry permission only once.
-    if enrollment_id:
-        progress = conn.execute(
-            """
-            select p.*, l.exercise_minutes, l.individual_minutes, l.submission_duration_minutes,
-                   l.feedback_release_mode, l.show_correct_answers, l.show_explanations
-            from courseplatform.lesson_progress p
-            join courseplatform.lessons l on l.lesson_id = p.lesson_id
-            where p.student_id = %s and p.lesson_id = %s and p.enrollment_id = %s
-            for update of p
-            """,
-            (student["student_id"], lesson_id, enrollment_id),
-        ).fetchone()
-    else:
-        matches = conn.execute(
-            """
-            select p.*, l.exercise_minutes, l.individual_minutes, l.submission_duration_minutes,
-                   l.feedback_release_mode, l.show_correct_answers, l.show_explanations
-            from courseplatform.lesson_progress p
-            join courseplatform.lessons l on l.lesson_id = p.lesson_id
-            where p.student_id = %s and p.lesson_id = %s
-            order by p.updated_at desc nulls last
-            limit 2
-            for update of p
-            """,
-            (student["student_id"], lesson_id),
-        ).fetchall()
-        if len(matches) > 1:
-            raise ApiError("ENROLLMENT_REQUIRED", "Selecione a matrícula/edição antes de iniciar a atividade.")
-        progress = matches[0] if matches else None
-    if not progress or progress_access_status(progress) != "AVAILABLE":
-        raise ApiError("LESSON_LOCKED", "Este módulo ainda não está disponível.")
-    if progress_evaluation_status(progress) not in {"NOT_STARTED", "IN_PROGRESS", "CORRECTION_REQUIRED", "FAILED", "TIME_EXCEEDED"}:
-        raise ApiError("ATTEMPT_NOT_AVAILABLE", "Não é possível iniciar uma tentativa neste estado.")
-
-    existing = conn.execute(
-        """
-        select *
-        from courseplatform.attempts
-        where progress_id = %s
-        order by attempt_number desc, created_at desc
-        limit 1
-        for update
-        """,
-        (progress["progress_id"],),
-    ).fetchone()
-    if existing and existing.get("status") == "IN_PROGRESS":
-        editable_attempt(conn, existing["attempt_id"], student["student_id"])
-        return success({"attempt": student_attempt(existing)})
-
-    now = utc_now()
-    minutes = int_value(progress.get("submission_duration_minutes"))
-    if minutes <= 0:
-        minutes = int_value(progress.get("exercise_minutes")) + int_value(progress.get("individual_minutes"))
-    if minutes <= 0:
-        minutes = 180
-    deadline = now + timedelta(minutes=minutes)
-    is_retry = bool(existing and progress_evaluation_status(progress) != "NOT_STARTED")
-    if is_retry:
-        if not as_bool(existing.get("retry_authorized")):
-            raise ApiError("RETRY_NOT_AUTHORIZED", "A administração precisa de autorizar um novo envio.")
-        review = conn.execute(
-            """select correction_deadline from courseplatform.reviews
-               where attempt_id = %s order by reviewed_at desc nulls last limit 1""",
-            (existing["attempt_id"],),
-        ).fetchone()
-        if review and review.get("correction_deadline"):
-            deadline = parse_datetime(review["correction_deadline"])
-            if deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=timezone.utc)
-        if deadline <= now:
-            raise ApiError("RETRY_DEADLINE_EXPIRED", "O prazo autorizado para o novo envio terminou. Solicite um novo prazo à administração.")
-    attempt_number = int_value(progress.get("attempt_count")) + 1
-    if existing:
-        attempt_number = max(attempt_number, int_value(existing.get("attempt_number")) + 1)
-    existing_snapshot = parse_assessment_snapshot((existing or {}).get("assessment_snapshot_json"))
-    if is_retry and isinstance(existing_snapshot.get("questions"), list):
-        snapshot = existing_snapshot
-    else:
-        version_row = conn.execute(
-            """
-            select cv.content_snapshot_json
-            from courseplatform.enrollments e
-            join courseplatform.course_versions cv on cv.course_version_id = e.course_version_id
-            where e.enrollment_id = %s
-            """,
-            (progress["enrollment_id"],),
-        ).fetchone()
-        version_snapshot = (version_row or {}).get("content_snapshot_json") or {}
-        version_lesson = next(
-            (
-                item for item in version_snapshot.get("lessons", [])
-                if isinstance(item, dict) and item.get("lesson_id") == lesson_id
-            ),
-            None,
-        )
-        if not version_lesson:
-            raise ApiError("LESSON_VERSION_MISMATCH", "O módulo não pertence à versão desta matrícula.")
-        snapshot = assessment_snapshot_from_version_lesson(version_lesson)
-    attempt = conn.execute(
-        """
-        insert into courseplatform.attempts
-          (attempt_id, progress_id, student_id, lesson_id, attempt_number, started_at,
-           deadline_at, submitted_at, status, score, objective_score, assessment_snapshot_json,
-           retry_authorized, created_at, updated_at)
-        values (%s, %s, %s, %s, %s, %s, %s, null, 'IN_PROGRESS', null, null, %s, false, %s, %s)
-        returning *
-        """,
-        (
-            generate_id("ATT"), progress["progress_id"], student["student_id"], lesson_id,
-            attempt_number, now, deadline,
-            json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
-            now, now,
-        ),
-    ).fetchone()
-    if is_retry:
-        conn.execute(
-            "update courseplatform.attempts set retry_authorized = false, updated_at = %s where attempt_id = %s",
-            (now, existing["attempt_id"]),
-        )
-        conn.execute(
-            """insert into courseplatform.answers
-               (answer_id, attempt_id, question_id, answer_text, selected_option_id, saved_at)
-               select 'ANS-' || %s || '-' || question_id, %s, question_id,
-                      answer_text, selected_option_id, %s
-               from courseplatform.answers where attempt_id = %s""",
-            (attempt["attempt_id"], attempt["attempt_id"], now, existing["attempt_id"]),
-        )
-    conn.execute(
-        """
-        update courseplatform.lesson_progress
-        set status = 'IN_PROGRESS', evaluation_status = 'IN_PROGRESS',
-            content_access_status = coalesce(content_access_status, 'AVAILABLE'),
-            started_at = coalesce(started_at, %s),
-            attempt_count = %s, submitted_at = null, approved_at = null, score = null, updated_at = %s
-        where progress_id = %s
-        """,
-        (now, attempt_number, now, progress["progress_id"]),
+    return assessment_domain.start_attempt_with_conn_action(
+        conn,
+        student,
+        lesson_id,
+        enrollment_id,
+        runtime=_assessment_runtime(),
     )
-    audit(conn, "STUDENT", student["student_id"], "ATTEMPT_STARTED", "ATTEMPT", attempt["attempt_id"], {
-        "previousAttemptId": existing["attempt_id"] if is_retry else None,
-        "deadlineAt": iso(deadline),
-    })
-    conn.commit()
-    return success({"attempt": student_attempt(attempt)})
 
 
 def save_answer(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["attemptId", "questionId"])
-    prepare_assessment_feature_schema()
-    with connection() as conn:
-        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
-        snapshot = snapshot_for_attempt_with_conn(conn, attempt)
-        question = next(
-            (
-                item for item in snapshot.get("questions", [])
-                if isinstance(item, dict) and item.get("question_id") == payload["questionId"]
-            ),
-            None,
-        )
-        if not question:
-            raise ApiError("QUESTION_NOT_FOUND", "Questão não encontrada neste módulo.")
-        question_type = str_value(question.get("question_type")).upper()
-        selected_options = selected_option_ids(payload.get("selectedOptionId"))
-        valid_option_ids = {
-            str_value(option.get("option_id"))
-            for option in question.get("options", [])
-            if isinstance(option, dict)
-        }
-        if any(option_id not in valid_option_ids for option_id in selected_options):
-            raise ApiError("INVALID_ANSWER_OPTION", "A resposta contém uma opção que não pertence a esta questão.")
-        answer = conn.execute(
-            """
-            insert into courseplatform.answers
-              (answer_id, attempt_id, question_id, answer_text, selected_option_id, saved_at)
-            values (%s, %s, %s, %s, %s, now())
-            on conflict (attempt_id, question_id) do update
-            set answer_text = excluded.answer_text,
-                selected_option_id = excluded.selected_option_id,
-                saved_at = excluded.saved_at
-            returning *
-            """,
-            (
-                generate_id("ANS"),
-                attempt["attempt_id"],
-                payload["questionId"],
-                str_value(payload.get("answerText")),
-                selected_option_storage(payload.get("selectedOptionId"), question_type),
-            ),
-        ).fetchone()
-        conn.commit()
-    return success({"answer": student_answer(answer)})
+    return assessment_domain.save_answer_action(payload, _assessment_runtime())
 
 
 def upload_file(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["attemptId", "fileName"])
-    prepare_assessment_feature_schema()
-    with connection() as conn:
-        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
-    try:
-        upload = validate_upload(
-            payload.get("base64Data"),
-            payload.get("fileName"),
-            payload.get("mimeType"),
-            purpose="SUBMISSION",
-        )
-    except StorageError as error:
-        raise storage_api_error(error) from error
-
-    settings = get_settings()
-    object_path = storage_object_path("submission", student["student_id"], attempt["attempt_id"], upload)
-    upload_key = hashlib.sha256(
-        f"{student['student_id']}:{attempt['attempt_id']}:{upload.checksum_sha256}".encode("utf-8")
-    ).hexdigest()
-    try:
-        upload_private_object(settings.supabase_submission_bucket, object_path, upload)
-    except StorageError as error:
-        raise storage_api_error(error) from error
-
-    with connection() as conn:
-        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
-        row = conn.execute(
-            """
-            insert into courseplatform.files
-              (file_id, attempt_id, student_id, lesson_id, file_name, mime_type,
-               size_bytes, drive_file_id, drive_url, storage_bucket, storage_path,
-               storage_checksum_sha256, storage_status, storage_upload_key, uploaded_at, status)
-            values (%s, %s, %s, %s, %s, %s, %s, '', '', %s, %s, %s, 'READY', %s, now(), 'ACTIVE')
-            on conflict (storage_upload_key) where storage_upload_key is not null do update
-            set file_name = excluded.file_name,
-                mime_type = excluded.mime_type,
-                size_bytes = excluded.size_bytes,
-                storage_bucket = excluded.storage_bucket,
-                storage_path = excluded.storage_path,
-                storage_checksum_sha256 = excluded.storage_checksum_sha256,
-                storage_status = 'READY',
-                uploaded_at = now(),
-                status = 'ACTIVE'
-            returning *
-            """,
-            (
-                generate_id("FIL"),
-                attempt["attempt_id"],
-                student["student_id"],
-                attempt["lesson_id"],
-                upload.file_name,
-                upload.mime_type,
-                upload.size_bytes,
-                settings.supabase_submission_bucket,
-                object_path,
-                upload.checksum_sha256,
-                upload_key,
-            ),
-        ).fetchone()
-        audit(
-            conn,
-            "STUDENT",
-            student["student_id"],
-            "SUBMISSION_FILE_UPLOADED",
-            "FILE",
-            row["file_id"],
-            {"attemptId": attempt["attempt_id"], "sizeBytes": upload.size_bytes, "mimeType": upload.mime_type},
-        )
-        conn.commit()
-    return success({"file": public_file(row)})
+    return assessment_domain.upload_file_action(payload, _assessment_runtime())
 
 
 def delete_uploaded_file(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["fileId"])
-    prepare_assessment_feature_schema()
-    with connection() as conn:
-        file = conn.execute(
-            "select attempt_id from courseplatform.files where file_id = %s and student_id = %s",
-            (payload["fileId"], student["student_id"]),
-        ).fetchone()
-        if not file:
-            raise ApiError("FILE_NOT_FOUND", "Ficheiro não encontrado.")
-        editable_attempt(conn, file["attempt_id"], student["student_id"])
-        row = conn.execute(
-            """
-            update courseplatform.files
-            set status = 'DELETED'
-            where file_id = %s and student_id = %s
-            returning *
-            """,
-            (payload["fileId"], student["student_id"]),
-        ).fetchone()
-        conn.commit()
-    if not row:
-        raise ApiError("FILE_NOT_FOUND", "Ficheiro não encontrado.")
-    return success({"file": public_file(row)})
+    return assessment_domain.delete_uploaded_file_action(payload, _assessment_runtime())
 
 
 def submit_attempt(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["attemptId"])
-    prepare_assessment_feature_schema()
-    now = utc_now()
-    status = "UNDER_REVIEW"
-    with connection() as conn:
-        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
-        snapshot = snapshot_for_attempt_with_conn(conn, attempt)
-        answers = conn.execute(
-            "select * from courseplatform.answers where attempt_id = %s for update",
-            (attempt["attempt_id"],),
-        ).fetchall()
-        objective_score, graded_answers = grade_objective_answers(snapshot, answers)
-        conn.execute(
-            "update courseplatform.answers set submitted_at = %s where attempt_id = %s",
-            (now, attempt["attempt_id"]),
-        )
-        for is_correct, awarded_points, answer_id in graded_answers:
-            conn.execute(
-                """update courseplatform.answers
-                   set is_correct = %s, awarded_points = %s, submitted_at = %s
-                   where answer_id = %s and attempt_id = %s""",
-                (is_correct, awarded_points, now, answer_id, attempt["attempt_id"]),
-            )
-        updated = conn.execute(
-            """
-            update courseplatform.attempts
-            set status = %s, submitted_at = %s, objective_score = %s, updated_at = %s
-            where attempt_id = %s
-            returning *
-            """,
-            (status, now, objective_score, now, attempt["attempt_id"]),
-        ).fetchone()
-        conn.execute(
-            """
-            update courseplatform.lesson_progress
-            set status = %s, evaluation_status = %s, submitted_at = %s, updated_at = %s
-            where progress_id = %s
-            """,
-            (status, status, now, now, attempt.get("progress_id")),
-        )
-        audit(conn, "STUDENT", student["student_id"], "ATTEMPT_SUBMITTED", "ATTEMPT", attempt["attempt_id"], {"status": status})
-        conn.commit()
-    return success({"attempt": student_attempt(updated)})
+    return assessment_domain.submit_attempt_action(payload, _assessment_runtime())
 
 
 def my_certificate(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    enrollment_id = str_value(payload.get("enrollmentId"))
-    with connection() as conn:
-        cert, _, _, _ = ensure_simple_certificate(conn, student, course_id, enrollment_id)
-        policy = participation_policy(conn, course_id)
-        conn.commit()
-    return success({"certificate": student_certificate_payload(cert, policy)})
+    return certificate_domain.my_certificate_action(payload, _certificate_runtime())
 
 
 def my_certifications(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    enrollment_id = str_value(payload.get("enrollmentId"))
-    with connection() as conn:
-        simple_cert, enrollment, course, completed = ensure_simple_certificate(
-            conn, student, course_id, enrollment_id
-        )
-        settings_row = conn.execute(
-            "select * from courseplatform.certificate_settings where course_id = %s",
-            (course_id,),
-        ).fetchone()
-        certificates = conn.execute(
-            """
-            select cert.*, c.title as course_title, s.full_name as student_name
-            from courseplatform.certificates cert
-            join courseplatform.courses c on c.course_id = cert.course_id
-            join courseplatform.students s on s.student_id = cert.student_id
-            where cert.student_id = %s and cert.course_id = %s and cert.enrollment_id = %s
-              and coalesce(cert.status, 'ISSUED') <> 'DELETED'
-            order by cert.issue_date desc nulls last
-            """,
-            (student["student_id"], course_id, enrollment["enrollment_id"]),
-        ).fetchall()
-        requests = conn.execute(
-            """
-            select cr.*, s.full_name, s.email, c.title
-            from courseplatform.certificate_requests cr
-            join courseplatform.students s on s.student_id = cr.student_id
-            join courseplatform.courses c on c.course_id = cr.course_id
-            where cr.student_id = %s and cr.course_id = %s and cr.enrollment_id = %s
-            order by coalesce(cr.updated_at, cr.created_at) desc
-            """,
-            (student["student_id"], course_id, enrollment["enrollment_id"]),
-        ).fetchall()
-        policy = normalize_participation_policy(((settings_row or {}).get("certificate_profile_json") or {}).get("participation"))
-        conn.commit()
-    return success({
-        "student": public_student(student),
-        "course": public_course(course),
-        "enrollment": public_enrollment(enrollment),
-        "completed": completed,
-        "simpleCertificate": student_certificate_payload(simple_cert, policy),
-        "certificates": [item for row in certificates if (item := student_certificate_payload(row, policy))],
-        "requests": [public_certificate_request(row) for row in requests],
-        "settings": certificate_settings_payload(settings_row, course),
-    })
+    return certificate_domain.my_certifications_action(payload, _certificate_runtime())
 
 
 def request_participation_certificate(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    enrollment_id = str_value(payload.get("enrollmentId"))
-    with connection() as conn:
-        cert, enrollment, _, completed = ensure_simple_certificate(
-            conn, student, course_id, enrollment_id
-        )
-        if not completed:
-            raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado.")
-        policy = participation_policy(conn, course_id)
-        if not policy["enabled"]:
-            raise ApiError("PARTICIPATION_DISABLED", "Este curso não disponibiliza certificado de participação.")
-        access = certificate_download_access(cert, policy)
-        if access["allowed"]:
-            raise ApiError("CERTIFICATE_ALREADY_AVAILABLE", "O certificado já está disponível para download.")
-        request = conn.execute(
-            """
-            select * from courseplatform.certificate_requests
-            where student_id = %s and course_id = %s and enrollment_id = %s
-              and request_type = 'PARTICIPATION'
-              and status = 'PAYMENT_SUBMITTED'
-            order by created_at desc limit 1
-            """, (student["student_id"], course_id, enrollment["enrollment_id"]),
-        ).fetchone()
-        if not request:
-            request = conn.execute(
-                """
-                insert into courseplatform.certificate_requests
-                  (request_id, student_id, course_id, enrollment_id, offering_id,
-                   course_version_id, request_type, status, created_at, updated_at)
-                values (%s, %s, %s, %s, %s, %s, 'PARTICIPATION', 'PAYMENT_SUBMITTED', now(), now())
-                returning *
-                """, (
-                    generate_id("CREQ"), student["student_id"], course_id,
-                    enrollment["enrollment_id"], enrollment["offering_id"],
-                    enrollment["course_version_id"],
-                ),
-            ).fetchone()
-            audit(conn, "STUDENT", student["student_id"], "PARTICIPATION_REQUESTED", "CERTIFICATE_REQUEST", request["request_id"])
-        conn.commit()
-    return success({"request": public_certificate_request(request)})
+    return certificate_domain.request_participation_certificate_action(payload, _certificate_runtime())
 
 
 def request_professional_certificate(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    enrollment_id = str_value(payload.get("enrollmentId"))
-    survey_answers = payload.get("surveyAnswers") if isinstance(payload.get("surveyAnswers"), dict) else {}
-    with connection() as conn:
-        _, enrollment, _, completed = ensure_simple_certificate(
-            conn, student, course_id, enrollment_id
-        )
-        if not completed:
-            raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado profissional.")
-        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
-        settings_row = conn.execute(
-            "select * from courseplatform.certificate_settings where course_id = %s",
-            (course_id,),
-        ).fetchone()
-        profile = certificate_settings_payload(settings_row, course).get("certificateProfile") or {}
-        if profile.get("printAccess") == "blocked":
-            raise ApiError("CERTIFICATE_PRINT_BLOCKED", "A emissão deste certificado profissional ainda não está disponível.")
-        initial_status = "REQUESTED" if profile.get("printAccess") == "paid" else "PAYMENT_SUBMITTED"
-        existing = conn.execute(
-            """
-            select cr.*
-            from courseplatform.certificate_requests cr
-            left join courseplatform.certificates cert on cert.certificate_id = cr.certificate_id
-            where cr.student_id = %s and cr.course_id = %s and cr.enrollment_id = %s
-              and cr.request_type = 'PROFESSIONAL'
-              and cr.status in ('REQUESTED', 'PAYMENT_SUBMITTED', 'APPROVED')
-              and not (cr.status = 'APPROVED' and coalesce(cert.status, 'ISSUED') in ('BLOCKED', 'DELETED'))
-            order by created_at desc
-            limit 1
-            """,
-            (student["student_id"], course_id, enrollment["enrollment_id"]),
-        ).fetchone()
-        if existing:
-            request = conn.execute(
-                """
-                update courseplatform.certificate_requests
-                set survey_answers_json = %s,
-                    status = case
-                      when %s = 'PAYMENT_SUBMITTED' and status = 'REQUESTED' then 'PAYMENT_SUBMITTED'
-                      else status
-                    end,
-                    updated_at = now()
-                where request_id = %s
-                returning *
-                """,
-                (json.dumps(survey_answers), initial_status, existing["request_id"]),
-            ).fetchone()
-        else:
-            request = conn.execute(
-                """
-                insert into courseplatform.certificate_requests
-                  (request_id, student_id, course_id, enrollment_id, offering_id,
-                   course_version_id, request_type, status,
-                   survey_answers_json, created_at, updated_at)
-                values (%s, %s, %s, %s, %s, %s, 'PROFESSIONAL', %s, %s, now(), now())
-                returning *
-                """,
-                (
-                    generate_id("CREQ"), student["student_id"], course_id,
-                    enrollment["enrollment_id"], enrollment["offering_id"],
-                    enrollment["course_version_id"], initial_status,
-                    json.dumps(survey_answers),
-                ),
-            ).fetchone()
-        conn.commit()
-    return success({"request": public_certificate_request(request)})
+    return certificate_domain.request_professional_certificate_action(payload, _certificate_runtime())
 
 
 def submit_professional_certificate_payment(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["requestId", "receiptFileName"])
-    request = fetch_one(
-        """
-        select * from courseplatform.certificate_requests
-        where request_id = %s and student_id = %s
-          and request_type = 'PROFESSIONAL'
-          and status in ('REQUESTED', 'PAYMENT_SUBMITTED')
-          and certificate_id is null
-        """,
-        (payload["requestId"], student["student_id"]),
-    )
-    if not request:
-        raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
-    try:
-        upload = validate_upload(
-            payload.get("receiptBase64"),
-            payload.get("receiptFileName"),
-            payload.get("receiptMimeType"),
-            purpose="PAYMENT_RECEIPT",
-        )
-    except StorageError as error:
-        raise storage_api_error(error) from error
-    settings = get_settings()
-    object_path = storage_object_path("payment-receipt", student["student_id"], request["request_id"], upload)
-    try:
-        upload_private_object(settings.supabase_payment_receipt_bucket, object_path, upload)
-    except StorageError as error:
-        raise storage_api_error(error) from error
-
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        request = conn.execute(
-            """
-            update courseplatform.certificate_requests
-            set status = 'PAYMENT_SUBMITTED',
-                payment_receipt_name = %s,
-                payment_receipt_url = '',
-                payment_receipt_mime_type = %s,
-                payment_receipt_bucket = %s,
-                payment_receipt_path = %s,
-                payment_receipt_checksum_sha256 = %s,
-                payment_receipt_size_bytes = %s,
-                payment_receipt_storage_status = 'READY',
-                submitted_at = now(),
-                updated_at = now()
-            where request_id = %s and student_id = %s
-              and request_type = 'PROFESSIONAL'
-              and status in ('REQUESTED', 'PAYMENT_SUBMITTED')
-              and certificate_id is null
-            returning *
-            """,
-            (
-                upload.file_name,
-                upload.mime_type,
-                settings.supabase_payment_receipt_bucket,
-                object_path,
-                upload.checksum_sha256,
-                upload.size_bytes,
-                payload["requestId"],
-                student["student_id"],
-            ),
-        ).fetchone()
-        if request:
-            audit(
-                conn,
-                "STUDENT",
-                student["student_id"],
-                "PAYMENT_RECEIPT_UPLOADED",
-                "CERTIFICATE_REQUEST",
-                request["request_id"],
-                {"sizeBytes": upload.size_bytes, "mimeType": upload.mime_type},
-            )
-        conn.commit()
-    if not request:
-        raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
-    return success({"request": public_certificate_request(request)})
+    return financial_domain.submit_professional_certificate_payment_action(payload, _financial_runtime())
 
 
 def _private_content_payload(
@@ -5971,161 +2688,23 @@ def _private_content_payload(
 
 
 def submission_file_download_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    require_fields(payload, ["fileId"])
-    if str_value(payload.get("adminToken")):
-        admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-        row = fetch_one(
-            "select * from courseplatform.files where file_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'",
-            (payload["fileId"],),
-        )
-    else:
-        _, student = student_context(payload)
-        row = fetch_one(
-            """select * from courseplatform.files
-               where file_id = %s and student_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'""",
-            (payload["fileId"], student["student_id"]),
-        )
-    if not row:
-        raise ApiError("FILE_NOT_FOUND", "Ficheiro não encontrado.")
-    return _private_content_payload(
-        row,
-        bucket_field="storage_bucket",
-        path_field="storage_path",
-        checksum_field="storage_checksum_sha256",
-        status_field="storage_status",
-        legacy_url_field="drive_url",
-        file_name_field="file_name",
-        mime_type_field="mime_type",
-        size_field="size_bytes",
-    )
+    return assessment_domain.submission_file_download_payload_action(payload, _assessment_runtime())
 
 
 def certificate_receipt_download_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    require_fields(payload, ["requestId"])
-    if str_value(payload.get("adminToken")):
-        admin_context(payload, {"OWNER", "ADMIN"})
-        row = fetch_one(
-            "select * from courseplatform.certificate_requests where request_id = %s",
-            (payload["requestId"],),
-        )
-    else:
-        _, student = student_context(payload)
-        row = fetch_one(
-            "select * from courseplatform.certificate_requests where request_id = %s and student_id = %s",
-            (payload["requestId"], student["student_id"]),
-        )
-    if not row or not (row.get("payment_receipt_path") or row.get("payment_receipt_url")):
-        raise ApiError("PAYMENT_RECEIPT_NOT_FOUND", "Comprovativo de pagamento não encontrado.")
-    return _private_content_payload(
-        row,
-        bucket_field="payment_receipt_bucket",
-        path_field="payment_receipt_path",
-        checksum_field="payment_receipt_checksum_sha256",
-        status_field="payment_receipt_storage_status",
-        legacy_url_field="payment_receipt_url",
-        file_name_field="payment_receipt_name",
-        mime_type_field="payment_receipt_mime_type",
-        size_field="payment_receipt_size_bytes",
-    )
+    return financial_domain.certificate_receipt_download_payload_action(payload, _financial_runtime())
 
 
 def record_certificate_download(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["certificateId"])
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        cert = conn.execute(
-            "select * from courseplatform.certificates where certificate_id = %s and student_id = %s for update",
-            (payload["certificateId"], student["student_id"]),
-        ).fetchone()
-        if not cert:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-        require_certificate_download_access(conn, cert)
-        cert = conn.execute(
-            """
-            update courseplatform.certificates
-            set download_count = download_count + 1
-            where certificate_id = %s
-            returning *
-            """,
-            (payload["certificateId"],),
-        ).fetchone()
-        snapshot = cert.get("template_snapshot_json") if cert else None
-        if cert and not snapshot:
-            snapshot = certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
-        conn.commit()
-    return success({"certificate": public_certificate(cert)})
+    return certificate_domain.record_certificate_download_action(payload, _certificate_runtime())
 
 
 def certificate_pdf_payload(payload: dict[str, Any]):
-    _, student = student_context(payload)
-    require_fields(payload, ["certificateId"])
-    verification_base_url = str_value(payload.get("verificationBaseUrl")) or "verify.html"
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        cert = conn.execute(
-            """
-            select cert.*, c.title as course_title, c.total_hours as course_hours,
-                   s.full_name as student_name,
-                   e.final_score as enrollment_score
-            from courseplatform.certificates cert
-            join courseplatform.courses c on c.course_id = cert.course_id
-            join courseplatform.students s on s.student_id = cert.student_id
-            left join courseplatform.enrollments e
-              on e.enrollment_id = cert.enrollment_id
-            where cert.certificate_id = %s and cert.student_id = %s
-            """,
-            (payload["certificateId"], student["student_id"]),
-        ).fetchone()
-        if not cert:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-        require_certificate_download_access(conn, cert)
-        version = conn.execute(
-            "select * from courseplatform.course_versions where course_version_id = %s",
-            (cert.get("course_version_id"),),
-        ).fetchone() if cert.get("course_version_id") else None
-        snapshot = cert.get("template_snapshot_json") or certificate_template_snapshot(
-            conn, cert.get("course_id"), cert.get("certificate_type"), version
-        )
-        conn.commit()
-    return certificate_document_payload(cert, snapshot, verification_base_url)
+    return certificate_domain.certificate_pdf_payload_action(payload, _certificate_runtime())
 
 
 def admin_certificate_pdf_payload(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    require_fields(payload, ["certificateId"])
-    verification_base_url = str_value(payload.get("verificationBaseUrl")) or "verify.html"
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        cert = conn.execute(
-            """
-            select cert.*, c.title as course_title, c.total_hours as course_hours,
-                   s.full_name as student_name,
-                   e.final_score as enrollment_score
-            from courseplatform.certificates cert
-            join courseplatform.courses c on c.course_id = cert.course_id
-            join courseplatform.students s on s.student_id = cert.student_id
-            left join courseplatform.enrollments e
-              on e.enrollment_id = cert.enrollment_id
-            where cert.certificate_id = %s
-            """,
-            (payload["certificateId"],),
-        ).fetchone()
-        snapshot = cert.get("template_snapshot_json") if cert else None
-        if cert and not snapshot:
-            version = conn.execute(
-                "select * from courseplatform.course_versions where course_version_id = %s",
-                (cert.get("course_version_id"),),
-            ).fetchone() if cert.get("course_version_id") else None
-            snapshot = certificate_template_snapshot(
-                conn, cert.get("course_id"), cert.get("certificate_type"), version
-            )
-        conn.commit()
-    if not cert:
-        raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-    if cert.get("status") == "DELETED":
-        raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-    return certificate_document_payload(cert, snapshot, verification_base_url)
+    return certificate_domain.admin_certificate_pdf_payload_action(payload, _certificate_runtime())
 
 
 def certificate_workload_label(snapshot: dict[str, Any] | None, course_hours: Any = None) -> str:
@@ -6186,528 +2765,27 @@ def certificate_document_payload(
 
 
 def admin_platform_statistics(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    prepare_chat_feature_schema()
-    prepare_notification_feature_schema()
-    with connection() as conn:
-        summary = conn.execute(
-            """
-            select
-              (select count(*) from courseplatform.students where status = 'ACTIVE') as active_students,
-              (select count(*) from courseplatform.chat_presence p
-               join courseplatform.students s on s.student_id = p.actor_id and s.status = 'ACTIVE'
-               where p.actor_type = 'STUDENT' and p.last_seen_at > now() - interval '75 seconds') as online_students,
-              (select count(*) from courseplatform.courses where status = 'ACTIVE') as active_courses,
-              (select count(*) from courseplatform.enrollments where status in ('ACTIVE', 'COMPLETED')) as enrollments,
-              (select count(*) from courseplatform.attempts where status in ('SUBMITTED', 'UNDER_REVIEW')) as pending_reviews,
-              (select count(*) from courseplatform.certificates where coalesce(status, 'ISSUED') = 'ISSUED') as issued_certificates
-            """
-        ).fetchone() or {}
-        engagement = conn.execute(
-            """
-            select
-              (select count(*) from courseplatform.students s
-               where s.status = 'ACTIVE' and (
-                 s.last_login_at >= now() - interval '24 hours'
-                 or exists (select 1 from courseplatform.chat_presence p where p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '24 hours')
-               )) as active_today,
-              (select count(*) from courseplatform.students s
-               where s.status = 'ACTIVE' and (
-                 s.last_login_at >= now() - interval '7 days'
-                 or exists (select 1 from courseplatform.chat_presence p where p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '7 days')
-               )) as active_7_days,
-              (select count(*) from courseplatform.students s
-               where s.status = 'ACTIVE' and (
-                 s.last_login_at >= now() - interval '30 days'
-                 or exists (select 1 from courseplatform.chat_presence p where p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '30 days')
-               )) as active_30_days,
-              (select count(*) from courseplatform.chat_messages
-               where status = 'ACTIVE' and created_at >= now() - interval '7 days') as messages_7_days,
-              (select count(*) from courseplatform.attempts
-               where submitted_at >= now() - interval '30 days') as submissions_30_days,
-              (select count(*) from courseplatform.notifications
-               where created_at >= now() - interval '30 days') as notifications_30_days
-            """
-        ).fetchone() or {}
-        performance = conn.execute(
-            """
-            select
-              coalesce((select avg(progress_percent) from courseplatform.enrollments
-                        where status in ('ACTIVE', 'COMPLETED')), 0) as average_progress,
-              coalesce((select 100.0 * count(*) filter (where status = 'COMPLETED') / nullif(count(*), 0)
-                        from courseplatform.enrollments where status in ('ACTIVE', 'COMPLETED')), 0) as completion_rate,
-              coalesce((select 100.0 * count(*) filter (where status = 'APPROVED') / nullif(count(*), 0)
-                        from courseplatform.attempts
-                        where status in ('APPROVED', 'FAILED', 'CORRECTION_REQUIRED')), 0) as approval_rate
-            """
-        ).fetchone() or {}
-        operations = conn.execute(
-            """
-            select
-              (select count(*) from courseplatform.notification_deliveries where status = 'FAILED') as failed_deliveries,
-              (select count(*) from courseplatform.certificate_requests where status in ('REQUESTED', 'PAYMENT_SUBMITTED')) as pending_certificates,
-              (select count(*) from courseplatform.students where status in ('BLOCKED', 'INACTIVE')) as inactive_students,
-              (select count(*) from courseplatform.attempts where status = 'TIME_EXCEEDED') as expired_attempts,
-              (select count(*) from courseplatform.chat_message_reports where status = 'OPEN') as open_chat_reports
-            """
-        ).fetchone() or {}
-        courses = conn.execute(
-            """
-            with enrollment_stats as (
-              select course_id,
-                     count(*) filter (where status in ('ACTIVE', 'COMPLETED')) as student_count,
-                     count(*) filter (where status = 'COMPLETED') as completed_count,
-                     coalesce(avg(progress_percent) filter (where status in ('ACTIVE', 'COMPLETED')), 0) as average_progress
-              from courseplatform.enrollments group by course_id
-            ), pending_stats as (
-              select l.course_id, count(*) as pending_reviews
-              from courseplatform.attempts a
-              join courseplatform.lessons l on l.lesson_id = a.lesson_id
-              where a.status in ('SUBMITTED', 'UNDER_REVIEW')
-              group by l.course_id
-            )
-            select c.course_id, c.course_code, c.title,
-                   coalesce(e.student_count, 0) as student_count,
-                   coalesce(e.completed_count, 0) as completed_count,
-                   coalesce(e.average_progress, 0) as average_progress,
-                   coalesce(p.pending_reviews, 0) as pending_reviews
-            from courseplatform.courses c
-            left join enrollment_stats e on e.course_id = c.course_id
-            left join pending_stats p on p.course_id = c.course_id
-            where c.status = 'ACTIVE'
-            order by student_count desc, c.title
-            limit 10
-            """
-        ).fetchall()
-        activity = conn.execute(
-            """
-            select day::date as activity_date,
-                   (select count(*) from courseplatform.attempts a
-                    where a.submitted_at >= day and a.submitted_at < day + interval '1 day') as submissions,
-                   (select count(*) from courseplatform.chat_messages m
-                    where m.status = 'ACTIVE' and m.created_at >= day and m.created_at < day + interval '1 day') as messages
-            from generate_series(current_date - interval '6 days', current_date, interval '1 day') day
-            order by day
-            """
-        ).fetchall()
-        conn.commit()
-    numeric = lambda row, key: int(row.get(key) or 0)
-    return success({
-        "summary": {
-            "activeStudents": numeric(summary, "active_students"),
-            "onlineStudents": numeric(summary, "online_students"),
-            "activeCourses": numeric(summary, "active_courses"),
-            "enrollments": numeric(summary, "enrollments"),
-            "pendingReviews": numeric(summary, "pending_reviews"),
-            "issuedCertificates": numeric(summary, "issued_certificates"),
-        },
-        "engagement": {
-            "activeToday": numeric(engagement, "active_today"),
-            "active7Days": numeric(engagement, "active_7_days"),
-            "active30Days": numeric(engagement, "active_30_days"),
-            "messages7Days": numeric(engagement, "messages_7_days"),
-            "submissions30Days": numeric(engagement, "submissions_30_days"),
-            "notifications30Days": numeric(engagement, "notifications_30_days"),
-        },
-        "performance": {
-            "averageProgress": round(float(performance.get("average_progress") or 0), 1),
-            "completionRate": round(float(performance.get("completion_rate") or 0), 1),
-            "approvalRate": round(float(performance.get("approval_rate") or 0), 1),
-        },
-        "operations": {
-            "failedDeliveries": numeric(operations, "failed_deliveries"),
-            "pendingCertificates": numeric(operations, "pending_certificates"),
-            "inactiveStudents": numeric(operations, "inactive_students"),
-            "expiredAttempts": numeric(operations, "expired_attempts"),
-            "openChatReports": numeric(operations, "open_chat_reports"),
-        },
-        "courses": [{
-            "courseId": row.get("course_id") or "",
-            "courseCode": row.get("course_code") or "",
-            "title": row.get("title") or "Curso",
-            "studentCount": int(row.get("student_count") or 0),
-            "completedCount": int(row.get("completed_count") or 0),
-            "averageProgress": round(float(row.get("average_progress") or 0), 1),
-            "pendingReviews": int(row.get("pending_reviews") or 0),
-        } for row in courses],
-        "activity": [{
-            "date": iso(row.get("activity_date")),
-            "submissions": int(row.get("submissions") or 0),
-            "messages": int(row.get("messages") or 0),
-        } for row in activity],
-        "generatedAt": iso(utc_now()),
-    })
+    return administration_domain.admin_platform_statistics_action(payload, runtime=_administration_runtime())
 
 
 def admin_list_courses(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    limit = cursor_page_limit(payload)
-    query = str_value(payload.get("query")).lower()
-    status = (payload.get("status") or "ALL").upper()
-    content = (payload.get("content") or "ALL").upper()
-    if content not in {"ALL", "WITH_MODULES", "WITHOUT_MODULES", "WITH_GROUPS", "WITHOUT_GROUPS"}:
-        raise ApiError("INVALID_COURSE_FILTER", "O filtro de conteúdo é inválido.")
-    scope = cursor_scope("admin-courses", status, content, query)
-    cursor = decode_list_cursor(payload.get("cursor"), "admin-courses", scope, sort_type="text")
-    conditions = ["(%s = 'ALL' or c.status = %s)"]
-    params: list[Any] = [status, status]
-    if query:
-        conditions.append("(lower(c.course_id || ' ' || c.course_code || ' ' || c.title || ' ' || coalesce(c.description,'')) like %s)")
-        params.append(f"%{query}%")
-    where = " and ".join(conditions)
-    content_sql = {
-        "ALL": "true",
-        "WITH_MODULES": "lesson_count > 0",
-        "WITHOUT_MODULES": "lesson_count = 0",
-        "WITH_GROUPS": "group_count > 0",
-        "WITHOUT_GROUPS": "group_count = 0",
-    }[content]
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_title, cursor_id = cursor
-        cursor_sql = "where (pagination_sort_text > %s or (pagination_sort_text = %s and course_id > %s))"
-        cursor_params.extend((cursor_title, cursor_title, cursor_id))
-    rows = fetch_all(
-        f"""
-        with course_rows as (
-          select c.*,
-            count(distinct l.lesson_id) filter (where coalesce(l.status, 'ACTIVE') <> 'DELETED') as lesson_count,
-            count(distinct g.group_id) filter (where coalesce(g.status, 'ACTIVE') <> 'DELETED') as group_count,
-            count(distinct e.enrollment_id) filter (where coalesce(e.status, 'ACTIVE') <> 'CANCELLED') as enrollment_count,
-            lower(coalesce(c.title, '')) as pagination_sort_text
-          from courseplatform.courses c
-          left join courseplatform.lessons l on l.course_id = c.course_id
-          left join courseplatform.groups g on g.course_id = c.course_id
-          left join courseplatform.enrollments e on e.course_id = c.course_id
-          where {where}
-          group by c.course_id
-        ), filtered_courses as (
-          select * from course_rows where {content_sql}
-        ), numbered_courses as (
-          select *,
-            count(*) over() as total_count,
-            count(*) filter (where status = 'ACTIVE') over() as active_count,
-            count(*) filter (where status = 'INACTIVE') over() as inactive_count,
-            sum(lesson_count) over() as total_lessons,
-            sum(group_count) over() as total_groups
-          from filtered_courses
-        )
-        select * from numbered_courses
-        {cursor_sql}
-        order by pagination_sort_text, course_id
-        limit %s
-        """,
-        (*params, *cursor_params, limit + 1),
-    )
-    summary_row = rows[0] if rows else {}
-    total = int(summary_row.get("total_count") or 0)
-    rows, page_info = cursor_pagination_result(
-        rows, limit, "admin-courses", scope, "pagination_sort_text", "course_id"
-    )
-    page_info["total"] = total
-    return success({
-        "courses": [{
-            "course": public_course(row),
-            "lessonCount": int(row["lesson_count"]),
-            "groupCount": int(row["group_count"]),
-            "enrollmentCount": int(row["enrollment_count"]),
-        } for row in rows],
-        "pagination": page_info,
-        "summary": {
-            "active": int(summary_row.get("active_count") or 0),
-            "inactive": int(summary_row.get("inactive_count") or 0),
-            "lessons": int(summary_row.get("total_lessons") or 0),
-            "groups": int(summary_row.get("total_groups") or 0),
-        },
-    })
+    return catalog_domain.admin_list_courses_action(payload, runtime=_catalog_runtime())
 
 
 def admin_course_structure(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    course = fetch_one("select * from courseplatform.courses where course_id = %s", (course_id,))
-    if not course:
-        raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
-    lessons = fetch_all("select * from courseplatform.lessons where course_id = %s order by lesson_number", (course_id,))
-    versions = fetch_all(
-        """
-        select * from courseplatform.course_versions
-        where course_id = %s
-        order by version_number desc
-        """,
-        (course_id,),
-    )
-    offerings = fetch_all(
-        """
-        select o.*, count(e.enrollment_id) as enrollment_count
-        from courseplatform.course_offerings o
-        left join courseplatform.enrollments e on e.offering_id = o.offering_id
-        where o.course_id = %s
-        group by o.offering_id
-        order by o.start_date desc nulls last, o.created_at desc
-        """,
-        (course_id,),
-    )
-    lesson_ids = [row["lesson_id"] for row in lessons]
-    content_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
-    questions_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
-    if lesson_ids:
-        content = fetch_all("select * from courseplatform.lesson_content where lesson_id = any(%s) order by section_order", (lesson_ids,))
-        questions = fetch_all("select * from courseplatform.questions where lesson_id = any(%s) order by question_order", (lesson_ids,))
-        question_ids = [row["question_id"] for row in questions]
-        options_by_question: dict[str, list[dict[str, Any]]] = {question_id: [] for question_id in question_ids}
-        if question_ids:
-            options = fetch_all("select * from courseplatform.question_options where question_id = any(%s) order by option_order", (question_ids,))
-            for option in options:
-                options_by_question[option["question_id"]].append(option)
-        for item in content:
-            content_by_lesson[item["lesson_id"]].append(item)
-        for question in questions:
-            questions_by_lesson[question["lesson_id"]].append({"question": question, "options": options_by_question.get(question["question_id"], [])})
-    return success({
-        "course": public_course(course),
-        "versions": [public_course_version(row) for row in versions],
-        "offerings": [public_course_offering(row) for row in offerings],
-        "lessons": [
-            {
-                "lesson": public_lesson(lesson),
-                "content": [public_content(item) for item in content_by_lesson.get(lesson["lesson_id"], [])],
-                "questions": [
-                    {
-                        "question": staff_question(item["question"]),
-                        "options": [staff_option(option) for option in item["options"]],
-                    }
-                    for item in questions_by_lesson.get(lesson["lesson_id"], [])
-                ],
-            }
-            for lesson in lessons
-        ],
-    })
+    return catalog_domain.admin_course_structure_action(payload, runtime=_catalog_runtime())
 
 
 def admin_list_groups(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    course_id = str_value(payload.get("courseId"))
-    status = str_value(payload.get("status") or "ALL").upper()
-    query = str_value(payload.get("query")).lower()
-    limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-groups", course_id, status, query)
-    cursor = decode_list_cursor(payload.get("cursor"), "admin-groups", scope, sort_type="text")
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_name, cursor_id = cursor
-        cursor_sql = "where (pagination_sort_text > %s or (pagination_sort_text = %s and group_id > %s))"
-        cursor_params.extend((cursor_name, cursor_name, cursor_id))
-    rows = fetch_all(
-        f"""
-        with group_rows as (
-          select g.*, count(gm.group_member_id) filter (where gm.status = 'ACTIVE') as member_count,
-                 lower(coalesce(g.name, '')) as pagination_sort_text
-          from courseplatform.groups g
-          left join courseplatform.group_members gm on gm.group_id = g.group_id
-          where (%s = '' or g.course_id = %s)
-            and (%s = 'ALL' or (%s = 'NON_DELETED' and g.status <> 'DELETED') or g.status = %s)
-            and (%s = '' or lower(coalesce(g.name, '') || ' ' || coalesce(g.group_code, '') || ' ' || coalesce(g.group_id, '')) like %s)
-          group by g.group_id
-        ), numbered_groups as (
-          select *, count(*) over() as total_count from group_rows
-        )
-        select * from numbered_groups
-        {cursor_sql}
-        order by pagination_sort_text, group_id
-        limit %s
-        """,
-        (course_id, course_id, status, status, status, query, f"%{query}%", *cursor_params, limit + 1),
-    )
-    total = int(rows[0]["total_count"]) if rows else 0
-    rows, page_info = cursor_pagination_result(
-        rows, limit, "admin-groups", scope, "pagination_sort_text", "group_id"
-    )
-    page_info["total"] = total
-    return success({
-        "groups": [{"group": {
-            "groupId": row["group_id"], "groupCode": row.get("group_code"),
-            "name": row.get("name"), "courseId": row.get("course_id"),
-            "offeringId": row.get("offering_id"), "startDate": iso(row.get("start_date")),
-            "endDate": iso(row.get("end_date")), "status": row.get("status"),
-            "createdAt": iso(row.get("created_at")), "updatedAt": iso(row.get("updated_at")),
-        }, "memberCount": int(row["member_count"] or 0)} for row in rows],
-        "pagination": page_info,
-    })
+    return enrollment_domain.admin_list_groups_action(payload, runtime=_enrollment_runtime())
 
 
 def admin_list_students(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    prepare_notification_feature_schema()
-    status = (payload.get("status") or "ALL").upper()
-    query = str_value(payload.get("query")).lower()
-    progress = str_value(payload.get("progress") or "ALL").upper()
-    sort = str_value(payload.get("sort") or "name")
-    if progress not in {"ALL", "NOT_STARTED", "IN_PROGRESS", "COMPLETED"}:
-        raise ApiError("INVALID_STUDENT_FILTER", "O filtro de progresso é inválido.")
-    if sort not in {"name", "progressDesc", "progressAsc", "recentLogin"}:
-        raise ApiError("INVALID_STUDENT_SORT", "A ordenação de estudantes é inválida.")
-    limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-students", status, progress, sort, query)
-    sort_type = "text" if sort == "name" else "number" if sort.startswith("progress") else "datetime"
-    cursor = decode_list_cursor(
-        payload.get("cursor"), "admin-students", scope,
-        sort_type=sort_type, allow_null_sort=sort == "recentLogin",
-    )
-    progress_sql = {
-        "ALL": "true",
-        "NOT_STARTED": "primary_progress <= 0",
-        "IN_PROGRESS": "primary_progress > 0 and primary_progress < 100",
-        "COMPLETED": "primary_progress >= 100",
-    }[progress]
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if sort == "name":
-        sort_field = "pagination_sort_text"
-        order_sql = "pagination_sort_text, student_id"
-        if cursor:
-            cursor_value, cursor_id = cursor
-            cursor_sql = "where (pagination_sort_text > %s or (pagination_sort_text = %s and student_id > %s))"
-            cursor_params.extend((cursor_value, cursor_value, cursor_id))
-    elif sort == "progressAsc":
-        sort_field = "primary_progress"
-        order_sql = "primary_progress, student_id"
-        if cursor:
-            cursor_value, cursor_id = cursor
-            cursor_sql = "where (primary_progress > %s or (primary_progress = %s and student_id > %s))"
-            cursor_params.extend((cursor_value, cursor_value, cursor_id))
-    elif sort == "progressDesc":
-        sort_field = "primary_progress"
-        order_sql = "primary_progress desc, student_id desc"
-        if cursor:
-            cursor_value, cursor_id = cursor
-            cursor_sql = "where (primary_progress < %s or (primary_progress = %s and student_id < %s))"
-            cursor_params.extend((cursor_value, cursor_value, cursor_id))
-    else:
-        sort_field = "last_login_at"
-        order_sql = "last_login_at desc nulls last, student_id desc"
-        if cursor:
-            cursor_value, cursor_id = cursor
-            if cursor_value is None:
-                cursor_sql = "where last_login_at is null and student_id < %s"
-                cursor_params.append(cursor_id)
-            else:
-                cursor_sql = "where (last_login_at < %s or last_login_at is null or (last_login_at = %s and student_id < %s))"
-                cursor_params.extend((cursor_value, cursor_value, cursor_id))
-    rows = fetch_all(
-        f"""
-        with student_rows as (
-          select s.*,
-            (select count(*) from courseplatform.push_subscriptions ps where ps.student_id = s.student_id and ps.enabled) as push_subscription_count,
-            coalesce(jsonb_agg(distinct to_jsonb(e)) filter (where e.enrollment_id is not null), '[]') as enrollments,
-            coalesce(jsonb_agg(distinct to_jsonb(gm)) filter (where gm.group_member_id is not null), '[]') as memberships,
-            coalesce(max(e.progress_percent), 0) as primary_progress,
-            lower(coalesce(s.full_name, '')) as pagination_sort_text
-          from courseplatform.students s
-          left join courseplatform.enrollments e on e.student_id = s.student_id
-          left join courseplatform.group_members gm on gm.student_id = s.student_id and gm.status = 'ACTIVE'
-          where (%s = 'ALL' or s.status = %s)
-            and (%s = '' or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
-              coalesce(s.public_student_id, '') || ' ' || coalesce(s.country, '') || ' ' || coalesce(s.organization, '')) like %s)
-          group by s.student_id
-        ), filtered_students as (
-          select * from student_rows where {progress_sql}
-        ), numbered_students as (
-          select *,
-            count(*) over() as total_count,
-            count(*) filter (where status = 'ACTIVE') over() as active_count,
-            count(*) filter (where status = 'BLOCKED') over() as blocked_count,
-            count(*) filter (where primary_progress >= 100) over() as completed_count,
-            avg(primary_progress) over() as average_progress
-          from filtered_students
-        )
-        select * from numbered_students
-        {cursor_sql}
-        order by {order_sql}
-        limit %s
-        """,
-        (status, status, query, f"%{query}%", *cursor_params, limit + 1),
-    )
-    summary_row = rows[0] if rows else {}
-    total = int(summary_row.get("total_count") or 0)
-    rows, page_info = cursor_pagination_result(
-        rows, limit, "admin-students", scope, sort_field, "student_id"
-    )
-    page_info["total"] = total
-    return success({
-        "students": [
-            {
-                "student": public_student(row),
-                "enrollments": [public_enrollment(item) for item in row.get("enrollments", [])],
-                "memberships": [public_group_member(item) for item in row.get("memberships", [])],
-            }
-            for row in rows
-        ],
-        "total": total,
-        "limit": limit,
-        "pagination": page_info,
-        "summary": {
-            "active": int(summary_row.get("active_count") or 0),
-            "blocked": int(summary_row.get("blocked_count") or 0),
-            "completed": int(summary_row.get("completed_count") or 0),
-            "averageProgress": round(float(summary_row.get("average_progress") or 0), 1),
-        },
-    })
+    return administration_domain.admin_list_students_action(payload, runtime=_administration_runtime())
 
 
 def admin_list_staff(payload: dict[str, Any]):
-    _, current_admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    status = str_value(payload.get("status") or "ALL").upper()
-    role = str_value(payload.get("role") or "ALL").upper()
-    query = str_value(payload.get("query")).lower()
-    limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-staff", status, role, query)
-    cursor = decode_list_cursor(payload.get("cursor"), "admin-staff", scope, sort_type="text")
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_name, cursor_id = cursor
-        cursor_sql = "where (pagination_sort_text > %s or (pagination_sort_text = %s and admin_id > %s))"
-        cursor_params.extend((cursor_name, cursor_name, cursor_id))
-    rows = fetch_all(
-        f"""
-        with staff_rows as (
-          select *, lower(coalesce(full_name, '')) as pagination_sort_text
-          from courseplatform.admins
-          where (%s = 'ALL' or status = %s)
-            and (%s = 'ALL' or role = %s)
-            and (%s = '' or lower(coalesce(full_name, '') || ' ' || coalesce(email, '') || ' ' || coalesce(role, '')) like %s)
-        ), numbered_staff as (
-          select *,
-            count(*) over() as total_count,
-            count(*) filter (where status = 'ACTIVE') over() as active_count,
-            count(*) filter (where role = 'REVIEWER' and status = 'ACTIVE') over() as reviewer_count
-          from staff_rows
-        )
-        select * from numbered_staff
-        {cursor_sql}
-        order by pagination_sort_text, admin_id
-        limit %s
-        """,
-        (status, status, role, role, query, f"%{query}%", *cursor_params, limit + 1),
-    )
-    summary_row = rows[0] if rows else {}
-    total = int(summary_row.get("total_count") or 0)
-    rows, page_info = cursor_pagination_result(
-        rows, limit, "admin-staff", scope, "pagination_sort_text", "admin_id"
-    )
-    page_info["total"] = total
-    return success({
-        "staff": [public_admin(row) for row in rows],
-        "currentAdmin": public_admin(current_admin),
-        "pagination": page_info,
-        "summary": {
-            "active": int(summary_row.get("active_count") or 0),
-            "reviewers": int(summary_row.get("reviewer_count") or 0),
-        },
-    })
+    return administration_domain.admin_list_staff_action(payload, runtime=_administration_runtime())
 
 
 def submission_item(row: dict[str, Any]):
@@ -6772,4314 +2850,320 @@ def submission_item(row: dict[str, Any]):
 
 
 def admin_list_submissions(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    expire_overdue_attempts()
-    status = (payload.get("status") or "ALL").upper()
-    query = (payload.get("query") or "").strip().lower()
-    limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-submissions", status, query)
-    cursor = decode_list_cursor(payload.get("cursor"), "admin-submissions", scope)
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_at, cursor_id = cursor
-        cursor_sql = """
-          and (
-            coalesce(a.submitted_at, a.started_at, a.created_at) < %s
-            or (
-              coalesce(a.submitted_at, a.started_at, a.created_at) = %s
-              and a.attempt_id < %s
-            )
-          )
-        """
-        cursor_params.extend((cursor_at, cursor_at, cursor_id))
-    rows = fetch_all(
-        f"""
-        with latest_reviews as (
-          select distinct on (attempt_id) *
-          from courseplatform.reviews
-          order by attempt_id, reviewed_at desc nulls last
-        ),
-        file_counts as (
-          select attempt_id, count(*) as file_count
-          from courseplatform.files
-          where coalesce(status, 'ACTIVE') <> 'DELETED'
-          group by attempt_id
-        )
-        select
-          a.*,
-          a.student_id as attempt_student_id,
-          a.lesson_id as attempt_lesson_id,
-          s.student_id, s.public_student_id, s.full_name, s.email, s.status as student_status,
-          s.country, s.organization, s.phone, s.job_title, s.interests,
-          s.profile_photo_url, s.created_at as student_created_at, s.last_login_at,
-          l.lesson_id, l.course_id, l.lesson_number, l.title, l.slug, l.summary,
-          l.theory_minutes, l.exercise_minutes, l.individual_minutes, l.passing_score,
-          l.prerequisite_lesson_id, l.status as lesson_status,
-          p.progress_id, p.status as progress_status, p.content_access_status,
-          p.evaluation_status, p.score as progress_score, p.attempt_count as progress_attempt_count,
-          lr.review_id, lr.reviewer_id, lr.decision, lr.score as review_score,
-          lr.comments, lr.correction_deadline, lr.unlock_next_lesson, lr.reviewed_at as review_reviewed_at,
-          coalesce(fc.file_count, 0) as file_count,
-          coalesce(a.submitted_at, a.started_at, a.created_at) as pagination_sort_at
-        from courseplatform.attempts a
-        left join courseplatform.students s on s.student_id = a.student_id
-        left join courseplatform.lessons l on l.lesson_id = a.lesson_id
-        left join courseplatform.lesson_progress p on p.progress_id = a.progress_id
-        left join latest_reviews lr on lr.attempt_id = a.attempt_id
-        left join file_counts fc on fc.attempt_id = a.attempt_id
-        where
-          (
-            %s = 'ALL'
-            or (%s = 'REVIEWED' and a.status in ('APPROVED', 'CORRECTION_REQUIRED', 'FAILED'))
-            or a.status = %s
-          )
-          and (
-            %s = ''
-            or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
-              coalesce(l.title, '') || ' ' || coalesce(a.review_comments, '') || ' ' ||
-              coalesce(l.lesson_id, '') || ' ' || coalesce(a.attempt_id, '')) like %s
-          )
-          {cursor_sql}
-        order by coalesce(a.submitted_at, a.started_at, a.created_at) desc nulls last,
-                 a.attempt_id desc
-        limit %s
-        """,
-        (status, status, status, query, f"%{query}%", *cursor_params, limit + 1),
-    )
-    rows, page_info = cursor_pagination_result(
-        rows,
-        limit,
-        "admin-submissions",
-        scope,
-        "pagination_sort_at",
-        "attempt_id",
-    )
-    return success({
-        "submissions": [submission_item(row) for row in rows],
-        "pagination": page_info,
-    })
+    return assessment_domain.admin_list_submissions_action(payload, _assessment_runtime())
 
 
 def admin_create_course_version(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["courseId"])
-    course_id = str_value(payload.get("courseId"))
-    with connection() as conn:
-        course = conn.execute(
-            "select * from courseplatform.courses where course_id = %s for update",
-            (course_id,),
-        ).fetchone()
-        if not course:
-            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
-        existing = conn.execute(
-            "select * from courseplatform.course_versions where course_id = %s and status = 'DRAFT' for update",
-            (course_id,),
-        ).fetchone()
-        if existing:
-            return success({"courseVersion": public_course_version(existing), "created": False})
-        latest = conn.execute(
-            "select coalesce(max(version_number), 0) as version_number from courseplatform.course_versions where course_id = %s",
-            (course_id,),
-        ).fetchone() or {}
-        version_number = int(latest.get("version_number") or 0) + 1
-        snapshot = course_structure_snapshot_with_conn(conn, course_id)
-        row = conn.execute(
-            """
-            insert into courseplatform.course_versions
-              (course_version_id, course_id, version_number, status, title, description,
-               total_hours, passing_score, content_snapshot_json, created_by, created_at, updated_at)
-            values (%s, %s, %s, 'DRAFT', %s, %s, %s, %s, %s, %s, now(), now())
-            returning *
-            """,
-            (
-                generate_id("CRSV"), course_id, version_number, course.get("title"),
-                course.get("description"), float_value(course.get("total_hours")),
-                float_value(course.get("passing_score"), 60),
-                json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
-                admin["admin_id"],
-            ),
-        ).fetchone()
-        audit(
-            conn, "ADMIN", admin["admin_id"], "COURSE_VERSION_CREATED",
-            "COURSE_VERSION", row["course_version_id"],
-            {"courseId": course_id, "versionNumber": version_number},
-        )
-        conn.commit()
-    return success({"courseVersion": public_course_version(row), "created": True})
+    return catalog_domain.admin_create_course_version_action(payload, runtime=_catalog_runtime())
 
 
 def admin_publish_course_version(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["courseVersionId"])
-    with connection() as conn:
-        version = conn.execute(
-            "select * from courseplatform.course_versions where course_version_id = %s for update",
-            (payload["courseVersionId"],),
-        ).fetchone()
-        if not version:
-            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
-        if version.get("status") != "DRAFT":
-            raise ApiError("COURSE_VERSION_NOT_DRAFT", "Apenas uma versão em rascunho pode ser publicada.")
-        snapshot = course_structure_snapshot_with_conn(conn, version["course_id"])
-        course_data = snapshot["course"]
-        row = conn.execute(
-            """
-            update courseplatform.course_versions
-            set status = 'PUBLISHED', title = %s, description = %s,
-                total_hours = %s, passing_score = %s, content_snapshot_json = %s,
-                published_by = %s, published_at = now(), updated_at = now()
-            where course_version_id = %s and status = 'DRAFT'
-            returning *
-            """,
-            (
-                course_data.get("title"), course_data.get("description"),
-                float_value(course_data.get("total_hours")),
-                float_value(course_data.get("passing_score"), 60),
-                json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
-                admin["admin_id"], version["course_version_id"],
-            ),
-        ).fetchone()
-        audit(
-            conn, "ADMIN", admin["admin_id"], "COURSE_VERSION_PUBLISHED",
-            "COURSE_VERSION", row["course_version_id"],
-            {"courseId": row["course_id"], "versionNumber": row["version_number"]},
-        )
-        conn.commit()
-    return success({"courseVersion": public_course_version(row)})
+    return catalog_domain.admin_publish_course_version_action(payload, runtime=_catalog_runtime())
 
 
 def admin_save_course_offering(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["courseId", "courseVersionId", "name"])
-    status = str_value(payload.get("status") or "DRAFT").upper()
-    if status not in {"DRAFT", "OPEN", "ACTIVE", "COMPLETED", "CANCELLED", "ARCHIVED"}:
-        raise ApiError("INVALID_OFFERING_STATUS", "Estado da edição/turma inválido.")
-    raw_start_date = payload.get("startDate")
-    raw_end_date = payload.get("endDate")
-    start_date = parse_datetime(raw_start_date)
-    end_date = parse_datetime(raw_end_date)
-    if raw_start_date not in (None, "") and start_date is None:
-        raise ApiError("INVALID_OFFERING_PERIOD", "A data inicial da edição é inválida.")
-    if raw_end_date not in (None, "") and end_date is None:
-        raise ApiError("INVALID_OFFERING_PERIOD", "A data final da edição é inválida.")
-    if start_date and start_date.tzinfo is None:
-        start_date = start_date.replace(tzinfo=timezone.utc)
-    if end_date and end_date.tzinfo is None:
-        end_date = end_date.replace(tzinfo=timezone.utc)
-    if start_date and end_date and end_date < start_date:
-        raise ApiError("INVALID_OFFERING_PERIOD", "A data final não pode ser anterior à data inicial.")
-    capacity = int_value(payload.get("capacity")) if payload.get("capacity") not in (None, "") else None
-    if capacity is not None and capacity <= 0:
-        raise ApiError("INVALID_OFFERING_CAPACITY", "A capacidade deve ser superior a zero.")
-    offering_id = str_value(payload.get("offeringId")) or generate_id("COFF")
-    rules = payload.get("rules") if isinstance(payload.get("rules"), dict) else {}
-    calendar = payload.get("calendar") if isinstance(payload.get("calendar"), list) else []
-    with connection() as conn:
-        version = conn.execute(
-            """
-            select * from courseplatform.course_versions
-            where course_version_id = %s and course_id = %s
-            """,
-            (payload["courseVersionId"], payload["courseId"]),
-        ).fetchone()
-        if not version:
-            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
-        if version.get("status") != "PUBLISHED":
-            raise ApiError("COURSE_VERSION_NOT_PUBLISHED", "Publique a versão antes de criar uma edição/turma.")
-        row = conn.execute(
-            """
-            insert into courseplatform.course_offerings
-              (offering_id, course_id, course_version_id, offering_code, name,
-               start_date, end_date, capacity, status, lead_admin_id, rules_json,
-               calendar_json, created_by, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
-            on conflict (offering_id) do update
-            set course_id = excluded.course_id,
-                course_version_id = excluded.course_version_id,
-                offering_code = excluded.offering_code,
-                name = excluded.name,
-                start_date = excluded.start_date,
-                end_date = excluded.end_date,
-                capacity = excluded.capacity,
-                status = excluded.status,
-                lead_admin_id = excluded.lead_admin_id,
-                rules_json = excluded.rules_json,
-                calendar_json = excluded.calendar_json,
-                updated_at = now()
-            returning *
-            """,
-            (
-                offering_id, payload["courseId"], payload["courseVersionId"],
-                str_value(payload.get("offeringCode") or offering_id), str_value(payload.get("name")),
-                start_date, end_date, capacity, status,
-                str_value(payload.get("leadAdminId")) or None,
-                json.dumps(rules, ensure_ascii=True, separators=(",", ":")),
-                json.dumps(calendar, ensure_ascii=True, separators=(",", ":")),
-                admin["admin_id"],
-            ),
-        ).fetchone()
-        audit(
-            conn, "ADMIN", admin["admin_id"], "COURSE_OFFERING_SAVED",
-            "COURSE_OFFERING", offering_id,
-            {"courseId": row["course_id"], "courseVersionId": row["course_version_id"], "status": status},
-        )
-        conn.commit()
-    return success({"offering": public_course_offering(row)})
+    return enrollment_domain.admin_save_course_offering_action(payload, runtime=_enrollment_runtime())
 
 
 def admin_enroll_students_in_offering(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["offeringId"])
-    student_ids = list(dict.fromkeys(
-        str_value(value) for value in (payload.get("studentIds") or []) if str_value(value)
-    ))
-    if not student_ids:
-        raise ApiError("EMPTY_ENROLLMENT_TARGET", "Selecione pelo menos um estudante.")
-    group_id = str_value(payload.get("groupId")) or None
-    with connection() as conn:
-        offering = conn.execute(
-            "select * from courseplatform.course_offerings where offering_id = %s for update",
-            (payload["offeringId"],),
-        ).fetchone()
-        if not offering:
-            raise ApiError("OFFERING_NOT_FOUND", "Edição/turma não encontrada.")
-        if offering.get("status") not in {"OPEN", "ACTIVE"}:
-            raise ApiError("OFFERING_NOT_OPEN", "A edição/turma não aceita novas matrículas.")
-        if group_id:
-            group = conn.execute(
-                "select * from courseplatform.groups where group_id = %s and offering_id = %s",
-                (group_id, offering["offering_id"]),
-            ).fetchone()
-            if not group:
-                raise ApiError("GROUP_OFFERING_MISMATCH", "O grupo não pertence à edição selecionada.")
-        enrollments = []
-        for student_id in student_ids:
-            student = conn.execute(
-                "select student_id from courseplatform.students where student_id = %s and status = 'ACTIVE'",
-                (student_id,),
-            ).fetchone()
-            if not student:
-                raise ApiError("STUDENT_NOT_FOUND", "Um dos estudantes selecionados não está ativo.")
-            enrollment = ensure_offering_enrollment_with_conn(conn, student_id, offering, group_id)
-            enrollments.append(enrollment)
-            if group_id:
-                conn.execute(
-                    """
-                    insert into courseplatform.group_members
-                      (group_member_id, group_id, student_id, enrollment_id, status, joined_at, updated_at)
-                    values (%s, %s, %s, %s, 'ACTIVE', now(), now())
-                    on conflict (group_id, student_id) do update
-                    set enrollment_id = excluded.enrollment_id, status = 'ACTIVE', updated_at = now()
-                    """,
-                    (generate_id("GM"), group_id, student_id, enrollment["enrollment_id"]),
-                )
-        audit(
-            conn, "ADMIN", admin["admin_id"], "STUDENTS_ENROLLED_IN_OFFERING",
-            "COURSE_OFFERING", offering["offering_id"],
-            {"studentCount": len(enrollments), "groupId": group_id},
-        )
-        conn.commit()
-    return success({
-        "offering": public_course_offering(offering),
-        "enrollments": [public_enrollment(row) for row in enrollments],
-    })
+    return enrollment_domain.admin_enroll_students_in_offering_action(payload, runtime=_enrollment_runtime())
 
 
 def admin_list_course_reconciliation_issues(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN"})
-    status = str_value(payload.get("status") or "OPEN").upper()
-    limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-course-reconciliation", status)
-    cursor = decode_list_cursor(payload.get("cursor"), "admin-course-reconciliation", scope)
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_at, cursor_id = cursor
-        cursor_sql = """
-          and (detected_at > %s or (detected_at = %s and issue_id > %s))
-        """
-        cursor_params.extend((cursor_at, cursor_at, cursor_id))
-    rows = fetch_all(
-        f"""
-        select *, detected_at as pagination_sort_at
-        from courseplatform.migration_reconciliation_issues
-        where migration_key = '20260915101047'
-          and (%s = 'ALL' or status = %s)
-          {cursor_sql}
-        order by detected_at, issue_id
-        limit %s
-        """,
-        (status, status, *cursor_params, limit + 1),
-    )
-    rows, page_info = cursor_pagination_result(
-        rows, limit, "admin-course-reconciliation", scope, "pagination_sort_at", "issue_id"
-    )
-    return success({
-        "issues": [
-            {
-                "issueId": row.get("issue_id"),
-                "entityType": row.get("entity_type"),
-                "entityId": row.get("entity_id"),
-                "issueCode": row.get("issue_code"),
-                "details": row.get("details_json") or {},
-                "status": row.get("status"),
-                "detectedAt": iso(row.get("detected_at")),
-            }
-            for row in rows
-        ],
-        "pagination": page_info,
-    })
+    return enrollment_domain.admin_list_course_reconciliation_issues_action(payload, runtime=_enrollment_runtime())
 
 
 def admin_get_submission(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    require_fields(payload, ["attemptId"])
-    prepare_assessment_feature_schema()
-    attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
-    if not attempt:
-        raise ApiError("ATTEMPT_NOT_FOUND", "Submissão não encontrada.")
-    student = fetch_one("select * from courseplatform.students where student_id = %s", (attempt["student_id"],))
-    lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (attempt["lesson_id"],))
-    progress = fetch_one(
-        "select * from courseplatform.lesson_progress where progress_id = %s",
-        (attempt.get("progress_id"),),
-    )
-    with connection() as conn:
-        snapshot = snapshot_for_attempt_with_conn(conn, attempt)
-    questions = [row for row in snapshot.get("questions", []) if isinstance(row, dict)]
-    answers = fetch_all("select * from courseplatform.answers where attempt_id = %s", (attempt["attempt_id"],))
-    answer_by_question = {row["question_id"]: row for row in answers}
-    files = fetch_all(
-        "select * from courseplatform.files where attempt_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED' order by uploaded_at",
-        (attempt["attempt_id"],),
-    )
-    reviews = fetch_all("select * from courseplatform.reviews where attempt_id = %s order by reviewed_at desc nulls last", (attempt["attempt_id"],))
-    return success({
-        "student": public_student(student or {"student_id": attempt["student_id"], "full_name": "Estudante sem cadastro", "email": "", "status": "UNKNOWN"}),
-        "lesson": public_lesson(lesson or {"lesson_id": attempt["lesson_id"], "title": attempt["lesson_id"]}),
-        "progress": public_progress(progress) if progress else None,
-        "attempt": staff_attempt(attempt),
-        "answers": [
-            {
-                "question": {
-                    **staff_question(question),
-                    "options": [staff_option(option) for option in question.get("options", [])],
-                },
-                "answer": staff_answer(answer_by_question.get(question["question_id"])) or {
-                    "answerId": "",
-                    "attemptId": attempt["attempt_id"],
-                    "questionId": question["question_id"],
-                    "answerText": "",
-                    "selectedOptionId": "",
-                    "isCorrect": None,
-                    "awardedPoints": None,
-                    "savedAt": None,
-                    "submittedAt": None,
-                },
-            }
-            for question in questions
-        ],
-        "files": [public_file(row) for row in files],
-        "reviews": [public_review(row) for row in reviews],
-    })
+    return assessment_domain.admin_get_submission_action(payload, _assessment_runtime())
 
 
 def admin_review_submission(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    require_fields(payload, ["attemptId", "decision"])
-    prepare_assessment_feature_schema()
-    prepare_notification_feature_schema()
-    decision = str_value(payload.get("decision")).upper()
-    if decision not in {"APPROVED", "APPROVED_WITH_NOTES", "CORRECTION_REQUIRED", "FAILED"}:
-        raise ApiError("INVALID_DECISION", "Decisão inválida.")
-    status = "APPROVED" if decision in {"APPROVED", "APPROVED_WITH_NOTES"} else decision
-    authorize_retry = as_bool(payload.get("authorizeRetry", decision == "CORRECTION_REQUIRED"))
-    if authorize_retry and decision not in {"CORRECTION_REQUIRED", "FAILED"}:
-        raise ApiError("INVALID_RETRY_DECISION", "O reenvio só pode ser autorizado para trabalhos devolvidos ou não aprovados.")
-    deadline = correction_deadline(payload) if authorize_retry else None
-    if status != "CORRECTION_REQUIRED":
-        require_fields(payload, ["score"])
-    score = None if payload.get("score") in (None, "") else float_value(payload.get("score"))
-    if score is not None and not 0 <= score <= 100:
-        raise ApiError("INVALID_SCORE", "A classificação deve estar entre 0 e 100.")
-    now = utc_now()
-    attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
-    if not attempt:
-        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
-    notification_ids: list[str] = []
-    with connection() as conn:
-        conn.execute("select progress_id from courseplatform.lesson_progress where progress_id = %s for update", (attempt["progress_id"],)).fetchone()
-        attempt = conn.execute("select * from courseplatform.attempts where attempt_id = %s for update", (attempt["attempt_id"],)).fetchone()
-        require_latest_attempt(conn, attempt)
-        review = conn.execute(
-            """
-            insert into courseplatform.reviews
-              (review_id, attempt_id, reviewer_id, decision, score, comments,
-               correction_deadline, unlock_next_lesson, reviewed_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            returning *
-            """,
-            (
-                generate_id("REV"),
-                attempt["attempt_id"],
-                admin["admin_id"],
-                decision,
-                score,
-                str_value(payload.get("comments")),
-                deadline,
-                status == "APPROVED",
-                now,
-            ),
-        ).fetchone()
-        updated = conn.execute(
-            """
-            update courseplatform.attempts
-            set status = %s, score = %s, reviewer_id = %s, reviewed_at = %s,
-                review_comments = %s, retry_authorized = %s, updated_at = %s
-            where attempt_id = %s
-            returning *
-            """,
-            (status, score, admin["admin_id"], now, str_value(payload.get("comments")), authorize_retry, now, attempt["attempt_id"]),
-        ).fetchone()
-        conn.execute(
-            """
-            update courseplatform.lesson_progress
-            set status = %s, evaluation_status = %s,
-                content_access_status = case when %s then 'AVAILABLE' else coalesce(content_access_status, 'AVAILABLE') end,
-                approved_at = case when %s = 'APPROVED' then %s else null end,
-                score = %s, updated_at = %s
-            where progress_id = %s
-            """,
-            (status, status, authorize_retry, status, now, score, now, attempt.get("progress_id")),
-        )
-        refresh_enrollment_progress(conn, attempt.get("progress_id"))
-        lesson = conn.execute(
-            "select title from courseplatform.lessons where lesson_id = %s",
-            (attempt["lesson_id"],),
-        ).fetchone() or {}
-        comments = str_value(payload.get("comments"))
-        message = f"{lesson.get('title') or 'Atividade'}: {notification_status_label(decision)}."
-        if comments:
-            message = f"{message} Comentário do avaliador: {comments}"
-        if authorize_retry:
-            message = f"{message} Novo envio autorizado até {iso(deadline)}. As respostas anteriores serão preservadas; carregue os documentos corrigidos."
-        notification_id = create_student_notification(
-            conn,
-            attempt["student_id"],
-            "REVIEW_FEEDBACK" if comments else "SUBMISSION_STATUS",
-            "Avaliação atualizada",
-            message,
-            admin_id=admin["admin_id"],
-            action_url=f"#/lesson/{attempt['lesson_id']}" if authorize_retry else "#/grades",
-            entity_type="ATTEMPT",
-            entity_id=attempt["attempt_id"],
-            priority="HIGH" if status == "CORRECTION_REQUIRED" else "NORMAL",
-            template_key="REVIEW_UPDATED",
-            template_variables={
-                "activity": lesson.get("title") or "Atividade",
-                "status": notification_status_label(decision),
-                "feedback": comments,
-                "details": message,
-            },
-        )
-        if notification_id:
-            notification_ids.append(notification_id)
-        audit(conn, "ADMIN", admin["admin_id"], "SUBMISSION_REVIEWED", "ATTEMPT", attempt["attempt_id"], {
-            "decision": decision, "score": score, "retryAuthorized": authorize_retry, "correctionDeadline": iso(deadline),
-        })
-        conn.commit()
-    dispatch_notification_deliveries(notification_ids)
-    return success({"attempt": staff_attempt(updated), "review": public_review(review)})
+    return assessment_domain.admin_review_submission_action(payload, _assessment_runtime())
 
 
 def admin_authorize_retry(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    require_fields(payload, ["attemptId"])
-    prepare_assessment_feature_schema()
-    prepare_notification_feature_schema()
-    if as_bool(payload.get("authorized", True)):
-        correction_deadline(payload)
-        attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
-        if not attempt:
-            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
-        return admin_review_submission({
-            **payload,
-            "decision": "CORRECTION_REQUIRED",
-            "score": attempt.get("score"),
-            "comments": str_value(payload.get("comments")) or "Trabalho devolvido para correção e novo envio dos documentos.",
-            "authorizeRetry": True,
-        })
-    notification_ids: list[str] = []
-    with connection() as conn:
-        pending = conn.execute(
-            "select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],),
-        ).fetchone()
-        if not pending:
-            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
-        conn.execute(
-            "select progress_id from courseplatform.lesson_progress where progress_id = %s for update",
-            (pending["progress_id"],),
-        ).fetchone()
-        pending = conn.execute(
-            "select * from courseplatform.attempts where attempt_id = %s for update", (payload["attemptId"],),
-        ).fetchone()
-        require_latest_attempt(conn, pending)
-        if not as_bool(pending.get("retry_authorized")):
-            raise ApiError("RETRY_NOT_PENDING", "Não existe uma autorização de reenvio pendente nesta tentativa.")
-        attempt = conn.execute(
-            """
-            update courseplatform.attempts
-            set retry_authorized = false, updated_at = now()
-            where attempt_id = %s
-            returning *
-            """,
-            (payload["attemptId"],),
-        ).fetchone()
-        if not attempt:
-            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
-        lesson = conn.execute(
-            "select title from courseplatform.lessons where lesson_id = %s",
-            (attempt["lesson_id"],),
-        ).fetchone() or {}
-        notification_id = create_student_notification(
-            conn,
-            attempt["student_id"],
-            "SUBMISSION_STATUS",
-            "Autorização de reenvio cancelada",
-            f"A autorização para iniciar um novo envio em {lesson.get('title') or 'atividade'} foi cancelada.",
-            admin_id=admin["admin_id"],
-            action_url=f"#/lesson/{attempt['lesson_id']}",
-            entity_type="ATTEMPT",
-            entity_id=attempt["attempt_id"],
-            priority="HIGH",
-        )
-        if notification_id:
-            notification_ids.append(notification_id)
-        audit(conn, "ADMIN", admin["admin_id"], "RETRY_REVOKED", "ATTEMPT", attempt["attempt_id"])
-        conn.commit()
-    dispatch_notification_deliveries(notification_ids)
-    return success({"attempt": staff_attempt(attempt)})
+    return assessment_domain.admin_authorize_retry_action(payload, _assessment_runtime())
 
 
 def admin_update_attempt(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    require_fields(payload, ["attemptId", "status"])
-    prepare_assessment_feature_schema()
-    prepare_notification_feature_schema()
-    status = str_value(payload.get("status")).upper()
-    if status not in ATTEMPT_STATUSES:
-        raise ApiError("INVALID_ATTEMPT_STATUS", "Estado da tentativa inválido.")
-    access_status = str_value(payload.get("contentAccessStatus")).upper()
-    if access_status and access_status not in CONTENT_ACCESS_STATUSES:
-        raise ApiError("INVALID_ACCESS_STATUS", "Estado de acesso ao conteúdo inválido.")
-    deadline_supplied = "deadlineAt" in payload
-    deadline = parse_datetime(payload.get("deadlineAt")) if deadline_supplied else None
-    if deadline_supplied and payload.get("deadlineAt") not in (None, "") and not deadline:
-        raise ApiError("INVALID_DEADLINE", "O prazo indicado não é válido.")
-    if deadline and deadline.tzinfo is None:
-        deadline = deadline.replace(tzinfo=timezone.utc)
-    if status == "IN_PROGRESS" and deadline and deadline <= utc_now():
-        raise ApiError("INVALID_DEADLINE", "Uma tentativa em curso precisa de um prazo futuro.")
-
-    notification_ids: list[str] = []
-    with connection() as conn:
-        attempt = conn.execute(
-            "select * from courseplatform.attempts where attempt_id = %s",
-            (payload["attemptId"],),
-        ).fetchone()
-        if not attempt:
-            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
-        progress = conn.execute(
-            "select * from courseplatform.lesson_progress where progress_id = %s",
-            (attempt.get("progress_id"),),
-        ).fetchone()
-        resolved_access = access_status or progress_access_status(progress)
-        status_changed = str_value(attempt.get("status")).upper() != status
-        deadline_changed = deadline_supplied and iso(attempt.get("deadline_at")) != iso(deadline)
-        access_changed = bool(access_status) and progress_access_status(progress) != resolved_access
-        updated = conn.execute(
-            """
-            update courseplatform.attempts
-            set status = %s,
-                deadline_at = case when %s then %s else deadline_at end,
-                submitted_at = case
-                  when %s = 'IN_PROGRESS' then null
-                  when %s = 'UNDER_REVIEW' then coalesce(submitted_at, now())
-                  else submitted_at
-                end,
-                reviewed_at = case
-                  when %s in ('APPROVED', 'CORRECTION_REQUIRED', 'FAILED', 'TIME_EXCEEDED')
-                    then coalesce(reviewed_at, now())
-                  when %s = 'IN_PROGRESS' then null
-                  else reviewed_at
-                end,
-                retry_authorized = case when %s = 'IN_PROGRESS' then false else retry_authorized end,
-                updated_at = now()
-            where attempt_id = %s
-            returning *
-            """,
-            (
-                status,
-                deadline_supplied,
-                deadline,
-                status,
-                status,
-                status,
-                status,
-                status,
-                attempt["attempt_id"],
-            ),
-        ).fetchone()
-        updated_progress = None
-        if progress:
-            updated_progress = conn.execute(
-                """
-                update courseplatform.lesson_progress
-                set status = %s, evaluation_status = %s, content_access_status = %s,
-                    approved_at = case when %s = 'APPROVED' then coalesce(approved_at, now()) else approved_at end,
-                    updated_at = now()
-                where progress_id = %s
-                returning *
-                """,
-                (
-                    legacy_progress_status(resolved_access, status),
-                    status,
-                    resolved_access,
-                    status,
-                    progress["progress_id"],
-                ),
-            ).fetchone()
-            refresh_enrollment_progress(conn, progress["progress_id"])
-        audit(
-            conn,
-            "ADMIN",
-            admin["admin_id"],
-            "ATTEMPT_MANAGED",
-            "ATTEMPT",
-            attempt["attempt_id"],
-            {
-                "status": status,
-                "deadlineAt": iso(deadline) if deadline_supplied else iso(attempt.get("deadline_at")),
-                "contentAccessStatus": resolved_access,
-            },
-        )
-        if status_changed or deadline_changed or access_changed:
-            lesson = conn.execute(
-                "select title from courseplatform.lessons where lesson_id = %s",
-                (attempt["lesson_id"],),
-            ).fetchone() or {}
-            details = f"{lesson.get('title') or 'Atividade'}: {notification_status_label(status)}."
-            if deadline_supplied and deadline:
-                details = f"{details} Novo prazo: {iso(deadline)}."
-            notification_id = create_student_notification(
-                conn,
-                attempt["student_id"],
-                "SUBMISSION_STATUS",
-                "Prazo da submissão atualizado" if deadline_changed and not status_changed else "Estado da submissão atualizado",
-                details,
-                admin_id=admin["admin_id"],
-                action_url="#/submissions",
-                entity_type="ATTEMPT",
-                entity_id=attempt["attempt_id"],
-                priority="HIGH" if status in {"CORRECTION_REQUIRED", "TIME_EXCEEDED"} else "NORMAL",
-                template_key="SUBMISSION_DEADLINE_UPDATED" if deadline_changed and not status_changed else "SUBMISSION_STATUS_UPDATED",
-                template_variables={
-                    "activity": lesson.get("title") or "Atividade",
-                    "status": notification_status_label(status),
-                    "deadline": iso(deadline) if deadline_supplied and deadline else "",
-                    "details": details,
-                },
-            )
-            if notification_id:
-                notification_ids.append(notification_id)
-        conn.commit()
-    dispatch_notification_deliveries(notification_ids)
-    return success({"attempt": staff_attempt(updated), "progress": public_progress(updated_progress) if updated_progress else None})
+    return assessment_domain.admin_update_attempt_action(payload, _assessment_runtime())
 
 
 def admin_save_media_config(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    media = payload.get("mediaConfig") or {"logoUrl": payload.get("logoUrl"), "videos": payload.get("videos", [])}
-    if not isinstance(media, dict):
-        raise ApiError("INVALID_MEDIA_CONFIG", "Configuração de media inválida.")
-    media["logoUrl"] = normalize_brand_logo_url(media.get("logoUrl"))
-    media.setdefault("videos", [])
-    with connection() as conn:
-        persist_media_config(conn, media)
-        audit(conn, "ADMIN", admin["admin_id"], "MEDIA_CONFIG_SAVED", "SETTING", "MEDIA_CONFIG")
-        conn.commit()
-    return success({"mediaConfig": media})
+    return catalog_domain.admin_save_media_config_action(payload, runtime=_catalog_runtime())
 
 
 def admin_save_staff(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER"})
-    require_fields(payload, ["fullName", "email"])
-    admin_id = str_value(payload.get("targetAdminId") or payload.get("adminId")) or generate_id("ADM")
-    role = str_value(payload.get("role") or "REVIEWER").upper()
-    if role not in {"OWNER", "ADMIN", "REVIEWER"}:
-        role = "REVIEWER"
-    status = str_value(payload.get("status") or "ACTIVE").upper()
-    is_new = not fetch_one("select 1 from courseplatform.admins where admin_id = %s", (admin_id,))
-    admin_password = str_value(payload.get("password"))
-    if is_new and not admin_password:
-        admin_password = generate_access_code(14)
-    if admin_password and not valid_password(admin_password):
-        raise ApiError("WEAK_PASSWORD", "A palavra-passe deve ter pelo menos 8 caracteres.")
-    with connection() as conn:
-        row = conn.execute(
-            """
-            insert into courseplatform.admins
-              (admin_id, full_name, email, password_hash, password_changed_at, password_reset_required,
-               role, status, created_at, updated_at)
-            values (%s, %s, %s, case when %s = '' then null else crypt(%s, gen_salt('bf', 12)) end,
-                    case when %s = '' then null else now() end, %s, %s, %s, now(), now())
-            on conflict (admin_id) do update
-            set full_name = excluded.full_name, email = excluded.email,
-                password_hash = coalesce(excluded.password_hash, courseplatform.admins.password_hash),
-                password_changed_at = coalesce(excluded.password_changed_at, courseplatform.admins.password_changed_at),
-                password_reset_required = case
-                  when excluded.password_hash is null then courseplatform.admins.password_reset_required
-                  else excluded.password_reset_required
-                end,
-                role = excluded.role, status = excluded.status, updated_at = now()
-            returning *
-            """,
-            (
-                admin_id,
-                str_value(payload.get("fullName")),
-                normalize_email(payload.get("email")),
-                admin_password,
-                admin_password,
-                admin_password,
-                bool(admin_password),
-                role,
-                status,
-            ),
-        ).fetchone()
-        audit(conn, "ADMIN", admin["admin_id"], "STAFF_SAVED", "ADMIN", admin_id)
-        conn.commit()
-    return success({"admin": public_admin(row), "adminPassword": admin_password if admin_password else ""})
+    return administration_domain.admin_save_staff_action(payload, runtime=_administration_runtime())
 
 
 def admin_set_staff_status(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER"})
-    require_fields(payload, ["targetAdminId", "status"])
-    with connection() as conn:
-        row = conn.execute(
-            "update courseplatform.admins set status = %s, updated_at = now() where admin_id = %s returning *",
-            (str_value(payload["status"]).upper(), payload["targetAdminId"]),
-        ).fetchone()
-        if not row:
-            raise ApiError("ADMIN_NOT_FOUND", "Staff não encontrado.")
-        audit(conn, "ADMIN", admin["admin_id"], "STAFF_STATUS_CHANGED", "ADMIN", payload["targetAdminId"], {"status": payload["status"]})
-        conn.commit()
-    return success({"admin": public_admin(row)})
+    return administration_domain.admin_set_staff_status_action(payload, runtime=_administration_runtime())
 
 
 def admin_create_student(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["fullName", "email"])
-    access_code = generate_access_code(12)
-    student_id = generate_id("STU")
-    with connection() as conn:
-        public_id = public_student_id()
-        while conn.execute("select 1 from courseplatform.students where public_student_id = %s", (public_id,)).fetchone():
-            public_id = public_student_id()
-        row = conn.execute(
-            """
-            insert into courseplatform.students
-              (student_id, public_student_id, full_name, email, access_code, password_hash,
-               password_changed_at, password_reset_required, status,
-               country, organization, created_at, updated_at)
-            values (%s, %s, %s, %s, null, crypt(%s, gen_salt('bf', 12)),
-                    now(), true, 'ACTIVE', %s, %s, now(), now())
-            returning *
-            """,
-            (
-                student_id,
-                public_id,
-                str_value(payload.get("fullName")),
-                normalize_email(payload.get("email")),
-                access_code,
-                str_value(payload.get("country")),
-                str_value(payload.get("organization")),
-            ),
-        ).fetchone()
-        audit(conn, "ADMIN", admin["admin_id"], "STUDENT_CREATED", "STUDENT", student_id)
-        conn.commit()
-    return success({"student": public_student(row), "accessCode": access_code})
+    return administration_domain.admin_create_student_action(payload, runtime=_administration_runtime())
 
 
 def admin_change_student_email(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_notification_feature_schema()
-    require_fields(
-        payload,
-        ["studentId", "newEmail", "confirmEmail", "adminPassword", "reason"],
-    )
-    if not as_bool(payload.get("verifiedWithStudent")):
-        raise ApiError(
-            "EMAIL_VERIFICATION_CONFIRMATION_REQUIRED",
-            "Confirme que verificou o novo endereço com o estudante.",
-        )
-    new_email = validated_email_change(payload)
-    reason = str_value(payload.get("reason"))
-    if len(reason) < 5:
-        raise ApiError("EMAIL_CHANGE_REASON_REQUIRED", "Indique brevemente o motivo da correção do email.")
-    if len(reason) > 300:
-        raise ApiError("EMAIL_CHANGE_REASON_TOO_LONG", "O motivo deve ter no máximo 300 caracteres.")
-    admin_password = str_value(payload.get("adminPassword"))
-    if len(admin_password) > 1024:
-        raise ApiError("INVALID_ADMIN_PASSWORD", "A palavra-passe administrativa não está correta.")
-    try:
-        with connection() as conn:
-            current_admin = conn.execute(
-                "select * from courseplatform.admins where admin_id = %s for update",
-                (admin["admin_id"],),
-            ).fetchone()
-            if not current_admin or current_admin.get("status") != "ACTIVE":
-                raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
-            if not verify_password_with_conn(
-                conn,
-                admin_password,
-                current_admin.get("password_hash"),
-            ):
-                raise ApiError(
-                    "INVALID_ADMIN_PASSWORD",
-                    "A palavra-passe administrativa não está correta.",
-                )
-            student = conn.execute(
-                "select * from courseplatform.students where student_id = %s for update",
-                (str_value(payload.get("studentId")),),
-            ).fetchone()
-            if not student:
-                raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
-            row = secure_student_email_update(
-                conn,
-                student,
-                new_email,
-                actor_type="ADMIN",
-                actor_id=admin["admin_id"],
-                reason=reason,
-            )
-            conn.commit()
-    except ApiError:
-        raise
-    except Exception as error:
-        text = str(error).lower()
-        if "unique" in text or "duplicate" in text:
-            raise ApiError(
-                "EMAIL_ALREADY_IN_USE",
-                "Este endereço de email já está associado a outro estudante.",
-            ) from error
-        raise database_api_error(error) from error
-    return success({
-        "student": public_student(row),
-        "studentSessionsRevoked": True,
-        "emailConsentReset": True,
-    })
+    return administration_domain.admin_change_student_email_action(payload, runtime=_administration_runtime())
 
 
 def admin_set_student_status(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["studentId", "status"])
-    with connection() as conn:
-        row = conn.execute(
-            "update courseplatform.students set status = %s, updated_at = now() where student_id = %s returning *",
-            (str_value(payload["status"]).upper(), payload["studentId"]),
-        ).fetchone()
-        if not row:
-            raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
-        audit(conn, "ADMIN", admin["admin_id"], "STUDENT_STATUS_CHANGED", "STUDENT", payload["studentId"], {"status": payload["status"]})
-        conn.commit()
-    return success({"student": public_student(row)})
+    return administration_domain.admin_set_student_status_action(payload, runtime=_administration_runtime())
 
 
 def admin_reset_student_access_code(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["studentId"])
-    access_code = generate_access_code(12)
-    with connection() as conn:
-        row = conn.execute(
-            """
-            update courseplatform.students
-            set password_hash = crypt(%s, gen_salt('bf', 12)),
-                password_changed_at = now(), password_reset_required = true,
-                access_code = null, updated_at = now()
-            where student_id = %s
-            returning *
-            """,
-            (access_code, payload["studentId"]),
-        ).fetchone()
-        if not row:
-            raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
-        conn.execute("update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s", (payload["studentId"],))
-        audit(conn, "ADMIN", admin["admin_id"], "STUDENT_ACCESS_RESET", "STUDENT", payload["studentId"])
-        conn.commit()
-    return success({"student": public_student(row), "accessCode": access_code})
+    return administration_domain.admin_reset_student_access_code_action(payload, runtime=_administration_runtime())
 
 
 def credential_restore_item(kind: str, row: dict[str, Any], temporary_password: str) -> dict[str, Any]:
-    if kind == "ADMIN":
-        return {
-            "type": "ADMIN",
-            "id": row.get("admin_id"),
-            "publicId": row.get("admin_id"),
-            "fullName": row.get("full_name"),
-            "email": row.get("email"),
-            "role": row.get("role"),
-            "status": row.get("status"),
-            "temporaryPassword": temporary_password,
-        }
-    return {
-        "type": "STUDENT",
-        "id": row.get("student_id"),
-        "publicId": row.get("public_student_id") or "",
-        "fullName": row.get("full_name"),
-        "email": row.get("email"),
-        "status": row.get("status"),
-        "temporaryPassword": temporary_password,
-    }
+    return administration_domain.credential_restore_item_action(kind, row, temporary_password, runtime=_administration_runtime())
 
 
 def admin_restore_credentials(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    target_type = str_value(payload.get("targetType") or "STUDENTS").upper()
-    if target_type not in {"STUDENTS", "ADMINS", "ALL"}:
-        raise ApiError("INVALID_TARGET", "Tipo de conta inválido para restauração de credenciais.")
-    if target_type in {"ADMINS", "ALL"} and admin.get("role") != "OWNER":
-        raise ApiError("FORBIDDEN", "Apenas o owner pode restaurar credenciais de staff.")
-
-    only_missing_password = as_bool(payload.get("onlyMissingPassword", True))
-    include_inactive = as_bool(payload.get("includeInactive", False))
-    student_ids = [str_value(item) for item in payload.get("studentIds") or [] if str_value(item)]
-    admin_ids = [str_value(item) for item in payload.get("adminIds") or [] if str_value(item)]
-    credentials: list[dict[str, Any]] = []
-
-    with connection() as conn:
-        if target_type in {"STUDENTS", "ALL"}:
-            students = conn.execute(
-                """
-                select student_id, public_student_id, full_name, email, status, password_hash
-                from courseplatform.students
-                where (%s or status = 'ACTIVE')
-                  and (%s = 0 or student_id = any(%s::text[]))
-                  and (%s = false or password_hash is null)
-                order by full_name
-                limit 1000
-                """,
-                (include_inactive, len(student_ids), student_ids, only_missing_password),
-            ).fetchall()
-            for student in students:
-                temporary_password = generate_access_code(12)
-                row = conn.execute(
-                    """
-                    update courseplatform.students
-                    set password_hash = crypt(%s, gen_salt('bf', 12)),
-                        password_changed_at = now(), password_reset_required = true,
-                        access_code = null, updated_at = now()
-                    where student_id = %s
-                    returning student_id, public_student_id, full_name, email, status
-                    """,
-                    (temporary_password, student["student_id"]),
-                ).fetchone()
-                conn.execute(
-                    "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                    (student["student_id"],),
-                )
-                credentials.append(credential_restore_item("STUDENT", row, temporary_password))
-
-        if target_type in {"ADMINS", "ALL"}:
-            admins = conn.execute(
-                """
-                select admin_id, full_name, email, role, status, password_hash
-                from courseplatform.admins
-                where (%s or status = 'ACTIVE')
-                  and (%s = 0 or admin_id = any(%s::text[]))
-                  and (%s = false or password_hash is null)
-                order by case role when 'OWNER' then 1 when 'ADMIN' then 2 else 3 end, full_name
-                limit 200
-                """,
-                (include_inactive, len(admin_ids), admin_ids, only_missing_password),
-            ).fetchall()
-            for staff in admins:
-                temporary_password = generate_access_code(14)
-                row = conn.execute(
-                    """
-                    update courseplatform.admins
-                    set password_hash = crypt(%s, gen_salt('bf', 12)),
-                        password_changed_at = now(), password_reset_required = true,
-                        updated_at = now()
-                    where admin_id = %s
-                    returning admin_id, full_name, email, role, status
-                    """,
-                    (temporary_password, staff["admin_id"]),
-                ).fetchone()
-                conn.execute(
-                    "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                    (f"ADMIN:{staff['admin_id']}",),
-                )
-                credentials.append(credential_restore_item("ADMIN", row, temporary_password))
-
-        audit(
-            conn,
-            "ADMIN",
-            admin["admin_id"],
-            "CREDENTIALS_RESTORED",
-            "ACCOUNT",
-            target_type,
-            {
-                "total": len(credentials),
-                "targetType": target_type,
-                "onlyMissingPassword": only_missing_password,
-                "includeInactive": include_inactive,
-            },
-        )
-        conn.commit()
-
-    summary = {
-        "students": sum(1 for item in credentials if item["type"] == "STUDENT"),
-        "admins": sum(1 for item in credentials if item["type"] == "ADMIN"),
-        "total": len(credentials),
-        "onlyMissingPassword": only_missing_password,
-        "includeInactive": include_inactive,
-    }
-    return success({"credentials": credentials, "summary": summary})
+    return administration_domain.admin_restore_credentials_action(payload, runtime=_administration_runtime())
 
 
 def admin_save_course(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["title"])
-    course_id = str_value(payload.get("courseId")) or generate_id("COURSE")
-    status = str_value(payload.get("status") or "ACTIVE").upper()
-    with connection() as conn:
-        row = conn.execute(
-            """
-            insert into courseplatform.courses
-              (course_id, course_code, title, description, total_hours, passing_score, status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, now(), now())
-            on conflict (course_id) do update
-            set course_code = excluded.course_code, title = excluded.title,
-                description = excluded.description, total_hours = excluded.total_hours,
-                passing_score = excluded.passing_score, status = excluded.status, updated_at = now()
-            returning *
-            """,
-            (
-                course_id,
-                str_value(payload.get("courseCode") or course_id),
-                str_value(payload.get("title")),
-                str_value(payload.get("description")),
-                float_value(payload.get("totalHours")),
-                float_value(payload.get("passingScore"), 60),
-                status,
-            ),
-        ).fetchone()
-        audit(conn, "ADMIN", admin["admin_id"], "COURSE_SAVED", "COURSE", course_id)
-        conn.commit()
-    return success({"course": public_course(row)})
+    return catalog_domain.admin_save_course_action(payload, runtime=_catalog_runtime())
 
 
 def admin_save_lesson(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["courseId", "title"])
-    prepare_assessment_feature_schema()
-    lesson_id = str_value(payload.get("lessonId")) or generate_id("LESSON")
-    status = str_value(payload.get("status") or "ACTIVE").upper()
-    requested_release_mode = str_value(payload.get("feedbackReleaseMode")).upper()
-    if requested_release_mode and requested_release_mode not in FEEDBACK_RELEASE_MODES:
-        raise ApiError("INVALID_FEEDBACK_POLICY", "A política de divulgação do feedback é inválida.")
-    release_mode = feedback_release_mode(payload.get("feedbackReleaseMode"))
-    show_correct_answers = as_bool(payload.get("showCorrectAnswers"))
-    show_explanations = as_bool(payload.get("showExplanations"))
-    submission_duration = int_value(payload.get("submissionDurationMinutes"))
-    if submission_duration <= 0:
-        submission_duration = int_value(payload.get("exerciseMinutes")) + int_value(payload.get("individualMinutes"))
-    submission_duration = max(1, min(submission_duration or 180, 43200))
-    with connection() as conn:
-        row = conn.execute(
-            """
-            insert into courseplatform.lessons
-              (lesson_id, course_id, lesson_number, title, slug, summary, theory_minutes,
-               exercise_minutes, individual_minutes, passing_score, prerequisite_lesson_id,
-               submission_duration_minutes, feedback_release_mode, show_correct_answers,
-               show_explanations, status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
-            on conflict (lesson_id) do update
-            set course_id = excluded.course_id, lesson_number = excluded.lesson_number,
-                title = excluded.title, slug = excluded.slug, summary = excluded.summary,
-                theory_minutes = excluded.theory_minutes, exercise_minutes = excluded.exercise_minutes,
-                individual_minutes = excluded.individual_minutes, passing_score = excluded.passing_score,
-                prerequisite_lesson_id = excluded.prerequisite_lesson_id,
-                submission_duration_minutes = excluded.submission_duration_minutes,
-                feedback_release_mode = excluded.feedback_release_mode,
-                show_correct_answers = excluded.show_correct_answers,
-                show_explanations = excluded.show_explanations,
-                status = excluded.status,
-                updated_at = now()
-            returning *
-            """,
-            (
-                lesson_id,
-                payload["courseId"],
-                int_value(payload.get("lessonNumber"), 1),
-                str_value(payload.get("title")),
-                str_value(payload.get("slug")),
-                str_value(payload.get("summary")),
-                float_value(payload.get("theoryMinutes")),
-                float_value(payload.get("exerciseMinutes")),
-                float_value(payload.get("individualMinutes")),
-                float_value(payload.get("passingScore"), 60),
-                str_value(payload.get("prerequisiteLessonId")) or None,
-                submission_duration,
-                release_mode,
-                show_correct_answers,
-                show_explanations,
-                status,
-            ),
-        ).fetchone()
-        audit(conn, "ADMIN", admin["admin_id"], "LESSON_SAVED", "LESSON", lesson_id)
-        conn.commit()
-    return success({"lesson": public_lesson(row)})
+    return catalog_domain.admin_save_lesson_action(payload, runtime=_catalog_runtime())
 
 
 def admin_save_lesson_content(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["lessonId", "title"])
-    content_id = str_value(payload.get("contentId")) or generate_id("CNT")
-    with connection() as conn:
-        row = conn.execute(
-            """
-            insert into courseplatform.lesson_content
-              (content_id, lesson_id, section_order, section_type, title, body_html,
-               estimated_minutes, is_required, status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
-            on conflict (content_id) do update
-            set lesson_id = excluded.lesson_id, section_order = excluded.section_order,
-                section_type = excluded.section_type, title = excluded.title,
-                body_html = excluded.body_html, estimated_minutes = excluded.estimated_minutes,
-                is_required = excluded.is_required, status = excluded.status, updated_at = now()
-            returning *
-            """,
-            (
-                content_id,
-                payload["lessonId"],
-                int_value(payload.get("sectionOrder"), 1),
-                str_value(payload.get("sectionType") or "TEORIA"),
-                str_value(payload.get("title")),
-                str_value(payload.get("bodyHtml")),
-                float_value(payload.get("estimatedMinutes")),
-                as_bool(payload.get("isRequired", True)),
-                str_value(payload.get("status") or "ACTIVE").upper(),
-            ),
-        ).fetchone()
-        audit(conn, "ADMIN", admin["admin_id"], "LESSON_CONTENT_SAVED", "LESSON_CONTENT", content_id)
-        conn.commit()
-    return success({"content": public_content(row)})
+    return catalog_domain.admin_save_lesson_content_action(payload, runtime=_catalog_runtime())
 
 
 def admin_save_group(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["courseId", "name"])
-    group_id = str_value(payload.get("groupId")) or generate_id("GRP")
-    student_ids = payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else []
-    with connection() as conn:
-        existing_group = conn.execute(
-            "select * from courseplatform.groups where group_id = %s",
-            (group_id,),
-        ).fetchone()
-        offering = resolve_course_offering_with_conn(
-            conn,
-            payload["courseId"],
-            str_value(payload.get("offeringId")) or str_value((existing_group or {}).get("offering_id")),
-        )
-        group = conn.execute(
-            """
-            insert into courseplatform.groups
-              (group_id, group_code, name, course_id, offering_id,
-               start_date, end_date, status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, now(), now())
-            on conflict (group_id) do update
-            set group_code = excluded.group_code, name = excluded.name, course_id = excluded.course_id,
-                offering_id = excluded.offering_id,
-                start_date = excluded.start_date, end_date = excluded.end_date,
-                status = excluded.status, updated_at = now()
-            returning *
-            """,
-            (
-                group_id,
-                str_value(payload.get("groupCode") or group_id),
-                str_value(payload.get("name")),
-                payload["courseId"],
-                offering["offering_id"],
-                parse_datetime(payload.get("startDate")),
-                parse_datetime(payload.get("endDate")),
-                str_value(payload.get("status") or "ACTIVE").upper(),
-            ),
-        ).fetchone()
-        for student_id in student_ids:
-            enrollment = ensure_offering_enrollment_with_conn(conn, student_id, offering, group_id)
-            conn.execute(
-                """
-                insert into courseplatform.group_members
-                  (group_member_id, group_id, student_id, enrollment_id, status, joined_at, updated_at)
-                values (%s, %s, %s, %s, 'ACTIVE', now(), now())
-                on conflict (group_id, student_id) do update
-                set enrollment_id = excluded.enrollment_id, status = 'ACTIVE', updated_at = now()
-                """,
-                (generate_id("GM"), group_id, student_id, enrollment["enrollment_id"]),
-            )
-        audit(conn, "ADMIN", admin["admin_id"], "GROUP_SAVED", "GROUP", group_id, {"studentCount": len(student_ids)})
-        conn.commit()
-    return success({"group": {"groupId": group["group_id"], "groupCode": group.get("group_code"), "name": group.get("name"), "courseId": group.get("course_id"), "offeringId": group.get("offering_id"), "startDate": iso(group.get("start_date")), "endDate": iso(group.get("end_date")), "status": group.get("status")}})
+    return enrollment_domain.admin_save_group_action(payload, runtime=_enrollment_runtime())
 
 
 def admin_assign_students_to_group(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["groupId"])
-    student_ids = payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else []
-    with connection() as conn:
-        group = conn.execute(
-            """
-            select g.*, o.course_version_id, o.status as offering_status,
-                   o.capacity, o.rules_json, o.calendar_json
-            from courseplatform.groups g
-            join courseplatform.course_offerings o on o.offering_id = g.offering_id
-            where g.group_id = %s
-            """,
-            (payload["groupId"],),
-        ).fetchone()
-        if not group:
-            raise ApiError("GROUP_NOT_FOUND", "Grupo não encontrado.")
-        offering = {
-            **group,
-            "offering_id": group["offering_id"],
-            "course_id": group["course_id"],
-            "status": group.get("offering_status"),
-        }
-        for student_id in student_ids:
-            enrollment = ensure_offering_enrollment_with_conn(
-                conn, student_id, offering, group["group_id"]
-            )
-            conn.execute(
-                """
-                insert into courseplatform.group_members
-                  (group_member_id, group_id, student_id, enrollment_id, status, joined_at, updated_at)
-                values (%s, %s, %s, %s, 'ACTIVE', now(), now())
-                on conflict (group_id, student_id) do update
-                set enrollment_id = excluded.enrollment_id, status = 'ACTIVE', updated_at = now()
-                """,
-                (generate_id("GM"), payload["groupId"], student_id, enrollment["enrollment_id"]),
-            )
-        audit(conn, "ADMIN", admin["admin_id"], "GROUP_MEMBERS_ASSIGNED", "GROUP", payload["groupId"], {"studentCount": len(student_ids)})
-        conn.commit()
-    return success({"studentCount": len(student_ids)})
+    return enrollment_domain.admin_assign_students_to_group_action(payload, runtime=_enrollment_runtime())
 
 
 def admin_set_lesson_access(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_assessment_feature_schema()
-    prepare_notification_feature_schema()
-    status = str_value(payload.get("status") or "AVAILABLE").upper()
-    if status not in CONTENT_ACCESS_STATUSES:
-        raise ApiError("INVALID_STATUS", "Estado de acesso inválido.")
-    lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
-    student_ids = set(payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else [])
-    group_ids = payload.get("groupIds") if isinstance(payload.get("groupIds"), list) else []
-    offering_id = str_value(payload.get("offeringId"))
-    if group_ids:
-        rows = fetch_all(
-            """
-            select gm.student_id, g.offering_id
-            from courseplatform.group_members gm
-            join courseplatform.groups g on g.group_id = gm.group_id
-            where gm.group_id = any(%s) and gm.status = 'ACTIVE'
-            """,
-            (group_ids,),
-        )
-        student_ids.update(row["student_id"] for row in rows)
-        offering_ids = {row.get("offering_id") for row in rows if row.get("offering_id")}
-        if offering_id and offering_ids and offering_ids != {offering_id}:
-            raise ApiError("GROUP_OFFERING_MISMATCH", "Os grupos não pertencem à edição selecionada.")
-        if not offering_id and len(offering_ids) == 1:
-            offering_id = next(iter(offering_ids))
-        if len(offering_ids) > 1:
-            raise ApiError("OFFERING_REQUIRED", "Selecione grupos de uma única edição/turma.")
-    if not lesson_ids or not student_ids:
-        raise ApiError("EMPTY_ACCESS_TARGET", "Selecione módulos e estudantes.")
-    updated = 0
-    notification_ids: list[str] = []
-    with connection() as conn:
-        for student_id in student_ids:
-            for lesson_id in lesson_ids:
-                lesson = conn.execute("select * from courseplatform.lessons where lesson_id = %s", (lesson_id,)).fetchone()
-                if not lesson:
-                    continue
-                offering = resolve_course_offering_with_conn(
-                    conn, lesson["course_id"], offering_id
-                )
-                enrollment = ensure_offering_enrollment_with_conn(
-                    conn, student_id, offering
-                )
-                previous = conn.execute(
-                    """
-                    select * from courseplatform.lesson_progress
-                    where enrollment_id = %s and lesson_id = %s
-                    """,
-                    (enrollment["enrollment_id"], lesson_id),
-                ).fetchone()
-                previous_access = progress_access_status(previous)
-                conn.execute(
-                    """
-                    insert into courseplatform.lesson_progress
-                      (progress_id, enrollment_id, student_id, lesson_id, status,
-                       content_access_status, evaluation_status, unlocked_at, attempt_count, updated_at)
-                    values (%s, %s, %s, %s, %s, %s, 'NOT_STARTED',
-                            case when %s <> 'LOCKED' then now() else null end, 0, now())
-                    on conflict (enrollment_id, lesson_id) do update
-                    set content_access_status = excluded.content_access_status,
-                        status = case
-                          when coalesce(courseplatform.lesson_progress.evaluation_status, 'NOT_STARTED') = 'NOT_STARTED'
-                            then excluded.content_access_status
-                          else courseplatform.lesson_progress.evaluation_status
-                        end,
-                        unlocked_at = case when excluded.content_access_status <> 'LOCKED' then coalesce(courseplatform.lesson_progress.unlocked_at, now()) else courseplatform.lesson_progress.unlocked_at end,
-                        updated_at = now()
-                    """,
-                    (generate_id("PRG"), enrollment["enrollment_id"], student_id, lesson_id, status, status, status),
-                )
-                if previous_access != status:
-                    notification_id = create_student_notification(
-                        conn,
-                        student_id,
-                        "MODULE_AVAILABLE",
-                        "Novo módulo disponível" if status == "AVAILABLE" else "Acesso ao módulo atualizado",
-                        (
-                            f"O módulo {lesson.get('title') or lesson_id} está disponível para leitura e exercícios."
-                            if status == "AVAILABLE"
-                            else f"O acesso ao módulo {lesson.get('title') or lesson_id} foi temporariamente bloqueado."
-                        ),
-                        admin_id=admin["admin_id"],
-                        action_url=f"#/lesson/{lesson_id}" if status == "AVAILABLE" else "#/lessons",
-                        entity_type="LESSON",
-                        entity_id=lesson_id,
-                        template_key="MODULE_ACCESS_UPDATED",
-                        template_variables={
-                            "module": lesson.get("title") or lesson_id,
-                            "status": notification_status_label(status),
-                            "details": (
-                                f"O módulo {lesson.get('title') or lesson_id} está disponível para leitura e exercícios."
-                                if status == "AVAILABLE"
-                                else f"O acesso ao módulo {lesson.get('title') or lesson_id} foi temporariamente bloqueado."
-                            ),
-                        },
-                    )
-                    if notification_id:
-                        notification_ids.append(notification_id)
-                updated += 1
-        audit(conn, "ADMIN", admin["admin_id"], "LESSON_ACCESS_CHANGED", "LESSON_PROGRESS", "", {"lessonCount": len(lesson_ids), "studentCount": len(student_ids), "status": status})
-        conn.commit()
-    dispatch_notification_deliveries(notification_ids)
-    return success({"studentCount": len(student_ids), "lessonCount": len(lesson_ids), "updatedCount": updated})
+    return learning_domain.admin_set_lesson_access_action(payload, runtime=_learning_runtime())
 
 
 def admin_manage_lesson_progress(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_assessment_feature_schema()
-    prepare_notification_feature_schema()
-    lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
-    student_ids = set(payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else [])
-    group_ids = payload.get("groupIds") if isinstance(payload.get("groupIds"), list) else []
-    offering_id = str_value(payload.get("offeringId"))
-    access_status = str_value(payload.get("contentAccessStatus")).upper()
-    evaluation_status = str_value(payload.get("evaluationStatus")).upper()
-    if access_status in {"UNCHANGED", "KEEP"}:
-        access_status = ""
-    if evaluation_status in {"UNCHANGED", "KEEP"}:
-        evaluation_status = ""
-    if access_status and access_status not in CONTENT_ACCESS_STATUSES:
-        raise ApiError("INVALID_ACCESS_STATUS", "Estado de acesso ao conteúdo inválido.")
-    if evaluation_status and evaluation_status not in EVALUATION_STATUSES:
-        raise ApiError("INVALID_EVALUATION_STATUS", "Estado de avaliação inválido.")
-    duration_supplied = payload.get("submissionDurationMinutes") not in (None, "")
-    submission_duration = int_value(payload.get("submissionDurationMinutes")) if duration_supplied else None
-    if duration_supplied and (submission_duration < 1 or submission_duration > 43200):
-        raise ApiError("INVALID_SUBMISSION_DURATION", "O tempo de submissão deve estar entre 1 e 43200 minutos.")
-    if not lesson_ids:
-        raise ApiError("EMPTY_LESSON_TARGET", "Selecione pelo menos um módulo.")
-    if not access_status and not evaluation_status and not duration_supplied:
-        raise ApiError("EMPTY_MANAGEMENT_CHANGE", "Selecione pelo menos uma alteração para aplicar.")
-
-    updated = 0
-    enrollment_ids: set[str] = set()
-    notification_ids: list[str] = []
-    with connection() as conn:
-        if group_ids:
-            rows = conn.execute(
-                """
-                select gm.student_id, g.offering_id
-                from courseplatform.group_members gm
-                join courseplatform.groups g on g.group_id = gm.group_id
-                where gm.group_id = any(%s) and gm.status = 'ACTIVE'
-                """,
-                (group_ids,),
-            ).fetchall()
-            student_ids.update(row["student_id"] for row in rows)
-            offering_ids = {row.get("offering_id") for row in rows if row.get("offering_id")}
-            if offering_id and offering_ids and offering_ids != {offering_id}:
-                raise ApiError("GROUP_OFFERING_MISMATCH", "Os grupos não pertencem à edição selecionada.")
-            if not offering_id and len(offering_ids) == 1:
-                offering_id = next(iter(offering_ids))
-            if len(offering_ids) > 1:
-                raise ApiError("OFFERING_REQUIRED", "Selecione grupos de uma única edição/turma.")
-        if (access_status or evaluation_status) and not student_ids:
-            raise ApiError("EMPTY_PROGRESS_TARGET", "Selecione pelo menos uma turma ou estudante.")
-
-        if duration_supplied:
-            conn.execute(
-                """
-                update courseplatform.lessons
-                set submission_duration_minutes = %s, updated_at = now()
-                where lesson_id = any(%s)
-                """,
-                (submission_duration, lesson_ids),
-            )
-
-        for student_id in student_ids:
-            for lesson_id in lesson_ids:
-                lesson = conn.execute(
-                    "select * from courseplatform.lessons where lesson_id = %s",
-                    (lesson_id,),
-                ).fetchone()
-                if not lesson:
-                    continue
-                offering = resolve_course_offering_with_conn(
-                    conn, lesson["course_id"], offering_id
-                )
-                enrollment = ensure_offering_enrollment_with_conn(
-                    conn, student_id, offering
-                )
-                progress = conn.execute(
-                    """
-                    select * from courseplatform.lesson_progress
-                    where enrollment_id = %s and lesson_id = %s
-                    """,
-                    (enrollment["enrollment_id"], lesson_id),
-                ).fetchone()
-                previous_access = progress_access_status(progress)
-                previous_evaluation = progress_evaluation_status(progress)
-                resolved_access = access_status or progress_access_status(progress)
-                resolved_evaluation = evaluation_status or progress_evaluation_status(progress)
-                resolved_legacy = legacy_progress_status(resolved_access, resolved_evaluation)
-                if progress:
-                    progress = conn.execute(
-                        """
-                        update courseplatform.lesson_progress
-                        set status = %s, content_access_status = %s, evaluation_status = %s,
-                            unlocked_at = case
-                              when %s = 'AVAILABLE' then coalesce(unlocked_at, now())
-                              else unlocked_at
-                            end,
-                            approved_at = case
-                              when %s = 'APPROVED' then coalesce(approved_at, now())
-                              else approved_at
-                            end,
-                            updated_at = now()
-                        where progress_id = %s
-                        returning *
-                        """,
-                        (
-                            resolved_legacy,
-                            resolved_access,
-                            resolved_evaluation,
-                            resolved_access,
-                            resolved_evaluation,
-                            progress["progress_id"],
-                        ),
-                    ).fetchone()
-                else:
-                    progress = conn.execute(
-                        """
-                        insert into courseplatform.lesson_progress
-                          (progress_id, enrollment_id, student_id, lesson_id, status,
-                           content_access_status, evaluation_status, unlocked_at,
-                           approved_at, attempt_count, updated_at)
-                        values (%s, %s, %s, %s, %s, %s, %s,
-                                case when %s = 'AVAILABLE' then now() else null end,
-                                case when %s = 'APPROVED' then now() else null end, 0, now())
-                        returning *
-                        """,
-                        (
-                            generate_id("PRG"),
-                            enrollment["enrollment_id"],
-                            student_id,
-                            lesson_id,
-                            resolved_legacy,
-                            resolved_access,
-                            resolved_evaluation,
-                            resolved_access,
-                            resolved_evaluation,
-                        ),
-                    ).fetchone()
-                if evaluation_status in ATTEMPT_STATUSES:
-                    conn.execute(
-                        """
-                        update courseplatform.attempts
-                        set status = %s,
-                            submitted_at = case
-                              when %s = 'IN_PROGRESS' then null
-                              when %s = 'UNDER_REVIEW' then coalesce(submitted_at, now())
-                              else submitted_at
-                            end,
-                            reviewed_at = case
-                              when %s in ('APPROVED', 'CORRECTION_REQUIRED', 'FAILED', 'TIME_EXCEEDED')
-                                then coalesce(reviewed_at, now())
-                              when %s = 'IN_PROGRESS' then null
-                              else reviewed_at
-                            end,
-                            updated_at = now()
-                        where attempt_id = (
-                          select attempt_id from courseplatform.attempts
-                          where student_id = %s and lesson_id = %s
-                          order by coalesce(updated_at, created_at) desc nulls last
-                          limit 1
-                        )
-                        """,
-                        (
-                            evaluation_status,
-                            evaluation_status,
-                            evaluation_status,
-                            evaluation_status,
-                            evaluation_status,
-                            student_id,
-                            lesson_id,
-                        ),
-                    )
-                access_changed = previous_access != resolved_access
-                evaluation_changed = previous_evaluation != resolved_evaluation
-                if access_changed or evaluation_changed:
-                    message_parts = []
-                    if access_changed:
-                        message_parts.append(f"Conteúdo: {notification_status_label(resolved_access)}")
-                    if evaluation_changed:
-                        message_parts.append(f"Avaliação: {notification_status_label(resolved_evaluation)}")
-                    notification_id = create_student_notification(
-                        conn,
-                        student_id,
-                        "MODULE_AVAILABLE" if access_changed else "SUBMISSION_STATUS",
-                        "Novo módulo disponível" if access_changed and resolved_access == "AVAILABLE" else "Módulo atualizado",
-                        f"{lesson.get('title') or lesson_id}. {'; '.join(message_parts)}.",
-                        admin_id=admin["admin_id"],
-                        action_url=f"#/lesson/{lesson_id}" if resolved_access == "AVAILABLE" else "#/lessons",
-                        entity_type="LESSON_PROGRESS",
-                        entity_id=progress["progress_id"],
-                        priority="HIGH" if resolved_evaluation == "CORRECTION_REQUIRED" else "NORMAL",
-                        template_key="MODULE_PROGRESS_UPDATED",
-                        template_variables={
-                            "module": lesson.get("title") or lesson_id,
-                            "status": notification_status_label(resolved_evaluation),
-                            "details": f"{lesson.get('title') or lesson_id}. {'; '.join(message_parts)}.",
-                        },
-                    )
-                    if notification_id:
-                        notification_ids.append(notification_id)
-                enrollment_ids.add(enrollment["enrollment_id"])
-                updated += 1
-
-        for enrollment_id in enrollment_ids:
-            progress = conn.execute(
-                "select progress_id from courseplatform.lesson_progress where enrollment_id = %s limit 1",
-                (enrollment_id,),
-            ).fetchone()
-            refresh_enrollment_progress(conn, progress.get("progress_id") if progress else None)
-        audit(
-            conn,
-            "ADMIN",
-            admin["admin_id"],
-            "LESSON_PROGRESS_MANAGED",
-            "LESSON_PROGRESS",
-            "",
-            {
-                "lessonCount": len(lesson_ids),
-                "studentCount": len(student_ids),
-                "contentAccessStatus": access_status or "UNCHANGED",
-                "evaluationStatus": evaluation_status or "UNCHANGED",
-                "submissionDurationMinutes": submission_duration if duration_supplied else None,
-            },
-        )
-        conn.commit()
-    dispatch_notification_deliveries(notification_ids)
-    return success({
-        "studentCount": len(student_ids),
-        "lessonCount": len(lesson_ids),
-        "updatedCount": updated,
-        "submissionDurationMinutes": submission_duration if duration_supplied else None,
-    })
+    return learning_domain.admin_manage_lesson_progress_action(payload, runtime=_learning_runtime())
 
 
 def admin_student_details(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    require_fields(payload, ["studentId"])
-    prepare_assessment_feature_schema()
-    student_id = payload["studentId"]
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        student = conn.execute("select * from courseplatform.students where student_id = %s", (student_id,)).fetchone()
-        if not student:
-            raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
-        enrollment_rows = conn.execute(
-            """
-            select e.*, c.title as course_title, c.course_code, g.name as group_name
-            from courseplatform.enrollments e
-            left join courseplatform.courses c on c.course_id = e.course_id
-            left join courseplatform.groups g on g.group_id = e.group_id
-            where e.student_id = %s
-            order by coalesce(e.updated_at, e.enrolled_at) desc nulls last
-            """,
-            (student_id,),
-        ).fetchall()
-        progress_rows = conn.execute(
-            """
-            select p.*, l.course_id, l.lesson_number, l.title as lesson_title,
-                   a.attempt_id, a.attempt_number, a.status as attempt_status,
-                   a.score as attempt_score, a.submitted_at as attempt_submitted_at,
-                   a.reviewed_at as attempt_reviewed_at,
-                   coalesce(f.file_count, 0) as file_count
-            from courseplatform.lesson_progress p
-            join courseplatform.lessons l on l.lesson_id = p.lesson_id
-            left join lateral (
-              select *
-              from courseplatform.attempts a
-              where a.student_id = p.student_id and a.lesson_id = p.lesson_id
-              order by coalesce(a.updated_at, a.created_at) desc nulls last
-              limit 1
-            ) a on true
-            left join lateral (
-              select count(*) as file_count
-              from courseplatform.files f
-              where f.student_id = p.student_id and f.lesson_id = p.lesson_id
-                and coalesce(f.status, 'ACTIVE') <> 'DELETED'
-            ) f on true
-            where p.student_id = %s
-            order by l.course_id, l.lesson_number
-            """,
-            (student_id,),
-        ).fetchall()
-        group_rows = conn.execute(
-            """
-            select gm.*, g.name, g.group_code, g.course_id, g.start_date, g.end_date
-            from courseplatform.group_members gm
-            join courseplatform.groups g on g.group_id = gm.group_id
-            where gm.student_id = %s
-            order by g.name
-            """,
-            (student_id,),
-        ).fetchall()
-        certificates = conn.execute(
-            """
-            select cert.*, c.title as course_title, s.full_name as student_name
-            from courseplatform.certificates cert
-            join courseplatform.courses c on c.course_id = cert.course_id
-            join courseplatform.students s on s.student_id = cert.student_id
-            where cert.student_id = %s
-            order by cert.issue_date desc nulls last
-            """,
-            (student_id,),
-        ).fetchall()
-        requests = conn.execute(
-            """
-            select cr.*, s.full_name, s.email, c.title
-            from courseplatform.certificate_requests cr
-            join courseplatform.students s on s.student_id = cr.student_id
-            join courseplatform.courses c on c.course_id = cr.course_id
-            where cr.student_id = %s
-            order by coalesce(cr.updated_at, cr.created_at) desc
-            """,
-            (student_id,),
-        ).fetchall()
-    return success({
-        "student": public_student(student),
-        "enrollments": [
-            {
-                **public_enrollment(row),
-                "courseTitle": row.get("course_title"),
-                "courseCode": row.get("course_code"),
-                "groupName": row.get("group_name"),
-            }
-            for row in enrollment_rows
-        ],
-        "lessonProgress": [
-            {
-                "progress": public_progress(row),
-                "courseId": row.get("course_id"),
-                "lesson": {
-                    "lessonId": row.get("lesson_id"),
-                    "lessonNumber": int(row.get("lesson_number") or 0),
-                    "title": row.get("lesson_title"),
-                },
-                "attempt": staff_attempt({
-                    "attempt_id": row.get("attempt_id"),
-                    "progress_id": row.get("progress_id"),
-                    "lesson_id": row.get("lesson_id"),
-                    "attempt_number": row.get("attempt_number"),
-                    "status": row.get("attempt_status"),
-                    "score": row.get("attempt_score"),
-                    "submitted_at": row.get("attempt_submitted_at"),
-                    "reviewed_at": row.get("attempt_reviewed_at"),
-                }) if row.get("attempt_id") else None,
-                "fileCount": int(row.get("file_count") or 0),
-            }
-            for row in progress_rows
-        ],
-        "groups": [
-            {
-                "groupMember": public_group_member(row),
-                "group": {
-                    "groupId": row.get("group_id"),
-                    "groupCode": row.get("group_code"),
-                    "name": row.get("name"),
-                    "courseId": row.get("course_id"),
-                    "startDate": iso(row.get("start_date")),
-                    "endDate": iso(row.get("end_date")),
-                },
-            }
-            for row in group_rows
-        ],
-        "certificates": [public_certificate(row) for row in certificates],
-        "certificateRequests": [public_certificate_request(row) for row in requests],
-    })
+    return administration_domain.admin_student_details_action(payload, runtime=_administration_runtime())
 
 
 def admin_list_certificate_requests(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    status = (payload.get("status") or "ALL").upper()
-    query = (payload.get("query") or "").strip().lower()
-    survey_only = as_bool(payload.get("surveyOnly"))
-    limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-certificate-requests", status, query, survey_only)
-    cursor = decode_list_cursor(payload.get("cursor"), "admin-certificate-requests", scope)
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_at, cursor_id = cursor
-        cursor_sql = """
-              and (
-                coalesce(cr.submitted_at, cr.updated_at, cr.created_at) < %s
-                or (
-                  coalesce(cr.submitted_at, cr.updated_at, cr.created_at) = %s
-                  and cr.request_id < %s
-                )
-              )
-        """
-        cursor_params.extend((cursor_at, cursor_at, cursor_id))
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        rows = conn.execute(
-            f"""
-            select cr.*, s.full_name, s.email, c.title,
-                   cert.certificate_number, cert.verification_code, cert.issue_date,
-                   cert.final_score, cert.certificate_type, cert.content_summary,
-                   coalesce(cr.submitted_at, cr.updated_at, cr.created_at) as pagination_sort_at
-            from courseplatform.certificate_requests cr
-            join courseplatform.students s on s.student_id = cr.student_id
-            join courseplatform.courses c on c.course_id = cr.course_id
-            left join courseplatform.certificates cert on cert.certificate_id = cr.certificate_id
-            where (%s = 'ALL' or cr.status = %s)
-              and (%s = false or coalesce(cr.survey_answers_json, '{{}}'::jsonb) <> '{{}}'::jsonb)
-              and (
-                %s = ''
-                or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
-                  coalesce(c.title, '') || ' ' || coalesce(cr.request_id, '')) like %s
-              )
-              {cursor_sql}
-            order by coalesce(cr.submitted_at, cr.updated_at, cr.created_at) desc,
-                     cr.request_id desc
-            limit %s
-            """,
-            (status, status, survey_only, query, f"%{query}%", *cursor_params, limit + 1),
-        ).fetchall()
-        conn.commit()
-    rows, page_info = cursor_pagination_result(
-        rows,
-        limit,
-        "admin-certificate-requests",
-        scope,
-        "pagination_sort_at",
-        "request_id",
-    )
-    return success({
-        "requests": [public_certificate_request(row) for row in rows],
-        "pagination": page_info,
-    })
+    return financial_domain.admin_list_certificate_requests_action(payload, _financial_runtime())
 
 
 def admin_list_certificates(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    status = (payload.get("status") or "ACTIVE").upper()
-    query = str_value(payload.get("query")).lower()
-    limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-certificates", status, query)
-    cursor = decode_list_cursor(
-        payload.get("cursor"),
-        "admin-certificates",
-        scope,
-        allow_null_sort=True,
-    )
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_at, cursor_id = cursor
-        if cursor_at is None:
-            cursor_sql = "and cert.issue_date is null and cert.certificate_id < %s"
-            cursor_params.append(cursor_id)
-        else:
-            cursor_sql = """
-              and (
-                cert.issue_date < %s
-                or cert.issue_date is null
-                or (cert.issue_date = %s and cert.certificate_id < %s)
-              )
-            """
-            cursor_params.extend((cursor_at, cursor_at, cursor_id))
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        rows = conn.execute(
-            f"""
-            select cert.*, s.full_name as student_name, s.email, c.title as course_title,
-                   cs.certificate_profile_json as course_certificate_profile
-            from courseplatform.certificates cert
-            join courseplatform.students s on s.student_id = cert.student_id
-            join courseplatform.courses c on c.course_id = cert.course_id
-            left join courseplatform.certificate_settings cs on cs.course_id = cert.course_id
-            where (
-                %s = 'ALL'
-                or (%s = 'ACTIVE' and coalesce(cert.status, 'ISSUED') <> 'DELETED')
-                or cert.status = %s
-              )
-              and (
-                %s = ''
-                or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
-                  coalesce(c.title, '') || ' ' || coalesce(cert.certificate_number, '') || ' ' ||
-                  coalesce(cert.verification_code, '')) like %s
-              )
-              {cursor_sql}
-            order by cert.issue_date desc nulls last, cert.certificate_id desc
-            limit %s
-            """,
-            (status, status, status, query, f"%{query}%", *cursor_params, limit + 1),
-        ).fetchall()
-        conn.commit()
-    rows, page_info = cursor_pagination_result(
-        rows,
-        limit,
-        "admin-certificates",
-        scope,
-        "issue_date",
-        "certificate_id",
-    )
-    return success({"certificates": [
-        {**public_certificate(row), "downloadAccess": certificate_download_access(
-            row, (row.get("course_certificate_profile") or {}).get("participation"),
-        )} for row in rows
-    ], "pagination": page_info})
+    return certificate_domain.admin_list_certificates_action(payload, _certificate_runtime())
 
 
 def admin_set_certificate_status(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["certificateId", "status"])
-    status = str_value(payload.get("status")).upper()
-    if status not in {"ISSUED", "BLOCKED"}:
-        raise ApiError("INVALID_CERTIFICATE_STATUS", "Estado de certificado inválido.")
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        current = conn.execute(
-            "select * from courseplatform.certificates where certificate_id = %s for update",
-            (payload["certificateId"],),
-        ).fetchone()
-        if not current:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-        if status == "ISSUED" and (current.get("certificate_type") or "SIMPLE") == "SIMPLE":
-            if not participation_policy(conn, current["course_id"])["enabled"]:
-                raise ApiError("PARTICIPATION_DISABLED", "Ative o certificado de participação na configuração do curso antes de o disponibilizar.")
-        reset_downloads = as_bool(payload.get("resetDownloads")) and status == "ISSUED"
-        certificate = conn.execute(
-            """
-            update courseplatform.certificates
-            set status = %s,
-                status_note = %s,
-                status_updated_by = %s,
-                status_updated_at = now(),
-                approved_by = case when %s = 'ISSUED' then %s else approved_by end,
-                approved_at = case when %s = 'ISSUED' then now() else approved_at end,
-                download_count = case when %s then 0 else download_count end
-            where certificate_id = %s
-            returning *
-            """,
-            (status, str_value(payload.get("statusNote")), admin["admin_id"], status, admin["admin_id"],
-             status, reset_downloads, payload["certificateId"]),
-        ).fetchone()
-        if not certificate:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_STATUS_CHANGED", "CERTIFICATE", certificate["certificate_id"],
-              {"status": status, "resetDownloads": reset_downloads, "previousDownloadCount": current.get("download_count")})
-        conn.commit()
-    return success({"certificate": public_certificate(certificate)})
+    return certificate_domain.admin_set_certificate_status_action(payload, _certificate_runtime())
 
 
 def admin_refresh_certificate_format(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    certificate_id = str_value(payload.get("certificateId"))
-    course_id = str_value(payload.get("courseId"))
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        if certificate_id:
-            rows = conn.execute(
-                """
-                select certificate_id, course_id, certificate_type
-                from courseplatform.certificates
-                where certificate_id = %s
-                """,
-                (certificate_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                select certificate_id, course_id, certificate_type
-                from courseplatform.certificates
-                where coalesce(status, 'ISSUED') <> 'DELETED'
-                  and (%s = '' or course_id = %s)
-                order by issue_date desc nulls last
-                limit 500
-                """,
-                (course_id, course_id),
-            ).fetchall()
-        if not rows:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-
-        refreshed = []
-        for row in rows:
-            summary = certificate_content_summary(conn, row["course_id"])
-            snapshot = certificate_template_snapshot(conn, row["course_id"], row.get("certificate_type") or "SIMPLE")
-            certificate = conn.execute(
-                """
-                update courseplatform.certificates
-                set content_summary = %s,
-                    template_snapshot_json = %s,
-                    status_note = %s,
-                    status_updated_by = %s,
-                    status_updated_at = now()
-                where certificate_id = %s
-                returning *
-                """,
-                (
-                    summary,
-                    json.dumps(snapshot),
-                    "Formato e conteúdo do certificado atualizados pelo administrador.",
-                    admin["admin_id"],
-                    row["certificate_id"],
-                ),
-            ).fetchone()
-            if certificate:
-                refreshed.append(certificate)
-                audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_FORMAT_REFRESHED", "CERTIFICATE", certificate["certificate_id"], {})
-        conn.commit()
-    return success({"updated": len(refreshed), "certificates": [public_certificate(row) for row in refreshed]})
+    return certificate_domain.admin_refresh_certificate_format_action(payload, _certificate_runtime())
 
 
 def admin_delete_certificate(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["certificateId"])
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        certificate = conn.execute(
-            """
-            update courseplatform.certificates
-            set status = 'DELETED',
-                status_note = %s,
-                status_updated_by = %s,
-                status_updated_at = now()
-            where certificate_id = %s and coalesce(status, 'ISSUED') <> 'DELETED'
-            returning *
-            """,
-            (str_value(payload.get("statusNote")) or "Apagado pelo administrador.", admin["admin_id"], payload["certificateId"]),
-        ).fetchone()
-        if not certificate:
-            raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_DELETED", "CERTIFICATE", certificate["certificate_id"], {})
-        conn.commit()
-    return success({"certificate": public_certificate(certificate)})
+    return certificate_domain.admin_delete_certificate_action(payload, _certificate_runtime())
 
 
 def approve_participation_request(conn, request, admin):
-    student = conn.execute("select * from courseplatform.students where student_id = %s", (request["student_id"],)).fetchone()
-    cert, _, _, completed = ensure_simple_certificate(
-        conn, student, request["course_id"], str_value(request.get("enrollment_id"))
+    return financial_domain.approve_participation_request_action(
+        conn,
+        request,
+        admin,
+        _financial_runtime(),
     )
-    if not completed:
-        raise ApiError("COURSE_NOT_COMPLETED", "O estudante ainda não concluiu este curso.")
-    if not cert:
-        raise ApiError("PARTICIPATION_DISABLED", "Ative o certificado de participação na configuração do curso antes de aprovar o pedido.")
-    updated = conn.execute(
-        """
-        update courseplatform.certificates
-        set status = 'ISSUED', approved_by = %s, approved_at = now(),
-            download_count = 0, status_note = 'Pedido de participação aprovado.',
-            status_updated_by = %s, status_updated_at = now()
-        where certificate_id = %s returning *
-        """, (admin["admin_id"], admin["admin_id"], cert["certificate_id"]),
-    ).fetchone()
-    audit(conn, "ADMIN", admin["admin_id"], "PARTICIPATION_APPROVED", "CERTIFICATE", cert["certificate_id"],
-          {"requestId": request["request_id"], "previousDownloadCount": cert.get("download_count")})
-    return updated
 
 
 def admin_review_certificate_request(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["requestId", "decision"])
-    decision = str_value(payload.get("decision")).upper()
-    if decision not in {"APPROVED", "REJECTED"}:
-        raise ApiError("INVALID_DECISION", "Decisão inválida.")
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        request = conn.execute(
-            "select * from courseplatform.certificate_requests where request_id = %s for update",
-            (payload["requestId"],),
-        ).fetchone()
-        if not request:
-            raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
-        if request.get("status") != "PAYMENT_SUBMITTED" or request.get("certificate_id"):
-            raise ApiError(
-                "CERTIFICATE_REQUEST_ALREADY_REVIEWED",
-                "Este pedido já foi revisto ou ainda não está pronto para avaliação.",
-            )
-        certificate = None
-        if decision == "APPROVED" and request.get("request_type") == "PARTICIPATION":
-            certificate = approve_participation_request(conn, request, admin)
-            request = conn.execute(
-                """
-                update courseplatform.certificate_requests
-                set status = 'APPROVED', certificate_id = %s, reviewed_by = %s,
-                    reviewed_at = now(), admin_notes = %s, updated_at = now()
-                where request_id = %s returning *
-                """, (certificate["certificate_id"], admin["admin_id"], str_value(payload.get("adminNotes")), request["request_id"]),
-            ).fetchone()
-        elif decision == "APPROVED":
-            student = conn.execute("select * from courseplatform.students where student_id = %s", (request["student_id"],)).fetchone()
-            course = conn.execute("select * from courseplatform.courses where course_id = %s", (request["course_id"],)).fetchone()
-            enrollment = resolve_student_enrollment_with_conn(
-                conn,
-                request["student_id"],
-                request["course_id"],
-                str_value(request.get("enrollment_id")),
-            )
-            version = conn.execute(
-                "select * from courseplatform.course_versions where course_version_id = %s",
-                (enrollment["course_version_id"],),
-            ).fetchone()
-            certificate = conn.execute(
-                """
-                insert into courseplatform.certificates
-                  (certificate_id, student_id, course_id, enrollment_id, offering_id,
-                   course_version_id, certificate_number, verification_code,
-                   issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
-                   recognition_level, content_summary, template_snapshot_json, professional_request_id,
-                   download_count, max_downloads, payment_status, approved_by, approved_at)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, now(), %s,
-                  '', '', 'ISSUED', 'PROFESSIONAL', 'CONTENT_DETAILED', %s, %s, %s, 0, 5,
-                  'CONFIRMED', %s, now())
-                returning *
-                """,
-                (
-                    generate_id("CERT"),
-                    request["student_id"],
-                    request["course_id"],
-                    enrollment["enrollment_id"],
-                    enrollment["offering_id"],
-                    enrollment["course_version_id"],
-                    certificate_number(),
-                    certificate_verification_code(),
-                    enrollment.get("final_score"),
-                    certificate_content_summary(conn, request["course_id"], version),
-                    json.dumps(certificate_template_snapshot(conn, request["course_id"], "PROFESSIONAL", version)),
-                    request["request_id"],
-                    admin["admin_id"],
-                ),
-            ).fetchone()
-            request = conn.execute(
-                """
-                update courseplatform.certificate_requests
-                set status = 'APPROVED',
-                    certificate_id = %s,
-                    reviewed_by = %s,
-                    reviewed_at = now(),
-                    admin_notes = %s,
-                    updated_at = now()
-                where request_id = %s
-                returning *
-                """,
-                (certificate["certificate_id"], admin["admin_id"], str_value(payload.get("adminNotes")), request["request_id"]),
-            ).fetchone()
-            certificate = {**certificate, "course_title": (course or {}).get("title"), "student_name": (student or {}).get("full_name")}
-        else:
-            request = conn.execute(
-                """
-                update courseplatform.certificate_requests
-                set status = 'REJECTED',
-                    reviewed_by = %s,
-                    reviewed_at = now(),
-                    admin_notes = %s,
-                    updated_at = now()
-                where request_id = %s
-                returning *
-                """,
-                (admin["admin_id"], str_value(payload.get("adminNotes")), request["request_id"]),
-            ).fetchone()
-        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_REQUEST_REVIEWED", "CERTIFICATE_REQUEST", request["request_id"], {"decision": decision})
-        conn.commit()
-    return success({"request": public_certificate_request(request), "certificate": public_certificate(certificate)})
+    return financial_domain.admin_review_certificate_request_action(payload, _financial_runtime())
 
 
 def admin_delete_certificate_request(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["requestId"])
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        request = conn.execute(
-            "select * from courseplatform.certificate_requests where request_id = %s for update",
-            (payload["requestId"],),
-        ).fetchone()
-        if not request:
-            raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
-        if request.get("certificate_id"):
-            raise ApiError(
-                "CERTIFICATE_REQUEST_PROTECTED",
-                "Este pedido está associado a um certificado e não pode ser apagado.",
-            )
-        if request.get("payment_receipt_url") or request.get("submitted_at"):
-            raise ApiError(
-                "CERTIFICATE_REQUEST_PROTECTED",
-                "Pedidos com comprovativo submetido devem ser preservados para auditoria.",
-            )
-        if request.get("status") not in {"REQUESTED", "REJECTED"}:
-            raise ApiError(
-                "CERTIFICATE_REQUEST_PROTECTED",
-                "Apenas pedidos solicitados ou rejeitados, sem comprovativo, podem ser apagados.",
-            )
-        deleted = conn.execute(
-            "delete from courseplatform.certificate_requests where request_id = %s returning *",
-            (request["request_id"],),
-        ).fetchone()
-        audit(
-            conn,
-            "ADMIN",
-            admin["admin_id"],
-            "CERTIFICATE_REQUEST_DELETED",
-            "CERTIFICATE_REQUEST",
-            request["request_id"],
-            {"status": request.get("status")},
-        )
-        conn.commit()
-    return success({"request": public_certificate_request(deleted)})
+    return financial_domain.admin_delete_certificate_request_action(payload, _financial_runtime())
 
 
 def admin_get_certificate_settings(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
-        row = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
-        conn.commit()
-    return success({"settings": certificate_settings_payload(row, course), "course": public_course(course)})
+    return certificate_domain.admin_get_certificate_settings_action(payload, _certificate_runtime())
 
 
 def admin_save_certificate_settings(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
-        current = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
-        current_payload = certificate_settings_payload(current, course)
-        survey_questions = normalize_survey_questions(payload.get("surveyQuestions")) if isinstance(payload.get("surveyQuestions"), list) else current_payload.get("surveyQuestions", [])
-        profile_source = {**current_payload.get("certificateProfile", {}), **(payload.get("certificateProfile") or {})}
-        profile = normalize_certificate_profile(profile_source, course)
-        row = conn.execute(
-            """
-            insert into courseplatform.certificate_settings
-              (course_id, congratulations_message, survey_questions_json,
-               professional_price, payment_instructions, professional_preview_url,
-               certificate_profile_json, updated_by, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, now())
-            on conflict (course_id) do update
-            set congratulations_message = excluded.congratulations_message,
-                survey_questions_json = excluded.survey_questions_json,
-                professional_price = excluded.professional_price,
-                payment_instructions = excluded.payment_instructions,
-                professional_preview_url = excluded.professional_preview_url,
-                certificate_profile_json = excluded.certificate_profile_json,
-                updated_by = excluded.updated_by,
-                updated_at = now()
-            returning *
-            """,
-            (
-                course_id,
-                str_value(payload.get("congratulationsMessage")) or current_payload.get("congratulationsMessage"),
-                json.dumps(survey_questions),
-                str_value(payload.get("professionalPrice")) or profile.get("printFee") or current_payload.get("professionalPrice"),
-                str_value(payload.get("paymentInstructions")) or profile.get("paymentInstructions") or current_payload.get("paymentInstructions"),
-                str_value(payload.get("professionalPreviewUrl")) or current_payload.get("professionalPreviewUrl"),
-                json.dumps(profile),
-                admin["admin_id"],
-            ),
-        ).fetchone()
-        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_SETTINGS_SAVED", "COURSE", course_id)
-        conn.commit()
-    return success({"settings": certificate_settings_payload(row, course), "course": public_course(course)})
+    return certificate_domain.admin_save_certificate_settings_action(payload, _certificate_runtime())
 
 
 def admin_list_certificate_surveys(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    query = str_value(payload.get("query")).lower()
-    limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-certificate-surveys", query)
-    cursor = decode_list_cursor(payload.get("cursor"), "admin-certificate-surveys", scope, sort_type="text")
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_title, cursor_id = cursor
-        cursor_sql = "and (lower(coalesce(c.title, '')) > %s or (lower(coalesce(c.title, '')) = %s and c.course_id > %s))"
-        cursor_params.extend((cursor_title, cursor_title, cursor_id))
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        rows = conn.execute(
-            f"""
-            with survey_rows as (
-              select c.*, cs.survey_questions_json, cs.congratulations_message, cs.updated_at,
-                     lower(coalesce(c.title, '')) as pagination_sort_text
-              from courseplatform.courses c
-              left join courseplatform.certificate_settings cs on cs.course_id = c.course_id
-              where coalesce(c.status, 'ACTIVE') <> 'DELETED'
-                and (%s = '' or lower(coalesce(c.title, '') || ' ' || coalesce(c.course_code, '') || ' ' || coalesce(c.course_id, '')) like %s)
-            ), numbered_surveys as (
-              select *, count(*) over() as total_count from survey_rows
-            )
-            select * from numbered_surveys c
-            where true {cursor_sql}
-            order by pagination_sort_text, course_id
-            limit %s
-            """,
-            (query, f"%{query}%", *cursor_params, limit + 1),
-        ).fetchall()
-        conn.commit()
-    total = int(rows[0]["total_count"]) if rows else 0
-    rows, page_info = cursor_pagination_result(
-        rows, limit, "admin-certificate-surveys", scope, "pagination_sort_text", "course_id"
-    )
-    page_info["total"] = total
-    surveys = []
-    for row in rows:
-        settings = certificate_settings_payload(row, row)
-        surveys.append({
-            "course": public_course(row),
-            "congratulationsMessage": settings.get("congratulationsMessage"),
-            "surveyQuestions": settings.get("surveyQuestions"),
-            "questionCount": len(settings.get("surveyQuestions") or []),
-            "updatedAt": iso(row.get("updated_at")),
-        })
-    return success({"surveys": surveys, "pagination": page_info})
+    return certificate_domain.admin_list_certificate_surveys_action(payload, _certificate_runtime())
 
 
 def admin_save_certificate_survey(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    course_id = payload.get("courseId") or get_settings().default_course_id
-    survey_questions = normalize_survey_questions(payload.get("surveyQuestions") if isinstance(payload.get("surveyQuestions"), list) else [])
-    with connection() as conn:
-        ensure_certificate_feature_schema(conn)
-        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
-        if not course:
-            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
-        current = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
-        current_payload = certificate_settings_payload(current, course)
-        profile = normalize_certificate_profile(current_payload.get("certificateProfile"), course)
-        row = conn.execute(
-            """
-            insert into courseplatform.certificate_settings
-              (course_id, congratulations_message, survey_questions_json,
-               professional_price, payment_instructions, professional_preview_url,
-               certificate_profile_json, updated_by, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, now())
-            on conflict (course_id) do update
-            set congratulations_message = excluded.congratulations_message,
-                survey_questions_json = excluded.survey_questions_json,
-                updated_by = excluded.updated_by,
-                updated_at = now()
-            returning *
-            """,
-            (
-                course_id,
-                str_value(payload.get("congratulationsMessage")) or current_payload.get("congratulationsMessage"),
-                json.dumps(survey_questions),
-                current_payload.get("professionalPrice"),
-                current_payload.get("paymentInstructions"),
-                current_payload.get("professionalPreviewUrl"),
-                json.dumps(profile),
-                admin["admin_id"],
-            ),
-        ).fetchone()
-        audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_SURVEY_SAVED", "COURSE", course_id)
-        conn.commit()
-    return success({"settings": certificate_settings_payload(row, course), "course": public_course(course)})
+    return certificate_domain.admin_save_certificate_survey_action(payload, _certificate_runtime())
 
 
 def admin_upload_certificate_asset(payload: dict[str, Any]):
-    admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["courseId", "assetKey", "fileName", "mimeType", "dataUrl"])
-    course_id = str_value(payload.get("courseId"))
-    asset_key = str_value(payload.get("assetKey"))
-    allowed_keys = set(default_certificate_profile().get("assets", {}).keys())
-    if asset_key not in allowed_keys:
-        raise ApiError("INVALID_ASSET_KEY", "Tipo de elemento gráfico inválido.")
-    mime_type, data_url, file_bytes = decode_raster_data_url(
-        payload.get("dataUrl"),
-        payload.get("mimeType"),
-        3 * 1024 * 1024,
-    )
-
-    extension = mimetypes.guess_extension(mime_type) or ".png"
-    object_path = f"{course_id}/{asset_key}-{certificate_token(8)}{extension}"
-    storage_saved, storage_error = upload_raster_asset_to_storage(file_bytes, mime_type, object_path)
-
-    return success({
-        "assetKey": asset_key,
-        "assetUrl": data_url,
-        "storagePath": object_path if storage_saved else "",
-        "storageSaved": storage_saved,
-        "storageError": storage_error,
-    })
+    return certificate_domain.admin_upload_certificate_asset_action(payload, _certificate_runtime())
 
 
 def admin_upload_brand_logo(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["fileName", "mimeType", "dataUrl"])
-    course_id = str_value(payload.get("courseId") or get_settings().default_course_id)
-    mime_type, data_url, file_bytes = decode_raster_data_url(
-        payload.get("dataUrl"),
-        payload.get("mimeType"),
-        BRAND_LOGO_MAX_BYTES,
-    )
-    extension = mimetypes.guess_extension(mime_type) or ".png"
-    object_path = f"{course_id}/branding/institutional-logo-{certificate_token(8)}{extension}"
-    storage_saved, storage_error = upload_raster_asset_to_storage(file_bytes, mime_type, object_path)
-
-    media = read_media_config(course_id)
-    if not isinstance(media, dict):
-        media = {"logoUrl": "", "videos": []}
-    media["logoUrl"] = data_url
-    media.setdefault("videos", [])
-    with connection() as conn:
-        persist_media_config(conn, media)
-        audit(
-            conn,
-            "ADMIN",
-            admin["admin_id"],
-            "BRAND_LOGO_UPLOADED",
-            "SETTING",
-            "MEDIA_CONFIG",
-            {
-                "fileName": str_value(payload.get("fileName"))[:180],
-                "mimeType": mime_type,
-                "sizeBytes": len(file_bytes),
-                "storageSaved": storage_saved,
-                "storagePath": object_path if storage_saved else "",
-            },
-        )
-        conn.commit()
-
-    return success({
-        "mediaConfig": media,
-        "storageSaved": storage_saved,
-        "storagePath": object_path if storage_saved else "",
-        "storageError": storage_error,
-    })
+    return administration_domain.admin_upload_brand_logo_action(payload, runtime=_administration_runtime())
 
 
 def verify_certificate(payload: dict[str, Any]):
-    code = payload.get("code") or payload.get("verificationCode") or ""
-    certificate = fetch_one(
-        """
-        select cert.*, s.full_name, c.title
-        from courseplatform.certificates cert
-        join courseplatform.students s on s.student_id = cert.student_id
-        join courseplatform.courses c on c.course_id = cert.course_id
-        where cert.verification_code = %s or cert.certificate_number = %s
-        """,
-        (code, code),
-    )
-    if not certificate:
-        return success({"valid": False})
-    return success({"valid": certificate.get("status") == "ISSUED", "certificate": {"certificateNumber": certificate.get("certificate_number"), "verificationCode": certificate.get("verification_code"), "issueDate": iso(certificate.get("issue_date")), "finalScore": float(certificate.get("final_score") or 0), "status": certificate.get("status")}, "student": {"fullName": certificate.get("full_name")}, "course": {"title": certificate.get("title")}})
+    return certificate_domain.verify_certificate_action(payload, _certificate_runtime())
 
 
 def admin_list_notifications(payload: dict[str, Any]):
-    _, _admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    prepare_notification_feature_schema()
-    limit = cursor_page_limit(payload, default_limit=80, max_limit=200)
-    query = str_value(payload.get("query")).lower()
-    category = str_value(payload.get("category") or "ALL").upper()
-    scope = cursor_scope("admin-notifications", category, query)
-    cursor = decode_list_cursor(payload.get("cursor"), "admin-notifications", scope)
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_at, cursor_id = cursor
-        cursor_sql = "and (n.created_at < %s or (n.created_at = %s and n.notification_id < %s))"
-        cursor_params.extend((cursor_at, cursor_at, cursor_id))
-    rows = fetch_all(
-        f"""
-        select n.*, s.full_name as student_name,
-               n.created_at as pagination_sort_at,
-               w.status as whatsapp_status, w.recipient as whatsapp_recipient,
-               w.provider_message_id as whatsapp_provider_message_id,
-               w.attempt_count as whatsapp_attempt_count, w.last_error as whatsapp_last_error,
-               w.sent_at as whatsapp_sent_at,
-               e.status as email_status, e.recipient as email_recipient,
-               e.provider_message_id as email_provider_message_id,
-               e.attempt_count as email_attempt_count, e.last_error as email_last_error,
-               e.sent_at as email_sent_at,
-               t.status as telegram_status, t.recipient as telegram_recipient,
-               t.provider_message_id as telegram_provider_message_id,
-               t.attempt_count as telegram_attempt_count, t.last_error as telegram_last_error,
-               t.sent_at as telegram_sent_at,
-               p.status as push_status,
-               p.provider_message_id as push_provider_message_id,
-               p.attempt_count as push_attempt_count, p.last_error as push_last_error,
-               p.sent_at as push_sent_at
-        from courseplatform.notifications n
-        join courseplatform.students s on s.student_id = n.student_id
-        left join courseplatform.notification_deliveries w
-          on w.notification_id = n.notification_id and w.channel = 'WHATSAPP'
-        left join courseplatform.notification_deliveries e
-          on e.notification_id = n.notification_id and e.channel = 'EMAIL'
-        left join courseplatform.notification_deliveries t
-          on t.notification_id = n.notification_id and t.channel = 'TELEGRAM'
-        left join courseplatform.notification_deliveries p
-          on p.notification_id = n.notification_id and p.channel = 'PUSH'
-        where (%s = 'ALL' or n.category = %s)
-          and (%s = '' or lower(coalesce(s.full_name, '') || ' ' || coalesce(n.title, '') || ' ' || coalesce(n.message, '')) like %s)
-          {cursor_sql}
-        order by n.created_at desc, n.notification_id desc
-        limit %s
-        """,
-        (category, category, query, f"%{query}%", *cursor_params, limit + 1),
-    )
-    rows, page_info = cursor_pagination_result(
-        rows, limit, "admin-notifications", scope, "pagination_sort_at", "notification_id"
-    )
-    totals = fetch_one(
-        """
-        select
-          (select count(*) from courseplatform.notifications) as internal_total,
-          count(*) filter (where d.channel = 'WHATSAPP' and d.status = 'SENT') as whatsapp_sent,
-          count(*) filter (where d.channel = 'WHATSAPP' and d.status in ('PENDING', 'PROCESSING')) as whatsapp_pending,
-          count(*) filter (where d.channel = 'WHATSAPP' and d.status = 'FAILED') as whatsapp_failed,
-          count(*) filter (where d.channel = 'WHATSAPP' and d.status = 'SKIPPED') as whatsapp_skipped,
-          count(*) filter (where d.channel = 'EMAIL' and d.status = 'SENT') as email_sent,
-          count(*) filter (where d.channel = 'EMAIL' and d.status in ('PENDING', 'PROCESSING')) as email_pending,
-          count(*) filter (where d.channel = 'EMAIL' and d.status = 'FAILED') as email_failed,
-          count(*) filter (where d.channel = 'EMAIL' and d.status = 'SKIPPED') as email_skipped,
-          count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'SENT') as telegram_sent,
-          count(*) filter (where d.channel = 'TELEGRAM' and d.status in ('PENDING', 'PROCESSING')) as telegram_pending,
-          count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'FAILED') as telegram_failed,
-          count(*) filter (where d.channel = 'TELEGRAM' and d.status = 'SKIPPED') as telegram_skipped,
-          count(*) filter (where d.channel = 'PUSH' and d.status = 'SENT') as push_sent,
-          count(*) filter (where d.channel = 'PUSH' and d.status in ('PENDING', 'PROCESSING')) as push_pending,
-          count(*) filter (where d.channel = 'PUSH' and d.status = 'FAILED') as push_failed,
-          count(*) filter (where d.channel = 'PUSH' and d.status = 'SKIPPED') as push_skipped
-        from courseplatform.notification_deliveries d
-        """
-    ) or {}
-    return success({
-        "notifications": [public_notification(row) for row in rows],
-        "summary": {
-            "internalTotal": int(totals.get("internal_total") or 0),
-            "whatsappSent": int(totals.get("whatsapp_sent") or 0),
-            "whatsappPending": int(totals.get("whatsapp_pending") or 0),
-            "whatsappFailed": int(totals.get("whatsapp_failed") or 0),
-            "whatsappSkipped": int(totals.get("whatsapp_skipped") or 0),
-            "emailSent": int(totals.get("email_sent") or 0),
-            "emailPending": int(totals.get("email_pending") or 0),
-            "emailFailed": int(totals.get("email_failed") or 0),
-            "emailSkipped": int(totals.get("email_skipped") or 0),
-            "telegramSent": int(totals.get("telegram_sent") or 0),
-            "telegramPending": int(totals.get("telegram_pending") or 0),
-            "telegramFailed": int(totals.get("telegram_failed") or 0),
-            "telegramSkipped": int(totals.get("telegram_skipped") or 0),
-            "pushSent": int(totals.get("push_sent") or 0),
-            "pushPending": int(totals.get("push_pending") or 0),
-            "pushFailed": int(totals.get("push_failed") or 0),
-            "pushSkipped": int(totals.get("push_skipped") or 0),
-        },
-        "whatsappConfiguration": whatsapp_configuration(),
-        "emailConfiguration": email_configuration(),
-        "telegramConfiguration": telegram_configuration(),
-        "pushConfiguration": web_push_configuration(),
-        "notificationTemplates": notification_templates_payload(),
-        "limit": limit,
-        "pagination": page_info,
-    })
+    return communication_domain.admin_list_notifications_action(payload, runtime=_communication_runtime())
 
 
 def admin_create_notification(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_notification_feature_schema()
-    require_fields(payload, ["title", "message"])
-    notify_all = as_bool(payload.get("notifyAll"))
-    student_ids = payload.get("studentIds") if isinstance(payload.get("studentIds"), list) else []
-    student_ids = [str_value(student_id) for student_id in student_ids if str_value(student_id)]
-    if notify_all:
-        student_ids = [
-            row["student_id"]
-            for row in fetch_all("select student_id from courseplatform.students where status = 'ACTIVE' order by full_name")
-        ]
-    if not student_ids:
-        raise ApiError("NOTIFICATION_RECIPIENT_REQUIRED", "Selecione pelo menos um estudante.")
-    notification_ids: list[str] = []
-    with connection() as conn:
-        for student_id in dict.fromkeys(student_ids):
-            notification_id = create_student_notification(
-                conn,
-                student_id,
-                str_value(payload.get("category") or "GENERAL"),
-                str_value(payload.get("title")),
-                str_value(payload.get("message")),
-                admin_id=admin["admin_id"],
-                action_url=safe_notification_action_url(payload.get("actionUrl")),
-                entity_type="MANUAL_UPDATE",
-                entity_id="",
-                priority=str_value(payload.get("priority") or "NORMAL"),
-                email_subject=str_value(payload.get("emailSubject")),
-                email_message=str_value(payload.get("emailMessage")),
-                push_title=str_value(payload.get("pushTitle")),
-                push_message=str_value(payload.get("pushMessage")),
-                send_whatsapp=as_bool(payload.get("sendWhatsApp")),
-                send_email=as_bool(payload.get("sendEmail")),
-                send_telegram=as_bool(payload.get("sendTelegram")),
-                send_push=as_bool(payload.get("sendPush")),
-            )
-            if notification_id:
-                notification_ids.append(notification_id)
-        audit(
-            conn,
-            "ADMIN",
-            admin["admin_id"],
-            "NOTIFICATION_SENT",
-            "NOTIFICATION",
-            "",
-            {
-                "studentCount": len(notification_ids),
-                "sendWhatsApp": as_bool(payload.get("sendWhatsApp")),
-                "sendEmail": as_bool(payload.get("sendEmail")),
-                "sendTelegram": as_bool(payload.get("sendTelegram")),
-                "sendPush": as_bool(payload.get("sendPush")),
-            },
-        )
-        conn.commit()
-    dispatch_notification_deliveries(notification_ids)
-    return success({"notificationCount": len(notification_ids), "notificationIds": notification_ids})
+    return communication_domain.admin_create_notification_action(payload, runtime=_communication_runtime())
 
 
 def admin_save_notification_template(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_notification_feature_schema()
-    source = payload.get("notificationTemplate") if isinstance(payload.get("notificationTemplate"), dict) else payload
-    template_key = str_value(source.get("templateKey")).upper()
-    if template_key not in NOTIFICATION_TEMPLATE_DEFINITIONS:
-        raise ApiError("INVALID_NOTIFICATION_TEMPLATE", "Selecione um modelo de notificação válido.")
-    limits = {
-        "internalTitleTemplate": 180,
-        "internalMessageTemplate": 1800,
-        "emailSubjectTemplate": 180,
-        "emailMessageTemplate": 5000,
-        "pushTitleTemplate": 120,
-        "pushMessageTemplate": 300,
-    }
-    values: dict[str, str] = {}
-    for field, limit in limits.items():
-        value = str_value(source.get(field))
-        if not value:
-            raise ApiError("NOTIFICATION_TEMPLATE_FIELD_REQUIRED", "Todos os textos do modelo são obrigatórios.", {"field": field})
-        if len(value) > limit:
-            raise ApiError("NOTIFICATION_TEMPLATE_TOO_LONG", "Um dos textos excede o tamanho permitido.", {"field": field, "limit": limit})
-        unknown_tokens = _template_tokens(value) - NOTIFICATION_TEMPLATE_VARIABLES
-        if unknown_tokens:
-            raise ApiError(
-                "INVALID_NOTIFICATION_TEMPLATE_VARIABLE",
-                "O modelo contém variáveis não suportadas.",
-                {"field": field, "variables": sorted(unknown_tokens)},
-            )
-        values[field] = value
-    with connection() as conn:
-        row = conn.execute(
-            """
-            insert into courseplatform.notification_templates
-              (template_key, internal_title_template, internal_message_template,
-               email_subject_template, email_message_template,
-               push_title_template, push_message_template, updated_by, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, now())
-            on conflict (template_key) do update set
-              internal_title_template = excluded.internal_title_template,
-              internal_message_template = excluded.internal_message_template,
-              email_subject_template = excluded.email_subject_template,
-              email_message_template = excluded.email_message_template,
-              push_title_template = excluded.push_title_template,
-              push_message_template = excluded.push_message_template,
-              updated_by = excluded.updated_by,
-              updated_at = now()
-            returning *
-            """,
-            (
-                template_key,
-                values["internalTitleTemplate"], values["internalMessageTemplate"],
-                values["emailSubjectTemplate"], values["emailMessageTemplate"],
-                values["pushTitleTemplate"], values["pushMessageTemplate"],
-                admin["admin_id"],
-            ),
-        ).fetchone()
-        audit(
-            conn, "ADMIN", admin["admin_id"], "NOTIFICATION_TEMPLATE_UPDATED",
-            "NOTIFICATION_TEMPLATE", template_key,
-        )
-        conn.commit()
-    return success({
-        "notificationTemplate": notification_template_payload(template_key, row),
-        "notificationTemplates": notification_templates_payload(),
-    })
+    return communication_domain.admin_save_notification_template_action(payload, runtime=_communication_runtime())
 
 
 def admin_reset_notification_template(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_notification_feature_schema()
-    template_key = str_value(payload.get("templateKey")).upper()
-    if template_key not in NOTIFICATION_TEMPLATE_DEFINITIONS:
-        raise ApiError("INVALID_NOTIFICATION_TEMPLATE", "Selecione um modelo de notificação válido.")
-    with connection() as conn:
-        conn.execute("delete from courseplatform.notification_templates where template_key = %s", (template_key,))
-        audit(
-            conn, "ADMIN", admin["admin_id"], "NOTIFICATION_TEMPLATE_RESET",
-            "NOTIFICATION_TEMPLATE", template_key,
-        )
-        conn.commit()
-    return success({
-        "notificationTemplate": notification_template_payload(template_key),
-        "notificationTemplates": notification_templates_payload(),
-    })
+    return communication_domain.admin_reset_notification_template_action(payload, runtime=_communication_runtime())
 
 
 def admin_save_whatsapp_configuration(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_notification_feature_schema()
-    settings = get_settings()
-    configuration = payload.get("whatsappConfiguration")
-    if not isinstance(configuration, dict):
-        configuration = payload
-
-    enabled = as_bool(configuration.get("enabled"))
-    phone_number_id = str_value(configuration.get("phoneNumberId"))
-    graph_api_version = str_value(configuration.get("graphApiVersion")) or "v23.0"
-    template_name = str_value(configuration.get("templateName"))
-    template_language = str_value(configuration.get("templateLanguage")) or "pt_PT"
-    platform_url = str_value(configuration.get("platformUrl")).rstrip("/")
-    access_token = str_value(configuration.get("accessToken"))
-    remove_access_token = as_bool(configuration.get("removeAccessToken"))
-
-    if access_token and remove_access_token:
-        raise ApiError(
-            "AMBIGUOUS_WHATSAPP_TOKEN_UPDATE",
-            "Escolha entre substituir ou remover o token de acesso.",
-        )
-    if len(access_token) > 8192:
-        raise ApiError("INVALID_WHATSAPP_ACCESS_TOKEN", "O token de acesso excede o tamanho permitido.")
-    if phone_number_id and not re.fullmatch(r"\d{6,30}", phone_number_id):
-        raise ApiError("INVALID_WHATSAPP_PHONE_ID", "O Phone Number ID deve conter apenas números.")
-    if not re.fullmatch(r"v\d+\.\d+", graph_api_version):
-        raise ApiError("INVALID_WHATSAPP_API_VERSION", "Utilize uma versão da Graph API no formato v23.0.")
-    if template_name and not re.fullmatch(r"[a-z0-9_]{1,512}", template_name):
-        raise ApiError("INVALID_WHATSAPP_TEMPLATE", "O nome do modelo deve usar letras minúsculas, números e underscores.")
-    if not re.fullmatch(r"[a-z]{2,3}(?:_[A-Z]{2})?", template_language):
-        raise ApiError("INVALID_WHATSAPP_LANGUAGE", "Utilize um idioma no formato pt_PT.")
-    if platform_url and not valid_whatsapp_platform_url(platform_url):
-        raise ApiError("INVALID_WHATSAPP_PLATFORM_URL", "Informe um endereço http:// ou https:// completo e válido.")
-    encryption_key = notification_encryption_key(settings)
-    if access_token and not encryption_key:
-        raise ApiError(
-            "WHATSAPP_ENCRYPTION_KEY_REQUIRED",
-            "Defina NOTIFICATION_CONFIG_ENCRYPTION_KEY no servidor antes de guardar o token pelo painel.",
-        )
-    if access_token and len(encryption_key.encode("utf-8")) < 32:
-        raise ApiError(
-            "WEAK_WHATSAPP_ENCRYPTION_KEY",
-            "NOTIFICATION_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
-        )
-
-    with connection() as conn:
-        existing = conn.execute(
-            """
-            select access_token_encrypted,
-                   access_token_encrypted is not null as token_configured
-            from courseplatform.notification_channel_settings
-            where channel = 'WHATSAPP'
-            """
-        ).fetchone() or {}
-        encrypted_token = None if remove_access_token else existing.get("access_token_encrypted")
-        if access_token:
-            encrypted_token = conn.execute(
-                "select pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256') as encrypted_token",
-                (access_token, encryption_key),
-            ).fetchone()["encrypted_token"]
-
-        encryption_key_configured = len(encryption_key.encode("utf-8")) >= 32
-        token_available = bool(
-            access_token
-            or (encrypted_token is not None and encryption_key_configured)
-            or settings.whatsapp_access_token
-        )
-        if enabled and not (phone_number_id and template_name and platform_url and token_available):
-            raise ApiError(
-                "INCOMPLETE_WHATSAPP_CONFIGURATION",
-                "Preencha o Phone Number ID, o modelo, o endereço da plataforma e um token antes de ativar o WhatsApp.",
-            )
-
-        conn.execute(
-            """
-            insert into courseplatform.notification_channel_settings
-              (channel, enabled, phone_number_id, graph_api_version, template_name,
-               template_language, platform_url, access_token_encrypted, updated_by, updated_at)
-            values ('WHATSAPP', %s, %s, %s, %s, %s, %s, %s, %s, now())
-            on conflict (channel) do update set
-              enabled = excluded.enabled,
-              phone_number_id = excluded.phone_number_id,
-              graph_api_version = excluded.graph_api_version,
-              template_name = excluded.template_name,
-              template_language = excluded.template_language,
-              platform_url = excluded.platform_url,
-              access_token_encrypted = excluded.access_token_encrypted,
-              updated_by = excluded.updated_by,
-              updated_at = now()
-            """,
-            (
-                enabled,
-                phone_number_id or None,
-                graph_api_version,
-                template_name or None,
-                template_language,
-                platform_url or None,
-                encrypted_token,
-                admin["admin_id"],
-            ),
-        )
-        audit(
-            conn,
-            "ADMIN",
-            admin["admin_id"],
-            "WHATSAPP_CONFIGURATION_UPDATED",
-            "NOTIFICATION_CHANNEL",
-            "WHATSAPP",
-            {
-                "enabled": enabled,
-                "phoneNumberConfigured": bool(phone_number_id),
-                "templateName": template_name,
-                "tokenChanged": bool(access_token or remove_access_token),
-            },
-        )
-        conn.commit()
-    return success({"whatsappConfiguration": whatsapp_configuration()})
+    return communication_domain.admin_save_whatsapp_configuration_action(payload, runtime=_communication_runtime())
 
 
 def admin_save_email_configuration(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_notification_feature_schema()
-    settings = get_settings()
-    configuration = payload.get("emailConfiguration")
-    if not isinstance(configuration, dict):
-        configuration = payload
-    enabled = as_bool(configuration.get("enabled"))
-    smtp_host = str_value(configuration.get("smtpHost"))
-    smtp_port = int_value(configuration.get("smtpPort"), 587)
-    smtp_username = str_value(configuration.get("smtpUsername"))
-    smtp_password = str_value(configuration.get("smtpPassword"))
-    from_email = normalize_email_recipient(configuration.get("fromEmail"))
-    raw_from_email = str_value(configuration.get("fromEmail"))
-    from_name = str_value(configuration.get("fromName"))
-    use_tls = as_bool(configuration.get("useTls"))
-    remove_password = as_bool(configuration.get("removeSmtpPassword"))
-    encryption_key = notification_encryption_key(settings)
-    if smtp_password and remove_password:
-        raise ApiError("AMBIGUOUS_SMTP_PASSWORD_UPDATE", "Escolha entre substituir ou remover a palavra-passe SMTP.")
-    if smtp_host and not valid_notification_host(smtp_host):
-        raise ApiError("INVALID_SMTP_HOST", "Informe apenas um hostname SMTP válido, sem protocolo ou caminho.")
-    if not 1 <= smtp_port <= 65535:
-        raise ApiError("INVALID_SMTP_PORT", "A porta SMTP deve estar entre 1 e 65535.")
-    if enabled and smtp_port != 465 and not use_tls:
-        raise ApiError(
-            "INSECURE_SMTP_TRANSPORT",
-            "Ative TLS para proteger as credenciais e o conteúdo do email. A porta 465 utiliza TLS implícito.",
-        )
-    if len(smtp_username) > 320:
-        raise ApiError("INVALID_SMTP_USERNAME", "O utilizador SMTP excede o tamanho permitido.")
-    if len(smtp_password) > 8192:
-        raise ApiError("INVALID_SMTP_PASSWORD", "A palavra-passe SMTP excede o tamanho permitido.")
-    if raw_from_email and not from_email:
-        raise ApiError("INVALID_SMTP_FROM_EMAIL", "Informe um endereço de remetente válido.")
-    if len(from_name) > 120 or "\r" in from_name or "\n" in from_name:
-        raise ApiError("INVALID_SMTP_FROM_NAME", "O nome do remetente é inválido.")
-    if smtp_password and len(encryption_key.encode("utf-8")) < 32:
-        raise ApiError(
-            "WEAK_NOTIFICATION_ENCRYPTION_KEY",
-            "NOTIFICATION_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
-        )
-    with connection() as conn:
-        existing = conn.execute(
-            """
-            select smtp_password_encrypted
-            from courseplatform.notification_channel_settings where channel = 'EMAIL'
-            """
-        ).fetchone() or {}
-        encrypted_password = None if remove_password else existing.get("smtp_password_encrypted")
-        if smtp_password:
-            encrypted_password = conn.execute(
-                "select pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256') as encrypted_secret",
-                (smtp_password, encryption_key),
-            ).fetchone()["encrypted_secret"]
-        stored_password_available = bool(
-            smtp_password
-            or (encrypted_password is not None and len(encryption_key.encode("utf-8")) >= 32)
-            or settings.smtp_password
-        )
-        if enabled and not (
-            smtp_host and from_email and (not smtp_username or stored_password_available)
-        ):
-            raise ApiError(
-                "INCOMPLETE_EMAIL_CONFIGURATION",
-                "Preencha o servidor, o remetente e, quando houver autenticação, a palavra-passe SMTP.",
-            )
-        conn.execute(
-            """
-            insert into courseplatform.notification_channel_settings
-              (channel, enabled, smtp_host, smtp_port, smtp_username,
-               smtp_password_encrypted, from_email, from_name, use_tls, updated_by, updated_at)
-            values ('EMAIL', %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-            on conflict (channel) do update set
-              enabled = excluded.enabled, smtp_host = excluded.smtp_host,
-              smtp_port = excluded.smtp_port, smtp_username = excluded.smtp_username,
-              smtp_password_encrypted = excluded.smtp_password_encrypted,
-              from_email = excluded.from_email, from_name = excluded.from_name,
-              use_tls = excluded.use_tls, updated_by = excluded.updated_by, updated_at = now()
-            """,
-            (
-                enabled, smtp_host or None, smtp_port, smtp_username or None,
-                encrypted_password, from_email or None, from_name or None,
-                use_tls, admin["admin_id"],
-            ),
-        )
-        audit(
-            conn, "ADMIN", admin["admin_id"], "EMAIL_CONFIGURATION_UPDATED",
-            "NOTIFICATION_CHANNEL", "EMAIL",
-            {
-                "enabled": enabled, "smtpHostConfigured": bool(smtp_host),
-                "fromEmailConfigured": bool(from_email),
-                "passwordChanged": bool(smtp_password or remove_password),
-            },
-        )
-        conn.commit()
-    return success({"emailConfiguration": email_configuration()})
+    return communication_domain.admin_save_email_configuration_action(payload, runtime=_communication_runtime())
 
 
 def admin_save_telegram_configuration(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_notification_feature_schema()
-    settings = get_settings()
-    configuration = payload.get("telegramConfiguration")
-    if not isinstance(configuration, dict):
-        configuration = payload
-    enabled = as_bool(configuration.get("enabled"))
-    bot_token = str_value(configuration.get("botToken"))
-    bot_username = str_value(configuration.get("botUsername")).lstrip("@")
-    raw_parse_mode = str_value(configuration.get("parseMode")) or "HTML"
-    parse_mode = normalize_telegram_parse_mode(raw_parse_mode)
-    remove_token = as_bool(configuration.get("removeBotToken"))
-    encryption_key = notification_encryption_key(settings)
-    if bot_token and remove_token:
-        raise ApiError("AMBIGUOUS_TELEGRAM_TOKEN_UPDATE", "Escolha entre substituir ou remover o token do bot.")
-    if bot_token and not valid_telegram_bot_token(bot_token):
-        raise ApiError("INVALID_TELEGRAM_BOT_TOKEN", "O token do bot Telegram possui um formato inválido.")
-    if bot_username and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", bot_username):
-        raise ApiError("INVALID_TELEGRAM_BOT_USERNAME", "Informe o username do bot sem @, com 5 a 32 caracteres.")
-    if raw_parse_mode.upper() not in {"HTML", "MARKDOWNV2", "MARKDOWN_V2", "NONE", "PLAIN"}:
-        raise ApiError("INVALID_TELEGRAM_PARSE_MODE", "Utilize HTML, MarkdownV2 ou sem formatação.")
-    if len(bot_token) > 256:
-        raise ApiError("INVALID_TELEGRAM_BOT_TOKEN", "O token do bot excede o tamanho permitido.")
-    if bot_token and len(encryption_key.encode("utf-8")) < 32:
-        raise ApiError(
-            "WEAK_NOTIFICATION_ENCRYPTION_KEY",
-            "NOTIFICATION_CONFIG_ENCRYPTION_KEY deve possuir pelo menos 32 bytes.",
-        )
-    with connection() as conn:
-        existing = conn.execute(
-            """
-            select access_token_encrypted
-            from courseplatform.notification_channel_settings where channel = 'TELEGRAM'
-            """
-        ).fetchone() or {}
-        encrypted_token = None if remove_token else existing.get("access_token_encrypted")
-        if bot_token:
-            encrypted_token = conn.execute(
-                "select pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256') as encrypted_secret",
-                (bot_token, encryption_key),
-            ).fetchone()["encrypted_secret"]
-        token_available = bool(
-            bot_token
-            or (encrypted_token is not None and len(encryption_key.encode("utf-8")) >= 32)
-            or settings.telegram_bot_token
-        )
-        if enabled and not (bot_username and token_available):
-            raise ApiError(
-                "INCOMPLETE_TELEGRAM_CONFIGURATION",
-                "Preencha o username e o token do bot antes de ativar o Telegram.",
-            )
-        conn.execute(
-            """
-            insert into courseplatform.notification_channel_settings
-              (channel, enabled, bot_username, parse_mode, access_token_encrypted, updated_by, updated_at)
-            values ('TELEGRAM', %s, %s, %s, %s, %s, now())
-            on conflict (channel) do update set
-              enabled = excluded.enabled, bot_username = excluded.bot_username,
-              parse_mode = excluded.parse_mode,
-              access_token_encrypted = excluded.access_token_encrypted,
-              updated_by = excluded.updated_by, updated_at = now()
-            """,
-            (enabled, bot_username or None, parse_mode or None, encrypted_token, admin["admin_id"]),
-        )
-        audit(
-            conn, "ADMIN", admin["admin_id"], "TELEGRAM_CONFIGURATION_UPDATED",
-            "NOTIFICATION_CHANNEL", "TELEGRAM",
-            {
-                "enabled": enabled, "botUsernameConfigured": bool(bot_username),
-                "parseMode": parse_mode, "tokenChanged": bool(bot_token or remove_token),
-            },
-        )
-        conn.commit()
-    return success({"telegramConfiguration": telegram_configuration()})
+    return communication_domain.admin_save_telegram_configuration_action(payload, runtime=_communication_runtime())
 
 
 def admin_retry_notification_deliveries(payload: dict[str, Any]):
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
-    prepare_notification_feature_schema()
-    limit = max(1, min(int_value(payload.get("limit"), 20), 20))
-    requested = payload.get("channels") if isinstance(payload.get("channels"), list) else []
-    channels = [str_value(channel).upper() for channel in requested]
-    channels = [channel for channel in dict.fromkeys(channels) if channel in {"WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"}]
-    if not channels:
-        channels = ["WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"]
-    delivery_functions = {
-        "WHATSAPP": deliver_pending_whatsapp,
-        "EMAIL": deliver_pending_email,
-        "TELEGRAM": deliver_pending_telegram,
-        "PUSH": deliver_pending_push,
-    }
-    deliveries: dict[str, dict[str, int]] = {}
-    for channel in channels:
-        try:
-            deliveries[channel.lower()] = delivery_functions[channel](limit=limit)
-        except Exception as error:
-            deliveries[channel.lower()] = {
-                "sent": 0, "failed": 1, "pending": 0,
-                "error": redact_notification_error(error),
-            }
-    result = {
-        key: sum(int(channel_result.get(key) or 0) for channel_result in deliveries.values())
-        for key in ("sent", "failed", "pending")
-    }
-    with connection() as conn:
-        audit(
-            conn, "ADMIN", admin["admin_id"], "NOTIFICATION_DELIVERIES_RETRIED",
-            "NOTIFICATION", "", {"total": result, "channels": channels},
-        )
-        conn.commit()
-    return success({
-        "delivery": result,
-        "deliveries": deliveries,
-        "whatsappConfiguration": whatsapp_configuration(),
-        "emailConfiguration": email_configuration(),
-        "telegramConfiguration": telegram_configuration(),
-        "pushConfiguration": web_push_configuration(),
-    })
+    return communication_domain.admin_retry_notification_deliveries_action(payload, runtime=_communication_runtime())
 
 
 def chat_message_body(value: Any) -> str:
-    body = str(value or "").replace("\x00", "").strip()
-    if not body:
-        raise ApiError("CHAT_MESSAGE_REQUIRED", "Escreva uma mensagem antes de enviar.")
-    if len(body) > 2000:
-        raise ApiError("CHAT_MESSAGE_TOO_LONG", "A mensagem não pode exceder 2 000 caracteres.")
-    return body
+    return communication_domain.chat_message_body_action(value, runtime=_communication_runtime())
 
 
-def touch_chat_presence(conn, actor: dict[str, Any], room_id: str = "") -> None:
-    conn.execute(
-        """
-        insert into courseplatform.chat_presence
-          (presence_id, actor_type, actor_id, current_room_id, last_seen_at, updated_at)
-        values (%s, %s, %s, %s, now(), now())
-        on conflict (actor_type, actor_id) do update set
-          current_room_id = excluded.current_room_id,
-          last_seen_at = now(),
-          updated_at = now()
-        """,
-        (
-            generate_id("CPR"),
-            actor["type"],
-            actor["id"],
-            str_value(room_id)[:160] or None,
-        ),
-    )
+def touch_chat_presence(conn, actor: dict[str, Any], room_id: str='') -> None:
+    return communication_domain.touch_chat_presence_action(conn, actor, room_id, runtime=_communication_runtime())
 
 
 def chat_actor_with_conn(conn, payload: dict[str, Any]) -> dict[str, Any]:
-    if payload.get("adminToken"):
-        session = validate_session_with_conn(conn, str_value(payload.get("adminToken")), "ADMIN")
-        admin_id = str(session["subject_id"]).replace("ADMIN:", "", 1)
-        admin = conn.execute(
-            "select * from courseplatform.admins where admin_id = %s",
-            (admin_id,),
-        ).fetchone()
-        if not admin or admin.get("status") != "ACTIVE":
-            raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
-        if admin.get("role") not in {"OWNER", "ADMIN", "REVIEWER"}:
-            raise ApiError("FORBIDDEN", "O seu perfil não possui acesso às conversas.")
-        actor = {"type": "ADMIN", "id": admin_id, "record": admin}
-        touch_chat_presence(conn, actor, payload.get("roomId") or payload.get("currentRoomId") or "")
-        return actor
-    _, student = student_context_with_conn(conn, payload)
-    actor = {"type": "STUDENT", "id": student["student_id"], "record": student}
-    touch_chat_presence(conn, actor, payload.get("roomId") or payload.get("currentRoomId") or "")
-    return actor
+    return communication_domain.chat_actor_with_conn_action(conn, payload, runtime=_communication_runtime())
 
 
-def upsert_chat_room(
-    conn,
-    room_key: str,
-    room_type: str,
-    name: str,
-    description: str,
-    *,
-    course_id: str | None = None,
-    group_id: str | None = None,
-    owner_student_id: str | None = None,
-    direct_student_one_id: str | None = None,
-    direct_student_two_id: str | None = None,
-) -> dict[str, Any] | None:
-    return conn.execute(
-        """
-        insert into courseplatform.chat_rooms
-          (room_id, room_key, room_type, name, description, course_id, group_id,
-           owner_student_id, direct_student_one_id, direct_student_two_id,
-           status, created_at, updated_at)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', now(), now())
-        on conflict (room_key) do update set
-          name = excluded.name,
-          description = excluded.description,
-          course_id = excluded.course_id,
-          group_id = excluded.group_id,
-          owner_student_id = excluded.owner_student_id,
-          direct_student_one_id = excluded.direct_student_one_id,
-          direct_student_two_id = excluded.direct_student_two_id,
-          updated_at = now()
-        where (
-          courseplatform.chat_rooms.name,
-          courseplatform.chat_rooms.description,
-          courseplatform.chat_rooms.course_id,
-          courseplatform.chat_rooms.group_id,
-          courseplatform.chat_rooms.owner_student_id,
-          courseplatform.chat_rooms.direct_student_one_id,
-          courseplatform.chat_rooms.direct_student_two_id
-        ) is distinct from (
-          excluded.name,
-          excluded.description,
-          excluded.course_id,
-          excluded.group_id,
-          excluded.owner_student_id,
-          excluded.direct_student_one_id,
-          excluded.direct_student_two_id
-        )
-        returning *
-        """,
-        (
-            generate_id("CRM"), room_key, room_type, name[:160], description[:500],
-            course_id, group_id, owner_student_id,
-            direct_student_one_id, direct_student_two_id,
-        ),
-    ).fetchone()
+def upsert_chat_room(conn, room_key: str, room_type: str, name: str, description: str, *, course_id: str | None=None, group_id: str | None=None, owner_student_id: str | None=None, direct_student_one_id: str | None=None, direct_student_two_id: str | None=None) -> dict[str, Any] | None:
+    return communication_domain.upsert_chat_room_action(conn, room_key, room_type, name, description, course_id=course_id, group_id=group_id, owner_student_id=owner_student_id, direct_student_one_id=direct_student_one_id, direct_student_two_id=direct_student_two_id, runtime=_communication_runtime())
 
 
 def chat_direct_pair(student_a: str, student_b: str) -> tuple[str, str]:
-    first, second = sorted((str(student_a), str(student_b)))
-    if not first or first == second:
-        raise ApiError("INVALID_CHAT_CONTACT", "Selecione outro estudante para iniciar a conversa.")
-    return first, second
+    return communication_domain.chat_direct_pair_action(student_a, student_b, runtime=_communication_runtime())
 
 
 def sync_chat_rooms(conn, actor: dict[str, Any]) -> None:
-    if actor["type"] == "STUDENT":
-        desired_rooms_sql = """
-          select 'COMMUNITY'::text as room_key, 'COMMUNITY'::text as room_type,
-                 'Comunidade geral'::text as name,
-                 'Espaço comum para estudantes e formadores da plataforma.'::text as description,
-                 null::text as course_id, null::text as group_id, null::text as owner_student_id
-          union all
-          select distinct 'COURSE:' || c.course_id, 'COURSE', c.title,
-                 'Conversa do curso com estudantes e formadores matriculados.',
-                 c.course_id, null::text, null::text
-          from courseplatform.enrollments e
-          join courseplatform.courses c on c.course_id = e.course_id
-          where e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED') and c.status = 'ACTIVE'
-          union all
-          select distinct 'GROUP:' || g.group_id, 'GROUP', g.name,
-                 'Canal reservado aos membros deste grupo.',
-                 g.course_id, g.group_id, null::text
-          from courseplatform.groups g
-          left join courseplatform.group_members gm
-            on gm.group_id = g.group_id and gm.student_id = %s and gm.status = 'ACTIVE'
-          left join courseplatform.enrollments e
-            on e.group_id = g.group_id and e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED')
-          where g.status = 'ACTIVE' and (gm.group_member_id is not null or e.enrollment_id is not null)
-          union all
-          select 'SUPPORT:' || %s, 'SUPPORT', 'Apoio com formadores',
-                 'Conversa privada entre o estudante e a equipa de formação.',
-                 null::text, null::text, %s
-        """
-        params = (actor["id"], actor["id"], actor["id"], actor["id"], actor["id"])
-    else:
-        desired_rooms_sql = """
-          select 'COMMUNITY'::text as room_key, 'COMMUNITY'::text as room_type,
-                 'Comunidade geral'::text as name,
-                 'Espaço comum para estudantes e formadores da plataforma.'::text as description,
-                 null::text as course_id, null::text as group_id, null::text as owner_student_id
-          union all
-          select 'COURSE:' || c.course_id, 'COURSE', c.title,
-                 'Conversa do curso com estudantes e formadores matriculados.',
-                 c.course_id, null::text, null::text
-          from courseplatform.courses c where c.status = 'ACTIVE'
-          union all
-          select 'GROUP:' || g.group_id, 'GROUP', g.name,
-                 'Canal reservado aos membros deste grupo.',
-                 g.course_id, g.group_id, null::text
-          from courseplatform.groups g where g.status = 'ACTIVE'
-          union all
-          select 'SUPPORT:' || s.student_id, 'SUPPORT', 'Apoio com formadores',
-                 'Conversa privada entre o estudante e a equipa de formação.',
-                 null::text, null::text, s.student_id
-          from courseplatform.students s where s.status = 'ACTIVE'
-        """
-        params = ()
-
-    conn.execute(
-        f"""
-        with desired_rooms as ({desired_rooms_sql})
-        insert into courseplatform.chat_rooms
-          (room_id, room_key, room_type, name, description, course_id, group_id,
-           owner_student_id, status, created_at, updated_at)
-        select
-          'CRM-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 12)),
-          room_key, room_type, left(name, 160), left(description, 500),
-          course_id, group_id, owner_student_id, 'ACTIVE', now(), now()
-        from desired_rooms
-        on conflict (room_key) do update set
-          name = excluded.name,
-          description = excluded.description,
-          course_id = excluded.course_id,
-          group_id = excluded.group_id,
-          owner_student_id = excluded.owner_student_id,
-          updated_at = now()
-        where (
-          courseplatform.chat_rooms.name,
-          courseplatform.chat_rooms.description,
-          courseplatform.chat_rooms.course_id,
-          courseplatform.chat_rooms.group_id,
-          courseplatform.chat_rooms.owner_student_id
-        ) is distinct from (
-          excluded.name,
-          excluded.description,
-          excluded.course_id,
-          excluded.group_id,
-          excluded.owner_student_id
-        )
-        """,
-        params,
-    )
+    return communication_domain.sync_chat_rooms_action(conn, actor, runtime=_communication_runtime())
 
 
 def student_can_access_chat_room(conn, student_id: str, room: dict[str, Any]) -> bool:
-    room_type = room.get("room_type")
-    if room_type == "COMMUNITY":
-        return True
-    if room_type == "SUPPORT":
-        return room.get("owner_student_id") == student_id
-    if room_type == "DIRECT":
-        return student_id in {
-            room.get("direct_student_one_id"),
-            room.get("direct_student_two_id"),
-        }
-    if room_type == "COURSE":
-        row = conn.execute(
-            """
-            select 1 from courseplatform.enrollments
-            where student_id = %s and course_id = %s and status in ('ACTIVE', 'COMPLETED')
-            limit 1
-            """,
-            (student_id, room.get("course_id")),
-        ).fetchone()
-        return bool(row)
-    if room_type == "GROUP":
-        row = conn.execute(
-            """
-            select 1
-            from courseplatform.groups g
-            left join courseplatform.group_members gm
-              on gm.group_id = g.group_id and gm.student_id = %s and gm.status = 'ACTIVE'
-            left join courseplatform.enrollments e
-              on e.group_id = g.group_id and e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED')
-            where g.group_id = %s and g.status = 'ACTIVE'
-              and (gm.group_member_id is not null or e.enrollment_id is not null)
-            limit 1
-            """,
-            (student_id, student_id, room.get("group_id")),
-        ).fetchone()
-        return bool(row)
-    return False
+    return communication_domain.student_can_access_chat_room_action(conn, student_id, room, runtime=_communication_runtime())
 
 
 def accessible_chat_room(conn, room_id: str, actor: dict[str, Any]) -> dict[str, Any]:
-    room = conn.execute(
-        "select * from courseplatform.chat_rooms where room_id = %s and status = 'ACTIVE'",
-        (room_id,),
-    ).fetchone()
-    if not room:
-        raise ApiError("CHAT_ROOM_NOT_FOUND", "A conversa não foi encontrada.")
-    if actor["type"] == "ADMIN" and room.get("room_type") == "DIRECT":
-        raise ApiError("CHAT_ROOM_FORBIDDEN", "As conversas privadas entre estudantes são reservadas aos participantes.")
-    if actor["type"] == "STUDENT" and not student_can_access_chat_room(conn, actor["id"], room):
-        raise ApiError("CHAT_ROOM_FORBIDDEN", "Não possui acesso a esta conversa.")
-    return room
+    return communication_domain.accessible_chat_room_action(conn, room_id, actor, runtime=_communication_runtime())
 
 
 def chat_realtime_configuration(payload: dict[str, Any]):
-    global _CHAT_REALTIME_SCHEMA_READY
-    prepare_chat_feature_schema()
-    settings = get_settings()
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        conn.commit()
-        environment_ready = bool(
-            settings.chat_realtime_enabled
-            and settings.supabase_url.startswith("https://")
-            and settings.supabase_publishable_key
-            and len(settings.supabase_realtime_jwt_secret) >= 32
-        )
-        schema_ready = False
-        if environment_ready:
-            try:
-                schema_ready = ensure_chat_realtime_schema(conn)
-                conn.commit()
-                _CHAT_REALTIME_SCHEMA_READY = schema_ready
-            except Exception:
-                conn.rollback()
-                schema_ready = False
-    configured = environment_ready and schema_ready
-    result: dict[str, Any] = {
-        "enabled": configured,
-        "transport": "SUPABASE_BROADCAST" if configured else "POLLING",
-        "pollIntervalMs": 15000 if configured else 4000,
-    }
-    if configured:
-        token, expires_at = chat_realtime_token(
-            actor,
-            settings.supabase_realtime_jwt_secret,
-            settings.chat_realtime_token_minutes,
-        )
-        result.update({
-            "url": settings.supabase_url,
-            "publishableKey": settings.supabase_publishable_key,
-            "accessToken": token,
-            "expiresAt": iso(expires_at),
-            "inboxTopic": f"chat:actor:{actor['type'].lower()}:{actor['id']}:inbox",
-        })
-    return success({"realtime": result})
+    return communication_domain.chat_realtime_configuration_action(payload, runtime=_communication_runtime())
 
 
 def chat_message_rows(conn, message_ids: list[str]) -> list[dict[str, Any]]:
-    if not message_ids:
-        return []
-    return conn.execute(
-        """
-        select m.*,
-               s.full_name as student_name, s.public_student_id, s.profile_photo_url,
-               a.full_name as admin_name, a.role as admin_role,
-               reply.body as reply_body, reply.status as reply_status,
-               rs.full_name as reply_student_name, ra.full_name as reply_admin_name,
-               (select count(*) from courseplatform.chat_message_reports r
-                where r.message_id = m.message_id and r.status = 'OPEN') as report_count,
-               (select count(*) from courseplatform.chat_message_receipts receipt
-                where receipt.message_id = m.message_id and receipt.delivered_at is not null) as delivered_count,
-               (select count(*) from courseplatform.chat_message_receipts receipt
-                where receipt.message_id = m.message_id and receipt.read_at is not null) as read_count,
-               (select max(receipt.read_at) from courseplatform.chat_message_receipts receipt
-                where receipt.message_id = m.message_id) as last_read_at
-        from courseplatform.chat_messages m
-        left join courseplatform.students s on s.student_id = m.sender_student_id
-        left join courseplatform.admins a on a.admin_id = m.sender_admin_id
-        left join courseplatform.chat_messages reply on reply.message_id = m.reply_to_message_id
-        left join courseplatform.students rs on rs.student_id = reply.sender_student_id
-        left join courseplatform.admins ra on ra.admin_id = reply.sender_admin_id
-        where m.message_id = any(%s)
-        """,
-        (message_ids,),
-    ).fetchall()
+    return communication_domain.chat_message_rows_action(conn, message_ids, runtime=_communication_runtime())
 
 
 def chat_message_row(conn, message_id: str) -> dict[str, Any] | None:
-    rows = chat_message_rows(conn, [message_id])
-    return rows[0] if rows else None
+    return communication_domain.chat_message_row_action(conn, message_id, runtime=_communication_runtime())
 
 
 def public_chat_message(row: dict[str, Any] | None, actor: dict[str, Any]) -> dict[str, Any] | None:
-    if not row:
-        return None
-    sender_type = row.get("sender_type") or "STUDENT"
-    sender_id = row.get("sender_admin_id") if sender_type == "ADMIN" else row.get("sender_student_id")
-    sender_name = row.get("admin_name") if sender_type == "ADMIN" else row.get("student_name")
-    reply_name = row.get("reply_admin_name") or row.get("reply_student_name") or "Participante"
-    deleted = row.get("status") in {"DELETED", "MODERATED"}
-    delivered_count = int(row.get("delivered_count") or 0)
-    read_count = int(row.get("read_count") or 0)
-    delivery_status = "READ" if read_count else "DELIVERED" if delivered_count else "SENT"
-    return {
-        "messageId": row.get("message_id"),
-        "roomId": row.get("room_id"),
-        "body": "" if deleted else row.get("body") or "",
-        "status": row.get("status") or "ACTIVE",
-        "isDeleted": deleted,
-        "isMine": sender_type == actor["type"] and sender_id == actor["id"],
-        "sender": {
-            "type": sender_type,
-            "id": row.get("public_student_id") if sender_type == "STUDENT" else "",
-            "name": sender_name or ("Formador" if sender_type == "ADMIN" else "Estudante"),
-            "publicId": row.get("public_student_id") or "",
-            "role": row.get("admin_role") or "STUDENT",
-            "profilePhotoUrl": row.get("profile_photo_url") or "",
-        },
-        "replyTo": {
-            "messageId": row.get("reply_to_message_id"),
-            "senderName": reply_name,
-            "body": "Mensagem removida" if row.get("reply_status") in {"DELETED", "MODERATED"} else row.get("reply_body") or "",
-        } if row.get("reply_to_message_id") else None,
-        "reportCount": int(row.get("report_count") or 0),
-        "deliveryStatus": delivery_status,
-        "deliveredCount": delivered_count,
-        "readCount": read_count,
-        "lastReadAt": iso(row.get("last_read_at")),
-        "createdAt": iso(row.get("created_at")),
-        "editedAt": iso(row.get("edited_at")),
-        "updatedAt": iso(row.get("updated_at")),
-    }
+    return communication_domain.public_chat_message_action(row, actor, runtime=_communication_runtime())
 
 
-def record_chat_message_receipts(
-    conn,
-    message_ids: list[str],
-    actor: dict[str, Any],
-    *,
-    mark_read: bool = False,
-) -> None:
-    if not message_ids:
-        return
-    rows = conn.execute(
-        """
-        select message_id, sender_type, sender_student_id, sender_admin_id
-        from courseplatform.chat_messages
-        where message_id = any(%s)
-        """,
-        (message_ids,),
-    ).fetchall()
-    for row in rows:
-        sender_id = row.get("sender_student_id") if row.get("sender_type") == "STUDENT" else row.get("sender_admin_id")
-        if row.get("sender_type") == actor["type"] and sender_id == actor["id"]:
-            continue
-        if actor["type"] == "STUDENT":
-            changed = conn.execute(
-                """
-                insert into courseplatform.chat_message_receipts
-                  (receipt_id, message_id, actor_type, student_id, delivered_at, read_at, updated_at)
-                values (%s, %s, 'STUDENT', %s, now(), %s, now())
-                on conflict (message_id, student_id) where student_id is not null do update set
-                  delivered_at = coalesce(courseplatform.chat_message_receipts.delivered_at, now()),
-                  read_at = case when %s then coalesce(courseplatform.chat_message_receipts.read_at, now())
-                                 else courseplatform.chat_message_receipts.read_at end,
-                  updated_at = now()
-                where %s and courseplatform.chat_message_receipts.read_at is null
-                returning message_id
-                """,
-                (
-                    generate_id("CRC"), row["message_id"], actor["id"],
-                    bool(mark_read) and utc_now() or None, bool(mark_read), bool(mark_read),
-                ),
-            ).fetchone()
-        else:
-            changed = conn.execute(
-                """
-                insert into courseplatform.chat_message_receipts
-                  (receipt_id, message_id, actor_type, admin_id, delivered_at, read_at, updated_at)
-                values (%s, %s, 'ADMIN', %s, now(), %s, now())
-                on conflict (message_id, admin_id) where admin_id is not null do update set
-                  delivered_at = coalesce(courseplatform.chat_message_receipts.delivered_at, now()),
-                  read_at = case when %s then coalesce(courseplatform.chat_message_receipts.read_at, now())
-                                 else courseplatform.chat_message_receipts.read_at end,
-                  updated_at = now()
-                where %s and courseplatform.chat_message_receipts.read_at is null
-                returning message_id
-                """,
-                (
-                    generate_id("CRC"), row["message_id"], actor["id"],
-                    bool(mark_read) and utc_now() or None, bool(mark_read), bool(mark_read),
-                ),
-            ).fetchone()
-        if changed:
-            conn.execute(
-                "update courseplatform.chat_messages set updated_at = now() where message_id = %s",
-                (row["message_id"],),
-            )
+def record_chat_message_receipts(conn, message_ids: list[str], actor: dict[str, Any], *, mark_read: bool=False) -> None:
+    return communication_domain.record_chat_message_receipts_action(conn, message_ids, actor, mark_read=mark_read, runtime=_communication_runtime())
 
 
 def mark_chat_room_read_with_conn(conn, room_id: str, actor: dict[str, Any]) -> None:
-    message_rows = conn.execute(
-        """
-        select message_id from courseplatform.chat_messages
-        where room_id = %s and status = 'ACTIVE'
-        order by created_at desc limit 200
-        """,
-        (room_id,),
-    ).fetchall()
-    record_chat_message_receipts(
-        conn,
-        [row["message_id"] for row in message_rows],
-        actor,
-        mark_read=True,
-    )
-    upsert_chat_room_read_cursor(conn, room_id, actor)
+    return communication_domain.mark_chat_room_read_with_conn_action(conn, room_id, actor, runtime=_communication_runtime())
 
 
 def upsert_chat_room_read_cursor(conn, room_id: str, actor: dict[str, Any]) -> None:
-    if actor["type"] == "STUDENT":
-        conn.execute(
-            """
-            insert into courseplatform.chat_reads
-              (read_id, room_id, actor_type, student_id, last_read_at, updated_at)
-            values (%s, %s, 'STUDENT', %s, now(), now())
-            on conflict (room_id, student_id) where student_id is not null
-            do update set last_read_at = now(), updated_at = now()
-            """,
-            (generate_id("CRD"), room_id, actor["id"]),
-        )
-    else:
-        conn.execute(
-            """
-            insert into courseplatform.chat_reads
-              (read_id, room_id, actor_type, admin_id, last_read_at, updated_at)
-            values (%s, %s, 'ADMIN', %s, now(), now())
-            on conflict (room_id, admin_id) where admin_id is not null
-            do update set last_read_at = now(), updated_at = now()
-            """,
-            (generate_id("CRD"), room_id, actor["id"]),
-        )
+    return communication_domain.upsert_chat_room_read_cursor_action(conn, room_id, actor, runtime=_communication_runtime())
 
 
-def chat_room_summary_context(
-    conn,
-    rooms: list[dict[str, Any]],
-    actor: dict[str, Any],
-    active_admin_count: int,
-) -> dict[str, dict[str, Any]]:
-    room_ids = [str_value(room.get("room_id")) for room in rooms if room.get("room_id")]
-    if not room_ids:
-        return {}
-
-    latest_refs = conn.execute(
-        """
-        select distinct on (room_id) room_id, message_id
-        from courseplatform.chat_messages
-        where room_id = any(%s)
-        order by room_id, created_at desc, message_id desc
-        """,
-        (room_ids,),
-    ).fetchall()
-    latest_rows = chat_message_rows(conn, [row["message_id"] for row in latest_refs])
-    latest_by_room = {row["room_id"]: row for row in latest_rows}
-
-    actor_column = "student_id" if actor["type"] == "STUDENT" else "admin_id"
-    sender_column = "sender_student_id" if actor["type"] == "STUDENT" else "sender_admin_id"
-    unread_rows = conn.execute(
-        f"""
-        with read_cursors as (
-          select room_id, max(last_read_at) as last_read_at
-          from courseplatform.chat_reads
-          where {actor_column} = %s and room_id = any(%s)
-          group by room_id
-        )
-        select m.room_id, count(*) as count
-        from courseplatform.chat_messages m
-        left join read_cursors r on r.room_id = m.room_id
-        where m.room_id = any(%s)
-          and m.status = 'ACTIVE'
-          and m.{sender_column} is distinct from %s
-          and m.created_at > coalesce(r.last_read_at, 'epoch'::timestamptz)
-        group by m.room_id
-        """,
-        (actor["id"], room_ids, room_ids, actor["id"]),
-    ).fetchall()
-    unread_by_room = {row["room_id"]: int(row.get("count") or 0) for row in unread_rows}
-
-    online_rows = conn.execute(
-        """
-        select current_room_id as room_id, count(*) as count
-        from courseplatform.chat_presence
-        where current_room_id = any(%s)
-          and last_seen_at > now() - interval '75 seconds'
-        group by current_room_id
-        """,
-        (room_ids,),
-    ).fetchall()
-    online_by_room = {row["room_id"]: int(row.get("count") or 0) for row in online_rows}
-
-    course_ids = sorted({room.get("course_id") for room in rooms if room.get("room_type") == "COURSE" and room.get("course_id")})
-    course_counts = {}
-    if course_ids:
-        rows = conn.execute(
-            """
-            select course_id, count(distinct student_id) as count
-            from courseplatform.enrollments
-            where course_id = any(%s) and status in ('ACTIVE', 'COMPLETED')
-            group by course_id
-            """,
-            (course_ids,),
-        ).fetchall()
-        course_counts = {row["course_id"]: int(row.get("count") or 0) for row in rows}
-
-    group_ids = sorted({room.get("group_id") for room in rooms if room.get("room_type") == "GROUP" and room.get("group_id")})
-    group_counts = {}
-    if group_ids:
-        rows = conn.execute(
-            """
-            select group_id, count(distinct student_id) as count
-            from (
-              select group_id, student_id from courseplatform.group_members
-              where group_id = any(%s) and status = 'ACTIVE'
-              union
-              select group_id, student_id from courseplatform.enrollments
-              where group_id = any(%s) and status in ('ACTIVE', 'COMPLETED')
-            ) members
-            group by group_id
-            """,
-            (group_ids, group_ids),
-        ).fetchall()
-        group_counts = {row["group_id"]: int(row.get("count") or 0) for row in rows}
-
-    active_student_count = 0
-    if any(room.get("room_type") == "COMMUNITY" for room in rooms):
-        row = conn.execute(
-            "select count(*) as count from courseplatform.students where status = 'ACTIVE'"
-        ).fetchone() or {}
-        active_student_count = int(row.get("count") or 0)
-
-    peer_ids: set[str] = set()
-    for room in rooms:
-        if room.get("room_type") == "DIRECT" and actor["type"] == "STUDENT":
-            peer_ids.add(
-                room.get("direct_student_two_id")
-                if room.get("direct_student_one_id") == actor["id"]
-                else room.get("direct_student_one_id")
-            )
-        elif room.get("room_type") == "SUPPORT" and actor["type"] == "ADMIN":
-            peer_ids.add(room.get("owner_student_id"))
-    peer_ids.discard(None)
-    peer_ids.discard("")
-    peers_by_id = {}
-    if peer_ids:
-        rows = conn.execute(
-            """
-            select s.student_id, s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
-                   presence.last_seen_at,
-                   coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
-            from courseplatform.students s
-            left join courseplatform.chat_presence presence
-              on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
-            where s.student_id = any(%s)
-            """,
-            (sorted(peer_ids),),
-        ).fetchall()
-        peers_by_id = {row["student_id"]: row for row in rows}
-
-    context: dict[str, dict[str, Any]] = {}
-    for room in rooms:
-        room_type = room.get("room_type")
-        if room_type == "DIRECT":
-            participant_count = 2
-        elif room_type == "SUPPORT":
-            participant_count = 1 + active_admin_count
-        elif room_type == "COURSE":
-            participant_count = course_counts.get(room.get("course_id"), 0) + active_admin_count
-        elif room_type == "GROUP":
-            participant_count = group_counts.get(room.get("group_id"), 0) + active_admin_count
-        else:
-            participant_count = active_student_count + active_admin_count
-        context[room["room_id"]] = {
-            "lastMessage": latest_by_room.get(room["room_id"]),
-            "unreadCount": unread_by_room.get(room["room_id"], 0),
-            "onlineCount": online_by_room.get(room["room_id"], 0),
-            "participantCount": participant_count,
-            "peersById": peers_by_id,
-        }
-    return context
+def chat_room_summary_context(conn, rooms: list[dict[str, Any]], actor: dict[str, Any], active_admin_count: int) -> dict[str, dict[str, Any]]:
+    return communication_domain.chat_room_summary_context_action(conn, rooms, actor, active_admin_count, runtime=_communication_runtime())
 
 
-def chat_room_participant_count(conn, room: dict[str, Any], active_admin_count: int | None = None) -> int:
-    if room.get("room_type") == "DIRECT":
-        return 2
-    if active_admin_count is None:
-        active_admins = conn.execute(
-            "select count(*) as count from courseplatform.admins where status = 'ACTIVE'"
-        ).fetchone() or {}
-        admin_count = int(active_admins.get("count") or 0)
-    else:
-        admin_count = active_admin_count
-    if room.get("room_type") == "SUPPORT":
-        return 1 + admin_count
-    if room.get("room_type") == "COURSE":
-        row = conn.execute(
-            """
-            select count(distinct student_id) as count from courseplatform.enrollments
-            where course_id = %s and status in ('ACTIVE', 'COMPLETED')
-            """,
-            (room.get("course_id"),),
-        ).fetchone() or {}
-        return int(row.get("count") or 0) + admin_count
-    if room.get("room_type") == "GROUP":
-        row = conn.execute(
-            """
-            select count(distinct student_id) as count
-            from (
-              select student_id from courseplatform.group_members
-              where group_id = %s and status = 'ACTIVE'
-              union
-              select student_id from courseplatform.enrollments
-              where group_id = %s and status in ('ACTIVE', 'COMPLETED')
-            ) members
-            """,
-            (room.get("group_id"), room.get("group_id")),
-        ).fetchone() or {}
-        return int(row.get("count") or 0) + admin_count
-    row = conn.execute(
-        "select count(*) as count from courseplatform.students where status = 'ACTIVE'"
-    ).fetchone() or {}
-    return int(row.get("count") or 0) + admin_count
+def chat_room_participant_count(conn, room: dict[str, Any], active_admin_count: int | None=None) -> int:
+    return communication_domain.chat_room_participant_count_action(conn, room, active_admin_count, runtime=_communication_runtime())
 
 
-def public_chat_room(
-    conn,
-    room: dict[str, Any],
-    actor: dict[str, Any],
-    active_admin_count: int | None = None,
-    summary: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    actor_column = "student_id" if actor["type"] == "STUDENT" else "admin_id"
-    sender_column = "sender_student_id" if actor["type"] == "STUDENT" else "sender_admin_id"
-    if summary is None:
-        last_message_ref = conn.execute(
-            """
-            select message_id from courseplatform.chat_messages
-            where room_id = %s order by created_at desc, message_id desc limit 1
-            """,
-            (room["room_id"],),
-        ).fetchone()
-        last_message = chat_message_row(conn, last_message_ref["message_id"]) if last_message_ref else None
-        unread = conn.execute(
-            f"""
-            select count(*) as count
-            from courseplatform.chat_messages m
-            where m.room_id = %s
-              and m.status = 'ACTIVE'
-              and m.{sender_column} is distinct from %s
-              and m.created_at > coalesce((
-                select last_read_at from courseplatform.chat_reads
-                where room_id = %s and {actor_column} = %s
-                order by last_read_at desc limit 1
-              ), 'epoch'::timestamptz)
-            """,
-            (room["room_id"], actor["id"], room["room_id"], actor["id"]),
-        ).fetchone() or {}
-    else:
-        last_message = summary.get("lastMessage")
-        unread = {"count": summary.get("unreadCount", 0)}
-    display_name = room.get("name") or "Conversa"
-    peer_payload = None
-    if room.get("room_type") == "DIRECT" and actor["type"] == "STUDENT":
-        peer_id = (
-            room.get("direct_student_two_id")
-            if room.get("direct_student_one_id") == actor["id"]
-            else room.get("direct_student_one_id")
-        )
-        peer = (summary or {}).get("peersById", {}).get(peer_id)
-        if peer is None:
-            peer = conn.execute(
-                """
-                select s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
-                       presence.last_seen_at,
-                       coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
-                from courseplatform.students s
-                left join courseplatform.chat_presence presence
-                  on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
-                where s.student_id = %s and s.status = 'ACTIVE'
-                """,
-                (peer_id,),
-            ).fetchone() or {}
-        display_name = peer.get("full_name") or "Colega de curso"
-        peer_payload = {
-            "publicStudentId": peer.get("public_student_id") or "",
-            "fullName": peer.get("full_name") or "Colega de curso",
-            "profilePhotoUrl": peer.get("profile_photo_url") or "",
-            "organization": peer.get("organization") or "",
-            "isOnline": bool(peer.get("is_online")),
-            "lastSeenAt": iso(peer.get("last_seen_at")),
-        }
-    if room.get("room_type") == "SUPPORT" and actor["type"] == "ADMIN":
-        owner = (summary or {}).get("peersById", {}).get(room.get("owner_student_id"))
-        if owner is None:
-            owner = conn.execute(
-                """
-                select s.public_student_id, s.full_name, s.profile_photo_url, s.organization,
-                       presence.last_seen_at,
-                       coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
-                from courseplatform.students s
-                left join courseplatform.chat_presence presence
-                  on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
-                where s.student_id = %s
-                """,
-                (room.get("owner_student_id"),),
-            ).fetchone() or {}
-        display_name = owner.get("full_name") or "Apoio ao estudante"
-        peer_payload = {
-            "publicStudentId": owner.get("public_student_id") or "",
-            "fullName": owner.get("full_name") or "Estudante",
-            "profilePhotoUrl": owner.get("profile_photo_url") or "",
-            "organization": owner.get("organization") or "",
-            "isOnline": bool(owner.get("is_online")),
-            "lastSeenAt": iso(owner.get("last_seen_at")),
-        }
-    if summary is None:
-        online = conn.execute(
-            """
-            select count(*) as count from courseplatform.chat_presence
-            where current_room_id = %s and last_seen_at > now() - interval '75 seconds'
-            """,
-            (room["room_id"],),
-        ).fetchone() or {}
-        participant_count = chat_room_participant_count(conn, room, active_admin_count)
-    else:
-        online = {"count": summary.get("onlineCount", 0)}
-        participant_count = int(summary.get("participantCount") or 0)
-    return {
-        "roomId": room.get("room_id"),
-        "roomType": room.get("room_type"),
-        "name": display_name,
-        "description": room.get("description") or "",
-        "courseId": room.get("course_id") or "",
-        "groupId": room.get("group_id") or "",
-        "peer": peer_payload,
-        "onlineCount": int(online.get("count") or 0),
-        "participantCount": participant_count,
-        "unreadCount": int(unread.get("count") or 0),
-        "lastMessage": public_chat_message(last_message, actor),
-        "updatedAt": iso(room.get("updated_at")),
-    }
+def public_chat_room(conn, room: dict[str, Any], actor: dict[str, Any], active_admin_count: int | None=None, summary: dict[str, Any] | None=None) -> dict[str, Any]:
+    return communication_domain.public_chat_room_action(conn, room, actor, active_admin_count, summary, runtime=_communication_runtime())
 
 
 def chat_list_contacts(payload: dict[str, Any]):
-    prepare_chat_feature_schema()
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        if actor["type"] != "STUDENT":
-            raise ApiError("CHAT_CONTACTS_FORBIDDEN", "A lista de colegas está disponível apenas para estudantes.")
-        rows = conn.execute(
-            """
-            select peer.student_id, peer.public_student_id, peer.full_name,
-                   peer.profile_photo_url, peer.organization,
-                   c.course_id, c.title,
-                   direct_room.room_id,
-                   presence.last_seen_at,
-                   coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
-            from courseplatform.enrollments mine
-            join courseplatform.enrollments shared
-              on shared.course_id = mine.course_id
-             and shared.student_id <> mine.student_id
-             and shared.status in ('ACTIVE', 'COMPLETED')
-            join courseplatform.students peer
-              on peer.student_id = shared.student_id
-             and peer.status = 'ACTIVE'
-             and nullif(trim(peer.public_student_id), '') is not null
-            join courseplatform.courses c
-              on c.course_id = mine.course_id and c.status = 'ACTIVE'
-            left join courseplatform.chat_rooms direct_room
-              on direct_room.room_type = 'DIRECT'
-             and direct_room.status = 'ACTIVE'
-             and direct_room.direct_student_one_id = least(mine.student_id, peer.student_id)
-             and direct_room.direct_student_two_id = greatest(mine.student_id, peer.student_id)
-            left join courseplatform.chat_presence presence
-              on presence.actor_type = 'STUDENT' and presence.actor_id = peer.student_id
-            where mine.student_id = %s
-              and mine.status in ('ACTIVE', 'COMPLETED')
-            order by peer.full_name, c.title
-            """,
-            (actor["id"],),
-        ).fetchall()
-        contacts: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            contact = contacts.setdefault(row["student_id"], {
-                "publicStudentId": row.get("public_student_id") or "",
-                "fullName": row.get("full_name") or "Colega de curso",
-                "profilePhotoUrl": row.get("profile_photo_url") or "",
-                "organization": row.get("organization") or "",
-                "roomId": row.get("room_id") or "",
-                "isOnline": bool(row.get("is_online")),
-                "lastSeenAt": iso(row.get("last_seen_at")),
-                "sharedCourses": [],
-            })
-            course = {"courseId": row.get("course_id") or "", "title": row.get("title") or "Curso"}
-            if course not in contact["sharedCourses"]:
-                contact["sharedCourses"].append(course)
-        conn.commit()
-    return success({"contacts": list(contacts.values())})
+    return communication_domain.chat_list_contacts_action(payload, runtime=_communication_runtime())
 
 
 def chat_start_direct(payload: dict[str, Any]):
-    require_fields(payload, ["publicStudentId"])
-    prepare_chat_feature_schema()
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        if actor["type"] != "STUDENT":
-            raise ApiError("CHAT_DIRECT_FORBIDDEN", "Apenas estudantes podem iniciar esta conversa privada.")
-        peer = conn.execute(
-            """
-            select student_id, public_student_id, full_name
-            from courseplatform.students
-            where public_student_id = %s and status = 'ACTIVE'
-            """,
-            (str_value(payload["publicStudentId"]),),
-        ).fetchone()
-        if not peer:
-            raise ApiError("CHAT_CONTACT_NOT_FOUND", "O colega selecionado não está disponível.")
-        first_id, second_id = chat_direct_pair(actor["id"], peer["student_id"])
-        shared_course = conn.execute(
-            """
-            select 1
-            from courseplatform.enrollments mine
-            join courseplatform.enrollments shared
-              on shared.course_id = mine.course_id
-             and shared.student_id = %s
-             and shared.status in ('ACTIVE', 'COMPLETED')
-            join courseplatform.courses c
-              on c.course_id = mine.course_id and c.status = 'ACTIVE'
-            where mine.student_id = %s
-              and mine.status in ('ACTIVE', 'COMPLETED')
-            limit 1
-            """,
-            (peer["student_id"], actor["id"]),
-        ).fetchone()
-        if not shared_course:
-            raise ApiError("CHAT_CONTACT_FORBIDDEN", "Só pode conversar em privado com colegas dos seus cursos.")
-        room_key = f"DIRECT:{first_id}:{second_id}"
-        room = upsert_chat_room(
-            conn,
-            room_key,
-            "DIRECT",
-            "Conversa privada",
-            "Conversa privada entre colegas de curso.",
-            direct_student_one_id=first_id,
-            direct_student_two_id=second_id,
-        )
-        if not room:
-            room = conn.execute(
-                "select * from courseplatform.chat_rooms where room_key = %s and status = 'ACTIVE'",
-                (room_key,),
-            ).fetchone()
-        if not room:
-            raise ApiError("CHAT_ROOM_NOT_FOUND", "Não foi possível preparar a conversa privada.")
-        room_payload = public_chat_room(conn, room, actor)
-        conn.commit()
-    return success({"room": room_payload})
+    return communication_domain.chat_start_direct_action(payload, runtime=_communication_runtime())
 
 
 def chat_presence_heartbeat(payload: dict[str, Any]):
-    prepare_chat_feature_schema()
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        conn.commit()
-    return success({
-        "online": True,
-        "actorType": actor["type"],
-        "capturedAt": iso(utc_now()),
-    })
+    return communication_domain.chat_presence_heartbeat_action(payload, runtime=_communication_runtime())
 
 
 def chat_list_rooms(payload: dict[str, Any]):
-    prepare_chat_feature_schema()
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        sync_chat_rooms(conn, actor)
-        if actor["type"] == "STUDENT":
-            access_sql = """
-              and (
-                r.room_type = 'COMMUNITY'
-                or (r.room_type = 'SUPPORT' and r.owner_student_id = %s)
-                or (
-                  r.room_type = 'DIRECT'
-                  and %s in (r.direct_student_one_id, r.direct_student_two_id)
-                )
-                or (
-                  r.room_type = 'COURSE'
-                  and exists (
-                    select 1 from courseplatform.enrollments e
-                    where e.student_id = %s and e.course_id = r.course_id
-                      and e.status in ('ACTIVE', 'COMPLETED')
-                  )
-                )
-                or (
-                  r.room_type = 'GROUP'
-                  and (
-                    exists (
-                      select 1 from courseplatform.group_members gm
-                      where gm.student_id = %s and gm.group_id = r.group_id and gm.status = 'ACTIVE'
-                    )
-                    or exists (
-                      select 1 from courseplatform.enrollments e
-                      where e.student_id = %s and e.group_id = r.group_id
-                        and e.status in ('ACTIVE', 'COMPLETED')
-                    )
-                  )
-                )
-              )
-            """
-            access_params = (actor["id"], actor["id"], actor["id"], actor["id"], actor["id"])
-        else:
-            access_sql = "and r.room_type <> 'DIRECT'"
-            access_params = ()
-        rooms = conn.execute(
-            f"""
-            select r.*,
-                   (select max(m.created_at) from courseplatform.chat_messages m where m.room_id = r.room_id) as last_message_at
-            from courseplatform.chat_rooms r
-            where r.status = 'ACTIVE'
-              {access_sql}
-            order by last_message_at desc nulls last,
-                     case r.room_type when 'COMMUNITY' then 1 when 'GROUP' then 2 when 'COURSE' then 3 else 4 end,
-                     r.name,
-                     r.room_id
-            """,
-            access_params,
-        ).fetchall()
-        active_admins = conn.execute(
-            "select count(*) as count from courseplatform.admins where status = 'ACTIVE'"
-        ).fetchone() or {}
-        active_admin_count = int(active_admins.get("count") or 0)
-        summaries = chat_room_summary_context(conn, rooms, actor, active_admin_count)
-        result = [
-            public_chat_room(conn, room, actor, active_admin_count, summaries.get(room["room_id"], {}))
-            for room in rooms
-        ]
-        conn.commit()
-    return success({
-        "rooms": result,
-        "unreadCount": sum(item["unreadCount"] for item in result),
-        "actor": {
-            "type": actor["type"],
-            "id": actor["record"].get("public_student_id") if actor["type"] == "STUDENT" else "",
-            "name": actor["record"].get("full_name") or "Participante",
-        },
-    })
+    return communication_domain.chat_list_rooms_action(payload, runtime=_communication_runtime())
 
 
 def chat_list_messages(payload: dict[str, Any]):
-    require_fields(payload, ["roomId"])
-    prepare_chat_feature_schema()
-    limit = max(1, min(int_value(payload.get("limit"), 80), 120))
-    since = parse_datetime(payload.get("since")) if payload.get("since") else None
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        room = accessible_chat_room(conn, str_value(payload["roomId"]), actor)
-        if since:
-            rows = conn.execute(
-                """
-                select message_id from courseplatform.chat_messages
-                where room_id = %s and updated_at > %s
-                order by updated_at asc limit %s
-                """,
-                (room["room_id"], since, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                select message_id from courseplatform.chat_messages
-                where room_id = %s
-                order by created_at desc limit %s
-                """,
-                (room["room_id"], limit),
-            ).fetchall()
-            rows.reverse()
-        message_ids = [row["message_id"] for row in rows]
-        record_chat_message_receipts(conn, message_ids, actor)
-        messages = [public_chat_message(chat_message_row(conn, message_id), actor) for message_id in message_ids]
-        room_payload = public_chat_room(conn, room, actor)
-        conn.commit()
-    return success({"room": room_payload, "messages": messages})
+    return communication_domain.chat_list_messages_action(payload, runtime=_communication_runtime())
 
 
 def chat_send_message(payload: dict[str, Any]):
-    require_fields(payload, ["roomId"])
-    body = chat_message_body(payload.get("body"))
-    prepare_chat_feature_schema()
-    prepare_notification_feature_schema()
-    notification_ids: list[str] = []
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        room = accessible_chat_room(conn, str_value(payload["roomId"]), actor)
-        sender_column = "sender_student_id" if actor["type"] == "STUDENT" else "sender_admin_id"
-        recent = conn.execute(
-            f"""
-            select count(*) as count from courseplatform.chat_messages
-            where {sender_column} = %s and created_at > now() - interval '1 minute'
-            """,
-            (actor["id"],),
-        ).fetchone() or {}
-        if int(recent.get("count") or 0) >= 25:
-            raise ApiError("CHAT_RATE_LIMIT", "Aguarde um momento antes de enviar novas mensagens.")
-        reply_id = str_value(payload.get("replyToMessageId"))
-        if reply_id:
-            reply = conn.execute(
-                "select message_id from courseplatform.chat_messages where message_id = %s and room_id = %s",
-                (reply_id, room["room_id"]),
-            ).fetchone()
-            if not reply:
-                raise ApiError("CHAT_REPLY_NOT_FOUND", "A mensagem selecionada para resposta já não está disponível.")
-        message_id = generate_id("CMSG")
-        conn.execute(
-            """
-            insert into courseplatform.chat_messages
-              (message_id, room_id, sender_type, sender_student_id, sender_admin_id,
-               body, reply_to_message_id, status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, 'ACTIVE', now(), now())
-            """,
-            (
-                message_id, room["room_id"], actor["type"],
-                actor["id"] if actor["type"] == "STUDENT" else None,
-                actor["id"] if actor["type"] == "ADMIN" else None,
-                body, reply_id or None,
-            ),
-        )
-        conn.execute(
-            "update courseplatform.chat_rooms set updated_at = now() where room_id = %s",
-            (room["room_id"],),
-        )
-        # The sender already has this room open. Advancing the cursor is enough
-        # here and avoids rewriting up to 200 historical delivery receipts
-        # before the API acknowledges the new message.
-        upsert_chat_room_read_cursor(conn, room["room_id"], actor)
-        if actor["type"] == "ADMIN" and room.get("room_type") == "SUPPORT" and room.get("owner_student_id"):
-            notification_id = create_student_notification(
-                conn,
-                room["owner_student_id"],
-                "GENERAL",
-                "Nova mensagem do formador",
-                f"{actor['record'].get('full_name') or 'A equipa de formação'} respondeu à sua conversa de apoio.",
-                admin_id=actor["id"],
-                action_url=f"#/chat/{room['room_id']}",
-                entity_type="CHAT_ROOM",
-                entity_id=room["room_id"],
-                priority="NORMAL",
-                send_whatsapp=False,
-                send_email=False,
-                send_telegram=False,
-                send_push=True,
-            )
-            if notification_id:
-                notification_ids.append(notification_id)
-        elif actor["type"] == "STUDENT" and room.get("room_type") == "DIRECT":
-            recipient_id = (
-                room.get("direct_student_two_id")
-                if room.get("direct_student_one_id") == actor["id"]
-                else room.get("direct_student_one_id")
-            )
-            notification_id = create_student_notification(
-                conn,
-                recipient_id,
-                "GENERAL",
-                "Nova mensagem privada",
-                f"{actor['record'].get('full_name') or 'Um colega'} enviou-lhe uma mensagem.",
-                action_url=f"#/chat/{room['room_id']}",
-                entity_type="CHAT_ROOM",
-                entity_id=room["room_id"],
-                priority="NORMAL",
-                send_whatsapp=False,
-                send_email=False,
-                send_telegram=False,
-                send_push=True,
-            )
-            if notification_id:
-                notification_ids.append(notification_id)
-        message = public_chat_message(chat_message_row(conn, message_id), actor)
-        conn.commit()
-    response = success({"message": message})
-    if notification_ids:
-        response["_backgroundNotificationIds"] = notification_ids
-    return response
+    return communication_domain.chat_send_message_action(payload, runtime=_communication_runtime())
 
 
 def chat_edit_message(payload: dict[str, Any]):
-    require_fields(payload, ["messageId"])
-    body = chat_message_body(payload.get("body"))
-    prepare_chat_feature_schema()
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        message = conn.execute(
-            "select * from courseplatform.chat_messages where message_id = %s",
-            (str_value(payload["messageId"]),),
-        ).fetchone()
-        if not message:
-            raise ApiError("CHAT_MESSAGE_NOT_FOUND", "A mensagem não foi encontrada.")
-        accessible_chat_room(conn, message["room_id"], actor)
-        sender_id = message.get("sender_student_id") if actor["type"] == "STUDENT" else message.get("sender_admin_id")
-        if message.get("sender_type") != actor["type"] or sender_id != actor["id"]:
-            raise ApiError("CHAT_MESSAGE_FORBIDDEN", "Só pode editar as suas próprias mensagens.")
-        if message.get("status") != "ACTIVE":
-            raise ApiError("CHAT_MESSAGE_NOT_EDITABLE", "Esta mensagem já não pode ser editada.")
-        conn.execute(
-            """
-            update courseplatform.chat_messages
-            set body = %s, edited_at = now(), updated_at = now()
-            where message_id = %s
-            """,
-            (body, message["message_id"]),
-        )
-        updated = public_chat_message(chat_message_row(conn, message["message_id"]), actor)
-        conn.commit()
-    return success({"message": updated})
+    return communication_domain.chat_edit_message_action(payload, runtime=_communication_runtime())
 
 
 def chat_delete_message(payload: dict[str, Any]):
-    require_fields(payload, ["messageId"])
-    prepare_chat_feature_schema()
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        message = conn.execute(
-            "select * from courseplatform.chat_messages where message_id = %s",
-            (str_value(payload["messageId"]),),
-        ).fetchone()
-        if not message:
-            raise ApiError("CHAT_MESSAGE_NOT_FOUND", "A mensagem não foi encontrada.")
-        accessible_chat_room(conn, message["room_id"], actor)
-        sender_id = message.get("sender_student_id") if actor["type"] == "STUDENT" else message.get("sender_admin_id")
-        owns_message = message.get("sender_type") == actor["type"] and sender_id == actor["id"]
-        if actor["type"] != "ADMIN" and not owns_message:
-            raise ApiError("CHAT_MESSAGE_FORBIDDEN", "Não possui permissão para remover esta mensagem.")
-        next_status = "DELETED" if owns_message else "MODERATED"
-        conn.execute(
-            """
-            update courseplatform.chat_messages
-            set body = '', status = %s, deleted_at = now(), updated_at = now()
-            where message_id = %s
-            """,
-            (next_status, message["message_id"]),
-        )
-        if actor["type"] == "ADMIN":
-            conn.execute(
-                """
-                update courseplatform.chat_message_reports
-                set status = 'RESOLVED', resolved_by_admin_id = %s,
-                    resolution_note = 'Mensagem removida pela moderação.', resolved_at = now()
-                where message_id = %s and status = 'OPEN'
-                """,
-                (actor["id"], message["message_id"]),
-            )
-        audit(
-            conn, actor["type"], actor["id"], "CHAT_MESSAGE_REMOVED",
-            "CHAT_MESSAGE", message["message_id"], {"status": next_status, "roomId": message["room_id"]},
-        )
-        updated = public_chat_message(chat_message_row(conn, message["message_id"]), actor)
-        conn.commit()
-    return success({"message": updated})
+    return communication_domain.chat_delete_message_action(payload, runtime=_communication_runtime())
 
 
 def chat_mark_read(payload: dict[str, Any]):
-    require_fields(payload, ["roomId"])
-    prepare_chat_feature_schema()
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        room = accessible_chat_room(conn, str_value(payload["roomId"]), actor)
-        mark_chat_room_read_with_conn(conn, room["room_id"], actor)
-        conn.commit()
-    return success({"roomId": room["room_id"], "unreadCount": 0})
+    return communication_domain.chat_mark_read_action(payload, runtime=_communication_runtime())
 
 
 def chat_report_message(payload: dict[str, Any]):
-    require_fields(payload, ["messageId"])
-    reason = str_value(payload.get("reason"))
-    if len(reason) < 5 or len(reason) > 500:
-        raise ApiError("INVALID_CHAT_REPORT", "Descreva o motivo da denúncia entre 5 e 500 caracteres.")
-    prepare_chat_feature_schema()
-    with connection() as conn:
-        actor = chat_actor_with_conn(conn, payload)
-        if actor["type"] != "STUDENT":
-            raise ApiError("CHAT_REPORT_FORBIDDEN", "Apenas estudantes podem utilizar esta denúncia.")
-        message = conn.execute(
-            "select * from courseplatform.chat_messages where message_id = %s and status = 'ACTIVE'",
-            (str_value(payload["messageId"]),),
-        ).fetchone()
-        if not message:
-            raise ApiError("CHAT_MESSAGE_NOT_FOUND", "A mensagem não foi encontrada.")
-        accessible_chat_room(conn, message["room_id"], actor)
-        if message.get("sender_student_id") == actor["id"]:
-            raise ApiError("CHAT_REPORT_OWN_MESSAGE", "Não pode denunciar a sua própria mensagem.")
-        existing = conn.execute(
-            """
-            select report_id from courseplatform.chat_message_reports
-            where message_id = %s and reported_by_student_id = %s and status = 'OPEN'
-            """,
-            (message["message_id"], actor["id"]),
-        ).fetchone()
-        if existing:
-            raise ApiError("CHAT_REPORT_EXISTS", "Esta mensagem já foi denunciada por si.")
-        report_id = generate_id("CRP")
-        conn.execute(
-            """
-            insert into courseplatform.chat_message_reports
-              (report_id, message_id, reported_by_student_id, reason, status, created_at)
-            values (%s, %s, %s, %s, 'OPEN', now())
-            """,
-            (report_id, message["message_id"], actor["id"], reason),
-        )
-        audit(
-            conn, "STUDENT", actor["id"], "CHAT_MESSAGE_REPORTED",
-            "CHAT_MESSAGE", message["message_id"], {"reportId": report_id},
-        )
-        conn.commit()
-    return success({"reportId": report_id, "reported": True})
+    return communication_domain.chat_report_message_action(payload, runtime=_communication_runtime())
 
 
 def not_implemented(action: str):

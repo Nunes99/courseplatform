@@ -6,8 +6,15 @@ Atualização arquitetural preparada em 15 de setembro de 2026: catálogo, vers�
 publicadas, edições/turmas e matrículas foram separados por migração expansiva.
 Esta atualização permanece local até validação e aplicação autorizada.
 
-Na mesma data começou a Etapa 8: contratos comuns, identidade e o manifesto do
-dispatcher foram separados por domínio sem alterar a superfície de 115 ações.
+Na mesma data começou a Etapa 8: contratos comuns, o manifesto do dispatcher e
+os fluxos completos de identidade, avaliações, submissões, certificados,
+pagamentos, catálogo, matrículas, comunicação, chat, aprendizagem e
+administração foram separados por domínio sem alterar a superfície de 115
+ações.
+
+Em 16 de setembro começou também uma superfície HTTP versionada em `/api/v1`.
+Ela possui contratos Pydantic por domínio e reutiliza o dispatcher existente,
+permitindo migração gradual sem criar uma segunda implementação das regras.
 
 ## Âmbito
 
@@ -18,16 +25,18 @@ Este documento descreve o que existe no repositório. Não é a arquitetura-alvo
 ```text
 Browser do estudante/admin
         |
-        | HTML/CSS/JavaScript + JSON por action
+        | HTML/CSS/JavaScript + JSON por action ou rota tipada
         v
 FastAPI / Vercel Python Function
   api/index.py -> backend.courseplatform.app
         |
-        | dispatch(action, payload)
+        +-- /api/v1 -> api/* -> dispatch(action, payload)
+        |
+        +-- /api, /api/index -> dispatch(action, payload)
         v
 backend/courseplatform/actions.py (adaptador compatível)
         |
-        +------ contracts.py + domains/*
+        +------ contracts.py + serializers.py + domains/*
         |
         +------ psycopg síncrono ------> Supabase Postgres
         |
@@ -43,8 +52,11 @@ Supabase Postgres -- trigger/policy --> Supabase Realtime --> Browser/chat
 O sistema é um monólito em transição para módulos internos: frontend estático,
 API e regras de negócio continuam no mesmo repositório. A maior parte das regras
 e consultas ainda está em `backend/courseplatform/actions.py`; o registo das
-ações, contratos comuns e a primeira camada de identidade já têm módulos
-próprios.
+ações, contratos comuns e os handlers de identidade, avaliações, submissões,
+certificados, pagamentos, catálogo, matrículas, comunicação, chat,
+aprendizagem e administração têm módulos próprios. Para compatibilidade,
+`actions.py` continua a expor adaptadores finos que injetam as dependências
+concretas no domínio em tempo de chamada.
 
 ## Pontos de entrada
 
@@ -53,6 +65,11 @@ próprios.
 - `api/index.py` importa e expõe `backend.courseplatform.app:app`.
 - `GET /`, `GET /api` e `GET /api/index` chamam o dispatcher. Sem `action` na raiz, `/` entrega `index.html`; nas rotas de API, o action padrão é `health`.
 - `POST /`, `POST /api` e `POST /api/index` recebem JSON com `action` e respetivo payload.
+- `/api/v1/auth/*`, `/api/v1/students/*` e `/api/v1/admin/*` iniciam a
+  superfície tipada. Nesta fase cobrem sessões, cursos do estudante e listas de
+  estudantes/staff, chamando os mesmos handlers do dispatcher legado.
+- `GET /docs` e `GET /openapi.json` documentam apenas os contratos HTTP
+  declarados; o dispatcher legado continua documentado neste ficheiro.
 - `GET /api/certificates/{certificate_id}/pdf` gera o PDF. Aceita sessão de estudante ou sessão administrativa nos headers/query params tratados pela rota.
 - `GET /api/files/{file_id}/content` entrega trabalhos após validar a sessão e a propriedade ou papel administrativo.
 - `GET /api/certificate-requests/{request_id}/receipt` entrega comprovativos após validar estudante proprietário ou OWNER/ADMIN.
