@@ -356,12 +356,14 @@ class TypedApiRouteTests(unittest.TestCase):
         self.assertIn("/api/v1/catalog/courses/${encodeURIComponent(this.courseId)}/media", source)
         self.assertIn("'/api/v1/students/me/home'", source)
         self.assertIn("'/api/v1/students/me/dashboard'", source)
+        self.assertIn("'/api/v1/students/me/courses'", source)
         self.assertIn("/api/v1/students/me/lessons/${encodeURIComponent(lessonId)}", source)
         for action in (
             "publicCourseConfig",
             "publicMediaConfig",
             "getStudentHome",
             "getDashboard",
+            "getMyCourses",
             "getLesson",
         ):
             self.assertIn(f"'{action}'", source)

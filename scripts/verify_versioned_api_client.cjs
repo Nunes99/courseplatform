@@ -87,6 +87,14 @@ async function main() {
       authenticated: true
     },
     {
+      name: 'myCourses',
+      invoke: () => api.myCourses(),
+      path: '/api/v1/students/me/courses',
+      query: {},
+      action: 'getMyCourses',
+      authenticated: true
+    },
+    {
       name: 'getLesson',
       invoke: () => api.getLesson('LESSON-1', 'ENROLLMENT-1'),
       path: '/api/v1/students/me/lessons/LESSON-1',
@@ -133,6 +141,9 @@ async function main() {
       const body = JSON.parse(fallbackCalls[1].options.body);
       assert.equal(body.action, operation.action);
       assert.equal(body.sessionToken, 'student-session');
+      if (operation.name === 'myCourses') {
+        assert.equal(body.courseId, 'COURSE-1');
+      }
     } else {
       assert.equal(fallbackCalls[1].options.method, 'GET');
       assert.equal(new URL(fallbackCalls[1].url).searchParams.get('action'), operation.action);
@@ -153,7 +164,7 @@ async function main() {
     assert.equal(unavailableCalls, 1);
   }
 
-  process.stdout.write('Cinco leituras versionadas e respetivos fallbacks foram validados.\n');
+  process.stdout.write('Seis leituras versionadas e respetivos fallbacks foram validados.\n');
 }
 
 

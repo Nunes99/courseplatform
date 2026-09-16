@@ -151,11 +151,11 @@ serializadores académicos partilhados residem em
 `backend/courseplatform/serializers.py`, com adaptadores temporários em
 `actions.py`.
 
-As leituras tipadas cobrem agora configuração pública de curso/media, home,
-dashboard e aula do estudante. As cinco operações do cliente tentam `/api/v1`
-primeiro e voltam ao respetivo action legado somente quando a rota versionada
-não existe no ambiente. Falhas reais de autenticação, autorização ou
-infraestrutura não acionam uma segunda chamada.
+As leituras tipadas cobrem agora configuração pública de curso/media, lista de
+cursos, home, dashboard e aula do estudante. As seis operações do cliente
+tentam `/api/v1` primeiro e voltam ao respetivo action legado somente quando a
+rota versionada não existe no ambiente. Falhas reais de autenticação,
+autorização ou infraestrutura não acionam uma segunda chamada.
 
 Integração das migrações numa base PostgreSQL local descartável:
 

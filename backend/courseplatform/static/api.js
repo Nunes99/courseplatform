@@ -277,7 +277,17 @@ export class CoursePlatformApi {
   }
 
   myCourses() {
-    return this.studentRequest('getMyCourses', { courseId: this.courseId });
+    const sessionToken = this.studentToken();
+    const legacyRead = () => this.request('getMyCourses', {
+      sessionToken,
+      courseId: this.courseId
+    });
+    return this.versionedRead(
+      '/api/v1/students/me/courses',
+      {},
+      { 'x-session-token': sessionToken },
+      legacyRead
+    );
   }
 
   async updateMyProfile(profile) {
