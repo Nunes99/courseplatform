@@ -6,6 +6,7 @@ from .contracts import (
     ERROR_RESPONSES,
     LearningDashboardData,
     LessonReadData,
+    MediaConfigData,
     StudentHomeData,
     SuccessEnvelope,
 )
@@ -17,6 +18,7 @@ SessionToken = Annotated[str, Header(alias="X-Session-Token", min_length=1)]
 CourseIdQuery = Annotated[str, Query(alias="courseId", max_length=128)]
 EnrollmentIdQuery = Annotated[str, Query(alias="enrollmentId", max_length=128)]
 LessonId = Annotated[str, Path(min_length=1, max_length=128)]
+CourseIdPath = Annotated[str, Path(min_length=1, max_length=128)]
 
 
 def learning_context_payload(
@@ -60,6 +62,24 @@ async def get_learning_dashboard(
     return await execute_action(
         "getDashboard",
         learning_context_payload(session_token, course_id, enrollment_id),
+    )
+
+
+@router.get(
+    "/courses/{course_id}/media",
+    response_model=SuccessEnvelope[MediaConfigData],
+    responses=ERROR_RESPONSES,
+)
+async def get_student_media(
+    course_id: CourseIdPath,
+    session_token: SessionToken,
+):
+    return await execute_action(
+        "getMediaConfig",
+        {
+            "sessionToken": session_token,
+            "courseId": course_id,
+        },
     )
 
 

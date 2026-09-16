@@ -95,6 +95,14 @@ async function main() {
       authenticated: true
     },
     {
+      name: 'mediaConfig',
+      invoke: () => api.mediaConfig('COURSE-1'),
+      path: '/api/v1/students/me/courses/COURSE-1/media',
+      query: {},
+      action: 'getMediaConfig',
+      authenticated: true
+    },
+    {
       name: 'getLesson',
       invoke: () => api.getLesson('LESSON-1', 'ENROLLMENT-1'),
       path: '/api/v1/students/me/lessons/LESSON-1',
@@ -141,7 +149,7 @@ async function main() {
       const body = JSON.parse(fallbackCalls[1].options.body);
       assert.equal(body.action, operation.action);
       assert.equal(body.sessionToken, 'student-session');
-      if (operation.name === 'myCourses') {
+      if (operation.name === 'myCourses' || operation.name === 'mediaConfig') {
         assert.equal(body.courseId, 'COURSE-1');
       }
     } else {
@@ -164,7 +172,7 @@ async function main() {
     assert.equal(unavailableCalls, 1);
   }
 
-  process.stdout.write('Seis leituras versionadas e respetivos fallbacks foram validados.\n');
+  process.stdout.write('Sete leituras versionadas e respetivos fallbacks foram validados.\n');
 }
 
 

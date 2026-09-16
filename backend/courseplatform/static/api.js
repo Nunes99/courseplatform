@@ -596,7 +596,18 @@ export class CoursePlatformApi {
   }
 
   mediaConfig(courseId = this.courseId) {
-    return this.studentRequest('getMediaConfig', { courseId });
+    const sessionToken = this.studentToken();
+    const legacyRead = () => this.request('getMediaConfig', {
+      sessionToken,
+      courseId
+    });
+    if (!courseId) return legacyRead();
+    return this.versionedRead(
+      `/api/v1/students/me/courses/${encodeURIComponent(courseId)}/media`,
+      {},
+      { 'x-session-token': sessionToken },
+      legacyRead
+    );
   }
 
   studentRequest(action, payload = {}) {

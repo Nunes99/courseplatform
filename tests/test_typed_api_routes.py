@@ -28,6 +28,7 @@ class TypedApiRouteTests(unittest.TestCase):
         self.assertIn("/api/v1/catalog/courses/{course_id}/media", paths)
         self.assertIn("/api/v1/students/me/home", paths)
         self.assertIn("/api/v1/students/me/dashboard", paths)
+        self.assertIn("/api/v1/students/me/courses/{course_id}/media", paths)
         self.assertIn("/api/v1/students/me/lessons/{lesson_id}", paths)
         self.assertIn("/api", paths)
 
@@ -147,6 +148,31 @@ class TypedApiRouteTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(result, response.json())
         dispatch.assert_called_once_with("getMyCourses", {"sessionToken": "student-session"})
+
+    def test_student_media_reads_session_and_course_from_typed_route(self):
+        result = {
+            "success": True,
+            "data": {"mediaConfig": {"logoUrl": "", "videos": []}},
+        }
+        with patch.object(executor.actions, "dispatch", return_value=result) as dispatch:
+            response = self.client.get(
+                "/api/v1/students/me/courses/COURSE-1/media",
+                headers={"x-session-token": "student-session"},
+            )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(result, response.json())
+        dispatch.assert_called_once_with(
+            "getMediaConfig",
+            {"sessionToken": "student-session", "courseId": "COURSE-1"},
+        )
+
+    def test_student_media_requires_session_header_before_dispatch(self):
+        with patch.object(executor.actions, "dispatch") as dispatch:
+            response = self.client.get(
+                "/api/v1/students/me/courses/COURSE-1/media"
+            )
+        self.assertEqual(422, response.status_code)
+        dispatch.assert_not_called()
 
     def test_learning_reads_map_context_to_existing_actions(self):
         home_result = {
@@ -357,6 +383,10 @@ class TypedApiRouteTests(unittest.TestCase):
         self.assertIn("'/api/v1/students/me/home'", source)
         self.assertIn("'/api/v1/students/me/dashboard'", source)
         self.assertIn("'/api/v1/students/me/courses'", source)
+        self.assertIn(
+            "/api/v1/students/me/courses/${encodeURIComponent(courseId)}/media",
+            source,
+        )
         self.assertIn("/api/v1/students/me/lessons/${encodeURIComponent(lessonId)}", source)
         for action in (
             "publicCourseConfig",
@@ -364,6 +394,7 @@ class TypedApiRouteTests(unittest.TestCase):
             "getStudentHome",
             "getDashboard",
             "getMyCourses",
+            "getMediaConfig",
             "getLesson",
         ):
             self.assertIn(f"'{action}'", source)
