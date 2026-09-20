@@ -67,6 +67,19 @@ def _env(name: str) -> str:
     return os.getenv(name, "").strip()
 
 
+def resolve_platform_url() -> str:
+    configured = _env("PLATFORM_URL") or _env("WHATSAPP_PLATFORM_URL")
+    if configured:
+        return configured.rstrip("/")
+
+    production_host = _env("VERCEL_PROJECT_PRODUCTION_URL").strip("/")
+    if not production_host:
+        return ""
+    if "://" not in production_host:
+        production_host = f"https://{production_host}"
+    return production_host.rstrip("/")
+
+
 def _project_ref_from_supabase_url() -> str:
     supabase_url = _env("SUPABASE_URL") or _env("NEXT_PUBLIC_SUPABASE_URL")
     if not supabase_url:
@@ -220,7 +233,7 @@ class Settings:
         self.whatsapp_template_name = os.getenv("WHATSAPP_TEMPLATE_NAME", "").strip()
         self.whatsapp_template_language = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "pt_PT").strip() or "pt_PT"
         self.whatsapp_platform_url = os.getenv("WHATSAPP_PLATFORM_URL", "").strip()
-        self.platform_url = os.getenv("PLATFORM_URL", self.whatsapp_platform_url).strip().rstrip("/")
+        self.platform_url = resolve_platform_url()
         self.whatsapp_timeout_seconds = _int_env("WHATSAPP_TIMEOUT_SECONDS", 12)
         # One server-only key protects every credential saved through the
         # administration panel. The WhatsApp-specific name remains a fallback
