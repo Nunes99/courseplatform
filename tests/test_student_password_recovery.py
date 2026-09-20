@@ -33,9 +33,11 @@ class _Result:
 
 
 class _RecoveryConnection:
-    def __init__(self, *, student=None, reset=None, source_count=0, email_count=0, attempt_count=0):
+    def __init__(self, *, student=None, reset=None, legacy_admin=None, linked_admin_id=None, source_count=0, email_count=0, attempt_count=0):
         self.student = student
         self.reset = reset
+        self.legacy_admin = legacy_admin
+        self.linked_admin_id = linked_admin_id
         self.source_count = source_count
         self.email_count = email_count
         self.attempt_count = attempt_count
@@ -53,6 +55,18 @@ class _RecoveryConnection:
             return _Result({"count": self.attempt_count})
         if "from courseplatform.students" in normalized and "where email" in normalized:
             return _Result(self.student)
+        if "insert into courseplatform.students" in normalized:
+            self.student = {
+                "student_id": params[0],
+                "full_name": params[2],
+                "email": params[3],
+                "status": "PENDING_VERIFICATION",
+            }
+            return _Result(self.student)
+        if "update courseplatform.admins" in normalized and "returning a.admin_id" in normalized:
+            return _Result({"admin_id": self.linked_admin_id} if self.linked_admin_id else None)
+        if "from courseplatform.admins" in normalized and "student_id is null" in normalized:
+            return _Result(self.legacy_admin)
         if "join courseplatform.students" in normalized and "where r.token_hash" in normalized:
             return _Result(self.reset)
         return _Result()
@@ -115,6 +129,23 @@ class StudentPasswordRecoveryTests(unittest.TestCase):
         )
         self.assertTrue(conn.committed)
 
+    def test_legacy_staff_recovery_creates_pending_identity_and_issues_token(self):
+        conn = _RecoveryConnection(legacy_admin={
+            "admin_id": "ADMIN-1",
+            "full_name": "Legacy Reviewer",
+            "email": "reviewer@example.test",
+        })
+        result = self._request(conn, "reviewer@example.test")
+
+        self.assertIn("_passwordResetDelivery", result)
+        self.assertTrue(any("insert into courseplatform.students" in query for query, _ in conn.queries))
+        reset_insert = next(
+            item for item in conn.queries
+            if "insert into courseplatform.student_password_resets" in item[0]
+        )
+        self.assertEqual("PENDING", reset_insert[1][5])
+        self.assertTrue(conn.committed)
+
     def test_throttled_request_remains_generic_and_does_not_issue_token(self):
         conn = _RecoveryConnection(source_count=SETTINGS.password_reset_source_limit)
         result = self._request(conn)
@@ -172,6 +203,72 @@ class StudentPasswordRecoveryTests(unittest.TestCase):
         audit_log.assert_called_once()
         self.assertTrue(any("set status = 'consumed'" in query for query, _ in conn.queries))
         self.assertTrue(conn.committed)
+
+    def test_pending_legacy_identity_is_activated_and_linked_after_reset(self):
+        reset = {
+            "reset_id": "PWR-1",
+            "student_id": "STUDENT-1",
+            "student_email": "reviewer@example.test",
+            "status": "DELIVERED",
+            "student_status": "PENDING_VERIFICATION",
+            "expires_at": NOW + timedelta(minutes=10),
+            "consumed_at": None,
+            "invalidated_at": None,
+        }
+        conn = _RecoveryConnection(reset=reset, linked_admin_id="ADMIN-1")
+        with (
+            patch.object(actions, "get_settings", return_value=SETTINGS),
+            patch.object(actions, "connection", _connection_for(conn)),
+            patch.object(actions, "utc_now", return_value=NOW),
+            patch.object(actions, "revoke_sessions"),
+            patch.object(actions, "create_student_notification"),
+            patch.object(actions, "audit") as audit_log,
+        ):
+            result = actions.complete_student_password_reset({
+                "token": "valid-token",
+                "newPassword": "new-password-123",
+                "confirmPassword": "new-password-123",
+                "_requestSource": "203.0.113.10",
+            })
+
+        self.assertTrue(result["data"]["passwordChanged"])
+        self.assertTrue(any(
+            "status = 'active'" in query and "email_verified_at" in query
+            for query, _ in conn.queries
+        ))
+        self.assertTrue(any(
+            "update courseplatform.admins" in query and "set student_id" in query
+            for query, _ in conn.queries
+        ))
+        self.assertTrue(any(
+            call.args[3] == "STAFF_IDENTITY_LINKED"
+            for call in audit_log.call_args_list
+        ))
+
+    def test_delivery_accepts_pending_identity_created_for_legacy_staff(self):
+        row = {
+            "reset_id": "PWR-1",
+            "student_id": "STUDENT-1",
+            "status": "PENDING",
+            "student_status": "PENDING_VERIFICATION",
+            "full_name": "Legacy Reviewer",
+            "email": "reviewer@example.test",
+            "expires_at": NOW + timedelta(minutes=10),
+        }
+        conn = _RecoveryConnection()
+        with (
+            patch.object(actions, "fetch_one", return_value=row),
+            patch.object(actions, "email_runtime_configuration", return_value={
+                "platformUrl": "https://learning.example.test",
+                "configured": True,
+            }),
+            patch.object(actions, "send_email_notification", return_value="message-id") as send,
+            patch.object(actions, "connection", _connection_for(conn)),
+        ):
+            actions.dispatch_student_password_reset("PWR-1", "one-time-token")
+
+        send.assert_called_once()
+        self.assertTrue(any("set status = 'delivered'" in query for query, _ in conn.queries))
 
     def test_expired_or_consumed_token_is_rejected(self):
         for status, expires_at in (("CONSUMED", NOW + timedelta(minutes=5)), ("DELIVERED", NOW - timedelta(seconds=1))):

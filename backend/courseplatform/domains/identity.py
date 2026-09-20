@@ -181,6 +181,39 @@ def registration_public_result(success: Callable[..., dict[str, Any]]) -> dict[s
     return success({"message": REGISTRATION_GENERIC_MESSAGE})
 
 
+def link_matching_legacy_staff(conn: Any, student_id: str, email: str) -> str:
+    linked_admin = conn.execute(
+        """
+        update courseplatform.admins a
+        set student_id = %s, email = %s, updated_at = now()
+        where a.student_id is null
+          and a.status = 'ACTIVE'
+          and lower(btrim(a.email)) = lower(btrim(%s))
+          and not exists (
+            select 1
+            from courseplatform.admins assigned
+            where assigned.student_id = %s
+          )
+        returning a.admin_id
+        """,
+        (student_id, email, email, student_id),
+    ).fetchone()
+    conn.execute(
+        """
+        update courseplatform.sessions ses
+        set active = false, revoked_at = now()
+        where ses.active = true
+          and ses.subject_id in (
+            select 'ADMIN:' || a.admin_id
+            from courseplatform.admins a
+            where a.student_id = %s
+          )
+        """,
+        (student_id,),
+    )
+    return str_value((linked_admin or {}).get("admin_id"))
+
+
 def valid_registration_email(value: str) -> bool:
     return bool(
         value
@@ -407,6 +440,21 @@ def complete_student_account_verification_action(payload: dict[str, Any], runtim
                     """,
                     (verification["student_id"],),
                 ).fetchone()
+                linked_admin_id = link_matching_legacy_staff(
+                    conn,
+                    verification["student_id"],
+                    student.get("email") if student else "",
+                )
+                if linked_admin_id:
+                    runtime.audit(
+                        conn,
+                        "SYSTEM",
+                        verification["student_id"],
+                        "STAFF_IDENTITY_LINKED",
+                        "ADMIN",
+                        linked_admin_id,
+                        {"studentId": verification["student_id"]},
+                    )
                 conn.execute(
                     """
                     update courseplatform.student_account_verifications
@@ -539,7 +587,55 @@ def recover_student_access_action(payload: dict[str, Any], runtime: IdentityRunt
                 """,
                 (email,),
             ).fetchone()
-            eligible = bool(student and student.get("status") == "ACTIVE")
+            if not throttled and not student:
+                legacy_admin = conn.execute(
+                    """
+                    select admin_id, full_name, email
+                    from courseplatform.admins
+                    where lower(btrim(email)) = %s
+                      and status = 'ACTIVE'
+                      and student_id is null
+                    for update
+                    """,
+                    (email,),
+                ).fetchone()
+                if legacy_admin:
+                    for _ in range(12):
+                        student = conn.execute(
+                            """
+                            insert into courseplatform.students
+                              (student_id, public_student_id, full_name, email, access_code,
+                               password_hash, password_changed_at, password_reset_required,
+                               status, email_verified_at, created_at, updated_at)
+                            values (%s, %s, %s, %s, null, null, null, true,
+                                    'PENDING_VERIFICATION', null, now(), now())
+                            on conflict do nothing
+                            returning student_id, full_name, email, status
+                            """,
+                            (
+                                runtime.generate_id("STU"),
+                                public_student_id(),
+                                legacy_admin.get("full_name") or "Utilizador",
+                                email,
+                            ),
+                        ).fetchone()
+                        if student:
+                            break
+                        student = conn.execute(
+                            """
+                            select student_id, full_name, email, status
+                            from courseplatform.students
+                            where email = %s
+                            for update
+                            """,
+                            (email,),
+                        ).fetchone()
+                        if student:
+                            break
+            eligible = bool(
+                student
+                and student.get("status") in {"ACTIVE", "PENDING_VERIFICATION"}
+            )
             if not throttled:
                 if eligible:
                     conn.execute(
@@ -638,7 +734,7 @@ def complete_student_password_reset_action(payload: dict[str, Any], runtime: Ide
                 )
                 reset = conn.execute(
                     """
-                    select r.*, s.status as student_status
+                    select r.*, s.status as student_status, s.email as student_email
                     from courseplatform.student_password_resets r
                     join courseplatform.students s on s.student_id = r.student_id
                     where r.token_hash = %s
@@ -654,7 +750,7 @@ def complete_student_password_reset_action(payload: dict[str, Any], runtime: Ide
                     and not reset.get("invalidated_at")
                     and expires_at
                     and expires_at > runtime.utc_now()
-                    and reset.get("student_status") == "ACTIVE"
+                    and reset.get("student_status") in {"ACTIVE", "PENDING_VERIFICATION"}
                 )
                 if not valid_reset:
                     if reset and expires_at and expires_at <= runtime.utc_now():
@@ -677,11 +773,28 @@ def complete_student_password_reset_action(payload: dict[str, Any], runtime: Ide
                         update courseplatform.students
                         set password_hash = crypt(%s, gen_salt('bf', 12)),
                             password_changed_at = now(), password_reset_required = false,
-                            access_code = null, updated_at = now()
+                            access_code = null, status = 'ACTIVE',
+                            email_verified_at = coalesce(email_verified_at, now()),
+                            updated_at = now()
                         where student_id = %s
                         """,
                         (new_password, student_id),
                     )
+                    linked_admin_id = link_matching_legacy_staff(
+                        conn,
+                        student_id,
+                        str_value(reset.get("student_email")),
+                    )
+                    if linked_admin_id:
+                        runtime.audit(
+                            conn,
+                            "SYSTEM",
+                            student_id,
+                            "STAFF_IDENTITY_LINKED",
+                            "ADMIN",
+                            linked_admin_id,
+                            {"studentId": student_id},
+                        )
                     runtime.revoke_sessions(conn, student_id)
                     conn.execute(
                         """

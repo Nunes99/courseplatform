@@ -153,6 +153,7 @@ class AccountRegistrationTests(unittest.TestCase):
         self.assertTrue(result["data"]["accountActivated"])
         self.assertEqual("ACTIVE", result["data"]["student"]["status"])
         self.assertTrue(any("set status = 'consumed'" in query for query, _ in conn.queries))
+        self.assertTrue(any("update courseplatform.admins" in query for query, _ in conn.queries))
         self.assertTrue(conn.committed)
 
     def test_http_registration_never_returns_plaintext_verification_token(self):

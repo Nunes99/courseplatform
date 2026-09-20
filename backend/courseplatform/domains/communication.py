@@ -1233,7 +1233,11 @@ def dispatch_student_password_reset_action(reset_id: str, token: str, request_ba
             """,
             (reset_id, token_hash),
         )
-        if not row or row.get("status") not in {"PENDING", "DELIVERED"} or row.get("student_status") != "ACTIVE":
+        if (
+            not row
+            or row.get("status") not in {"PENDING", "DELIVERED"}
+            or row.get("student_status") not in {"ACTIVE", "PENDING_VERIFICATION"}
+        ):
             return
         configuration = email_runtime_configuration(prepare_schema=False)
         base_url = str_value(configuration.get("platformUrl")).rstrip("/")
