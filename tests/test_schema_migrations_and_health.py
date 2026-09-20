@@ -2,6 +2,7 @@ import inspect
 import re
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -124,6 +125,32 @@ class HealthEndpointTests(unittest.TestCase):
     def test_query_string_cannot_open_diagnostics(self):
         response = self.client.get("/api/index?action=healthDiagnostics&adminToken=token")
         self.assertEqual(405, response.status_code)
+
+    def test_protected_diagnostics_reports_password_recovery_configuration(self):
+        with (
+            patch.object(actions, "admin_context"),
+            patch.object(actions, "configured_admin_recovery_hashes", return_value=set()),
+            patch.object(actions, "get_settings", return_value=SimpleNamespace(
+                password_reset_hash_key="test-only-password-reset-key-32-bytes-long",
+            )),
+            patch.object(actions, "schema_status", return_value={
+                "compatible": True,
+                "installedVersion": db.EXPECTED_SCHEMA_VERSION,
+                "expectedVersion": db.EXPECTED_SCHEMA_VERSION,
+                "reason": "READY",
+            }),
+            patch.object(actions, "fetch_one", return_value={
+                "students": 1,
+                "students_with_password": 1,
+                "admins": 1,
+                "admins_with_password": 1,
+                "courses": 1,
+                "lessons": 1,
+            }),
+        ):
+            result = actions.health_diagnostics({"adminToken": "token"})
+
+        self.assertTrue(result["data"]["authentication"]["studentPasswordRecoveryConfigured"])
 
 
 class MigrationManifestTests(unittest.TestCase):

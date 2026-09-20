@@ -109,6 +109,10 @@ def health_diagnostics_action(payload: dict[str, Any], *, runtime: Administratio
     schema_status = runtime.schema_status
     success = runtime.success
     admin_context(payload, {"OWNER", "ADMIN"})
+    settings = runtime.get_settings()
+    student_password_recovery_configured = len(
+        str(getattr(settings, "password_reset_hash_key", "") or "").encode("utf-8")
+    ) >= 32
     data_diagnostics = {
         "students": 0,
         "studentsWithPassword": 0,
@@ -127,7 +131,11 @@ def health_diagnostics_action(payload: dict[str, Any], *, runtime: Administratio
                   (select count(*) from courseplatform.students) as students,
                   (select count(*) from courseplatform.students where password_hash is not null) as students_with_password,
                   (select count(*) from courseplatform.admins) as admins,
-                  (select count(*) from courseplatform.admins where password_hash is not null) as admins_with_password,
+                  (select count(*)
+                   from courseplatform.admins a
+                   left join courseplatform.students s on s.student_id = a.student_id
+                   where case when a.student_id is not null
+                     then s.password_hash is not null else a.password_hash is not null end) as admins_with_password,
                   (select count(*) from courseplatform.courses) as courses,
                   (select count(*) from courseplatform.lessons) as lessons
                 """
@@ -162,6 +170,7 @@ def health_diagnostics_action(payload: dict[str, Any], *, runtime: Administratio
             and data_diagnostics["studentsWithPassword"] > 0
             and data_diagnostics["adminsWithPassword"] > 0,
             "adminRecoveryConfigured": bool(configured_admin_recovery_hashes()),
+            "studentPasswordRecoveryConfigured": student_password_recovery_configured,
         },
     })
 
@@ -569,11 +578,16 @@ def admin_list_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     rows = fetch_all(
         f"""
         with staff_rows as (
-          select *, lower(coalesce(full_name, '')) as pagination_sort_text
-          from courseplatform.admins
-          where (%s = 'ALL' or status = %s)
-            and (%s = 'ALL' or role = %s)
-            and (%s = '' or lower(coalesce(full_name, '') || ' ' || coalesce(email, '') || ' ' || coalesce(role, '')) like %s)
+          select a.*,
+            s.student_id as identity_student_id,
+            s.email as identity_email,
+            s.status as identity_status,
+            lower(coalesce(a.full_name, '')) as pagination_sort_text
+          from courseplatform.admins a
+          left join courseplatform.students s on s.student_id = a.student_id
+          where (%s = 'ALL' or a.status = %s)
+            and (%s = 'ALL' or a.role = %s)
+            and (%s = '' or lower(coalesce(a.full_name, '') || ' ' || coalesce(s.email, a.email, '') || ' ' || coalesce(a.role, '')) like %s)
         ), numbered_staff as (
           select *,
             count(*) over() as total_count,
@@ -609,8 +623,6 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     admin_context = runtime.admin_context
     audit = runtime.audit
     connection = runtime.connection
-    fetch_one = runtime.fetch_one
-    generate_access_code = runtime.generate_access_code
     generate_id = runtime.generate_id
     normalize_email = runtime.normalize_email
     public_admin = runtime.public_admin
@@ -625,22 +637,73 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     if role not in {"OWNER", "ADMIN", "REVIEWER"}:
         role = "REVIEWER"
     status = str_value(payload.get("status") or "ACTIVE").upper()
-    is_new = not fetch_one("select 1 from courseplatform.admins where admin_id = %s", (admin_id,))
-    admin_password = str_value(payload.get("password"))
-    if is_new and not admin_password:
-        admin_password = generate_access_code(14)
-    if admin_password and not valid_password(admin_password):
-        raise ApiError("WEAK_PASSWORD", "A palavra-passe deve ter pelo menos 8 caracteres.")
+    if status not in {"ACTIVE", "INACTIVE", "BLOCKED", "DELETED"}:
+        raise ApiError("INVALID_STAFF_STATUS", "Estado de staff inválido.")
+    requested_email = normalize_email(payload.get("email"))
     with connection() as conn:
+        existing = conn.execute(
+            "select * from courseplatform.admins where admin_id = %s for update",
+            (admin_id,),
+        ).fetchone()
+        is_new = not existing
+        linked_student = None
+        if existing and existing.get("student_id"):
+            linked_student = conn.execute(
+                "select * from courseplatform.students where student_id = %s for update",
+                (existing["student_id"],),
+            ).fetchone()
+            if not linked_student:
+                raise ApiError("STAFF_IDENTITY_NOT_FOUND", "A identidade de estudante ligada ao staff não foi encontrada.")
+            if normalize_email(linked_student.get("email")) != requested_email:
+                raise ApiError(
+                    "STAFF_IDENTITY_EMAIL_MISMATCH",
+                    "Altere o email na conta de estudante; o acesso administrativo usa a mesma identidade.",
+                )
+        else:
+            linked_student = conn.execute(
+                "select * from courseplatform.students where lower(email) = %s for update",
+                (requested_email,),
+            ).fetchone()
+
+        if linked_student and linked_student.get("status") != "ACTIVE":
+            raise ApiError(
+                "STAFF_IDENTITY_NOT_ACTIVE",
+                "A conta de estudante deve estar ativa antes de receber acesso administrativo.",
+            )
+        if is_new and not linked_student:
+            raise ApiError(
+                "STUDENT_ACCOUNT_REQUIRED",
+                "Crie ou ative primeiro a conta de utilizador com este email e depois atribua o papel administrativo.",
+            )
+
+        student_id = linked_student.get("student_id") if linked_student else None
+        if student_id:
+            identity_conflict = conn.execute(
+                """
+                select admin_id
+                from courseplatform.admins
+                where student_id = %s and admin_id <> %s
+                limit 1
+                """,
+                (student_id, admin_id),
+            ).fetchone()
+            if identity_conflict:
+                raise ApiError("STAFF_IDENTITY_ALREADY_ASSIGNED", "Este estudante já possui um perfil administrativo.")
+
+        admin_password = "" if student_id else str_value(payload.get("password"))
+        if admin_password and not valid_password(admin_password):
+            raise ApiError("WEAK_PASSWORD", "A palavra-passe deve ter pelo menos 8 caracteres.")
+        effective_email = normalize_email(linked_student.get("email")) if linked_student else requested_email
         row = conn.execute(
             """
             insert into courseplatform.admins
-              (admin_id, full_name, email, password_hash, password_changed_at, password_reset_required,
+              (admin_id, student_id, full_name, email, password_hash, password_changed_at, password_reset_required,
                role, status, created_at, updated_at)
-            values (%s, %s, %s, case when %s = '' then null else crypt(%s, gen_salt('bf', 12)) end,
+            values (%s, %s, %s, %s, case when %s = '' then null else crypt(%s, gen_salt('bf', 12)) end,
                     case when %s = '' then null else now() end, %s, %s, %s, now(), now())
             on conflict (admin_id) do update
-            set full_name = excluded.full_name, email = excluded.email,
+            set student_id = coalesce(excluded.student_id, courseplatform.admins.student_id),
+                full_name = excluded.full_name, email = excluded.email,
                 password_hash = coalesce(excluded.password_hash, courseplatform.admins.password_hash),
                 password_changed_at = coalesce(excluded.password_changed_at, courseplatform.admins.password_changed_at),
                 password_reset_required = case
@@ -652,8 +715,9 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
             """,
             (
                 admin_id,
+                student_id,
                 str_value(payload.get("fullName")),
-                normalize_email(payload.get("email")),
+                effective_email,
                 admin_password,
                 admin_password,
                 admin_password,
@@ -662,7 +726,31 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
                 status,
             ),
         ).fetchone()
-        audit(conn, "ADMIN", admin["admin_id"], "STAFF_SAVED", "ADMIN", admin_id)
+        if student_id:
+            row = {
+                **row,
+                "identity_student_id": student_id,
+                "identity_email": effective_email,
+                "identity_status": linked_student.get("status"),
+            }
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "STAFF_SAVED",
+            "ADMIN",
+            admin_id,
+            {"identitySource": "STUDENT" if student_id else "LEGACY_ADMIN", "studentId": student_id or ""},
+        )
+        if existing and (
+            existing.get("role") != role
+            or existing.get("status") != status
+            or existing.get("student_id") != student_id
+        ):
+            conn.execute(
+                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+                (f"ADMIN:{admin_id}",),
+            )
         conn.commit()
     return success({"admin": public_admin(row), "adminPassword": admin_password if admin_password else ""})
 
@@ -677,13 +765,23 @@ def admin_set_staff_status_action(payload: dict[str, Any], *, runtime: Administr
     success = runtime.success
     _, admin = admin_context(payload, {"OWNER"})
     require_fields(payload, ["targetAdminId", "status"])
+    target_status = str_value(payload["status"]).upper()
+    if target_status not in {"ACTIVE", "INACTIVE", "BLOCKED", "DELETED"}:
+        raise ApiError("INVALID_STAFF_STATUS", "Estado de staff inválido.")
+    if payload["targetAdminId"] == admin["admin_id"] and target_status != "ACTIVE":
+        raise ApiError("CANNOT_DISABLE_CURRENT_OWNER", "Não pode desativar a conta proprietária da sessão atual.")
     with connection() as conn:
         row = conn.execute(
             "update courseplatform.admins set status = %s, updated_at = now() where admin_id = %s returning *",
-            (str_value(payload["status"]).upper(), payload["targetAdminId"]),
+            (target_status, payload["targetAdminId"]),
         ).fetchone()
         if not row:
             raise ApiError("ADMIN_NOT_FOUND", "Staff não encontrado.")
+        if target_status != "ACTIVE":
+            conn.execute(
+                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+                (f"ADMIN:{payload['targetAdminId']}",),
+            )
         audit(conn, "ADMIN", admin["admin_id"], "STAFF_STATUS_CHANGED", "ADMIN", payload["targetAdminId"], {"status": payload["status"]})
         conn.commit()
     return success({"admin": public_admin(row)})
@@ -770,15 +868,32 @@ def admin_change_student_email_action(payload: dict[str, Any], *, runtime: Admin
     try:
         with connection() as conn:
             current_admin = conn.execute(
-                "select * from courseplatform.admins where admin_id = %s for update",
+                """
+                select a.*,
+                       s.password_hash as identity_password_hash,
+                       s.status as identity_status
+                from courseplatform.admins a
+                left join courseplatform.students s on s.student_id = a.student_id
+                where a.admin_id = %s
+                for update of a
+                """,
                 (admin["admin_id"],),
             ).fetchone()
-            if not current_admin or current_admin.get("status") != "ACTIVE":
+            if (
+                not current_admin
+                or current_admin.get("status") != "ACTIVE"
+                or (current_admin.get("student_id") and current_admin.get("identity_status") != "ACTIVE")
+            ):
                 raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
+            password_hash = (
+                current_admin.get("identity_password_hash")
+                if current_admin.get("student_id")
+                else current_admin.get("password_hash")
+            )
             if not verify_password_with_conn(
                 conn,
                 admin_password,
-                current_admin.get("password_hash"),
+                password_hash,
             ):
                 raise ApiError(
                     "INVALID_ADMIN_PASSWORD",
@@ -826,13 +941,32 @@ def admin_set_student_status_action(payload: dict[str, Any], *, runtime: Adminis
     success = runtime.success
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["studentId", "status"])
+    target_status = str_value(payload["status"]).upper()
     with connection() as conn:
         row = conn.execute(
             "update courseplatform.students set status = %s, updated_at = now() where student_id = %s returning *",
-            (str_value(payload["status"]).upper(), payload["studentId"]),
+            (target_status, payload["studentId"]),
         ).fetchone()
         if not row:
             raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
+        if target_status != "ACTIVE":
+            conn.execute(
+                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+                (payload["studentId"],),
+            )
+            conn.execute(
+                """
+                update courseplatform.sessions ses
+                set active = false, revoked_at = now()
+                where ses.active = true
+                  and ses.subject_id in (
+                    select 'ADMIN:' || a.admin_id
+                    from courseplatform.admins a
+                    where a.student_id = %s
+                  )
+                """,
+                (payload["studentId"],),
+            )
         audit(conn, "ADMIN", admin["admin_id"], "STUDENT_STATUS_CHANGED", "STUDENT", payload["studentId"], {"status": payload["status"]})
         conn.commit()
     return success({"student": public_student(row)})
@@ -864,6 +998,19 @@ def admin_reset_student_access_code_action(payload: dict[str, Any], *, runtime: 
         if not row:
             raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
         conn.execute("update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s", (payload["studentId"],))
+        conn.execute(
+            """
+            update courseplatform.sessions ses
+            set active = false, revoked_at = now()
+            where ses.active = true
+              and ses.subject_id in (
+                select 'ADMIN:' || a.admin_id
+                from courseplatform.admins a
+                where a.student_id = %s
+              )
+            """,
+            (payload["studentId"],),
+        )
         audit(conn, "ADMIN", admin["admin_id"], "STUDENT_ACCESS_RESET", "STUDENT", payload["studentId"])
         conn.commit()
     return success({"student": public_student(row), "accessCode": access_code})
@@ -913,6 +1060,7 @@ def admin_restore_credentials_action(payload: dict[str, Any], *, runtime: Admini
     student_ids = [str_value(item) for item in payload.get("studentIds") or [] if str_value(item)]
     admin_ids = [str_value(item) for item in payload.get("adminIds") or [] if str_value(item)]
     credentials: list[dict[str, Any]] = []
+    restored_student_passwords: dict[str, str] = {}
 
     with connection() as conn:
         if target_type in {"STUDENTS", "ALL"}:
@@ -945,34 +1093,77 @@ def admin_restore_credentials_action(payload: dict[str, Any], *, runtime: Admini
                     "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
                     (student["student_id"],),
                 )
+                conn.execute(
+                    """
+                    update courseplatform.sessions ses
+                    set active = false, revoked_at = now()
+                    where ses.active = true
+                      and ses.subject_id in (
+                        select 'ADMIN:' || a.admin_id
+                        from courseplatform.admins a
+                        where a.student_id = %s
+                      )
+                    """,
+                    (student["student_id"],),
+                )
+                restored_student_passwords[student["student_id"]] = temporary_password
                 credentials.append(credential_restore_item("STUDENT", row, temporary_password))
 
         if target_type in {"ADMINS", "ALL"}:
             admins = conn.execute(
                 """
-                select admin_id, full_name, email, role, status, password_hash
-                from courseplatform.admins
-                where (%s or status = 'ACTIVE')
-                  and (%s = 0 or admin_id = any(%s::text[]))
-                  and (%s = false or password_hash is null)
-                order by case role when 'OWNER' then 1 when 'ADMIN' then 2 else 3 end, full_name
+                select a.admin_id, a.student_id, a.full_name,
+                       coalesce(s.email, a.email) as email,
+                       a.role, a.status, a.password_hash,
+                       s.password_hash as identity_password_hash,
+                       s.status as identity_status
+                from courseplatform.admins a
+                left join courseplatform.students s on s.student_id = a.student_id
+                where (%s or a.status = 'ACTIVE')
+                  and (%s = 0 or a.admin_id = any(%s::text[]))
+                  and (%s = false or case when a.student_id is not null
+                    then s.password_hash is null else a.password_hash is null end)
+                order by case a.role when 'OWNER' then 1 when 'ADMIN' then 2 else 3 end, a.full_name
                 limit 200
                 """,
                 (include_inactive, len(admin_ids), admin_ids, only_missing_password),
             ).fetchall()
             for staff in admins:
-                temporary_password = generate_access_code(14)
-                row = conn.execute(
-                    """
-                    update courseplatform.admins
-                    set password_hash = crypt(%s, gen_salt('bf', 12)),
-                        password_changed_at = now(), password_reset_required = true,
-                        updated_at = now()
-                    where admin_id = %s
-                    returning admin_id, full_name, email, role, status
-                    """,
-                    (temporary_password, staff["admin_id"]),
-                ).fetchone()
+                if staff.get("student_id"):
+                    if staff.get("identity_status") != "ACTIVE" and not include_inactive:
+                        continue
+                    temporary_password = restored_student_passwords.get(staff["student_id"])
+                    if not temporary_password:
+                        temporary_password = generate_access_code(14)
+                        conn.execute(
+                            """
+                            update courseplatform.students
+                            set password_hash = crypt(%s, gen_salt('bf', 12)),
+                                password_changed_at = now(), password_reset_required = true,
+                                access_code = null, updated_at = now()
+                            where student_id = %s
+                            """,
+                            (temporary_password, staff["student_id"]),
+                        )
+                        conn.execute(
+                            "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+                            (staff["student_id"],),
+                        )
+                        restored_student_passwords[staff["student_id"]] = temporary_password
+                    row = staff
+                else:
+                    temporary_password = generate_access_code(14)
+                    row = conn.execute(
+                        """
+                        update courseplatform.admins
+                        set password_hash = crypt(%s, gen_salt('bf', 12)),
+                            password_changed_at = now(), password_reset_required = true,
+                            updated_at = now()
+                        where admin_id = %s
+                        returning admin_id, full_name, email, role, status
+                        """,
+                        (temporary_password, staff["admin_id"]),
+                    ).fetchone()
                 conn.execute(
                     "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
                     (f"ADMIN:{staff['admin_id']}",),

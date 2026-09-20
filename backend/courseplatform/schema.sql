@@ -25,6 +25,7 @@ create table if not exists courseplatform.students (
 
 create table if not exists courseplatform.admins (
   admin_id text primary key,
+  student_id text references courseplatform.students(student_id) on delete restrict,
   full_name text not null,
   email text not null unique,
   password_hash text,
@@ -53,6 +54,9 @@ alter table courseplatform.students add column if not exists notification_prefer
 alter table courseplatform.admins add column if not exists password_hash text;
 alter table courseplatform.admins add column if not exists password_changed_at timestamptz;
 alter table courseplatform.admins add column if not exists password_reset_required boolean not null default false;
+alter table courseplatform.admins add column if not exists student_id text references courseplatform.students(student_id) on delete restrict;
+create unique index if not exists uq_admins_student_identity
+  on courseplatform.admins(student_id) where student_id is not null;
 
 create table if not exists courseplatform.sessions (
   session_token text primary key,

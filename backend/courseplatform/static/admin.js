@@ -1958,16 +1958,20 @@ function staffRowTemplate(admin) {
   const canEdit = state.admin?.role === 'OWNER';
   const canRemove = canEdit && !isCurrent && admin.status !== 'DELETED';
   const canActivate = canEdit && admin.status !== 'ACTIVE';
+  const visibleStatus = admin.status === 'ACTIVE' && admin.identitySource === 'STUDENT' && !admin.accessActive
+    ? 'BLOCKED'
+    : admin.status;
 
   return `
     <tr>
       <td>
         <strong>${escapeHtml(admin.fullName)}</strong>
         ${isCurrent ? '<small>Perfil atual</small>' : ''}
+        <small>${admin.identitySource === 'STUDENT' ? 'Identidade de estudante' : 'Credencial administrativa legada'}</small>
       </td>
       <td>${escapeHtml(admin.email)}</td>
       <td>${escapeHtml(admin.role)}</td>
-      <td><span class="status-pill ${statusClass(admin.status)}">${statusLabel(admin.status)}</span></td>
+      <td><span class="status-pill ${statusClass(visibleStatus)}">${statusLabel(visibleStatus)}</span></td>
       <td>${escapeHtml(formatDate(admin.updatedAt || admin.createdAt))}</td>
       <td>
         <div class="admin-row-actions">
@@ -2018,7 +2022,11 @@ function showStaffDialog(adminId = '') {
         </label>
         <label>
           <span>Email</span>
-          <input type="email" name="email" value="${escapeHtml(admin.email || '')}" required>
+          <input type="email" name="email" value="${escapeHtml(admin.email || '')}"
+            ${admin.identitySource === 'STUDENT' ? 'readonly' : ''} required>
+          <small>${admin.identitySource === 'STUDENT'
+            ? 'O email e a palavra-passe são geridos na conta de estudante ligada.'
+            : 'Use o email de uma conta de utilizador ativa para atribuir qualquer papel administrativo.'}</small>
         </label>
         <div class="course-form-grid">
           <label>

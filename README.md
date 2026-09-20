@@ -293,7 +293,7 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 
 ## Dados e segurança
 
-- A autenticação atual é própria: bcrypt no Postgres, tokens opacos e apenas hashes dos tokens em `courseplatform.sessions`. Ainda não usa Supabase Auth.
+- A autenticação atual é própria: bcrypt no Postgres, tokens opacos e apenas hashes dos tokens em `courseplatform.sessions`. Staff ligado a um estudante usa a mesma credencial, enquanto `admins` concede apenas o papel administrativo; contas administrativas antigas permanecem temporariamente compatíveis. Ainda não usa Supabase Auth.
 - A recuperação do estudante guarda apenas hashes HMAC do email/origem e SHA-256 do token. O token chega ao browser no fragmento do link, é removido imediatamente da barra de endereço e só pode ser consumido uma vez.
 - A API usa ligação direta ao Postgres. A chave `SUPABASE_SECRET_KEY` (ou a
   `SUPABASE_SERVICE_ROLE_KEY` legada) é usada apenas no backend para objetos

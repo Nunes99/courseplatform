@@ -122,6 +122,23 @@ class StudentPasswordRecoveryTests(unittest.TestCase):
         self.assertEqual(result, actions.password_reset_public_result())
         self.assertFalse(any("insert into courseplatform.student_password_resets" in query for query, _ in conn.queries))
 
+    def test_missing_hash_key_is_logged_without_exposing_account_data(self):
+        settings = SimpleNamespace(**{**SETTINGS.__dict__, "password_reset_hash_key": "too-short"})
+        with (
+            patch.object(actions, "get_settings", return_value=settings),
+            self.assertLogs("backend.courseplatform.domains.identity", level="ERROR") as captured,
+        ):
+            result = actions.recover_student_access({
+                "email": "student@example.test",
+                "_requestSource": "203.0.113.10",
+            })
+
+        self.assertEqual(result, actions.password_reset_public_result())
+        log_output = " ".join(captured.output)
+        self.assertIn("PASSWORD_RESET_HASH_KEY", log_output)
+        self.assertNotIn("student@example.test", log_output)
+        self.assertNotIn("203.0.113.10", log_output)
+
     def test_valid_token_changes_password_revokes_sessions_and_consumes_token(self):
         token = "valid-one-time-token"
         reset = {
@@ -233,6 +250,36 @@ class StudentPasswordRecoveryTests(unittest.TestCase):
         self.assertIn("/#/reset-access?token=", delivery["action_url"])
         self.assertIn(token, delivery["action_url"])
         self.assertTrue(any("set status = 'delivered'" in query for query, _ in conn.queries))
+
+    def test_delivery_failure_is_persisted_and_logged_without_token(self):
+        token = "one-time-token"
+        row = {
+            "reset_id": "PWR-1",
+            "student_id": "STUDENT-1",
+            "status": "PENDING",
+            "student_status": "ACTIVE",
+            "full_name": "Student One",
+            "email": "student@example.test",
+            "expires_at": NOW + timedelta(minutes=10),
+        }
+        conn = _RecoveryConnection()
+        with (
+            patch.object(actions, "fetch_one", return_value=row),
+            patch.object(actions, "email_runtime_configuration", return_value={
+                "platformUrl": "https://learning.example.test",
+                "configured": True,
+            }),
+            patch.object(actions, "send_email_notification", side_effect=RuntimeError("smtp unavailable")),
+            patch.object(actions, "connection", _connection_for(conn)),
+            self.assertLogs("backend.courseplatform.domains.communication", level="ERROR") as captured,
+        ):
+            actions.dispatch_student_password_reset("PWR-1", token)
+
+        self.assertTrue(any("set status = 'delivery_failed'" in query for query, _ in conn.queries))
+        log_output = " ".join(captured.output)
+        self.assertIn("delivery failed", log_output.lower())
+        self.assertNotIn(token, log_output)
+        self.assertNotIn("student@example.test", log_output)
 
     def test_frontend_no_longer_displays_temporary_password(self):
         root = Path(__file__).resolve().parents[1]

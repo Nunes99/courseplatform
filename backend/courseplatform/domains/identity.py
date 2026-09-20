@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -8,6 +9,9 @@ from datetime import timedelta
 from typing import Any
 
 from ..contracts import ApiError, str_value
+
+
+logger = logging.getLogger(__name__)
 
 
 ACTION_BINDINGS = (
@@ -124,12 +128,21 @@ def serialize_student(
 def serialize_admin(row: dict[str, Any] | None, *, as_iso: Callable[[Any], str | None]):
     if not row:
         return None
+    student_id = row.get("identity_student_id") or row.get("student_id")
+    identity_status = row.get("identity_status") or ("" if student_id else None)
     return {
         "adminId": row["admin_id"],
+        "studentId": student_id or "",
         "fullName": row.get("full_name"),
-        "email": row.get("email"),
+        "email": row.get("identity_email") or row.get("email"),
         "role": row.get("role"),
         "status": row.get("status"),
+        "identitySource": "STUDENT" if student_id else "LEGACY_ADMIN",
+        "identityStatus": identity_status,
+        "accessActive": bool(
+            row.get("status") == "ACTIVE"
+            and (not student_id or identity_status == "ACTIVE")
+        ),
         "createdAt": as_iso(row.get("created_at")),
         "updatedAt": as_iso(row.get("updated_at")),
     }
@@ -204,6 +217,9 @@ def recover_student_access_action(payload: dict[str, Any], runtime: IdentityRunt
     email = normalize_email(payload["email"])
     settings = runtime.get_settings()
     if len(settings.password_reset_hash_key.encode("utf-8")) < 32:
+        logger.error(
+            "Student password recovery is unavailable because PASSWORD_RESET_HASH_KEY is missing or too short."
+        )
         return password_reset_public_result(runtime.success)
 
     source = str_value(payload.get("_requestSource"))[:256] or "unknown"
@@ -393,6 +409,19 @@ def complete_student_password_reset_action(payload: dict[str, Any], runtime: Ide
                     runtime.revoke_sessions(conn, student_id)
                     conn.execute(
                         """
+                        update courseplatform.sessions ses
+                        set active = false, revoked_at = now()
+                        where ses.active = true
+                          and ses.subject_id in (
+                            select 'ADMIN:' || a.admin_id
+                            from courseplatform.admins a
+                            where a.student_id = %s
+                          )
+                        """,
+                        (student_id,),
+                    )
+                    conn.execute(
+                        """
                         update courseplatform.student_password_resets
                         set status = 'CONSUMED', consumed_at = now()
                         where reset_id = %s
@@ -455,10 +484,29 @@ def admin_login_action(payload: dict[str, Any], runtime: IdentityRuntime):
     runtime.require_fields(payload, ["email", "adminKey"])
     email = normalize_email(payload["email"])
     try:
-        admin = runtime.fetch_one("select * from courseplatform.admins where email = %s", (email,))
+        admin = runtime.fetch_one(
+            """
+            select a.*,
+                   s.student_id as identity_student_id,
+                   s.email as identity_email,
+                   s.password_hash as identity_password_hash,
+                   s.status as identity_status
+            from courseplatform.admins a
+            left join courseplatform.students s on s.student_id = a.student_id
+            where lower(coalesce(s.email, a.email)) = %s
+            order by (a.student_id is not null) desc
+            limit 1
+            """,
+            (email,),
+        )
     except Exception as error:
         raise runtime.database_api_error(error) from error
-    if not admin or admin.get("status") != "ACTIVE":
+    linked_student = bool(admin and admin.get("student_id"))
+    if (
+        not admin
+        or admin.get("status") != "ACTIVE"
+        or (linked_student and admin.get("identity_status") != "ACTIVE")
+    ):
         total = runtime.fetch_one("select count(*) as total from courseplatform.admins")
         if int(total.get("total") or 0) == 0:
             raise ApiError(
@@ -467,7 +515,12 @@ def admin_login_action(payload: dict[str, Any], runtime: IdentityRuntime):
             )
         raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
     try:
-        if not runtime.verify_password(payload["adminKey"], admin.get("password_hash")):
+        password_hash = (
+            admin.get("identity_password_hash")
+            if linked_student
+            else admin.get("password_hash")
+        )
+        if not runtime.verify_password(payload["adminKey"], password_hash):
             raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
         subject_id = f"ADMIN:{admin['admin_id']}"
         with runtime.connection() as conn:
@@ -502,26 +555,61 @@ def recover_admin_access_action(payload: dict[str, Any], runtime: IdentityRuntim
 
     email = normalize_email(payload["email"])
     try:
-        admin = runtime.fetch_one("select * from courseplatform.admins where email = %s", (email,))
+        admin = runtime.fetch_one(
+            """
+            select a.*,
+                   s.student_id as identity_student_id,
+                   s.email as identity_email,
+                   s.status as identity_status
+            from courseplatform.admins a
+            left join courseplatform.students s on s.student_id = a.student_id
+            where lower(coalesce(s.email, a.email)) = %s
+            order by (a.student_id is not null) desc
+            limit 1
+            """,
+            (email,),
+        )
     except Exception as error:
         raise runtime.database_api_error(error) from error
-    if not admin or admin.get("status") != "ACTIVE":
+    linked_student = bool(admin and admin.get("student_id"))
+    if (
+        not admin
+        or admin.get("status") != "ACTIVE"
+        or (linked_student and admin.get("identity_status") != "ACTIVE")
+    ):
         raise ApiError("ADMIN_RECOVERY_NOT_FOUND", "Não encontramos uma conta administrativa ativa com esse email.")
 
     admin_password = runtime.generate_access_code(14)
     try:
         with runtime.connection() as conn:
-            row = conn.execute(
-                """
-                update courseplatform.admins
-                set password_hash = crypt(%s, gen_salt('bf', 12)),
-                    password_changed_at = now(), password_reset_required = true,
-                    updated_at = now()
-                where admin_id = %s
-                returning *
-                """,
-                (admin_password, admin["admin_id"]),
-            ).fetchone()
+            if linked_student:
+                conn.execute(
+                    """
+                    update courseplatform.students
+                    set password_hash = crypt(%s, gen_salt('bf', 12)),
+                        password_changed_at = now(), password_reset_required = true,
+                        access_code = null, updated_at = now()
+                    where student_id = %s
+                    """,
+                    (admin_password, admin["student_id"]),
+                )
+                conn.execute(
+                    "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+                    (admin["student_id"],),
+                )
+                row = admin
+            else:
+                row = conn.execute(
+                    """
+                    update courseplatform.admins
+                    set password_hash = crypt(%s, gen_salt('bf', 12)),
+                        password_changed_at = now(), password_reset_required = true,
+                        updated_at = now()
+                    where admin_id = %s
+                    returning *
+                    """,
+                    (admin_password, admin["admin_id"]),
+                ).fetchone()
             conn.execute(
                 "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
                 (f"ADMIN:{admin['admin_id']}",),
@@ -533,7 +621,11 @@ def recover_admin_access_action(payload: dict[str, Any], runtime: IdentityRuntim
                 "ADMIN_ACCESS_RECOVERED",
                 "ADMIN",
                 admin["admin_id"],
-                {"role": row.get("role"), "email": runtime.mask_email(row.get("email") or email)},
+                {
+                    "role": row.get("role"),
+                    "email": runtime.mask_email(row.get("identity_email") or row.get("email") or email),
+                    "identitySource": "STUDENT" if linked_student else "LEGACY_ADMIN",
+                },
             )
             conn.commit()
     except Exception as error:
@@ -541,7 +633,7 @@ def recover_admin_access_action(payload: dict[str, Any], runtime: IdentityRuntim
 
     return runtime.success({
         "admin": runtime.public_admin(row),
-        "email": runtime.mask_email(row.get("email") or email),
+        "email": runtime.mask_email(row.get("identity_email") or row.get("email") or email),
         "temporaryAdminKey": admin_password,
     })
 
@@ -707,6 +799,19 @@ def change_my_access_code_action(payload: dict[str, Any], runtime: IdentityRunti
         )
         conn.execute(
             "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
+            (student["student_id"],),
+        )
+        conn.execute(
+            """
+            update courseplatform.sessions ses
+            set active = false, revoked_at = now()
+            where ses.active = true
+              and ses.subject_id in (
+                select 'ADMIN:' || a.admin_id
+                from courseplatform.admins a
+                where a.student_id = %s
+              )
+            """,
             (student["student_id"],),
         )
         runtime.audit(

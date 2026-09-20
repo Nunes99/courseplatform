@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import re
 import secrets
 import smtplib
@@ -19,6 +20,8 @@ from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from ..contracts import ApiError
+
+logger = logging.getLogger(__name__)
 
 _NOTIFICATION_SCHEMA_READY = False
 _CHAT_SCHEMA_READY = False
@@ -1264,6 +1267,11 @@ def dispatch_student_password_reset_action(reset_id: str, token: str, request_ba
             )
             conn.commit()
     except Exception as error:
+        logger.error(
+            "Student password reset delivery failed.",
+            extra={"reset_id": reset_id, "error_type": error.__class__.__name__},
+            exc_info=True,
+        )
         try:
             with connection() as conn:
                 conn.execute(
@@ -3110,10 +3118,19 @@ def chat_actor_with_conn_action(conn, payload: dict[str, Any], *, runtime: Commu
         session = validate_session_with_conn(conn, str_value(payload.get("adminToken")), "ADMIN")
         admin_id = str(session["subject_id"]).replace("ADMIN:", "", 1)
         admin = conn.execute(
-            "select * from courseplatform.admins where admin_id = %s",
+            """
+            select a.*, s.status as identity_status
+            from courseplatform.admins a
+            left join courseplatform.students s on s.student_id = a.student_id
+            where a.admin_id = %s
+            """,
             (admin_id,),
         ).fetchone()
-        if not admin or admin.get("status") != "ACTIVE":
+        if (
+            not admin
+            or admin.get("status") != "ACTIVE"
+            or (admin.get("student_id") and admin.get("identity_status") != "ACTIVE")
+        ):
             raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
         if admin.get("role") not in {"OWNER", "ADMIN", "REVIEWER"}:
             raise ApiError("FORBIDDEN", "O seu perfil não possui acesso às conversas.")
@@ -3739,7 +3756,13 @@ def chat_room_participant_count_action(conn, room: dict[str, Any], active_admin_
         return 2
     if active_admin_count is None:
         active_admins = conn.execute(
-            "select count(*) as count from courseplatform.admins where status = 'ACTIVE'"
+            """
+            select count(*) as count
+            from courseplatform.admins a
+            left join courseplatform.students s on s.student_id = a.student_id
+            where a.status = 'ACTIVE'
+              and (a.student_id is null or s.status = 'ACTIVE')
+            """
         ).fetchone() or {}
         admin_count = int(active_admins.get("count") or 0)
     else:
@@ -4112,7 +4135,13 @@ def chat_list_rooms_action(payload: dict[str, Any], *, runtime: CommunicationRun
             access_params,
         ).fetchall()
         active_admins = conn.execute(
-            "select count(*) as count from courseplatform.admins where status = 'ACTIVE'"
+            """
+            select count(*) as count
+            from courseplatform.admins a
+            left join courseplatform.students s on s.student_id = a.student_id
+            where a.status = 'ACTIVE'
+              and (a.student_id is null or s.status = 'ACTIVE')
+            """
         ).fetchone() or {}
         active_admin_count = int(active_admins.get("count") or 0)
         summaries = chat_room_summary_context(conn, rooms, actor, active_admin_count)

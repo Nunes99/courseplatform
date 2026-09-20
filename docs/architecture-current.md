@@ -103,6 +103,26 @@ O backend procura assets primeiro em `public/` e depois em `backend/courseplatfo
 
 A área do estudante usa rotas por hash. A sessão do estudante é guardada em `localStorage`; a sessão administrativa, em `sessionStorage`. O backend guarda apenas SHA-256 dos tokens opacos na tabela de sessões.
 
+### Identidade única e permissões administrativas
+
+A migração `20260920115325_unify_staff_student_identity.sql` adiciona a ligação
+opcional `admins.student_id`. Quando a ligação existe, `students` é a fonte da
+credencial, do email de acesso e do estado da pessoa; `admins` contém apenas o
+papel administrativo, o estado da atribuição e os metadados de staff. Assim, a
+mesma palavra-passe autentica a área do estudante e, somente quando existe uma
+atribuição administrativa ativa, a área de administração.
+
+O backend exige simultaneamente a conta de estudante e a atribuição de staff
+ativas. A existência de uma conta de estudante nunca concede acesso
+administrativo por si só. Novos membros de staff precisam de uma conta de estudante
+ativa e são ligados pelo identificador interno, não apenas pelo email.
+
+Contas `OWNER`/`ADMIN` antigas sem estudante correspondente continuam no modo
+`LEGACY_ADMIN` para evitar bloqueio durante a transição. Este modo é apenas uma
+compatibilidade operacional: novos membros de staff não recebem uma segunda
+palavra-passe. Alterar ou recuperar a palavra-passe de uma identidade ligada
+revoga tanto sessões de estudante como sessões administrativas.
+
 ### Fonte dos assets
 
 `public/` é a fonte canónica e única para alterações do frontend.

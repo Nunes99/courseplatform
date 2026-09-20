@@ -732,6 +732,18 @@ def secure_student_email_update(
     ).fetchone()
     if conflict:
         raise ApiError("EMAIL_ALREADY_IN_USE", "Este endereço de email já está associado a outro estudante.")
+    admin_conflict = conn.execute(
+        """
+        select admin_id
+        from courseplatform.admins
+        where lower(email) = %s
+          and coalesce(student_id, '') <> %s
+        limit 1
+        """,
+        (new_email, student_id),
+    ).fetchone()
+    if admin_conflict:
+        raise ApiError("EMAIL_ALREADY_IN_USE", "Este endereço de email já está associado a outra conta.")
 
     row = conn.execute(
         """
@@ -750,6 +762,15 @@ def secure_student_email_update(
 
     conn.execute(
         """
+        update courseplatform.admins
+        set email = %s, updated_at = now()
+        where student_id = %s
+        """,
+        (new_email, student_id),
+    )
+
+    conn.execute(
+        """
         update courseplatform.notification_deliveries d
         set status = 'SKIPPED',
             last_error = 'Endereço de email alterado; entrega cancelada por segurança.',
@@ -763,6 +784,19 @@ def secure_student_email_update(
         (student_id,),
     )
     revoke_sessions(conn, student_id)
+    conn.execute(
+        """
+        update courseplatform.sessions ses
+        set active = false, revoked_at = now()
+        where ses.active = true
+          and ses.subject_id in (
+            select 'ADMIN:' || a.admin_id
+            from courseplatform.admins a
+            where a.student_id = %s
+          )
+        """,
+        (student_id,),
+    )
     create_student_notification(
         conn,
         student_id,
@@ -1625,10 +1659,23 @@ def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None
     session = validate_session(token, "ADMIN")
     admin_id = str(session["subject_id"]).replace("ADMIN:", "", 1)
     admin = fetch_one(
-        "select * from courseplatform.admins where admin_id = %s",
+        """
+        select a.*,
+               s.student_id as identity_student_id,
+               s.email as identity_email,
+               s.password_hash as identity_password_hash,
+               s.status as identity_status
+        from courseplatform.admins a
+        left join courseplatform.students s on s.student_id = a.student_id
+        where a.admin_id = %s
+        """,
         (admin_id,),
     )
-    if not admin or admin.get("status") != "ACTIVE":
+    if (
+        not admin
+        or admin.get("status") != "ACTIVE"
+        or (admin.get("student_id") and admin.get("identity_status") != "ACTIVE")
+    ):
         raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
     if allowed_roles and admin.get("role") not in allowed_roles:
         raise ApiError("FORBIDDEN", "O seu perfil não possui permissão para esta operação.")

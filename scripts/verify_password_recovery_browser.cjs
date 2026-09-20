@@ -24,12 +24,19 @@ const CONTENT_TYPES = {
 async function configurePage(page) {
   const failures = [];
   page.on('pageerror', (error) => failures.push(`pageerror: ${error.message}`));
+  page.on('response', (response) => {
+    if (response.status() >= 400 && response.url().startsWith(baseOrigin)) {
+      failures.push(`response ${response.status()}: ${response.url()}`);
+    }
+  });
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
     const locationUrl = message.location().url || '';
     const expectedBlockedResource = message.text().includes('ERR_BLOCKED_BY_CLIENT')
       || (locationUrl && new URL(locationUrl).origin !== baseOrigin && message.text().startsWith('Failed to load resource'));
-    if (!expectedBlockedResource) failures.push(`console: ${message.text()}`);
+    if (!expectedBlockedResource) {
+      failures.push(`console: ${message.text()}${locationUrl ? ` (${locationUrl})` : ''}`);
+    }
   });
   await page.addInitScript(({ origin }) => {
     window.COURSE_PLATFORM_API_URL = `${origin}/api/index`;
@@ -39,6 +46,12 @@ async function configurePage(page) {
     const url = new URL(request.url());
     if (url.origin !== baseOrigin) {
       return route.abort('blockedbyclient');
+    }
+    if (/^\/api\/v1\/catalog\/courses\/[^/]+\/media$/.test(url.pathname)) {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: { mediaConfig: { logoUrl: '', videos: [] } } }),
+      });
     }
     if (url.pathname === '/api/index') {
       const payload = request.method() === 'POST'

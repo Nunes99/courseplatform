@@ -14,15 +14,21 @@ Esta é a **política esperada**, derivada dos handlers e do produto atual. Não
 
 Papéis administrativos atuais: `REVIEWER`, `ADMIN` e `OWNER`. O `OWNER` é o único papel que gere contas de staff.
 
+Uma identidade ligada pode ter simultaneamente acesso de estudante e um papel
+administrativo. O papel amplia permissões; não cria outra pessoa nem outra
+palavra-passe. A API continua a emitir sessões distintas para cada área, e toda
+ação administrativa valida no backend a atribuição, o papel e o estado da
+identidade.
+
 ## Matriz funcional
 
 | Recurso/operação | Anónimo | Estudante | REVIEWER | ADMIN | OWNER |
 | --- | --- | --- | --- | --- | --- |
 | Health público mínimo | Público | Público | Público | Público | Público |
 | Configuração pública de curso/media | Público | Público | Público | Público | Público |
-| Login | Público | Público | Público | Público | Público |
+| Login | Público | Própria identidade | Mesma identidade + atribuição REVIEWER ativa | Mesma identidade + atribuição ADMIN ativa | Mesma identidade + atribuição OWNER ativa |
 | Recuperação de estudante | Pedir link sem enumeração e concluir com token válido | Igual ao público | Igual ao público | Igual ao público | Igual ao público |
-| Recuperação administrativa | Iniciar com mecanismo protegido | Não | Própria conta | Própria conta | Própria conta/emergência auditada |
+| Recuperação administrativa | Iniciar com mecanismo protegido | Recuperação normal da identidade | Recuperação normal da identidade ligada | Própria identidade; compatibilidade legada quando não ligada | Própria identidade/emergência auditada |
 | Verificação de certificado | Dados públicos mínimos pelo código | Igual ao público | Igual ao público | Igual ao público | Igual ao público |
 | Perfil do estudante | Não | Próprio: ler/editar | Leitura no âmbito | Leitura/gestão | Leitura/gestão |
 | Email/senha do estudante | Não | Alterar a própria com comprovação | Não | Recuperar/alterar conforme fluxo auditado | Igual a ADMIN |
