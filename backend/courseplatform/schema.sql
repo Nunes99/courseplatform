@@ -18,6 +18,7 @@ create table if not exists courseplatform.students (
   job_title text,
   interests text,
   profile_photo_url text,
+  email_verified_at timestamptz,
   created_at timestamptz,
   updated_at timestamptz,
   last_login_at timestamptz
@@ -41,6 +42,7 @@ alter table courseplatform.students add column if not exists access_code text;
 alter table courseplatform.students add column if not exists password_hash text;
 alter table courseplatform.students add column if not exists password_changed_at timestamptz;
 alter table courseplatform.students add column if not exists password_reset_required boolean not null default false;
+alter table courseplatform.students add column if not exists email_verified_at timestamptz;
 alter table courseplatform.students alter column access_code drop not null;
 alter table courseplatform.students add column if not exists whatsapp_opt_in boolean not null default false;
 alter table courseplatform.students add column if not exists whatsapp_opt_in_at timestamptz;
@@ -96,6 +98,32 @@ create table if not exists courseplatform.student_password_reset_attempts (
   succeeded boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+create table if not exists courseplatform.student_account_verifications (
+  verification_id text primary key,
+  student_id text not null references courseplatform.students(student_id) on delete cascade,
+  email_hash text not null,
+  source_hash text not null,
+  token_hash text not null unique,
+  status text not null default 'PENDING',
+  expires_at timestamptz not null,
+  delivery_attempted_at timestamptz,
+  delivered_at timestamptz,
+  delivery_error_code text,
+  consumed_at timestamptz,
+  invalidated_at timestamptz,
+  created_at timestamptz not null default now(),
+  constraint student_account_verifications_status_check
+    check (status in ('PENDING', 'DELIVERED', 'DELIVERY_FAILED', 'CONSUMED', 'INVALIDATED', 'EXPIRED'))
+);
+
+create index if not exists idx_account_verifications_student_created
+  on courseplatform.student_account_verifications(student_id, created_at desc);
+create index if not exists idx_account_verifications_email_created
+  on courseplatform.student_account_verifications(email_hash, created_at desc);
+create index if not exists idx_account_verifications_source_created
+  on courseplatform.student_account_verifications(source_hash, created_at desc);
+alter table courseplatform.student_account_verifications enable row level security;
 
 create table if not exists courseplatform.courses (
   course_id text primary key,

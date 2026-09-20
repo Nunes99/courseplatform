@@ -154,6 +154,8 @@ nomes administrativos reutilizam o mesmo handler do chat;
 
 O fluxo de recuperação do estudante é público por necessidade funcional. `recoverStudentAccess` devolve sempre a mesma mensagem e cria um token de utilização única para contas ativas; `completeStudentPasswordReset` consome o token, altera o hash bcrypt e revoga as sessões na mesma transação. A entrega usa o email associado à conta e o SMTP do servidor.
 
+O cadastro público usa `registerStudentAccount` e `completeStudentAccountVerification`. A conta nasce com estado `PENDING_VERIFICATION`, sem matrícula automática e sem função administrativa. O token de confirmação é armazenado apenas como hash, expira e é consumido uma única vez. Depois da confirmação, a identidade fica `ACTIVE`; OWNER/ADMIN podem atribuir separadamente um papel de staff a essa mesma conta.
+
 ### Sessão de estudante
 
 - Área académica: `getDashboard`, `getStudentHome`, `getMyCourses`, `getMediaConfig`, `getLesson`.

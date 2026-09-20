@@ -635,6 +635,13 @@ async function route() {
   closeMobileMenu();
   const { name: routeName, value: routeValue } = parseStudentRoute(location.hash);
 
+  const accountVerificationToken = consumeAccountVerificationToken();
+  if (accountVerificationToken) {
+    renderLogin();
+    await showAccountVerificationDialog(accountVerificationToken);
+    return;
+  }
+
   const passwordResetToken = consumePasswordResetToken();
   if (passwordResetToken) {
     renderLogin();
@@ -738,13 +745,16 @@ function renderLogin() {
           <label>
             <span>Palavra-passe de acesso</span>
             <input type="password" name="accessCode" autocomplete="current-password"
-              required placeholder="Palavra-passe fornecida pelo administrador">
+              required placeholder="Introduza a sua palavra-passe">
           </label>
           <button class="button button-primary button-block" type="submit">
             Entrar na plataforma
           </button>
           <button class="text-button login-recovery-link" type="button" id="recoverAccessButton">
             Esqueci a palavra-passe de acesso
+          </button>
+          <button class="button button-secondary button-block" type="button" id="createAccountButton">
+            Criar uma conta
           </button>
         </form>
 
@@ -758,6 +768,88 @@ function renderLogin() {
     const email = document.querySelector('#loginForm [name="email"]')?.value || '';
     showStudentRecoveryDialog(email);
   });
+  document.querySelector('#createAccountButton').addEventListener('click', showStudentRegistrationDialog);
+  reportHeight();
+}
+
+function showStudentRegistrationDialog() {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="studentRegistrationTitle">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <h2 id="studentRegistrationTitle">Criar conta</h2>
+      <p class="recovery-note">
+        Use os seus dados pessoais. Enviaremos uma ligação de confirmação para ativar a conta.
+      </p>
+      <form id="studentRegistrationForm" class="form-stack">
+        <label>
+          <span>Nome completo</span>
+          <input type="text" name="fullName" autocomplete="name" minlength="2" maxlength="160" required>
+        </label>
+        <label>
+          <span>Email</span>
+          <input type="email" name="email" autocomplete="email" maxlength="320" required>
+        </label>
+        <div class="form-grid two-columns">
+          <label>
+            <span>País</span>
+            <input type="text" name="country" autocomplete="country-name" maxlength="100">
+          </label>
+          <label>
+            <span>Organização</span>
+            <input type="text" name="organization" autocomplete="organization" maxlength="160">
+          </label>
+        </div>
+        <label>
+          <span>Palavra-passe</span>
+          <input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" required>
+        </label>
+        <label>
+          <span>Confirmar palavra-passe</span>
+          <input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" maxlength="128" required>
+        </label>
+        <div id="studentRegistrationResult" class="recovery-result" role="status" hidden></div>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-registration>Cancelar</button>
+          <button class="button button-primary" type="submit">Criar conta</button>
+        </div>
+      </form>
+    </div>
+  `;
+  const close = () => overlay.remove();
+  document.body.appendChild(overlay);
+  overlay.querySelector('.dialog-close').addEventListener('click', close);
+  overlay.querySelector('[data-cancel-registration]').addEventListener('click', close);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) close();
+  });
+  overlay.querySelector('#studentRegistrationForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const resultBox = form.querySelector('#studentRegistrationResult');
+    const values = Object.fromEntries(new FormData(form));
+    resultBox.hidden = true;
+    resultBox.classList.remove('is-error');
+    setBusy(button, true, 'A criar...');
+    try {
+      const result = await api.registerStudentAccount(values);
+      resultBox.textContent = result.message || 'Consulte o seu email para confirmar e ativar a conta.';
+      resultBox.hidden = false;
+      form.querySelectorAll('input').forEach((input) => { input.disabled = true; });
+      button.hidden = true;
+      form.querySelector('[data-cancel-registration]').textContent = 'Fechar';
+    } catch (error) {
+      resultBox.textContent = error.message || 'Não foi possível criar a conta.';
+      resultBox.classList.add('is-error');
+      resultBox.hidden = false;
+    } finally {
+      setBusy(button, false);
+      reportHeight();
+    }
+  });
+  overlay.querySelector('[name="fullName"]').focus();
   reportHeight();
 }
 
@@ -934,6 +1026,44 @@ function renderStudentRecoveryResult(overlay, result) {
   resultBox.hidden = false;
   resultBox.classList.remove('is-error');
   resultBox.textContent = result.message || 'Se a conta estiver ativa, receberá as instruções por email.';
+}
+
+function consumeAccountVerificationToken() {
+  const hash = String(location.hash || '');
+  if (!hash.startsWith('#/verify-account?')) return '';
+  const token = new URLSearchParams(hash.slice(hash.indexOf('?') + 1)).get('token') || '';
+  history.replaceState(null, '', `${location.pathname}${location.search}`);
+  return token;
+}
+
+async function showAccountVerificationDialog(token) {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-card recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="accountVerificationTitle">
+      <h2 id="accountVerificationTitle">A confirmar o cadastro</h2>
+      <p class="recovery-note" id="accountVerificationMessage">Estamos a validar a ligação recebida por email.</p>
+      <div class="dialog-actions">
+        <button class="button button-primary" type="button" data-close-verification disabled>Continuar para o login</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const message = overlay.querySelector('#accountVerificationMessage');
+  const closeButton = overlay.querySelector('[data-close-verification]');
+  try {
+    await api.completeStudentAccountVerification(token);
+    message.textContent = 'Email confirmado. A sua conta está ativa e já pode iniciar sessão.';
+    closeButton.disabled = false;
+  } catch (error) {
+    message.textContent = error.message || 'Não foi possível confirmar o cadastro.';
+    message.classList.add('form-message-error');
+    closeButton.textContent = 'Voltar ao login';
+    closeButton.disabled = false;
+  }
+  closeButton.addEventListener('click', () => overlay.remove());
+  closeButton.focus();
+  reportHeight();
 }
 
 function consumePasswordResetToken() {

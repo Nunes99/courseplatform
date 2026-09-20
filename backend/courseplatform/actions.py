@@ -88,6 +88,7 @@ from .storage import (
 RASTER_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
 BRAND_LOGO_MAX_BYTES = 1024 * 1024
 PASSWORD_RESET_GENERIC_MESSAGE = identity_domain.PASSWORD_RESET_GENERIC_MESSAGE
+REGISTRATION_GENERIC_MESSAGE = identity_domain.REGISTRATION_GENERIC_MESSAGE
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
@@ -941,6 +942,15 @@ def send_email_notification(delivery: dict[str, Any], configuration: dict[str, A
 
 def dispatch_student_password_reset(reset_id: str, token: str, request_base_url: str='') -> None:
     return communication_domain.dispatch_student_password_reset_action(reset_id, token, request_base_url, runtime=_communication_runtime())
+
+
+def dispatch_student_account_verification(verification_id: str, token: str, request_base_url: str='') -> None:
+    return communication_domain.dispatch_student_account_verification_action(
+        verification_id,
+        token,
+        request_base_url,
+        runtime=_communication_runtime(),
+    )
 
 
 def _telegram_markdown_v2(value: Any) -> str:
@@ -2174,6 +2184,14 @@ def password_reset_public_result() -> dict[str, Any]:
 
 def recover_student_access(payload: dict[str, Any]):
     return identity_domain.recover_student_access_action(payload, _identity_runtime())
+
+
+def register_student_account(payload: dict[str, Any]):
+    return identity_domain.register_student_account_action(payload, _identity_runtime())
+
+
+def complete_student_account_verification(payload: dict[str, Any]):
+    return identity_domain.complete_student_account_verification_action(payload, _identity_runtime())
 
 
 def complete_student_password_reset(payload: dict[str, Any]):

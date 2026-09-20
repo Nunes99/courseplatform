@@ -50,6 +50,43 @@ class AdminLoginRequest(StrictRequest):
     admin_key: str = Field(alias="adminKey", min_length=1, max_length=256)
 
 
+class StudentRegistrationRequest(StrictRequest):
+    full_name: str = Field(alias="fullName", min_length=2, max_length=160)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=128)
+    confirm_password: str = Field(alias="confirmPassword", min_length=8, max_length=128)
+    country: str | None = Field(default=None, max_length=100)
+    organization: str | None = Field(default=None, max_length=160)
+
+
+class AccountVerificationRequest(StrictRequest):
+    token: str = Field(min_length=1, max_length=256)
+
+
+class PasswordResetRequest(StrictRequest):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PasswordResetCompletionRequest(StrictRequest):
+    token: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(alias="newPassword", min_length=8, max_length=128)
+    confirm_password: str = Field(alias="confirmPassword", min_length=8, max_length=128)
+
+
+class PublicMessageData(BaseModel):
+    message: str
+
+
+class AccountVerificationData(BaseModel):
+    accountActivated: bool
+    student: dict[str, Any]
+
+
+class PasswordResetData(BaseModel):
+    passwordChanged: bool
+    sessionsRevoked: bool
+
+
 class StudentSessionData(BaseModel):
     sessionToken: str
     expiresAt: str | None = None

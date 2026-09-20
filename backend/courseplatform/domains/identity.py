@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 ACTION_BINDINGS = (
     ("login", "login"),
+    ("registerStudentAccount", "register_student_account"),
+    ("completeStudentAccountVerification", "complete_student_account_verification"),
     ("recoverStudentAccess", "recover_student_access"),
     ("completeStudentPasswordReset", "complete_student_password_reset"),
     ("logout", "logout"),
@@ -32,6 +35,11 @@ ACTION_BINDINGS = (
 PASSWORD_RESET_GENERIC_MESSAGE = (
     "Se existir uma conta ativa associada a esse email, receberá uma mensagem "
     "com as instruções para definir uma nova palavra-passe."
+)
+
+REGISTRATION_GENERIC_MESSAGE = (
+    "Se o email puder ser utilizado para uma nova conta, receberá uma mensagem "
+    "para confirmar o cadastro e ativar o acesso."
 )
 
 
@@ -103,6 +111,8 @@ def serialize_student(
         "publicStudentId": row.get("public_student_id") or "",
         "fullName": row.get("full_name"),
         "email": row.get("email"),
+        "emailVerified": bool(row.get("email_verified_at")),
+        "emailVerifiedAt": as_iso(row.get("email_verified_at")),
         "status": row.get("status"),
         "country": row.get("country"),
         "organization": row.get("organization"),
@@ -167,6 +177,272 @@ def password_reset_public_result(success: Callable[..., dict[str, Any]]) -> dict
     return success({"message": PASSWORD_RESET_GENERIC_MESSAGE})
 
 
+def registration_public_result(success: Callable[..., dict[str, Any]]) -> dict[str, Any]:
+    return success({"message": REGISTRATION_GENERIC_MESSAGE})
+
+
+def valid_registration_email(value: str) -> bool:
+    return bool(
+        value
+        and len(value) <= 320
+        and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value)
+    )
+
+
+def register_student_account_action(payload: dict[str, Any], runtime: IdentityRuntime):
+    runtime.require_fields(payload, ["fullName", "email", "password", "confirmPassword"])
+    full_name = str_value(payload.get("fullName"))
+    email = normalize_email(payload.get("email"))
+    password = str(payload.get("password") or "")
+    confirmation = str(payload.get("confirmPassword") or "")
+    country = str_value(payload.get("country"))
+    organization = str_value(payload.get("organization"))
+    if not 2 <= len(full_name) <= 160:
+        raise ApiError("INVALID_FULL_NAME", "Indique o nome completo com 2 a 160 caracteres.")
+    if not valid_registration_email(email):
+        raise ApiError("INVALID_EMAIL", "Indique um endereço de email válido.")
+    if password != confirmation:
+        raise ApiError("PASSWORD_CONFIRMATION_MISMATCH", "A confirmação da palavra-passe não corresponde.")
+    if not valid_password(password) or len(password) > 128:
+        raise ApiError("INVALID_NEW_PASSWORD", "A palavra-passe deve ter entre 8 e 128 caracteres.")
+    if len(country) > 100 or len(organization) > 160:
+        raise ApiError("REGISTRATION_DETAILS_TOO_LONG", "Os dados do cadastro excedem o tamanho permitido.")
+
+    settings = runtime.get_settings()
+    if len(settings.password_reset_hash_key.encode("utf-8")) < 32:
+        logger.error("Account registration is unavailable because PASSWORD_RESET_HASH_KEY is missing or too short.")
+        raise ApiError("REGISTRATION_UNAVAILABLE", "O cadastro não está disponível neste momento.")
+
+    source = str_value(payload.get("_requestSource"))[:256] or "unknown"
+    email_hash = password_reset_private_digest("registration-email", email, settings)
+    source_hash = password_reset_private_digest("registration-source", source, settings)
+    token = secrets.token_urlsafe(48)
+    token_hash = runtime.hash_secret(token)
+    verification_id = runtime.generate_id("VFY")
+    expires_at = runtime.utc_now() + timedelta(minutes=max(10, settings.account_verification_ttl_minutes))
+    delivery = None
+
+    try:
+        with runtime.connection() as conn:
+            for lock_key in sorted({email_hash, source_hash}):
+                conn.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,))
+            source_count = conn.execute(
+                """
+                select count(*) as count
+                from courseplatform.student_account_verifications
+                where source_hash = %s
+                  and created_at >= now() - make_interval(mins => %s)
+                """,
+                (source_hash, max(1, settings.registration_source_window_minutes)),
+            ).fetchone()
+            email_count = conn.execute(
+                """
+                select count(*) as count
+                from courseplatform.student_account_verifications
+                where email_hash = %s
+                  and created_at >= now() - make_interval(mins => %s)
+                """,
+                (email_hash, max(1, settings.registration_account_window_minutes)),
+            ).fetchone()
+            limited = (
+                int((source_count or {}).get("count") or 0) >= max(1, settings.registration_source_limit)
+                or int((email_count or {}).get("count") or 0) >= max(1, settings.registration_account_limit)
+            )
+            student = conn.execute(
+                "select * from courseplatform.students where email = %s for update",
+                (email,),
+            ).fetchone()
+            can_register = not limited and (
+                not student
+                or (
+                    student.get("status") == "PENDING_VERIFICATION"
+                    and not student.get("email_verified_at")
+                )
+            )
+            if can_register:
+                if student:
+                    student = conn.execute(
+                        """
+                        update courseplatform.students
+                        set full_name = %s,
+                            password_hash = crypt(%s, gen_salt('bf', 12)),
+                            password_changed_at = now(), password_reset_required = false,
+                            country = %s, organization = %s, updated_at = now()
+                        where student_id = %s
+                        returning *
+                        """,
+                        (full_name, password, country or None, organization or None, student["student_id"]),
+                    ).fetchone()
+                else:
+                    for _ in range(12):
+                        student_id = runtime.generate_id("STU")
+                        student = conn.execute(
+                            """
+                            insert into courseplatform.students
+                              (student_id, public_student_id, full_name, email, access_code, password_hash,
+                               password_changed_at, password_reset_required, status, country, organization,
+                               email_verified_at, created_at, updated_at)
+                            values (%s, %s, %s, %s, null, crypt(%s, gen_salt('bf', 12)),
+                                    now(), false, 'PENDING_VERIFICATION', %s, %s, null, now(), now())
+                            on conflict do nothing
+                            returning *
+                            """,
+                            (
+                                student_id,
+                                public_student_id(),
+                                full_name,
+                                email,
+                                password,
+                                country or None,
+                                organization or None,
+                            ),
+                        ).fetchone()
+                        if student:
+                            break
+                        student = conn.execute(
+                            "select * from courseplatform.students where email = %s for update",
+                            (email,),
+                        ).fetchone()
+                        if student:
+                            break
+                if student and student.get("status") == "PENDING_VERIFICATION" and not student.get("email_verified_at"):
+                    conn.execute(
+                        """
+                        update courseplatform.student_account_verifications
+                        set status = 'INVALIDATED', invalidated_at = now()
+                        where student_id = %s and consumed_at is null and invalidated_at is null
+                        """,
+                        (student["student_id"],),
+                    )
+                    conn.execute(
+                        """
+                        insert into courseplatform.student_account_verifications
+                          (verification_id, student_id, email_hash, source_hash, token_hash,
+                           status, expires_at, created_at)
+                        values (%s, %s, %s, %s, %s, 'PENDING', %s, now())
+                        """,
+                        (
+                            verification_id,
+                            student["student_id"],
+                            email_hash,
+                            source_hash,
+                            token_hash,
+                            expires_at,
+                        ),
+                    )
+                    runtime.audit(
+                        conn,
+                        "SYSTEM",
+                        student["student_id"],
+                        "STUDENT_ACCOUNT_REGISTRATION_REQUESTED",
+                        "STUDENT",
+                        student["student_id"],
+                        {"verificationId": verification_id, "expiresAt": runtime.iso(expires_at)},
+                    )
+                    delivery = {"verificationId": verification_id, "token": token}
+            conn.commit()
+    except ApiError:
+        raise
+    except Exception as error:
+        raise runtime.database_api_error(error) from error
+
+    result = registration_public_result(runtime.success)
+    if delivery:
+        result["_accountVerificationDelivery"] = delivery
+    return result
+
+
+def complete_student_account_verification_action(payload: dict[str, Any], runtime: IdentityRuntime):
+    runtime.require_fields(payload, ["token"])
+    token = str_value(payload.get("token"))
+    if not token or len(token) > 256:
+        raise ApiError("ACCOUNT_VERIFICATION_TOKEN_INVALID", "O link de confirmação é inválido ou já expirou.")
+    token_hash = runtime.hash_secret(token)
+    verification_error = None
+    student = None
+    try:
+        with runtime.connection() as conn:
+            verification = conn.execute(
+                """
+                select v.*, s.status as student_status, s.email_verified_at
+                from courseplatform.student_account_verifications v
+                join courseplatform.students s on s.student_id = v.student_id
+                where v.token_hash = %s
+                for update of v, s
+                """,
+                (token_hash,),
+            ).fetchone()
+            expires_at = runtime.parse_datetime(verification.get("expires_at")) if verification else None
+            valid_verification = bool(
+                verification
+                and verification.get("status") in {"PENDING", "DELIVERED"}
+                and not verification.get("consumed_at")
+                and not verification.get("invalidated_at")
+                and expires_at
+                and expires_at > runtime.utc_now()
+                and verification.get("student_status") == "PENDING_VERIFICATION"
+                and not verification.get("email_verified_at")
+            )
+            if not valid_verification:
+                if verification and expires_at and expires_at <= runtime.utc_now():
+                    conn.execute(
+                        """
+                        update courseplatform.student_account_verifications
+                        set status = 'EXPIRED', invalidated_at = coalesce(invalidated_at, now())
+                        where verification_id = %s
+                        """,
+                        (verification["verification_id"],),
+                    )
+                verification_error = ApiError(
+                    "ACCOUNT_VERIFICATION_TOKEN_INVALID",
+                    "O link de confirmação é inválido ou já expirou.",
+                )
+            else:
+                student = conn.execute(
+                    """
+                    update courseplatform.students
+                    set status = 'ACTIVE', email_verified_at = now(), updated_at = now()
+                    where student_id = %s
+                    returning *
+                    """,
+                    (verification["student_id"],),
+                ).fetchone()
+                conn.execute(
+                    """
+                    update courseplatform.student_account_verifications
+                    set status = 'CONSUMED', consumed_at = now()
+                    where verification_id = %s
+                    """,
+                    (verification["verification_id"],),
+                )
+                conn.execute(
+                    """
+                    update courseplatform.student_account_verifications
+                    set status = 'INVALIDATED', invalidated_at = now()
+                    where student_id = %s and verification_id <> %s
+                      and consumed_at is null and invalidated_at is null
+                    """,
+                    (verification["student_id"], verification["verification_id"]),
+                )
+                runtime.audit(
+                    conn,
+                    "STUDENT",
+                    verification["student_id"],
+                    "STUDENT_ACCOUNT_ACTIVATED",
+                    "STUDENT",
+                    verification["student_id"],
+                    {"verificationId": verification["verification_id"]},
+                )
+            conn.commit()
+    except Exception as error:
+        if isinstance(error, ApiError):
+            raise
+        raise runtime.database_api_error(error) from error
+    if verification_error:
+        raise verification_error
+    return runtime.success({"accountActivated": True, "student": runtime.public_student(student)})
+
+
 def login_action(payload: dict[str, Any], runtime: IdentityRuntime):
     runtime.require_fields(payload, ["email", "accessCode"])
     email = normalize_email(payload["email"])
@@ -184,10 +460,10 @@ def login_action(payload: dict[str, Any], runtime: IdentityRuntime):
                 "DATABASE_EMPTY",
                 "A base de dados ligada ainda não tem estudantes. Confirme se o POSTGRES_URL aponta para a base migrada.",
             )
-        raise ApiError("INVALID_CREDENTIALS", "Email ou código de acesso inválido.")
+        raise ApiError("INVALID_CREDENTIALS", "Email ou palavra-passe inválidos.")
     try:
         if not runtime.verify_password(payload["accessCode"], student.get("password_hash")):
-            raise ApiError("INVALID_CREDENTIALS", "Email ou código de acesso inválido.")
+            raise ApiError("INVALID_CREDENTIALS", "Email ou palavra-passe inválidos.")
         with runtime.connection() as conn:
             runtime.revoke_sessions(conn, student["student_id"])
             session = runtime.create_session(

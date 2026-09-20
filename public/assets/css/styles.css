@@ -8648,16 +8648,22 @@ body:has(.admin-layout) .button-secondary {
   border: 1px solid var(--line);
   border-radius: 8px;
   background-color: var(--surface-soft);
-  background-image: url("https://api.iconify.design/lucide/x.svg?color=%2300365B");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 18px 18px;
   color: transparent;
   font-size: 0;
 }
 
-:root[data-theme="dark"] .dialog-close {
-  background-image: url("https://api.iconify.design/lucide/x.svg?color=%23FFF8E4");
+.dialog-close::before {
+  content: "\00d7";
+  display: block;
+  color: var(--primary);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 32px;
+  text-align: center;
+}
+
+:root[data-theme="dark"] .dialog-close::before {
+  color: var(--text);
 }
 
 .admin-content-tabs,

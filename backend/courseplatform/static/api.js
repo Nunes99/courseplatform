@@ -139,12 +139,59 @@ export class CoursePlatformApi {
     return this.parseResponse(response);
   }
 
+  async versionedPost(path, payload = {}, headers = {}) {
+    const apiUrl = new URL(this.apiUrl);
+    const url = new URL(path, apiUrl.origin);
+    let response;
+    try {
+      response = await fetch(url.toString(), {
+        method: 'POST',
+        redirect: 'follow',
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...headers
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      throw this.networkError(error);
+    }
+    if (response.status === 404 || response.status === 405) {
+      let body = null;
+      try {
+        body = await response.clone().json();
+      } catch {
+        // An older deployment may return its static HTML 404 page.
+      }
+      const code = body?.error?.code || '';
+      if (!code || code === 'NOT_FOUND' || code === 'METHOD_NOT_ALLOWED') {
+        throw new ApiError(
+          'A rota tipada ainda não está disponível neste ambiente.',
+          'VERSIONED_ROUTE_UNAVAILABLE',
+          { status: response.status }
+        );
+      }
+    }
+    return this.parseResponse(response);
+  }
+
   async versionedRead(path, params, headers, legacyRead) {
     try {
       return await this.versionedGet(path, params, headers);
     } catch (error) {
       if (error?.code !== 'VERSIONED_ROUTE_UNAVAILABLE') throw error;
       return legacyRead();
+    }
+  }
+
+  async versionedWrite(path, payload, headers, legacyWrite) {
+    try {
+      return await this.versionedPost(path, payload, headers);
+    } catch (error) {
+      if (error?.code !== 'VERSIONED_ROUTE_UNAVAILABLE') throw error;
+      return legacyWrite();
     }
   }
 
@@ -226,15 +273,46 @@ export class CoursePlatformApi {
   }
 
   recoverStudentAccess(email) {
-    return this.request('recoverStudentAccess', { email });
+    const payload = { email };
+    return this.versionedWrite(
+      '/api/v1/auth/password-resets',
+      payload,
+      {},
+      () => this.request('recoverStudentAccess', payload)
+    );
   }
 
   completeStudentPasswordReset(token, newPassword, confirmPassword) {
-    return this.request('completeStudentPasswordReset', {
+    const payload = {
       token,
       newPassword,
       confirmPassword
-    });
+    };
+    return this.versionedWrite(
+      '/api/v1/auth/password-resets/complete',
+      payload,
+      {},
+      () => this.request('completeStudentPasswordReset', payload)
+    );
+  }
+
+  registerStudentAccount(payload) {
+    return this.versionedWrite(
+      '/api/v1/auth/registrations',
+      payload,
+      {},
+      () => this.request('registerStudentAccount', payload)
+    );
+  }
+
+  completeStudentAccountVerification(token) {
+    const payload = { token };
+    return this.versionedWrite(
+      '/api/v1/auth/registrations/verify',
+      payload,
+      {},
+      () => this.request('completeStudentAccountVerification', payload)
+    );
   }
 
   async logout() {

@@ -379,11 +379,70 @@ function showAdminRecoveryDialog(prefilledEmail = '') {
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
   overlay.innerHTML = `
+    <div class="dialog-card recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="adminRecoveryTitle">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <h2 id="adminRecoveryTitle">Recuperar palavra-passe</h2>
+      <p class="recovery-note">
+        Staff ligado utiliza a mesma conta e palavra-passe da área do estudante. Enviaremos uma ligação de utilização única para o email da conta.
+      </p>
+      <form id="adminRecoveryForm" class="form-stack">
+        <label>
+          <span>Email da conta</span>
+          <input type="email" name="email" autocomplete="email" required
+            value="${escapeHtml(prefilledEmail || '')}" placeholder="utilizador@email.com">
+        </label>
+        <div id="adminRecoveryResult" class="recovery-result" role="status" hidden></div>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-cancel-recovery>Cancelar</button>
+          <button class="button button-primary" type="submit">Enviar instruções</button>
+        </div>
+        <button class="text-button login-recovery-link" type="button" data-legacy-admin-recovery>
+          Recuperar uma conta administrativa legada
+        </button>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  bindDialogClose(overlay);
+  overlay.querySelector('[data-cancel-recovery]').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-legacy-admin-recovery]').addEventListener('click', () => {
+    const email = overlay.querySelector('[name="email"]')?.value || prefilledEmail;
+    overlay.remove();
+    showLegacyAdminRecoveryDialog(email);
+  });
+  overlay.querySelector('#adminRecoveryForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const resultBox = overlay.querySelector('#adminRecoveryResult');
+    setBusy(button, true, 'A enviar...');
+    try {
+      const result = await api.recoverStudentAccess(form.elements.email.value);
+      resultBox.textContent = result.message || 'Se a conta estiver ativa, receberá as instruções por email.';
+      resultBox.classList.remove('is-error');
+      resultBox.hidden = false;
+    } catch (error) {
+      resultBox.textContent = error.message || 'Não foi possível iniciar a recuperação.';
+      resultBox.classList.add('is-error');
+      resultBox.hidden = false;
+    } finally {
+      setBusy(button, false);
+      reportHeight();
+    }
+  });
+  overlay.querySelector('[name="email"]').focus();
+  reportHeight();
+}
+
+function showLegacyAdminRecoveryDialog(prefilledEmail = '') {
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
     <div class="dialog-card recovery-dialog">
       <button class="dialog-close" type="button" aria-label="Fechar">x</button>
-      <h2>Recuperar acesso administrativo</h2>
+      <h2>Recuperar conta administrativa legada</h2>
       <p class="recovery-note">
-        Use a chave de recuperação configurada no backend para gerar uma nova palavra-passe temporária.
+        Utilize esta contingência apenas para contas antigas ainda não ligadas a um utilizador da plataforma.
       </p>
 
       <form id="adminRecoveryForm" class="form-stack">

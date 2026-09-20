@@ -13,6 +13,7 @@ from .actions import (
     certificate_receipt_download_payload,
     dispatch,
     dispatch_notification_deliveries,
+    dispatch_student_account_verification,
     dispatch_student_password_reset,
     public_error,
     record_certificate_download,
@@ -77,11 +78,17 @@ async def handle_post_action(request: Request, background_tasks: BackgroundTasks
 
     try:
         payload.pop("_requestSource", None)
-        if action in {"recoverStudentAccess", "completeStudentPasswordReset"}:
+        if action in {
+            "registerStudentAccount",
+            "completeStudentAccountVerification",
+            "recoverStudentAccess",
+            "completeStudentPasswordReset",
+        }:
             payload["_requestSource"] = request_source(request)
         result = await run_in_threadpool(dispatch, action, payload)
         notification_ids = result.pop("_backgroundNotificationIds", []) if isinstance(result, dict) else []
         reset_delivery = result.pop("_passwordResetDelivery", None) if isinstance(result, dict) else None
+        verification_delivery = result.pop("_accountVerificationDelivery", None) if isinstance(result, dict) else None
         if notification_ids:
             background_tasks.add_task(dispatch_notification_deliveries, notification_ids)
         if reset_delivery:
@@ -89,6 +96,13 @@ async def handle_post_action(request: Request, background_tasks: BackgroundTasks
                 dispatch_student_password_reset,
                 reset_delivery.get("resetId", ""),
                 reset_delivery.get("token", ""),
+                str(request.base_url).rstrip("/"),
+            )
+        if verification_delivery:
+            background_tasks.add_task(
+                dispatch_student_account_verification,
+                verification_delivery.get("verificationId", ""),
+                verification_delivery.get("token", ""),
                 str(request.base_url).rstrip("/"),
             )
         return JSONResponse(result)

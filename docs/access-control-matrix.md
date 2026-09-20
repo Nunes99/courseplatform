@@ -27,8 +27,9 @@ identidade.
 | Health público mínimo | Público | Público | Público | Público | Público |
 | Configuração pública de curso/media | Público | Público | Público | Público | Público |
 | Login | Público | Própria identidade | Mesma identidade + atribuição REVIEWER ativa | Mesma identidade + atribuição ADMIN ativa | Mesma identidade + atribuição OWNER ativa |
+| Cadastro | Criar identidade pendente e confirmar o próprio email | Não aplicável após ativação | Não cria papel administrativo | Não cria papel administrativo | Não cria papel administrativo |
 | Recuperação de estudante | Pedir link sem enumeração e concluir com token válido | Igual ao público | Igual ao público | Igual ao público | Igual ao público |
-| Recuperação administrativa | Iniciar com mecanismo protegido | Recuperação normal da identidade | Recuperação normal da identidade ligada | Própria identidade; compatibilidade legada quando não ligada | Própria identidade/emergência auditada |
+| Recuperação administrativa | Iniciar recuperação genérica por email | Recuperação normal da identidade | Recuperação normal da identidade ligada | Própria identidade; contingência legada quando não ligada | Própria identidade/emergência auditada |
 | Verificação de certificado | Dados públicos mínimos pelo código | Igual ao público | Igual ao público | Igual ao público | Igual ao público |
 | Perfil do estudante | Não | Próprio: ler/editar | Leitura no âmbito | Leitura/gestão | Leitura/gestão |
 | Email/senha do estudante | Não | Alterar a própria com comprovação | Não | Recuperar/alterar conforme fluxo auditado | Igual a ADMIN |

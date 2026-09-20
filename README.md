@@ -266,6 +266,7 @@ Recuperação de estudantes:
 - `PASSWORD_RESET_HASH_KEY` (segredo de servidor com pelo menos 32 bytes);
 - `PASSWORD_RESET_TTL_MINUTES`, `PASSWORD_RESET_ACCOUNT_LIMIT`, `PASSWORD_RESET_ACCOUNT_WINDOW_MINUTES`;
 - `PASSWORD_RESET_SOURCE_LIMIT`, `PASSWORD_RESET_SOURCE_WINDOW_MINUTES`, `PASSWORD_RESET_COMPLETION_LIMIT`, `PASSWORD_RESET_COMPLETION_WINDOW_MINUTES`.
+- `ACCOUNT_VERIFICATION_TTL_MINUTES`, `REGISTRATION_ACCOUNT_LIMIT`, `REGISTRATION_ACCOUNT_WINDOW_MINUTES`, `REGISTRATION_SOURCE_LIMIT`, `REGISTRATION_SOURCE_WINDOW_MINUTES`.
 - Requer também SMTP ativo e `PLATFORM_URL`. A resposta pública é sempre genérica; o link de utilização única é enviado apenas para o email guardado na conta.
 
 Supabase Storage e Realtime:
@@ -295,6 +296,8 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 
 - A autenticação atual é própria: bcrypt no Postgres, tokens opacos e apenas hashes dos tokens em `courseplatform.sessions`. Staff ligado a um estudante usa a mesma credencial, enquanto `admins` concede apenas o papel administrativo; contas administrativas antigas permanecem temporariamente compatíveis. Ainda não usa Supabase Auth.
 - A recuperação do estudante guarda apenas hashes HMAC do email/origem e SHA-256 do token. O token chega ao browser no fragmento do link, é removido imediatamente da barra de endereço e só pode ser consumido uma vez.
+- O cadastro público cria uma conta pendente, envia uma ligação de confirmação de utilização única e só permite login depois da verificação do email. A mesma identidade pode receber posteriormente uma atribuição de revisor, administrador ou proprietário.
+- Contas de staff ligadas recuperam a palavra-passe pelo mesmo fluxo público. A chave administrativa permanece apenas como contingência para contas legadas ainda não associadas.
 - A API usa ligação direta ao Postgres. A chave `SUPABASE_SECRET_KEY` (ou a
   `SUPABASE_SERVICE_ROLE_KEY` legada) é usada apenas no backend para objetos
   privados e nunca deve chegar ao navegador.

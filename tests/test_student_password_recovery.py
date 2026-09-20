@@ -251,6 +251,37 @@ class StudentPasswordRecoveryTests(unittest.TestCase):
         self.assertIn(token, delivery["action_url"])
         self.assertTrue(any("set status = 'delivered'" in query for query, _ in conn.queries))
 
+    def test_delivery_ignores_the_request_host_for_reset_links(self):
+        token = "one-time-token"
+        row = {
+            "reset_id": "PWR-1",
+            "student_id": "STUDENT-1",
+            "status": "PENDING",
+            "student_status": "ACTIVE",
+            "full_name": "Student One",
+            "email": "student@example.test",
+            "expires_at": NOW + timedelta(minutes=10),
+        }
+        conn = _RecoveryConnection()
+        with (
+            patch.object(actions, "fetch_one", return_value=row),
+            patch.object(actions, "email_runtime_configuration", return_value={
+                "platformUrl": "https://learning.example.test",
+                "configured": True,
+            }),
+            patch.object(actions, "send_email_notification", return_value="message-id") as send,
+            patch.object(actions, "connection", _connection_for(conn)),
+        ):
+            actions.dispatch_student_password_reset(
+                "PWR-1",
+                token,
+                "https://attacker.example.test",
+            )
+
+        action_url = send.call_args.args[0]["action_url"]
+        self.assertTrue(action_url.startswith("https://learning.example.test/"))
+        self.assertNotIn("attacker.example.test", action_url)
+
     def test_delivery_failure_is_persisted_and_logged_without_token(self):
         token = "one-time-token"
         row = {

@@ -36,7 +36,7 @@ Verificado nesta entrega:
 - `actions.ApiError` e os helpers públicos usados pelos testes continuam
   disponíveis por compatibilidade;
 - imports de `app.py`, dispatcher e domínios não formam ciclos;
-- os dez handlers únicos das onze ações de identidade são adaptadores sem SQL;
+- os doze handlers únicos das treze ações de identidade são adaptadores sem SQL;
 - validação, regras, transações e serialização de identidade residem no domínio;
 - dependências substituíveis nos testes são resolvidas em tempo de chamada;
 - os onze handlers únicos das doze ações de avaliações são adaptadores sem SQL;
@@ -93,7 +93,7 @@ Vercel, desempenho sob carga ou fluxos com dados reais.
 
 | Domínio | Responsabilidade |
 | --- | --- |
-| `identity` | login, sessões, recuperação e perfil |
+| `identity` | cadastro, verificação de email, login, sessões, recuperação e perfil |
 | `catalog` | cursos, versões, módulos, conteúdo e media |
 | `enrollments` | ofertas/turmas, matrículas e grupos |
 | `learning` | dashboard, acesso e progresso |

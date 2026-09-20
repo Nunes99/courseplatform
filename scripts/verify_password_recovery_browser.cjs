@@ -53,6 +53,31 @@ async function configurePage(page) {
         body: JSON.stringify({ success: true, data: { mediaConfig: { logoUrl: '', videos: [] } } }),
       });
     }
+    if (url.pathname === '/api/v1/auth/password-resets') {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: { message: 'Se existir uma conta ativa associada a esse email, receberá uma mensagem com as instruções para definir uma nova palavra-passe.' } }),
+      });
+    }
+    if (url.pathname === '/api/v1/auth/password-resets/complete') {
+      const payload = request.postDataJSON() || {};
+      const body = payload.newPassword !== payload.confirmPassword
+        ? { success: false, error: { code: 'PASSWORD_CONFIRMATION_MISMATCH', message: 'A confirmação da nova palavra-passe não corresponde.' } }
+        : { success: true, data: { passwordChanged: true, sessionsRevoked: true } };
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+    }
+    if (url.pathname === '/api/v1/auth/registrations') {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: { message: 'Se o email puder ser utilizado para uma nova conta, receberá uma mensagem para confirmar o cadastro e ativar o acesso.' } }),
+      });
+    }
+    if (url.pathname === '/api/v1/auth/registrations/verify') {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: { accountActivated: true, student: { status: 'ACTIVE' } } }),
+      });
+    }
     if (url.pathname === '/api/index') {
       const payload = request.method() === 'POST'
         ? (request.postDataJSON() || {})
@@ -117,6 +142,19 @@ async function main() {
     const desktop = await context.newPage();
     const desktopFailures = await configurePage(desktop);
     await desktop.goto(`${base}/index.html`, { waitUntil: 'domcontentloaded' });
+    await desktop.getByRole('button', { name: 'Criar uma conta' }).click();
+    const registrationDialog = desktop.getByRole('dialog', { name: 'Criar conta' });
+    await registrationDialog.waitFor();
+    await registrationDialog.locator('[name="fullName"]').fill('Synthetic Student');
+    await registrationDialog.locator('[name="email"]').fill('synthetic@example.test');
+    await registrationDialog.locator('[name="password"]').fill('new-password-123');
+    await registrationDialog.locator('[name="confirmPassword"]').fill('new-password-123');
+    await desktop.screenshot({ path: path.join(output, 'registration-desktop.png'), fullPage: true });
+    await registrationDialog.getByRole('button', { name: 'Criar conta' }).click();
+    await registrationDialog.getByText('receberá uma mensagem para confirmar o cadastro').waitFor();
+    await assertViewport(desktop);
+    await registrationDialog.locator('[data-cancel-registration]').click();
+
     await desktop.getByRole('button', { name: 'Esqueci a palavra-passe de acesso' }).click();
     const requestDialog = desktop.getByRole('dialog', { name: 'Recuperar palavra-passe de acesso' });
     await requestDialog.waitFor();
@@ -129,6 +167,13 @@ async function main() {
     await desktop.screenshot({ path: path.join(output, 'request-desktop.png'), fullPage: true });
     await desktop.keyboard.press('Escape');
     await requestDialog.waitFor({ state: 'detached' });
+
+    await desktop.goto(`${base}/index.html#/verify-account?token=synthetic-verification-token`, { waitUntil: 'commit' });
+    const verificationDialog = desktop.getByRole('dialog', { name: 'A confirmar o cadastro' });
+    await verificationDialog.waitFor();
+    assert.ok(!desktop.url().includes('synthetic-verification-token'), 'verification token remained in browser URL');
+    await verificationDialog.getByText('A sua conta está ativa').waitFor();
+    await verificationDialog.getByRole('button', { name: 'Continuar para o login' }).click();
 
     await desktop.goto(`${base}/index.html#/reset-access?token=synthetic-one-time-token`, { waitUntil: 'commit' });
     const resetDialog = desktop.getByRole('dialog', { name: 'Definir nova palavra-passe' });
@@ -144,6 +189,15 @@ async function main() {
     assert.deepEqual(desktopFailures, []);
 
     await desktop.setViewportSize({ width: 390, height: 844 });
+    await desktop.goto(`${base}/index.html`, { waitUntil: 'domcontentloaded' });
+    await desktop.getByRole('button', { name: 'Criar uma conta' }).click();
+    const mobileRegistrationDialog = desktop.getByRole('dialog', { name: 'Criar conta' });
+    await mobileRegistrationDialog.waitFor();
+    assert.equal(await mobileRegistrationDialog.locator('[name="fullName"]:focus').count(), 1, 'registration focus did not enter the dialog');
+    await assertViewport(desktop);
+    await desktop.screenshot({ path: path.join(output, 'registration-mobile.png'), fullPage: true });
+    await mobileRegistrationDialog.locator('[data-cancel-registration]').click();
+
     await desktop.evaluate(() => { location.hash = '#/reset-access?token=mobile-synthetic-token'; });
     const mobileDialog = desktop.getByRole('dialog', { name: 'Definir nova palavra-passe' });
     await mobileDialog.waitFor();
@@ -155,7 +209,7 @@ async function main() {
     assert.deepEqual(desktopFailures, []);
     await desktop.close();
     await context.close();
-    console.log('Student password recovery UI: desktop/mobile, keyboard, success/error and URL token cleanup passed.');
+    console.log('Account registration and password recovery UI: desktop/mobile, keyboard, success/error and URL token cleanup passed.');
   } finally {
     await browser.close();
   }

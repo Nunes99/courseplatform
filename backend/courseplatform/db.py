@@ -9,7 +9,7 @@ from .config import get_settings
 
 
 APPLICATION_SCHEMA_COMPONENT = "application"
-EXPECTED_SCHEMA_VERSION = 20260920115325
+EXPECTED_SCHEMA_VERSION = 20260921120000
 
 
 def _connect():

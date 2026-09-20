@@ -1236,7 +1236,7 @@ def dispatch_student_password_reset_action(reset_id: str, token: str, request_ba
         if not row or row.get("status") not in {"PENDING", "DELIVERED"} or row.get("student_status") != "ACTIVE":
             return
         configuration = email_runtime_configuration(prepare_schema=False)
-        base_url = str_value(configuration.get("platformUrl") or request_base_url).rstrip("/")
+        base_url = str_value(configuration.get("platformUrl")).rstrip("/")
         if not base_url.startswith(("https://", "http://")):
             raise RuntimeError("PLATFORM_URL is not configured for password recovery.")
         action_url = f"{base_url}/#/reset-access?{urlencode({'token': token})}"
@@ -1283,6 +1283,90 @@ def dispatch_student_password_reset_action(reset_id: str, token: str, request_ba
                     where reset_id = %s and token_hash = %s and consumed_at is null
                     """,
                     (error.__class__.__name__[:80], reset_id, token_hash),
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+
+def dispatch_student_account_verification_action(
+    verification_id: str,
+    token: str,
+    request_base_url: str = "",
+    *,
+    runtime: CommunicationRuntime,
+) -> None:
+    """Send one account-verification link without persisting its plaintext token."""
+    if not verification_id or not token:
+        return
+    token_hash = runtime.hash_secret(token)
+    try:
+        row = runtime.fetch_one(
+            """
+            select v.verification_id, v.student_id, v.status, v.expires_at,
+                   s.full_name, s.email, s.status as student_status
+            from courseplatform.student_account_verifications v
+            join courseplatform.students s on s.student_id = v.student_id
+            where v.verification_id = %s and v.token_hash = %s
+              and v.consumed_at is null and v.invalidated_at is null
+              and v.expires_at > now()
+            """,
+            (verification_id, token_hash),
+        )
+        if (
+            not row
+            or row.get("status") not in {"PENDING", "DELIVERED"}
+            or row.get("student_status") != "PENDING_VERIFICATION"
+        ):
+            return
+        configuration = runtime.email_runtime_configuration(prepare_schema=False)
+        base_url = runtime.str_value(configuration.get("platformUrl")).rstrip("/")
+        if not base_url.startswith(("https://", "http://")):
+            raise RuntimeError("PLATFORM_URL is not configured for account verification.")
+        action_url = f"{base_url}/#/verify-account?{urlencode({'token': token})}"
+        runtime.send_email_notification(
+            {
+                "recipient": row.get("email"),
+                "student_name": row.get("full_name"),
+                "email_subject": "Confirmar o cadastro na plataforma",
+                "email_message": (
+                    "Recebemos um pedido de cadastro para este endereço. "
+                    "Use o botão abaixo para confirmar o email e ativar a conta. "
+                    "O link é de utilização única e expira em breve. Se não iniciou o cadastro, ignore esta mensagem."
+                ),
+                "action_url": action_url,
+            },
+            configuration,
+        )
+        with runtime.connection() as conn:
+            conn.execute(
+                """
+                update courseplatform.student_account_verifications
+                set status = 'DELIVERED', delivery_attempted_at = now(),
+                    delivered_at = now(), delivery_error_code = null
+                where verification_id = %s and token_hash = %s
+                  and consumed_at is null and invalidated_at is null
+                """,
+                (verification_id, token_hash),
+            )
+            conn.commit()
+    except Exception as error:
+        logger.error(
+            "Student account verification delivery failed.",
+            extra={"verification_id": verification_id, "error_type": error.__class__.__name__},
+            exc_info=True,
+        )
+        try:
+            with runtime.connection() as conn:
+                conn.execute(
+                    """
+                    update courseplatform.student_account_verifications
+                    set status = 'DELIVERY_FAILED', delivery_attempted_at = now(),
+                        invalidated_at = coalesce(invalidated_at, now()),
+                        delivery_error_code = %s
+                    where verification_id = %s and token_hash = %s and consumed_at is null
+                    """,
+                    (error.__class__.__name__[:80], verification_id, token_hash),
                 )
                 conn.commit()
         except Exception:
