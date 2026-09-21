@@ -383,7 +383,7 @@ function showAdminRecoveryDialog(prefilledEmail = '') {
       <button class="dialog-close" type="button" aria-label="Fechar">x</button>
       <h2 id="adminRecoveryTitle">Recuperar palavra-passe</h2>
       <p class="recovery-note">
-        Staff ligado utiliza a mesma conta e palavra-passe da área do estudante. Enviaremos uma ligação de utilização única para o email da conta.
+        Revisores e administradores utilizam a mesma conta e palavra-passe da área do estudante. Enviaremos uma ligação de utilização única para o email da conta.
       </p>
       <form id="adminRecoveryForm" class="form-stack">
         <label>
@@ -397,7 +397,7 @@ function showAdminRecoveryDialog(prefilledEmail = '') {
           <button class="button button-primary" type="submit">Enviar instruções</button>
         </div>
         <button class="text-button login-recovery-link" type="button" data-legacy-admin-recovery>
-          Recuperar uma conta administrativa legada
+          Recuperação de emergência do proprietário
         </button>
       </form>
     </div>
@@ -440,9 +440,9 @@ function showLegacyAdminRecoveryDialog(prefilledEmail = '') {
   overlay.innerHTML = `
     <div class="dialog-card recovery-dialog">
       <button class="dialog-close" type="button" aria-label="Fechar">x</button>
-      <h2>Recuperar conta administrativa legada</h2>
+      <h2>Recuperação de emergência do proprietário</h2>
       <p class="recovery-note">
-        Utilize esta contingência apenas para contas antigas ainda não ligadas a um utilizador da plataforma.
+        Esta chave mestre é exclusiva do proprietário e destina-se apenas à contingência de uma conta antiga ainda não ligada.
       </p>
 
       <form id="adminRecoveryForm" class="form-stack">

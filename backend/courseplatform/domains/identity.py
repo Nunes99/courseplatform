@@ -967,6 +967,11 @@ def recover_admin_access_action(payload: dict[str, Any], runtime: IdentityRuntim
         or (linked_student and admin.get("identity_status") != "ACTIVE")
     ):
         raise ApiError("ADMIN_RECOVERY_NOT_FOUND", "Não encontramos uma conta administrativa ativa com esse email.")
+    if admin.get("role") != "OWNER":
+        raise ApiError(
+            "ADMIN_RECOVERY_OWNER_ONLY",
+            "Revisores e administradores recuperam a palavra-passe através do email da conta de utilizador.",
+        )
 
     admin_password = runtime.generate_access_code(14)
     try:

@@ -168,6 +168,71 @@ class UnifiedIdentityLoginTests(unittest.TestCase):
         self.assertEqual("LEGACY_ADMIN", result["data"]["admin"]["identitySource"])
 
 
+class UnifiedIdentityRecoveryTests(unittest.TestCase):
+    def test_reviewer_cannot_use_owner_emergency_recovery(self):
+        runtime = SimpleNamespace(
+            require_fields=lambda *_args: None,
+            configured_admin_recovery_hashes=lambda: {"configured"},
+            verify_admin_recovery_key=lambda _key: True,
+            fetch_one=lambda *_args: {
+                "admin_id": "REVIEWER-1",
+                "student_id": None,
+                "email": "reviewer@example.test",
+                "role": "REVIEWER",
+                "status": "ACTIVE",
+            },
+            database_api_error=lambda error: error,
+            connection=Mock(),
+        )
+
+        with self.assertRaises(actions.ApiError) as raised:
+            identity.recover_admin_access_action(
+                {"email": "reviewer@example.test", "recoveryKey": "owner-key"},
+                runtime,
+            )
+
+        self.assertEqual("ADMIN_RECOVERY_OWNER_ONLY", raised.exception.code)
+        runtime.connection.assert_not_called()
+
+    def test_owner_emergency_recovery_remains_available(self):
+        owner = {
+            "admin_id": "OWNER-1",
+            "student_id": None,
+            "full_name": "Platform Owner",
+            "email": "owner@example.test",
+            "role": "OWNER",
+            "status": "ACTIVE",
+        }
+
+        def handler(query, _params):
+            if "update courseplatform.admins" in query and "returning" in query:
+                return _Result(owner)
+            return _Result()
+
+        conn = _Connection(handler)
+        runtime = SimpleNamespace(
+            require_fields=lambda *_args: None,
+            configured_admin_recovery_hashes=lambda: {"configured"},
+            verify_admin_recovery_key=lambda _key: True,
+            fetch_one=lambda *_args: owner,
+            database_api_error=lambda error: error,
+            generate_access_code=lambda _length: "temporary-owner-key",
+            connection=_connection_for(conn),
+            audit=Mock(),
+            mask_email=lambda email: email,
+            public_admin=lambda row: identity.serialize_admin(row, as_iso=lambda value: value),
+            success=lambda data: {"success": True, "data": data},
+        )
+
+        result = identity.recover_admin_access_action(
+            {"email": "owner@example.test", "recoveryKey": "owner-key"},
+            runtime,
+        )
+
+        self.assertEqual("temporary-owner-key", result["data"]["temporaryAdminKey"])
+        self.assertTrue(conn.committed)
+
+
 class UnifiedIdentityStaffManagementTests(unittest.TestCase):
     def _runtime(self, conn):
         return SimpleNamespace(

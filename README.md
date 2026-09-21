@@ -280,7 +280,7 @@ Supabase Storage e Realtime:
 
 Recuperação administrativa atual:
 
-- `ADMIN_RECOVERY_KEY_HASH`; `ADMIN_RECOVERY_KEY` existe apenas como fallback de desenvolvimento.
+- `ADMIN_RECOVERY_KEY_HASH`; `ADMIN_RECOVERY_KEY` existe apenas como fallback de desenvolvimento. A contingência recupera exclusivamente a conta `OWNER`; revisores e administradores usam o fluxo de email da identidade de utilizador.
 
 Notificações:
 
