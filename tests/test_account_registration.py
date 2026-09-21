@@ -119,13 +119,49 @@ class AccountRegistrationTests(unittest.TestCase):
         self.assertTrue(any("'pending_verification'" in query for query, _ in conn.queries))
         self.assertTrue(conn.committed)
 
-    def test_existing_active_account_gets_generic_response_without_new_token(self):
+    def test_existing_active_account_is_reported_in_registration_form(self):
         conn = _RegistrationConnection(existing={
             "student_id": "STUDENT-1",
             "email": "student@example.test",
             "status": "ACTIVE",
             "email_verified_at": NOW,
         })
+
+        with self.assertRaises(actions.ApiError) as raised:
+            self._register(conn)
+
+        self.assertEqual("EMAIL_ALREADY_REGISTERED", raised.exception.code)
+        self.assertIn("já está cadastrado", raised.exception.message)
+
+    def test_http_registration_returns_conflict_for_existing_account(self):
+        with patch(
+            "backend.courseplatform.actions.dispatch",
+            side_effect=actions.ApiError(
+                "EMAIL_ALREADY_REGISTERED",
+                "Este email já está cadastrado. Inicie sessão ou recupere a palavra-passe.",
+            ),
+        ):
+            response = TestClient(app).post("/api/v1/auth/registrations", json={
+                "fullName": "Student One",
+                "email": "student@example.test",
+                "password": "strong-password",
+                "confirmPassword": "strong-password",
+            })
+
+        self.assertEqual(409, response.status_code)
+        self.assertEqual("EMAIL_ALREADY_REGISTERED", response.json()["error"]["code"])
+
+    def test_rate_limiter_keeps_existing_account_response_generic(self):
+        conn = _RegistrationConnection(
+            existing={
+                "student_id": "STUDENT-1",
+                "email": "student@example.test",
+                "status": "ACTIVE",
+                "email_verified_at": NOW,
+            },
+            email_count=SETTINGS.registration_account_limit,
+        )
+
         result = self._register(conn)
 
         self.assertEqual(actions.REGISTRATION_GENERIC_MESSAGE, result["data"]["message"])
@@ -172,7 +208,10 @@ class AccountRegistrationTests(unittest.TestCase):
 
         with (
             patch("backend.courseplatform.app.dispatch", side_effect=fake_dispatch),
-            patch("backend.courseplatform.app.dispatch_student_account_verification") as deliver,
+            patch(
+                "backend.courseplatform.app.dispatch_student_account_verification",
+                return_value=True,
+            ) as deliver,
         ):
             response = TestClient(app).post("/api", json={
                 "action": "registerStudentAccount",
@@ -186,6 +225,39 @@ class AccountRegistrationTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertNotIn("server-secret-token", response.text)
         self.assertNotEqual("attacker-controlled", captured["_requestSource"])
+        deliver.assert_called_once()
+
+    def test_typed_registration_reports_verification_delivery_failure(self):
+        def fake_dispatch(action, payload):
+            return {
+                "success": True,
+                "data": {"message": actions.REGISTRATION_GENERIC_MESSAGE},
+                "_accountVerificationDelivery": {
+                    "verificationId": "VFY-1",
+                    "token": "server-secret-token",
+                },
+            }
+
+        with (
+            patch("backend.courseplatform.actions.dispatch", side_effect=fake_dispatch),
+            patch(
+                "backend.courseplatform.api.identity.dispatch_student_account_verification",
+                return_value=False,
+            ) as deliver,
+        ):
+            response = TestClient(app).post("/api/v1/auth/registrations", json={
+                "fullName": "Student One",
+                "email": "student@example.test",
+                "password": "strong-password",
+                "confirmPassword": "strong-password",
+            })
+
+        self.assertEqual(503, response.status_code)
+        self.assertEqual(
+            "ACCOUNT_VERIFICATION_DELIVERY_FAILED",
+            response.json()["error"]["code"],
+        )
+        self.assertNotIn("server-secret-token", response.text)
         deliver.assert_called_once()
 
     def test_delivery_uses_one_time_fragment_link(self):
@@ -208,8 +280,9 @@ class AccountRegistrationTests(unittest.TestCase):
             patch.object(actions, "send_email_notification", return_value="message-id") as send,
             patch.object(actions, "connection", _connection_for(conn)),
         ):
-            actions.dispatch_student_account_verification("VFY-1", "plain-token")
+            delivered = actions.dispatch_student_account_verification("VFY-1", "plain-token")
 
+        self.assertTrue(delivered)
         self.assertNotIn("plain-token", fetch.call_args.args[1])
         self.assertIn("/#/verify-account?token=plain-token", send.call_args.args[0]["action_url"])
         self.assertTrue(any("set status = 'delivered'" in query for query, _ in conn.queries))
@@ -243,6 +316,36 @@ class AccountRegistrationTests(unittest.TestCase):
         action_url = send.call_args.args[0]["action_url"]
         self.assertTrue(action_url.startswith("https://learning.example.test/"))
         self.assertNotIn("attacker.example.test", action_url)
+
+    def test_verification_delivery_failure_is_persisted_without_leaking_token(self):
+        token = "one-time-verification-token"
+        row = {
+            "verification_id": "VFY-1",
+            "student_id": "STUDENT-1",
+            "status": "PENDING",
+            "student_status": "PENDING_VERIFICATION",
+            "full_name": "Student One",
+            "email": "student@example.test",
+            "expires_at": NOW + timedelta(minutes=10),
+        }
+        conn = _RegistrationConnection()
+        with (
+            patch.object(actions, "fetch_one", return_value=row),
+            patch.object(actions, "email_runtime_configuration", return_value={
+                "platformUrl": "https://learning.example.test",
+                "configured": True,
+            }),
+            patch.object(actions, "send_email_notification", side_effect=RuntimeError("smtp unavailable")),
+            patch.object(actions, "connection", _connection_for(conn)),
+            self.assertLogs("backend.courseplatform.domains.communication", level="ERROR") as captured,
+        ):
+            delivered = actions.dispatch_student_account_verification("VFY-1", token)
+
+        self.assertFalse(delivered)
+        self.assertTrue(any("set status = 'delivery_failed'" in query for query, _ in conn.queries))
+        log_output = " ".join(captured.output)
+        self.assertNotIn(token, log_output)
+        self.assertNotIn("student@example.test", log_output)
 
 
 if __name__ == "__main__":

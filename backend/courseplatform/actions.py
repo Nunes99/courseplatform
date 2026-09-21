@@ -89,6 +89,7 @@ RASTER_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
 BRAND_LOGO_MAX_BYTES = 1024 * 1024
 PASSWORD_RESET_GENERIC_MESSAGE = identity_domain.PASSWORD_RESET_GENERIC_MESSAGE
 REGISTRATION_GENERIC_MESSAGE = identity_domain.REGISTRATION_GENERIC_MESSAGE
+ACCOUNT_VERIFICATION_DELIVERY_FAILED_MESSAGE = identity_domain.ACCOUNT_VERIFICATION_DELIVERY_FAILED_MESSAGE
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:
@@ -944,7 +945,7 @@ def dispatch_student_password_reset(reset_id: str, token: str, request_base_url:
     return communication_domain.dispatch_student_password_reset_action(reset_id, token, request_base_url, runtime=_communication_runtime())
 
 
-def dispatch_student_account_verification(verification_id: str, token: str, request_base_url: str='') -> None:
+def dispatch_student_account_verification(verification_id: str, token: str, request_base_url: str='') -> bool:
     return communication_domain.dispatch_student_account_verification_action(
         verification_id,
         token,

@@ -1,7 +1,13 @@
 from fastapi import APIRouter, BackgroundTasks, Header, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
-from ..actions import dispatch_student_account_verification, dispatch_student_password_reset
+from ..actions import (
+    ACCOUNT_VERIFICATION_DELIVERY_FAILED_MESSAGE,
+    dispatch_student_account_verification,
+    dispatch_student_password_reset,
+)
+from ..contracts import ApiError, public_error
 
 from .contracts import (
     AdminLoginRequest,
@@ -52,12 +58,20 @@ async def _execute_public_identity_action(
             str(request.base_url).rstrip("/"),
         )
     if verification_delivery:
-        background_tasks.add_task(
+        delivered = await run_in_threadpool(
             dispatch_student_account_verification,
             verification_delivery.get("verificationId", ""),
             verification_delivery.get("token", ""),
             str(request.base_url).rstrip("/"),
         )
+        if not delivered:
+            return JSONResponse(
+                public_error(ApiError(
+                    "ACCOUNT_VERIFICATION_DELIVERY_FAILED",
+                    ACCOUNT_VERIFICATION_DELIVERY_FAILED_MESSAGE,
+                )),
+                status_code=503,
+            )
     return result
 
 

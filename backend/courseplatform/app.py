@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from starlette.concurrency import run_in_threadpool
 
 from .actions import (
+    ACCOUNT_VERIFICATION_DELIVERY_FAILED_MESSAGE,
     ApiError,
     admin_certificate_pdf_payload,
     certificate_pdf_payload,
@@ -99,12 +100,20 @@ async def handle_post_action(request: Request, background_tasks: BackgroundTasks
                 str(request.base_url).rstrip("/"),
             )
         if verification_delivery:
-            background_tasks.add_task(
+            delivered = await run_in_threadpool(
                 dispatch_student_account_verification,
                 verification_delivery.get("verificationId", ""),
                 verification_delivery.get("token", ""),
                 str(request.base_url).rstrip("/"),
             )
+            if not delivered:
+                return JSONResponse(
+                    public_error(ApiError(
+                        "ACCOUNT_VERIFICATION_DELIVERY_FAILED",
+                        ACCOUNT_VERIFICATION_DELIVERY_FAILED_MESSAGE,
+                    )),
+                    status_code=503,
+                )
         return JSONResponse(result)
     except Exception as error:
         return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)

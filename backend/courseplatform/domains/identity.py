@@ -42,6 +42,11 @@ REGISTRATION_GENERIC_MESSAGE = (
     "para confirmar o cadastro e ativar o acesso."
 )
 
+ACCOUNT_VERIFICATION_DELIVERY_FAILED_MESSAGE = (
+    "A conta foi registada, mas não foi possível enviar o email de confirmação. "
+    "Tente novamente dentro de alguns minutos."
+)
+
 
 @dataclass(frozen=True)
 class IdentityRuntime:
@@ -285,6 +290,14 @@ def register_student_account_action(payload: dict[str, Any], runtime: IdentityRu
                 "select * from courseplatform.students where email = %s for update",
                 (email,),
             ).fetchone()
+            if not limited and student and not (
+                student.get("status") == "PENDING_VERIFICATION"
+                and not student.get("email_verified_at")
+            ):
+                raise ApiError(
+                    "EMAIL_ALREADY_REGISTERED",
+                    "Este email já está cadastrado. Inicie sessão ou recupere a palavra-passe.",
+                )
             can_register = not limited and (
                 not student
                 or (

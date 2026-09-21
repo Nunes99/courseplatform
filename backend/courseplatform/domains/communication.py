@@ -1299,10 +1299,10 @@ def dispatch_student_account_verification_action(
     request_base_url: str = "",
     *,
     runtime: CommunicationRuntime,
-) -> None:
+) -> bool:
     """Send one account-verification link without persisting its plaintext token."""
     if not verification_id or not token:
-        return
+        return False
     token_hash = runtime.hash_secret(token)
     try:
         row = runtime.fetch_one(
@@ -1322,7 +1322,7 @@ def dispatch_student_account_verification_action(
             or row.get("status") not in {"PENDING", "DELIVERED"}
             or row.get("student_status") != "PENDING_VERIFICATION"
         ):
-            return
+            return False
         configuration = runtime.email_runtime_configuration(prepare_schema=False)
         base_url = runtime.str_value(configuration.get("platformUrl")).rstrip("/")
         if not base_url.startswith(("https://", "http://")):
@@ -1354,6 +1354,7 @@ def dispatch_student_account_verification_action(
                 (verification_id, token_hash),
             )
             conn.commit()
+        return True
     except Exception as error:
         logger.error(
             "Student account verification delivery failed.",
@@ -1375,6 +1376,7 @@ def dispatch_student_account_verification_action(
                 conn.commit()
         except Exception:
             pass
+        return False
 
 
 def _telegram_markdown_v2_action(value: Any, *, runtime: CommunicationRuntime) -> str:

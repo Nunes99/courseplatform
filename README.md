@@ -267,7 +267,7 @@ Recuperação de estudantes:
 - `PASSWORD_RESET_TTL_MINUTES`, `PASSWORD_RESET_ACCOUNT_LIMIT`, `PASSWORD_RESET_ACCOUNT_WINDOW_MINUTES`;
 - `PASSWORD_RESET_SOURCE_LIMIT`, `PASSWORD_RESET_SOURCE_WINDOW_MINUTES`, `PASSWORD_RESET_COMPLETION_LIMIT`, `PASSWORD_RESET_COMPLETION_WINDOW_MINUTES`.
 - `ACCOUNT_VERIFICATION_TTL_MINUTES`, `REGISTRATION_ACCOUNT_LIMIT`, `REGISTRATION_ACCOUNT_WINDOW_MINUTES`, `REGISTRATION_SOURCE_LIMIT`, `REGISTRATION_SOURCE_WINDOW_MINUTES`.
-- Requer também SMTP ativo e uma origem pública confiável. Defina `PLATFORM_URL` fora da Vercel; na Vercel, a aplicação usa `VERCEL_PROJECT_PRODUCTION_URL` como fallback quando as variáveis de sistema estão expostas. A resposta pública é sempre genérica; o link de utilização única é enviado apenas para o email guardado na conta.
+- Requer também SMTP ativo e uma origem pública confiável. Defina `PLATFORM_URL` fora da Vercel; na Vercel, a aplicação usa `VERCEL_PROJECT_PRODUCTION_URL` como fallback quando as variáveis de sistema estão expostas. O link de utilização única é enviado apenas para o email guardado na conta. O cadastro aguarda a confirmação do SMTP: se o provedor recusar a mensagem, mantém a conta pendente e devolve `ACCOUNT_VERIFICATION_DELIVERY_FAILED`, permitindo repetir o pedido sem anunciar um envio inexistente.
 
 Supabase Storage e Realtime:
 

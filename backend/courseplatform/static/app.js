@@ -789,7 +789,9 @@ function showStudentRegistrationDialog() {
         </label>
         <label>
           <span>Email</span>
-          <input type="email" name="email" autocomplete="email" maxlength="320" required>
+          <input type="email" name="email" autocomplete="email" maxlength="320" required
+            aria-describedby="studentRegistrationEmailError">
+          <small id="studentRegistrationEmailError" class="field-error" role="alert" hidden></small>
         </label>
         <div class="form-grid two-columns">
           <label>
@@ -824,12 +826,24 @@ function showStudentRegistrationDialog() {
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) close();
   });
+  const emailInput = overlay.querySelector('[name="email"]');
+  const emailError = overlay.querySelector('#studentRegistrationEmailError');
+  emailInput.addEventListener('input', () => {
+    emailInput.setCustomValidity('');
+    emailInput.removeAttribute('aria-invalid');
+    emailError.hidden = true;
+    emailError.textContent = '';
+  });
   overlay.querySelector('#studentRegistrationForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const resultBox = form.querySelector('#studentRegistrationResult');
     const values = Object.fromEntries(new FormData(form));
+    emailInput.setCustomValidity('');
+    emailInput.removeAttribute('aria-invalid');
+    emailError.hidden = true;
+    emailError.textContent = '';
     resultBox.hidden = true;
     resultBox.classList.remove('is-error');
     setBusy(button, true, 'A criar...');
@@ -844,6 +858,13 @@ function showStudentRegistrationDialog() {
       resultBox.textContent = error.message || 'Não foi possível criar a conta.';
       resultBox.classList.add('is-error');
       resultBox.hidden = false;
+      if (error.code === 'EMAIL_ALREADY_REGISTERED') {
+        emailInput.setCustomValidity(error.message);
+        emailInput.setAttribute('aria-invalid', 'true');
+        emailError.textContent = error.message;
+        emailError.hidden = false;
+        emailInput.focus();
+      }
     } finally {
       setBusy(button, false);
       reportHeight();
