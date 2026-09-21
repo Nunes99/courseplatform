@@ -629,99 +629,73 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     require_fields = runtime.require_fields
     str_value = runtime.str_value
     success = runtime.success
-    valid_password = runtime.valid_password
     _, admin = admin_context(payload, {"OWNER"})
-    require_fields(payload, ["fullName", "email"])
+    require_fields(payload, ["studentId"])
     admin_id = str_value(payload.get("targetAdminId") or payload.get("adminId")) or generate_id("ADM")
+    requested_student_id = str_value(payload.get("studentId"))
     role = str_value(payload.get("role") or "REVIEWER").upper()
     if role not in {"OWNER", "ADMIN", "REVIEWER"}:
         role = "REVIEWER"
     status = str_value(payload.get("status") or "ACTIVE").upper()
     if status not in {"ACTIVE", "INACTIVE", "BLOCKED", "DELETED"}:
         raise ApiError("INVALID_STAFF_STATUS", "Estado de staff inválido.")
-    requested_email = normalize_email(payload.get("email"))
     with connection() as conn:
         existing = conn.execute(
             "select * from courseplatform.admins where admin_id = %s for update",
             (admin_id,),
         ).fetchone()
-        is_new = not existing
-        linked_student = None
-        if existing and existing.get("student_id"):
-            linked_student = conn.execute(
-                "select * from courseplatform.students where student_id = %s for update",
-                (existing["student_id"],),
-            ).fetchone()
-            if not linked_student:
-                raise ApiError("STAFF_IDENTITY_NOT_FOUND", "A identidade de estudante ligada ao staff não foi encontrada.")
-            if normalize_email(linked_student.get("email")) != requested_email:
-                raise ApiError(
-                    "STAFF_IDENTITY_EMAIL_MISMATCH",
-                    "Altere o email na conta de estudante; o acesso administrativo usa a mesma identidade.",
-                )
-        else:
-            linked_student = conn.execute(
-                "select * from courseplatform.students where lower(email) = %s for update",
-                (requested_email,),
-            ).fetchone()
-
-        if linked_student and linked_student.get("status") != "ACTIVE":
+        if existing and existing.get("student_id") and existing.get("student_id") != requested_student_id:
             raise ApiError(
-                "STAFF_IDENTITY_NOT_ACTIVE",
-                "A conta de estudante deve estar ativa antes de receber acesso administrativo.",
+                "STAFF_IDENTITY_CHANGE_FORBIDDEN",
+                "A identidade ligada ao staff não pode ser substituída. Remova a função e atribua-a ao outro utilizador.",
             )
-        if is_new and not linked_student:
+        linked_student = conn.execute(
+            "select * from courseplatform.students where student_id = %s for update",
+            (requested_student_id,),
+        ).fetchone()
+
+        if not linked_student:
             raise ApiError(
                 "STUDENT_ACCOUNT_REQUIRED",
-                "Crie ou ative primeiro a conta de utilizador com este email e depois atribua o papel administrativo.",
+                "Selecione um utilizador já cadastrado antes de atribuir a função de staff.",
+            )
+        if linked_student.get("status") != "ACTIVE":
+            raise ApiError(
+                "STAFF_IDENTITY_NOT_ACTIVE",
+                "A conta do utilizador deve estar ativa antes de receber acesso administrativo.",
             )
 
-        student_id = linked_student.get("student_id") if linked_student else None
-        if student_id:
-            identity_conflict = conn.execute(
-                """
-                select admin_id
-                from courseplatform.admins
-                where student_id = %s and admin_id <> %s
-                limit 1
-                """,
-                (student_id, admin_id),
-            ).fetchone()
-            if identity_conflict:
-                raise ApiError("STAFF_IDENTITY_ALREADY_ASSIGNED", "Este estudante já possui um perfil administrativo.")
+        student_id = linked_student["student_id"]
+        identity_conflict = conn.execute(
+            """
+            select admin_id
+            from courseplatform.admins
+            where student_id = %s and admin_id <> %s
+            limit 1
+            """,
+            (student_id, admin_id),
+        ).fetchone()
+        if identity_conflict:
+            raise ApiError("STAFF_IDENTITY_ALREADY_ASSIGNED", "Este utilizador já possui uma função de staff.")
 
-        admin_password = "" if student_id else str_value(payload.get("password"))
-        if admin_password and not valid_password(admin_password):
-            raise ApiError("WEAK_PASSWORD", "A palavra-passe deve ter pelo menos 8 caracteres.")
-        effective_email = normalize_email(linked_student.get("email")) if linked_student else requested_email
+        effective_email = normalize_email(linked_student.get("email"))
         row = conn.execute(
             """
             insert into courseplatform.admins
               (admin_id, student_id, full_name, email, password_hash, password_changed_at, password_reset_required,
                role, status, created_at, updated_at)
-            values (%s, %s, %s, %s, case when %s = '' then null else crypt(%s, gen_salt('bf', 12)) end,
-                    case when %s = '' then null else now() end, %s, %s, %s, now(), now())
+            values (%s, %s, %s, %s, null, null, false, %s, %s, now(), now())
             on conflict (admin_id) do update
-            set student_id = coalesce(excluded.student_id, courseplatform.admins.student_id),
+            set student_id = excluded.student_id,
                 full_name = excluded.full_name, email = excluded.email,
-                password_hash = coalesce(excluded.password_hash, courseplatform.admins.password_hash),
-                password_changed_at = coalesce(excluded.password_changed_at, courseplatform.admins.password_changed_at),
-                password_reset_required = case
-                  when excluded.password_hash is null then courseplatform.admins.password_reset_required
-                  else excluded.password_reset_required
-                end,
                 role = excluded.role, status = excluded.status, updated_at = now()
             returning *
             """,
             (
                 admin_id,
                 student_id,
-                str_value(payload.get("fullName")),
+                str_value(linked_student.get("full_name")),
                 effective_email,
-                admin_password,
-                admin_password,
-                admin_password,
-                bool(admin_password),
                 role,
                 status,
             ),
@@ -740,7 +714,7 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
             "STAFF_SAVED",
             "ADMIN",
             admin_id,
-            {"identitySource": "STUDENT" if student_id else "LEGACY_ADMIN", "studentId": student_id or ""},
+            {"identitySource": "STUDENT", "studentId": student_id},
         )
         if existing and (
             existing.get("role") != role
@@ -752,7 +726,7 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
                 (f"ADMIN:{admin_id}",),
             )
         conn.commit()
-    return success({"admin": public_admin(row), "adminPassword": admin_password if admin_password else ""})
+    return success({"admin": public_admin(row), "adminPassword": ""})
 
 
 def admin_set_staff_status_action(payload: dict[str, Any], *, runtime: AdministrationRuntime):
@@ -771,12 +745,32 @@ def admin_set_staff_status_action(payload: dict[str, Any], *, runtime: Administr
     if payload["targetAdminId"] == admin["admin_id"] and target_status != "ACTIVE":
         raise ApiError("CANNOT_DISABLE_CURRENT_OWNER", "Não pode desativar a conta proprietária da sessão atual.")
     with connection() as conn:
+        target = conn.execute(
+            """
+            select a.*, s.status as identity_status
+            from courseplatform.admins a
+            left join courseplatform.students s on s.student_id = a.student_id
+            where a.admin_id = %s
+            for update of a
+            """,
+            (payload["targetAdminId"],),
+        ).fetchone()
+        if not target:
+            raise ApiError("ADMIN_NOT_FOUND", "Staff não encontrado.")
+        if target_status == "ACTIVE" and not target.get("student_id"):
+            raise ApiError(
+                "STUDENT_ACCOUNT_REQUIRED",
+                "Ligue primeiro este perfil de staff a um utilizador cadastrado.",
+            )
+        if target_status == "ACTIVE" and target.get("identity_status") != "ACTIVE":
+            raise ApiError(
+                "STAFF_IDENTITY_NOT_ACTIVE",
+                "A conta do utilizador deve estar ativa antes de receber acesso administrativo.",
+            )
         row = conn.execute(
             "update courseplatform.admins set status = %s, updated_at = now() where admin_id = %s returning *",
             (target_status, payload["targetAdminId"]),
         ).fetchone()
-        if not row:
-            raise ApiError("ADMIN_NOT_FOUND", "Staff não encontrado.")
         if target_status != "ACTIVE":
             conn.execute(
                 "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",

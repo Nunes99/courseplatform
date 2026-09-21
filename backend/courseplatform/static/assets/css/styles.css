@@ -3179,6 +3179,25 @@ input[type="search"] {
   color: var(--muted);
 }
 
+.admin-selection-summary {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.admin-selection-summary span,
+.admin-selection-summary small {
+  color: var(--muted);
+}
+
+.admin-selection-summary strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
 .recovery-result {
   display: grid;
   gap: 10px;

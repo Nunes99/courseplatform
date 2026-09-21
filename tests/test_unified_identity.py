@@ -252,6 +252,7 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
     def test_new_reviewer_links_existing_student_without_second_password(self):
         student = {
             "student_id": "STU-1",
+            "full_name": "Registered Reviewer",
             "email": "reviewer@example.test",
             "status": "ACTIVE",
         }
@@ -259,7 +260,7 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
         def handler(query, params):
             if "from courseplatform.admins where admin_id" in query:
                 return _Result(None)
-            if "from courseplatform.students where lower(email)" in query:
+            if "from courseplatform.students where student_id" in query:
                 return _Result(student)
             if "where student_id = %s and admin_id <> %s" in query:
                 return _Result(None)
@@ -278,8 +279,7 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
         runtime = self._runtime(conn)
         result = administration.admin_save_staff_action(
             {
-                "fullName": "Reviewer",
-                "email": "REVIEWER@example.test",
+                "studentId": "STU-1",
                 "role": "REVIEWER",
                 "status": "ACTIVE",
             },
@@ -287,6 +287,8 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
         )
 
         self.assertEqual("STU-1", result["data"]["admin"]["studentId"])
+        self.assertEqual("Registered Reviewer", result["data"]["admin"]["fullName"])
+        self.assertEqual("reviewer@example.test", result["data"]["admin"]["email"])
         self.assertTrue(result["data"]["admin"]["accessActive"])
         self.assertEqual("", result["data"]["adminPassword"])
         runtime.generate_access_code.assert_not_called()
@@ -296,7 +298,7 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
         def handler(query, _params):
             if "from courseplatform.admins where admin_id" in query:
                 return _Result(None)
-            if "from courseplatform.students where lower(email)" in query:
+            if "from courseplatform.students where student_id" in query:
                 return _Result(None)
             return _Result()
 
@@ -304,8 +306,7 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
         with self.assertRaises(actions.ApiError) as raised:
             administration.admin_save_staff_action(
                 {
-                    "fullName": "Reviewer",
-                    "email": "missing@example.test",
+                    "studentId": "STU-MISSING",
                     "role": "REVIEWER",
                     "status": "ACTIVE",
                 },
@@ -313,6 +314,33 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
             )
 
         self.assertEqual("STUDENT_ACCOUNT_REQUIRED", raised.exception.code)
+
+    def test_linked_staff_identity_cannot_be_reassigned(self):
+        existing = {
+            "admin_id": "ADM-1",
+            "student_id": "STU-1",
+            "role": "REVIEWER",
+            "status": "ACTIVE",
+        }
+
+        def handler(query, _params):
+            if "from courseplatform.admins where admin_id" in query:
+                return _Result(existing)
+            return _Result()
+
+        runtime = self._runtime(_Connection(handler))
+        with self.assertRaises(actions.ApiError) as raised:
+            administration.admin_save_staff_action(
+                {
+                    "targetAdminId": "ADM-1",
+                    "studentId": "STU-2",
+                    "role": "REVIEWER",
+                    "status": "ACTIVE",
+                },
+                runtime=runtime,
+            )
+
+        self.assertEqual("STAFF_IDENTITY_CHANGE_FORBIDDEN", raised.exception.code)
 
     def test_owner_cannot_disable_the_current_owner_session(self):
         runtime = SimpleNamespace(
@@ -333,6 +361,37 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
 
         self.assertEqual("CANNOT_DISABLE_CURRENT_OWNER", raised.exception.code)
         runtime.connection.assert_not_called()
+
+    def test_legacy_staff_cannot_be_reactivated_without_registered_user(self):
+        legacy_staff = {
+            "admin_id": "ADM-LEGACY",
+            "student_id": None,
+            "role": "REVIEWER",
+            "status": "DELETED",
+        }
+
+        def handler(query, _params):
+            if "from courseplatform.admins a" in query:
+                return _Result(legacy_staff)
+            return _Result()
+
+        runtime = SimpleNamespace(
+            admin_context=lambda *_args: ({}, {"admin_id": "OWNER-1", "role": "OWNER"}),
+            audit=Mock(),
+            connection=_connection_for(_Connection(handler)),
+            public_admin=Mock(),
+            require_fields=lambda *_args: None,
+            str_value=actions.str_value,
+            success=lambda data: {"success": True, "data": data},
+        )
+
+        with self.assertRaises(actions.ApiError) as raised:
+            administration.admin_set_staff_status_action(
+                {"targetAdminId": "ADM-LEGACY", "status": "ACTIVE"},
+                runtime=runtime,
+            )
+
+        self.assertEqual("STUDENT_ACCOUNT_REQUIRED", raised.exception.code)
 
     def test_disabling_student_revokes_student_and_linked_admin_sessions(self):
         student = {"student_id": "STU-1", "status": "INACTIVE"}

@@ -1898,7 +1898,7 @@ function renderStaff() {
       <div class="admin-heading-actions">
         ${state.admin?.role === 'OWNER' ? `
           <button class="button button-secondary" id="restoreStaffCredentials" type="button">Restaurar credenciais</button>
-          <button class="button button-primary" id="newStaff" type="button">Adicionar staff</button>
+          <button class="button button-primary" id="newStaff" type="button">Atribuir função</button>
         ` : ''}
       </div>
     </div>
@@ -2072,21 +2072,31 @@ function showStaffDialog(adminId = '') {
   overlay.innerHTML = `
     <div class="dialog-card course-lesson-dialog">
       <button class="dialog-close" type="button">x</button>
-      <h2>${adminId ? 'Editar staff' : 'Adicionar staff'}</h2>
+      <h2>${adminId ? 'Editar função de staff' : 'Atribuir função de staff'}</h2>
+      <p class="recovery-note">O acesso administrativo usa a mesma conta e palavra-passe da área do estudante.</p>
       <form id="staffForm" class="form-stack">
         <input type="hidden" name="adminId" value="${escapeHtml(admin.adminId || '')}">
-        <label>
-          <span>Nome completo</span>
-          <input name="fullName" value="${escapeHtml(admin.fullName || '')}" required>
-        </label>
-        <label>
-          <span>Email</span>
-          <input type="email" name="email" value="${escapeHtml(admin.email || '')}"
-            ${admin.identitySource === 'STUDENT' ? 'readonly' : ''} required>
-          <small>${admin.identitySource === 'STUDENT'
-            ? 'O email e a palavra-passe são geridos na conta de estudante ligada.'
-            : 'Use o email de uma conta de utilizador ativa para atribuir qualquer papel administrativo.'}</small>
-        </label>
+        ${admin.studentId ? `
+          <input type="hidden" name="studentId" value="${escapeHtml(admin.studentId)}">
+          <div class="admin-selection-summary">
+            <span>Utilizador cadastrado</span>
+            <strong>${escapeHtml(admin.fullName || '')}</strong>
+            <small>${escapeHtml(admin.email || '')}</small>
+          </div>
+        ` : `
+          <label>
+            <span>Pesquisar utilizador cadastrado</span>
+            <input id="staffUserSearch" type="search" autocomplete="off"
+              placeholder="Nome, email ou ID do estudante">
+          </label>
+          <label>
+            <span>Utilizador</span>
+            <select id="staffUserSelect" name="studentId" required>
+              <option value="">A carregar utilizadores...</option>
+            </select>
+            <small>Somente contas ativas e já cadastradas podem receber funções administrativas.</small>
+          </label>
+        `}
         <div class="course-form-grid">
           <label>
             <span>Permissão</span>
@@ -2107,7 +2117,7 @@ function showStaffDialog(adminId = '') {
         </div>
         <div class="dialog-actions">
           <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
-          <button class="button button-primary" type="submit">Guardar staff</button>
+          <button class="button button-primary" type="submit">Guardar função</button>
         </div>
       </form>
     </div>
@@ -2116,19 +2126,62 @@ function showStaffDialog(adminId = '') {
   document.body.appendChild(overlay);
   bindDialogClose(overlay);
   overlay.querySelector('[data-cancel-dialog]').addEventListener('click', () => overlay.remove());
+  const userSearch = overlay.querySelector('#staffUserSearch');
+  const userSelect = overlay.querySelector('#staffUserSelect');
+  let userSearchTimer;
+  let userRequestVersion = 0;
+  const loadEligibleUsers = async (query = '') => {
+    if (!userSelect) return;
+    const requestVersion = ++userRequestVersion;
+    userSelect.disabled = true;
+    userSelect.innerHTML = '<option value="">A carregar utilizadores...</option>';
+    try {
+      const result = await api.adminStudents({
+        query,
+        status: 'ACTIVE',
+        progress: 'ALL',
+        sort: 'name',
+        limit: 50
+      }, { force: true });
+      if (requestVersion !== userRequestVersion) return;
+      const students = result.students || [];
+      userSelect.innerHTML = `
+        <option value="">Selecione um utilizador</option>
+        ${students.map((student) => `
+          <option value="${escapeHtml(student.studentId)}">
+            ${escapeHtml(student.fullName)} - ${escapeHtml(student.email)}${student.publicStudentId ? ` (${escapeHtml(student.publicStudentId)})` : ''}
+          </option>
+        `).join('')}
+      `;
+      if (!students.length) {
+        userSelect.innerHTML = '<option value="">Nenhum utilizador ativo encontrado</option>';
+      }
+    } catch (error) {
+      if (requestVersion !== userRequestVersion) return;
+      userSelect.innerHTML = '<option value="">Não foi possível carregar os utilizadores</option>';
+      handleAdminError(error);
+    } finally {
+      if (requestVersion === userRequestVersion) userSelect.disabled = false;
+    }
+  };
+  if (userSearch && userSelect) {
+    loadEligibleUsers();
+    userSearch.addEventListener('input', (event) => {
+      clearTimeout(userSearchTimer);
+      const query = event.currentTarget.value.trim();
+      userSearchTimer = setTimeout(() => loadEligibleUsers(query), 300);
+    });
+  }
   overlay.querySelector('#staffForm').addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (!confirmAdminAction('Deseja guardar estas permissões de staff?')) return;
+    if (!confirmAdminAction('Deseja atribuir estas permissões ao utilizador selecionado?')) return;
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const values = Object.fromEntries(new FormData(form));
     setBusy(button, true, 'A guardar...');
     try {
-      const result = await api.adminSaveStaff(values);
-      if (result.adminPassword) {
-        alert(`Staff guardado.\n\nPalavra-passe temporária: ${result.adminPassword}\n\nGuarde a palavra-passe antes de fechar.`);
-      }
-      showToast('Staff guardado.', 'success');
+      await api.adminSaveStaff(values);
+      showToast('Função de staff guardada.', 'success');
       overlay.remove();
       await loadStaff();
     } catch (error) {
