@@ -16,6 +16,7 @@
     "qa:participation-policy": "node scripts/verify_participation_policy.cjs",
     "qa:course-editions": "node scripts/verify_course_editions_browser.cjs",
     "qa:stage7-lists": "node scripts/verify_stage7_admin_lists.cjs",
+    "qa:student-dashboard": "node scripts/verify_student_dashboard_resilience.cjs",
     "qa:typed-api-client": "node scripts/verify_versioned_api_client.cjs"
   },
   "devDependencies": {

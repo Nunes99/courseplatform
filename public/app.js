@@ -105,6 +105,7 @@ const state = {
 
 let deferredInstallPrompt = null;
 let activeChatWorkspace = null;
+let pwaRegistration = null;
 window.addEventListener('beforeinstallprompt', (event) => {
   event.preventDefault();
   deferredInstallPrompt = event;
@@ -247,6 +248,7 @@ async function initializePwa() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return null;
   try {
     const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    pwaRegistration = registration;
     navigator.serviceWorker.addEventListener('message', (event) => {
       if (event.data?.type === 'PUSH_RECEIVED' && api?.hasStudentSession()) {
         refreshAllUnreadIndicators();
@@ -256,6 +258,37 @@ async function initializePwa() {
   } catch (error) {
     console.warn('Não foi possível registar o service worker.', error);
     return null;
+  }
+}
+
+async function availableServiceWorkerRegistration(timeoutMs = 2500) {
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return null;
+  if (pwaRegistration?.active) return pwaRegistration;
+
+  try {
+    const existing = await navigator.serviceWorker.getRegistration('./');
+    if (existing?.active) {
+      pwaRegistration = existing;
+      return existing;
+    }
+  } catch {
+    return null;
+  }
+
+  let timeoutId;
+  try {
+    const registration = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((resolve) => {
+        timeoutId = window.setTimeout(() => resolve(null), timeoutMs);
+      })
+    ]);
+    if (registration) pwaRegistration = registration;
+    return registration || null;
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 
@@ -274,8 +307,10 @@ async function refreshPushState(serverState = null) {
   state.push.subscribedOnDevice = false;
   if (supportsWebPush()) {
     try {
-      const registration = await navigator.serviceWorker.ready;
-      state.push.subscribedOnDevice = Boolean(await registration.pushManager.getSubscription());
+      const registration = await availableServiceWorkerRegistration();
+      state.push.subscribedOnDevice = Boolean(
+        registration && await registration.pushManager.getSubscription()
+      );
     } catch {
       state.push.subscribedOnDevice = false;
     }
@@ -1382,8 +1417,14 @@ async function renderDashboard(view = 'overview') {
 
   const [home, notificationData, pushData] = await Promise.all([
     api.studentHome(state.selectedCourseId, state.selectedEnrollmentId),
-    api.notifications({ limit: 6 }),
-    api.pushConfiguration()
+    api.notifications({ limit: 6 }).catch((error) => {
+      console.warn('Não foi possível carregar as notificações.', error);
+      return { items: [], unreadCount: 0, total: 0 };
+    }),
+    api.pushConfiguration().catch((error) => {
+      console.warn('Não foi possível carregar a configuração Push.', error);
+      return { pushConfiguration: {}, subscriptionCount: 0 };
+    })
   ]);
   await refreshPushState(pushData);
   setNotificationState(notificationData);
