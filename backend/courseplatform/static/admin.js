@@ -2058,6 +2058,18 @@ function staffRowTemplate(admin) {
   `;
 }
 
+function staffEligibleStudent(item) {
+  const student = item && item.student && typeof item.student === 'object'
+    ? item.student
+    : item || {};
+  return {
+    studentId: student.studentId || '',
+    publicStudentId: student.publicStudentId || '',
+    fullName: student.fullName || '',
+    email: student.email || ''
+  };
+}
+
 function showStaffDialog(adminId = '') {
   const admin = state.staff.find((item) => item.adminId === adminId) || {
     adminId: '',
@@ -2144,7 +2156,9 @@ function showStaffDialog(adminId = '') {
         limit: 50
       }, { force: true });
       if (requestVersion !== userRequestVersion) return;
-      const students = result.students || [];
+      const students = (result.students || [])
+        .map(staffEligibleStudent)
+        .filter((student) => student.studentId);
       userSelect.innerHTML = `
         <option value="">Selecione um utilizador</option>
         ${students.map((student) => `
