@@ -24,11 +24,22 @@ async function main() {
       });
       page.on('pageerror', error => errors.push(`${panel}: ${error.message}`));
       page.on('console', message => {
-        if (message.type() === 'error') errors.push(`${panel}: ${message.text()}`);
+        if (message.type() === 'error') {
+          const location = message.location();
+          errors.push(`${panel}: ${message.text()}${location.url ? ` (${location.url})` : ''}`);
+        }
+      });
+      page.on('requestfailed', request => {
+        errors.push(`${panel}: request failed ${request.url()} (${request.failure()?.errorText || 'unknown'})`);
       });
       page.on('dialog', dialog => dialog.accept());
       await page.route('**/*', async route => {
         const url = new URL(route.request().url());
+        if (url.pathname === '/assets/css/styles.css' || url.pathname === '/assets/css/tokens.css') {
+          const fileName = path.basename(url.pathname);
+          const source = await fs.readFile(path.join(root, 'public/assets/css', fileName), 'utf8');
+          return route.fulfill({ contentType: 'text/css', body: source });
+        }
         if (url.origin !== new URL(base).origin) {
           const type = route.request().resourceType();
           return route.fulfill({
@@ -48,6 +59,12 @@ async function main() {
           if (payload.action === 'adminListGroups') data = { groups: [] };
           if (payload.action === 'adminListStudents') data = { students: [], pagination: { total: 0 } };
           return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data }) });
+        }
+        if (/^\/api\/v1\/catalog\/courses\/[^/]+\/media$/.test(url.pathname)) {
+          return route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({ success: true, data: { logoUrl: '', videos: [] } }),
+          });
         }
         if (url.pathname === `/${panel === 'admin' ? 'admin' : 'app'}.js`) {
           const module = panel === 'admin' ? 'admin' : 'app';
@@ -118,10 +135,18 @@ window.__qaAssessmentPolicy = data => {
             explanation: 'A primeira opção satisfaz o critério.',
             options: [{ optionId: 'O1', optionLabel: 'A', optionText: 'Primeira', isCorrect: true }],
           }],
+          files: [{
+            fileId: 'F1', fileName: 'trabalho-final.pdf', sizeBytes: 102400,
+            contentUrl: '/api/files/F1/content'
+          }],
         };
         await page.evaluate(value => window.__qaAssessmentPolicy(value), data);
         assert.ok(await page.getByText('Resposta correta:', { exact: false }).isVisible());
         assert.ok(await page.getByText('Explicação:', { exact: false }).isVisible());
+        assert.ok(await page.getByRole('heading', { name: 'Ficheiros submetidos' }).isVisible());
+        assert.equal(await page.getByRole('button', { name: 'Abrir', exact: true }).count(), 1);
+        assert.equal(await page.getByRole('button', { name: 'Baixar', exact: true }).count(), 1);
+        assert.equal(await page.getByRole('button', { name: 'Eliminar', exact: true }).count(), 0);
       }
 
       for (const [label, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {

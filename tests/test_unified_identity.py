@@ -429,7 +429,7 @@ class UnifiedIdentityMigrationTests(unittest.TestCase):
             Path(__file__).resolve().parents[1]
             / "supabase"
             / "migrations"
-            / "20260920115325_unify_staff_student_identity.sql"
+            / "20260920221040_unify_staff_student_identity.sql"
         ).read_text(encoding="utf-8").lower()
 
         self.assertIn("add column if not exists student_id", migration)

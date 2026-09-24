@@ -24,7 +24,7 @@ Um grupo organiza estudantes dentro de uma oferta. Não substitui a matrícula.
 
 ## Estratégia de migração
 
-A migração `20260915101047_model_course_versions_and_offerings.sql` segue expansão,
+A migração `20260915173343_model_course_versions_and_offerings.sql` segue expansão,
 backfill e validação:
 
 1. cria as novas tabelas sem remover dados existentes;

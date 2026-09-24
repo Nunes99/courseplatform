@@ -2951,6 +2951,24 @@ function fileTemplate(file) {
   `;
 }
 
+function submittedFileTemplate(file) {
+  const contentUrl = file.contentUrl || file.driveUrl || '';
+  return `
+    <div class="uploaded-file" data-file="${escapeHtml(file.fileId)}">
+      <div>
+        <strong>${escapeHtml(file.fileName)}</strong>
+        <span>${escapeHtml(formatBytes(file.sizeBytes))}</span>
+      </div>
+      <div class="file-actions">
+        <button type="button" data-open-student-file="${escapeHtml(file.fileId)}"
+          data-file-url="${escapeHtml(contentUrl)}" data-file-name="${escapeHtml(file.fileName || 'ficheiro')}">Abrir</button>
+        <button type="button" data-download-student-file="${escapeHtml(file.fileId)}"
+          data-file-url="${escapeHtml(contentUrl)}" data-file-name="${escapeHtml(file.fileName || 'ficheiro')}">Baixar</button>
+      </div>
+    </div>
+  `;
+}
+
 function assessmentFeedbackTemplate(attemptData) {
   const policy = attemptData?.feedbackPolicy || {};
   if (!policy.correctAnswersVisible && !policy.explanationsVisible) return '';
@@ -3006,6 +3024,7 @@ function reviewStateTemplate(attempt, review, attemptData = null) {
     : attempt.retryAuthorized && retryExpired
       ? '<p class="error-note">O prazo de reenvio terminou. Solicite um novo prazo à administração.</p>'
     : '';
+  const submittedFiles = attemptData?.files || [];
 
   return `
     <div class="review-card">
@@ -3019,6 +3038,18 @@ function reviewStateTemplate(attempt, review, attemptData = null) {
         ? `<p>Prazo para correção: <strong>${formatDate(review.correctionDeadline)}</strong></p>`
         : ''}
       ${assessmentFeedbackTemplate(attemptData)}
+      ${submittedFiles.length ? `
+        <section class="upload-panel submitted-files-panel" aria-label="Ficheiros submetidos">
+          <div>
+            <p class="eyebrow">Documentos da tentativa</p>
+            <h3>Ficheiros submetidos</h3>
+            <p>Estes documentos estão preservados em modo somente leitura.</p>
+          </div>
+          <div class="uploaded-files">
+            ${submittedFiles.map(submittedFileTemplate).join('')}
+          </div>
+        </section>
+      ` : ''}
       ${retry}
       <button class="button button-secondary" id="backReview">Voltar ao curso</button>
     </div>

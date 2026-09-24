@@ -105,7 +105,7 @@ A área do estudante usa rotas por hash. A sessão do estudante é guardada em `
 
 ### Identidade única e permissões administrativas
 
-A migração `20260920115325_unify_staff_student_identity.sql` adiciona a ligação
+A migração `20260920221040_unify_staff_student_identity.sql` adiciona a ligação
 opcional `admins.student_id`. Quando a ligação existe, `students` é a fonte da
 credencial, do email de acesso e do estado da pessoa; `admins` contém apenas o
 papel administrativo, o estado da atribuição e os metadados de staff. Assim, a

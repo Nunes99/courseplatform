@@ -64,6 +64,10 @@ async function main() {
           : type === 'script' || type === 'stylesheet' ? '' : '{}';
         return route.fulfill({ contentType, body });
       }
+      if (url.pathname === '/assets/css/styles.css' || url.pathname === '/assets/css/tokens.css') {
+        const body = await fs.readFile(path.join(root, 'public', url.pathname.replace(/^\//, '')), 'utf8');
+        return route.fulfill({ contentType: 'text/css', body });
+      }
       if (url.pathname === '/api/index') {
         return route.fulfill({
           contentType: 'application/json',
@@ -98,6 +102,7 @@ async function main() {
     }, base);
     await page.goto(`${base}/admin.html`);
     await page.waitForFunction(() => Boolean(window.__qaCourseEditions));
+    await page.locator('#adminLoginForm').waitFor();
     await page.evaluate((data) => window.__qaCourseEditions(data), structure);
 
     await page.getByRole('heading', { name: 'Versões e edições do curso' }).waitFor();
@@ -107,7 +112,28 @@ async function main() {
 
     for (const [label, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
       await page.setViewportSize({ width, height });
-      await page.waitForTimeout(150);
+      try {
+        await page.waitForFunction(() => {
+          const sidebar = document.querySelector('.admin-sidebar');
+          const header = document.querySelector('.site-header');
+          return sidebar && header
+            && getComputedStyle(sidebar).position === 'fixed'
+            && getComputedStyle(header).position === 'fixed';
+        }, null, { timeout: 3000 });
+      } catch (error) {
+        const state = await page.evaluate(() => {
+          const sidebar = document.querySelector('.admin-sidebar');
+          const header = document.querySelector('.site-header');
+          return {
+            viewportWidth: window.innerWidth,
+            sidebarPosition: sidebar ? getComputedStyle(sidebar).position : 'missing',
+            headerPosition: header ? getComputedStyle(header).position : 'missing',
+            desktopMedia: matchMedia('(min-width: 1025px)').matches,
+            mobileMedia: matchMedia('(max-width: 1024px)').matches
+          };
+        });
+        throw new Error(`${label}: layout did not settle (${JSON.stringify(state)})`, { cause: error });
+      }
       const geometry = await page.evaluate(() => ({
         pageWidth: document.documentElement.scrollWidth,
         viewportWidth: window.innerWidth,

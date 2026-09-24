@@ -6,9 +6,13 @@
 executa `supabase/schema.sql`, `supabase/chat_realtime.sql` ou
 `backend/courseplatform/schema.sql` durante pedidos.
 
-A versão exigida pelo backend é `20260920115325`. A última migração grava esse
+A versão exigida pelo backend é `20260921120000`. A última migração grava esse
 valor em `courseplatform.schema_versions`. Uma ausência ou diferença produz
 `DATABASE_MIGRATION_REQUIRED`; a aplicação não tenta corrigir a base.
+
+O timestamp no nome do ficheiro identifica o registo no histórico de migrações
+do Supabase. O valor em `schema_versions` é um contrato independente da API e
+não deve ser inferido a partir desse nome.
 
 ## DDL retirado dos pedidos
 
@@ -33,9 +37,9 @@ emite um certificado numa transação e não altera o esquema.
 4. `20260913131500_create_courseplatform_runtime_role.sql`: role mínima da API.
 5. `20260913185739_add_application_schema_version.sql`: marcador de compatibilidade.
 6. `20260914103215_private_submission_storage.sql`: metadados e buckets privados para trabalhos e comprovativos.
-7. `20260915101047_model_course_versions_and_offerings.sql`: separa catálogo, versão publicada, edição/turma e matrícula histórica.
-8. `20260920115325_unify_staff_student_identity.sql`: liga atribuições administrativas à identidade de estudante sem remover credenciais legadas não associadas.
-9. `20260921120000_unified_account_registration.sql`: adiciona verificação de email para novos cadastros, preserva contas históricas e materializa tokens de confirmação de utilização única.
+7. `20260915173343_model_course_versions_and_offerings.sql`: separa catálogo, versão publicada, edição/turma e matrícula histórica.
+8. `20260920221040_unify_staff_student_identity.sql`: liga atribuições administrativas à identidade de estudante sem remover credenciais legadas não associadas.
+9. `20260920232716_unified_account_registration.sql`: adiciona verificação de email para novos cadastros, preserva contas históricas e materializa tokens de confirmação de utilização única.
 
 As migrações da Etapa 4 são aditivas e repetíveis. A migração histórica da role
 runtime é a exceção deliberada: uma segunda execução falha antes de alterar
