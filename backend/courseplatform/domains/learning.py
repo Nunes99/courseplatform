@@ -453,6 +453,7 @@ def get_lesson_action(payload: dict[str, Any], *, runtime: LearningRuntime):
     resolve_student_enrollment_with_conn = runtime.resolve_student_enrollment_with_conn
     str_value = runtime.str_value
     student_context = runtime.student_context
+    student_attempt = runtime.student_attempt
     student_option = runtime.student_option
     student_question = runtime.student_question
     success = runtime.success
@@ -492,6 +493,17 @@ def get_lesson_action(payload: dict[str, Any], *, runtime: LearningRuntime):
             """,
             (enrollment["enrollment_id"], lesson_id),
         ).fetchone()
+        latest_attempt = None
+        if progress:
+            latest_attempt = conn.execute(
+                """
+                select * from courseplatform.attempts
+                where progress_id = %s
+                order by coalesce(started_at, created_at) desc nulls last
+                limit 1
+                """,
+                (progress["progress_id"],),
+            ).fetchone()
     if not progress or progress_access_status(progress) != "AVAILABLE":
         raise ApiError("LESSON_LOCKED", "Este módulo ainda não está disponível para leitura.")
     content = [
@@ -512,6 +524,7 @@ def get_lesson_action(payload: dict[str, Any], *, runtime: LearningRuntime):
             "status": "LOCKED",
             "attempt_count": 0,
         }),
+        "activeAttempt": student_attempt(latest_attempt) if latest_attempt else None,
         "content": [public_content(row) for row in content],
         "questions": [
             {

@@ -191,6 +191,8 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
                         "evaluation_status": "NOT_STARTED",
                         "attempt_count": 0,
                     })
+                if normalized.startswith("select * from courseplatform.attempts"):
+                    return QueryResult(row=None)
                 raise AssertionError(normalized)
 
         @contextmanager

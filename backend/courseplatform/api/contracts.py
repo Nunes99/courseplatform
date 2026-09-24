@@ -164,6 +164,7 @@ class LessonReadData(BaseModel):
     enrollment: dict[str, Any]
     courseVersion: dict[str, Any]
     progress: dict[str, Any]
+    activeAttempt: dict[str, Any] | None = None
     content: list[dict[str, Any]]
     questions: list[dict[str, Any]]
 

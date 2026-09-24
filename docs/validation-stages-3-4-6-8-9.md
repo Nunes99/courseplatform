@@ -120,6 +120,13 @@ overflow e consola limpa. Os 29 testes de Storage privado também passaram. A
 confirmação com o estudante real permanece pendente até esta revisão ser
 publicada.
 
+A primeira publicação confirmou que a rota individual da aula podia ser
+aberta sem o `activeAttempt` presente no estado restaurado do dashboard. A
+leitura tipada da aula passou a devolver explicitamente a tentativa mais
+recente e o frontend usa esse valor como fallback antes de consultar os
+ficheiros. Um teste de regressão cobre agora a navegação direta para uma aula
+aprovada.
+
 ## Validação manual com contas reais
 
 Use contas que já existam e não altere dados apenas para testar.

@@ -2695,7 +2695,7 @@ async function openLesson(lessonId) {
 
   let activeAttempt = state.dashboard?.lessons?.find(
     (item) => item.lesson.lessonId === lessonId
-  )?.activeAttempt || null;
+  )?.activeAttempt || lessonData.activeAttempt || null;
 
   if (moduleEvaluationStatus(lessonData.progress, activeAttempt) === 'NOT_STARTED') {
     activeAttempt = null;
