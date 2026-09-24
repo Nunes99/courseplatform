@@ -111,12 +111,14 @@ Verificadores do frontend concluídos:
 - atribuição de staff;
 - versões e edições de cursos em desktop e mobile.
 
-Depois da validação real, foi corrigida a visualização pós-revisão para manter
-os ficheiros próprios da tentativa acessíveis ao estudante em modo somente
-leitura. O verificador de avaliações confirmou, em desktop e mobile, um botão
-`Abrir`, um botão `Baixar`, ausência de `Eliminar`, ausência de overflow e
-consola limpa. Os 29 testes de Storage privado também passaram. A confirmação
-com o estudante real permanece pendente até esta revisão ser publicada.
+Depois da validação real, foram corrigidas tanto a visualização pós-revisão
+como a visualização compacta de aula aprovada, para manter os ficheiros
+próprios da tentativa acessíveis ao estudante em modo somente leitura. O
+verificador de avaliações confirmou ambos os fluxos em desktop e mobile, com
+um botão `Abrir`, um botão `Baixar`, ausência de `Eliminar`, ausência de
+overflow e consola limpa. Os 29 testes de Storage privado também passaram. A
+confirmação com o estudante real permanece pendente até esta revisão ser
+publicada.
 
 ## Validação manual com contas reais
 

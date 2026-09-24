@@ -2782,6 +2782,7 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
         <div class="completion-icon"><img src="${iconUrl('circle-check', goldIcon)}" alt=""></div>
         <h2>Aula aprovada</h2>
         <p>Obteve ${lessonData.progress.score}% e pode rever todo o conteúdo.</p>
+        ${submittedFilesPanelTemplate(attemptData)}
         <button class="button button-secondary" id="backApproved">Voltar ao curso</button>
       </div>
     `;
@@ -2969,6 +2970,23 @@ function submittedFileTemplate(file) {
   `;
 }
 
+function submittedFilesPanelTemplate(attemptData) {
+  const submittedFiles = attemptData?.files || [];
+  if (!submittedFiles.length) return '';
+  return `
+    <section class="upload-panel submitted-files-panel" aria-label="Ficheiros submetidos">
+      <div>
+        <p class="eyebrow">Documentos da tentativa</p>
+        <h3>Ficheiros submetidos</h3>
+        <p>Estes documentos estão preservados em modo somente leitura.</p>
+      </div>
+      <div class="uploaded-files">
+        ${submittedFiles.map(submittedFileTemplate).join('')}
+      </div>
+    </section>
+  `;
+}
+
 function assessmentFeedbackTemplate(attemptData) {
   const policy = attemptData?.feedbackPolicy || {};
   if (!policy.correctAnswersVisible && !policy.explanationsVisible) return '';
@@ -3024,8 +3042,6 @@ function reviewStateTemplate(attempt, review, attemptData = null) {
     : attempt.retryAuthorized && retryExpired
       ? '<p class="error-note">O prazo de reenvio terminou. Solicite um novo prazo à administração.</p>'
     : '';
-  const submittedFiles = attemptData?.files || [];
-
   return `
     <div class="review-card">
       <span class="status-pill ${statusClass(attempt.status)}">
@@ -3038,18 +3054,7 @@ function reviewStateTemplate(attempt, review, attemptData = null) {
         ? `<p>Prazo para correção: <strong>${formatDate(review.correctionDeadline)}</strong></p>`
         : ''}
       ${assessmentFeedbackTemplate(attemptData)}
-      ${submittedFiles.length ? `
-        <section class="upload-panel submitted-files-panel" aria-label="Ficheiros submetidos">
-          <div>
-            <p class="eyebrow">Documentos da tentativa</p>
-            <h3>Ficheiros submetidos</h3>
-            <p>Estes documentos estão preservados em modo somente leitura.</p>
-          </div>
-          <div class="uploaded-files">
-            ${submittedFiles.map(submittedFileTemplate).join('')}
-          </div>
-        </section>
-      ` : ''}
+      ${submittedFilesPanelTemplate(attemptData)}
       ${retry}
       <button class="button button-secondary" id="backReview">Voltar ao curso</button>
     </div>

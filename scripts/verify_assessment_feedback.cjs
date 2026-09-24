@@ -86,9 +86,11 @@ window.__qaAssessmentPolicy = () => {
   showLessonDialog('L1');
 };`
             : `
-window.__qaAssessmentPolicy = data => {
+window.__qaAssessmentPolicy = (data, mode = 'review') => {
   root.innerHTML = '<section id="assessmentArea" class="assessment-area"></section>';
-  document.querySelector('#assessmentArea').innerHTML = reviewStateTemplate(data.attempt, data.latestReview, data);
+  document.querySelector('#assessmentArea').innerHTML = mode === 'approved'
+    ? assessmentTemplate({ progress: { score: data.attempt.score } }, data.attempt, data)
+    : reviewStateTemplate(data.attempt, data.latestReview, data);
 };`;
           return route.fulfill({ contentType: 'application/javascript', body: source + hook });
         }
@@ -143,6 +145,12 @@ window.__qaAssessmentPolicy = data => {
         await page.evaluate(value => window.__qaAssessmentPolicy(value), data);
         assert.ok(await page.getByText('Resposta correta:', { exact: false }).isVisible());
         assert.ok(await page.getByText('Explicação:', { exact: false }).isVisible());
+        assert.ok(await page.getByRole('heading', { name: 'Ficheiros submetidos' }).isVisible());
+        assert.equal(await page.getByRole('button', { name: 'Abrir', exact: true }).count(), 1);
+        assert.equal(await page.getByRole('button', { name: 'Baixar', exact: true }).count(), 1);
+        assert.equal(await page.getByRole('button', { name: 'Eliminar', exact: true }).count(), 0);
+        await page.evaluate(value => window.__qaAssessmentPolicy(value, 'approved'), data);
+        assert.ok(await page.getByRole('heading', { name: 'Aula aprovada' }).isVisible());
         assert.ok(await page.getByRole('heading', { name: 'Ficheiros submetidos' }).isVisible());
         assert.equal(await page.getByRole('button', { name: 'Abrir', exact: true }).count(), 1);
         assert.equal(await page.getByRole('button', { name: 'Baixar', exact: true }).count(), 1);
