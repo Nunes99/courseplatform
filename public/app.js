@@ -103,6 +103,27 @@ const state = {
   presencePollId: null
 };
 
+function resetStudentAccountState({ clearSelection = false } = {}) {
+  clearTimers();
+  api?.clearCache?.();
+  state.dashboard = null;
+  state.myCourses = [];
+  state.lesson = null;
+  state.attempt = null;
+  state.attemptData = null;
+  state.certifications = null;
+  state.notifications = { items: [], unreadCount: 0, total: 0 };
+  state.chat.unreadCount = 0;
+  state.notificationChannelInfo = null;
+
+  if (clearSelection) {
+    state.selectedCourseId = config.courseId || '';
+    state.selectedEnrollmentId = '';
+    localStorage.removeItem('courseSelectedCourseId');
+    localStorage.removeItem('courseSelectedEnrollmentId');
+  }
+}
+
 let deferredInstallPrompt = null;
 let activeChatWorkspace = null;
 let pwaRegistration = null;
@@ -164,6 +185,11 @@ async function initialize() {
   logoutButton.addEventListener('click', logout);
   mobileLogoutButton?.addEventListener('click', logout);
   window.addEventListener('hashchange', route);
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'courseSessionToken' && event.oldValue !== event.newValue) {
+      window.location.reload();
+    }
+  });
   window.addEventListener('message', (event) => {
     if (event.data?.source === 'tilda-parent' && event.data?.type === 'request-resize') {
       reportHeight();
@@ -987,6 +1013,7 @@ async function login(event) {
 
   try {
     await api.login(data.get('email'), data.get('accessCode'));
+    resetStudentAccountState({ clearSelection: true });
     startPresenceHeartbeat();
     setMobileHeaderActionsVisible(true);
     location.hash = '#/';
@@ -1181,6 +1208,7 @@ function showPasswordResetDialog(token) {
     try {
       await api.completeStudentPasswordReset(token, values.newPassword, values.confirmPassword);
       localStorage.removeItem('courseSessionToken');
+      resetStudentAccountState({ clearSelection: true });
       close();
       renderLogin();
       showToast('Palavra-passe alterada. Já pode iniciar sessão.', 'success');
@@ -1215,11 +1243,7 @@ async function logout() {
     localStorage.removeItem('courseSessionToken');
   }
 
-  state.dashboard = null;
-  state.lesson = null;
-  state.attempt = null;
-  state.notifications = { items: [], unreadCount: 0, total: 0 };
-  state.chat.unreadCount = 0;
+  resetStudentAccountState({ clearSelection: true });
   state.push.configuration = null;
   state.push.subscriptionCount = 0;
   state.push.subscribedOnDevice = false;
@@ -2693,9 +2717,9 @@ async function openLesson(lessonId) {
   const lessonData = await api.getLesson(lessonId, state.selectedEnrollmentId);
   state.lesson = lessonData;
 
-  let activeAttempt = state.dashboard?.lessons?.find(
+  let activeAttempt = lessonData.activeAttempt || state.dashboard?.lessons?.find(
     (item) => item.lesson.lessonId === lessonId
-  )?.activeAttempt || lessonData.activeAttempt || null;
+  )?.activeAttempt || null;
 
   if (moduleEvaluationStatus(lessonData.progress, activeAttempt) === 'NOT_STARTED') {
     activeAttempt = null;
@@ -4500,6 +4524,7 @@ function handleError(error, toast = true) {
     ['INVALID_SESSION', 'SESSION_EXPIRED', 'SESSION_REQUIRED'].includes(error.code)
   ) {
     localStorage.removeItem('courseSessionToken');
+    resetStudentAccountState({ clearSelection: true });
     renderLogin();
   }
 
