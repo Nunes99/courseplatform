@@ -1,3 +1,4 @@
+import copy
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +17,7 @@ ACTION_BINDINGS = (
     ("adminGetCourseStructure", "admin_course_structure"),
     ("adminCreateCourseVersion", "admin_create_course_version"),
     ("adminRefreshCourseVersionDraft", "admin_refresh_course_version_draft"),
+    ("adminEditCourseVersionDraft", "admin_edit_course_version_draft"),
     ("adminPreviewCourseVersion", "admin_preview_course_version"),
     ("adminPublishCourseVersion", "admin_publish_course_version"),
     ("adminSaveMediaConfig", "admin_save_media_config"),
@@ -424,6 +426,121 @@ def course_version_preview(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def course_version_draft_editor(snapshot: dict[str, Any]) -> dict[str, Any]:
+    course = snapshot.get("course") if isinstance(snapshot.get("course"), dict) else {}
+    lessons = snapshot.get("lessons") if isinstance(snapshot.get("lessons"), list) else []
+    return {
+        "course": {
+            "courseCode": course.get("course_code"),
+            "title": course.get("title"),
+            "description": course.get("description"),
+            "totalHours": course.get("total_hours"),
+            "passingScore": course.get("passing_score"),
+        },
+        "lessons": [
+            {
+                "lessonId": lesson.get("lesson_id"),
+                "lessonNumber": lesson.get("lesson_number"),
+                "title": lesson.get("title"),
+                "summary": lesson.get("summary"),
+                "status": lesson.get("status") or "ACTIVE",
+                "prerequisiteLessonId": lesson.get("prerequisite_lesson_id"),
+                "content": [
+                    {
+                        "contentId": item.get("content_id"),
+                        "sectionOrder": item.get("section_order"),
+                        "sectionType": item.get("section_type"),
+                        "title": item.get("title"),
+                        "bodyHtml": item.get("body_html"),
+                        "estimatedMinutes": item.get("estimated_minutes"),
+                        "isRequired": bool(item.get("is_required", True)),
+                        "status": item.get("status") or "ACTIVE",
+                    }
+                    for item in (lesson.get("content") or [])
+                    if isinstance(item, dict)
+                ],
+                "questionCount": sum(1 for item in (lesson.get("questions") or []) if isinstance(item, dict)),
+            }
+            for lesson in lessons
+            if isinstance(lesson, dict)
+        ],
+    }
+
+
+def _draft_text(value: Any, field: str, *, required: bool = False, maximum: int = 10000) -> str:
+    text = str(value or "").strip()
+    if required and not text:
+        raise ApiError("COURSE_VERSION_FIELD_REQUIRED", f"O campo {field} é obrigatório.")
+    if len(text) > maximum:
+        raise ApiError("COURSE_VERSION_FIELD_TOO_LONG", f"O campo {field} excede o tamanho permitido.")
+    return text
+
+
+def _draft_number(value: Any, field: str, *, minimum: float = 0, maximum: float = 100000) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ApiError("COURSE_VERSION_FIELD_INVALID", f"O campo {field} deve ser numérico.") from exc
+    if not minimum <= number <= maximum:
+        raise ApiError("COURSE_VERSION_FIELD_INVALID", f"O campo {field} está fora do intervalo permitido.")
+    return number
+
+
+def _draft_entity(items: list[dict[str, Any]], id_field: str, entity_id: Any, label: str) -> dict[str, Any]:
+    normalized_id = str(entity_id or "").strip()
+    for item in items:
+        if isinstance(item, dict) and str(item.get(id_field) or "") == normalized_id:
+            return item
+    raise ApiError("COURSE_VERSION_ENTITY_NOT_FOUND", f"{label} não encontrado no rascunho.")
+
+
+def _reorder_draft_items(items: list[dict[str, Any]], ids: Any, id_field: str, order_field: str, label: str) -> None:
+    if not isinstance(ids, list) or any(not isinstance(value, str) or not value.strip() for value in ids):
+        raise ApiError("COURSE_VERSION_ORDER_INVALID", f"A ordem de {label} é inválida.")
+    current_ids = [str(item.get(id_field) or "") for item in items if isinstance(item, dict)]
+    if len(ids) != len(set(ids)) or set(ids) != set(current_ids):
+        raise ApiError("COURSE_VERSION_ORDER_INCOMPLETE", f"A ordem deve incluir todos os {label}, sem repetições.")
+    positions = {entity_id: index for index, entity_id in enumerate(ids, start=1)}
+    items.sort(key=lambda item: positions[str(item.get(id_field) or "")])
+    for item in items:
+        item[order_field] = positions[str(item.get(id_field) or "")]
+
+
+def edit_course_version_draft_snapshot(snapshot: dict[str, Any], operation: Any, changes: Any) -> dict[str, Any]:
+    operation_name = str(operation or "").strip().upper()
+    if not isinstance(changes, dict):
+        raise ApiError("COURSE_VERSION_CHANGES_INVALID", "As alterações do rascunho são inválidas.")
+    edited = copy.deepcopy(snapshot)
+    course = edited.setdefault("course", {})
+    lessons = edited.setdefault("lessons", [])
+
+    if operation_name == "UPDATE_COURSE":
+        course["course_code"] = _draft_text(changes.get("courseCode"), "código", required=True, maximum=80)
+        course["title"] = _draft_text(changes.get("title"), "título", required=True, maximum=240)
+        course["description"] = _draft_text(changes.get("description"), "descrição", maximum=5000)
+        course["total_hours"] = _draft_number(changes.get("totalHours"), "carga horária")
+        course["passing_score"] = _draft_number(changes.get("passingScore"), "nota mínima", maximum=100)
+    elif operation_name == "UPDATE_LESSON":
+        lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
+        lesson["title"] = _draft_text(changes.get("title"), "título do módulo", required=True, maximum=240)
+        lesson["summary"] = _draft_text(changes.get("summary"), "resumo do módulo", maximum=5000)
+    elif operation_name == "UPDATE_CONTENT":
+        lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
+        content = _draft_entity(lesson.get("content") or [], "content_id", changes.get("contentId"), "Conteúdo")
+        content["title"] = _draft_text(changes.get("title"), "título do conteúdo", required=True, maximum=240)
+        content["body_html"] = _draft_text(changes.get("bodyHtml"), "conteúdo", maximum=100000)
+        content["estimated_minutes"] = _draft_number(changes.get("estimatedMinutes"), "duração estimada")
+        content["is_required"] = bool(changes.get("isRequired"))
+    elif operation_name == "REORDER_LESSONS":
+        _reorder_draft_items(lessons, changes.get("lessonIds"), "lesson_id", "lesson_number", "módulos")
+    elif operation_name == "REORDER_CONTENT":
+        lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
+        _reorder_draft_items(lesson.get("content") or [], changes.get("contentIds"), "content_id", "section_order", "conteúdos")
+    else:
+        raise ApiError("COURSE_VERSION_OPERATION_INVALID", "A operação solicitada para o rascunho não é válida.")
+    return edited
+
+
 def stored_course_version_snapshot(version: dict[str, Any]) -> dict[str, Any]:
     snapshot = version.get("content_snapshot_json") or {}
     if isinstance(snapshot, str):
@@ -740,6 +857,70 @@ def admin_refresh_course_version_draft_action(payload: dict[str, Any], *, runtim
     })
 
 
+def admin_edit_course_version_draft_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    _, admin = runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    runtime.require_fields(payload, ["courseVersionId", "operation", "changes"])
+    with runtime.connection() as conn:
+        version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s for update",
+            (payload["courseVersionId"],),
+        ).fetchone()
+        if not version:
+            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
+        if version.get("status") != "DRAFT":
+            raise ApiError("COURSE_VERSION_NOT_DRAFT", "Apenas um rascunho pode ser editado.")
+        expected_updated_at = str(payload.get("expectedUpdatedAt") or "").strip()
+        current_updated_at = runtime.iso(version.get("updated_at")) or ""
+        if expected_updated_at and expected_updated_at != current_updated_at:
+            raise ApiError(
+                "COURSE_VERSION_CONFLICT",
+                "Este rascunho foi alterado por outra sessão. Atualize a página antes de continuar.",
+            )
+        snapshot = edit_course_version_draft_snapshot(
+            stored_course_version_snapshot(version),
+            payload.get("operation"),
+            payload.get("changes"),
+        )
+        course_data = snapshot["course"]
+        row = conn.execute(
+            """
+            update courseplatform.course_versions
+            set title = %s, description = %s, total_hours = %s, passing_score = %s,
+                content_snapshot_json = %s, updated_at = now()
+            where course_version_id = %s and status = 'DRAFT'
+            returning *
+            """,
+            (
+                course_data.get("title"),
+                course_data.get("description"),
+                runtime.float_value(course_data.get("total_hours")),
+                runtime.float_value(course_data.get("passing_score"), 60),
+                json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
+                version["course_version_id"],
+            ),
+        ).fetchone()
+        runtime.audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "COURSE_VERSION_DRAFT_EDITED",
+            "COURSE_VERSION",
+            row["course_version_id"],
+            {
+                "courseId": row["course_id"],
+                "versionNumber": row["version_number"],
+                "operation": str(payload.get("operation") or "").upper(),
+            },
+        )
+        conn.commit()
+    return runtime.success({
+        "courseVersion": runtime.public_course_version(row),
+        "validation": validate_course_version_snapshot(snapshot),
+        "preview": course_version_preview(snapshot),
+        "draftEditor": course_version_draft_editor(snapshot),
+    })
+
+
 def admin_preview_course_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
     admin_context = runtime.admin_context
     connection = runtime.connection
@@ -757,11 +938,14 @@ def admin_preview_course_version_action(payload: dict[str, Any], *, runtime: Cat
             raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
         snapshot = stored_course_version_snapshot(version)
     validation = validate_course_version_snapshot(snapshot)
-    return success({
+    response = {
         "courseVersion": public_course_version(version),
         "validation": validation,
         "preview": course_version_preview(snapshot),
-    })
+    }
+    if version.get("status") == "DRAFT":
+        response["draftEditor"] = course_version_draft_editor(snapshot)
+    return success(response)
 
 
 def admin_publish_course_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):

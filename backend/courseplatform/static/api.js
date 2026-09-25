@@ -860,6 +860,15 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminRefreshCourseVersionDraft', { courseVersionId });
   }
 
+  adminEditCourseVersionDraft(courseVersionId, operation, changes, expectedUpdatedAt = '') {
+    return this.mutateAdmin('adminEditCourseVersionDraft', {
+      courseVersionId,
+      operation,
+      changes,
+      expectedUpdatedAt
+    });
+  }
+
   adminPreviewCourseVersion(courseVersionId) {
     return this.adminRequest('adminPreviewCourseVersion', { courseVersionId });
   }

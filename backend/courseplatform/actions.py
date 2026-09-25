@@ -2931,6 +2931,10 @@ def admin_refresh_course_version_draft(payload: dict[str, Any]):
     return catalog_domain.admin_refresh_course_version_draft_action(payload, runtime=_catalog_runtime())
 
 
+def admin_edit_course_version_draft(payload: dict[str, Any]):
+    return catalog_domain.admin_edit_course_version_draft_action(payload, runtime=_catalog_runtime())
+
+
 def admin_preview_course_version(payload: dict[str, Any]):
     return catalog_domain.admin_preview_course_version_action(payload, runtime=_catalog_runtime())
 

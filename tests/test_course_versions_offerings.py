@@ -107,6 +107,7 @@ class CourseVersionsAndOfferingsTests(unittest.TestCase):
         for action in (
             "adminCreateCourseVersion",
             "adminRefreshCourseVersionDraft",
+            "adminEditCourseVersionDraft",
             "adminPreviewCourseVersion",
             "adminPublishCourseVersion",
             "adminSaveCourseOffering",

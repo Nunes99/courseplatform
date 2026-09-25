@@ -14,6 +14,13 @@ o snapshot guardado nela. Criar um rascunho captura a estrutura atual do editor;
 alterações posteriores só entram nesse rascunho através da ação explícita
 `Atualizar do editor`. Publicar usa exatamente o snapshot pré-visualizado.
 
+O administrador também pode editar diretamente os metadados do curso, módulos
+e conteúdos do rascunho, e reordenar módulos ou conteúdos. Cada comando bloqueia
+a linha da versão, aplica uma operação limitada sobre o snapshot mais recente e
+faz uma única gravação antes do commit. Uma versão publicada nunca aceita estas
+operações. O contrato do editor não devolve perguntas, respostas corretas ou
+gabaritos.
+
 A resposta contém apenas o resumo necessário para o editor: metadados do curso,
 ordem dos módulos e contagens de conteúdos e questões. Respostas corretas e o
 conteúdo integral do banco de questões não são devolvidos pela pré-visualização.
@@ -41,14 +48,14 @@ validação; a interface não é a barreira de segurança.
 Esta fatia não altera o esquema nem reescreve versões publicadas. O rascunho
 guarda uma cópia independente no campo `content_snapshot_json`, já existente.
 Atualizá-lo substitui apenas essa cópia e regista `COURSE_VERSION_DRAFT_REFRESHED`
-na auditoria. As ofertas, matrículas, progressos, tentativas e certificados
+na auditoria. As edições diretas registam `COURSE_VERSION_DRAFT_EDITED`, incluindo
+o tipo de operação. As ofertas, matrículas, progressos, tentativas e certificados
 existentes permanecem inalterados.
 
 ## Trabalho ainda pendente na Etapa 10
 
-- oferecer edição direta do snapshot do rascunho, além da atualização integral
-  e explícita a partir das tabelas de trabalho;
-- ordenar módulos e conteúdos com uma operação transacional explícita;
+- permitir criar, remover ou restaurar módulos e conteúdos diretamente no
+  rascunho, sem reutilizar as tabelas de trabalho;
 - versionar e reutilizar um banco de questões;
 - configurar limites de tentativa, janela, tempo e randomização por avaliação;
 - introduzir rubricas, pauta consolidada e histórico de alterações de notas;

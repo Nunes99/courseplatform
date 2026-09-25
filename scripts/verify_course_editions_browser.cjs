@@ -19,7 +19,8 @@ const course = {
 const structure = {
   course,
   versions: [
-    { courseVersionId: 'CV-2', courseId: course.courseId, versionNumber: 2, status: 'DRAFT', title: course.title },
+    { courseVersionId: 'CV-2', courseId: course.courseId, versionNumber: 2, status: 'DRAFT', title: course.title,
+      updatedAt: '2026-09-25T08:00:00Z' },
     { courseVersionId: 'CV-1', courseId: course.courseId, versionNumber: 1, status: 'PUBLISHED', title: course.title,
       publishedAt: '2026-09-01T08:00:00Z' }
   ],
@@ -88,6 +89,26 @@ async function main() {
                     { lessonId: 'LESSON-1', lessonNumber: 1, title: 'Fundamentos', contentCount: 2, questionCount: 1 },
                     { lessonId: 'LESSON-2', lessonNumber: 2, title: 'Aplicação', contentCount: 2, questionCount: 2 }
                   ]
+                },
+                draftEditor: {
+                  course,
+                  lessons: [
+                    {
+                      lessonId: 'LESSON-1', lessonNumber: 1, title: 'Fundamentos', summary: 'Conceitos essenciais.',
+                      status: 'ACTIVE', questionCount: 1,
+                      content: [
+                        { contentId: 'CONTENT-1', sectionOrder: 1, sectionType: 'TEXT', title: 'Introdução', bodyHtml: 'Conteúdo introdutório.', estimatedMinutes: 20, isRequired: true, status: 'ACTIVE' },
+                        { contentId: 'CONTENT-2', sectionOrder: 2, sectionType: 'VIDEO', title: 'Aula orientada', bodyHtml: '', estimatedMinutes: 35, isRequired: true, status: 'ACTIVE' }
+                      ]
+                    },
+                    {
+                      lessonId: 'LESSON-2', lessonNumber: 2, title: 'Aplicação', summary: 'Aplicação prática.',
+                      status: 'ACTIVE', questionCount: 2,
+                      content: [
+                        { contentId: 'CONTENT-3', sectionOrder: 1, sectionType: 'TEXT', title: 'Estudo de caso', bodyHtml: 'Análise aplicada.', estimatedMinutes: 30, isRequired: true, status: 'ACTIVE' }
+                      ]
+                    }
+                  ]
                 }
               }
             })
@@ -134,6 +155,7 @@ async function main() {
     assert.equal(await page.getByText('Edição de janeiro de 2027', { exact: true }).count(), 1);
     assert.equal(await page.locator('[data-publish-course-version="CV-2"]').count(), 1);
     assert.equal(await page.locator('[data-refresh-course-version="CV-2"]').count(), 1);
+    assert.equal(await page.locator('[data-edit-course-version="CV-2"]').count(), 1);
 
     for (const [label, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
       await page.setViewportSize({ width, height });
@@ -188,6 +210,34 @@ async function main() {
     assert.ok(previewGeometry.scrollWidth <= previewGeometry.clientWidth, 'mobile preview horizontal overflow');
     await page.screenshot({ path: path.join(output, 'mobile-version-preview.png'), fullPage: true });
     await page.locator('[data-close-preview]').click();
+
+    await page.locator('[data-edit-course-version="CV-2"]').click();
+    const draftDialog = page.locator('.course-version-editor-dialog');
+    await draftDialog.getByRole('heading', { name: 'Editar versão 2' }).waitFor();
+    await draftDialog.getByText('As alterações são guardadas apenas neste rascunho.', { exact: true }).waitFor();
+    const firstLesson = draftDialog.getByText('Fundamentos', { exact: true }).first();
+    await firstLesson.waitFor();
+    const draftGeometry = await draftDialog.evaluate((node) => ({
+      right: node.getBoundingClientRect().right,
+      left: node.getBoundingClientRect().left,
+      viewport: window.innerWidth,
+      scrollWidth: node.scrollWidth,
+      clientWidth: node.clientWidth
+    }));
+    assert.ok(draftGeometry.left >= 0 && draftGeometry.right <= draftGeometry.viewport, 'mobile draft editor outside viewport');
+    assert.ok(draftGeometry.scrollWidth <= draftGeometry.clientWidth, 'mobile draft editor horizontal overflow');
+    await page.screenshot({ path: path.join(output, 'mobile-draft-editor.png'), fullPage: true });
+    await firstLesson.scrollIntoViewIfNeeded();
+    const outlineGeometry = await draftDialog.locator('.course-version-editor-outline').evaluate((node) => ({
+      right: node.getBoundingClientRect().right,
+      left: node.getBoundingClientRect().left,
+      width: node.getBoundingClientRect().width,
+      scrollWidth: node.scrollWidth
+    }));
+    assert.ok(outlineGeometry.left >= draftGeometry.left && outlineGeometry.right <= draftGeometry.right, 'draft outline outside dialog');
+    assert.ok(outlineGeometry.scrollWidth <= outlineGeometry.width + 1, 'draft outline horizontal overflow');
+    await page.screenshot({ path: path.join(output, 'mobile-draft-outline.png'), fullPage: true });
+    await draftDialog.locator('[data-close-draft-editor]').click();
 
     await page.getByRole('button', { name: 'Editar edição de janeiro de 2027' }).click();
     await page.getByRole('heading', { name: 'Editar edição' }).waitFor();

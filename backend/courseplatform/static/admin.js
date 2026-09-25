@@ -6466,6 +6466,9 @@ function renderCourses() {
   root.querySelectorAll('[data-refresh-course-version]').forEach((button) => {
     button.addEventListener('click', () => refreshCourseVersionDraft(button.dataset.refreshCourseVersion, button));
   });
+  root.querySelectorAll('[data-edit-course-version]').forEach((button) => {
+    button.addEventListener('click', () => showCourseVersionDraftEditor(button.dataset.editCourseVersion, null, button));
+  });
   root.querySelectorAll('[data-edit-course-offering]').forEach((button) => {
     button.addEventListener('click', () => showCourseOfferingDialog(button.dataset.editCourseOffering));
   });
@@ -6680,6 +6683,8 @@ function courseVersionCardTemplate(version) {
           <button class="button button-secondary button-small" type="button"
             data-preview-course-version="${escapeHtml(version.courseVersionId)}">Pré-visualizar</button>
           ${version.status === 'DRAFT' ? `
+            <button class="button button-secondary button-small" type="button"
+              data-edit-course-version="${escapeHtml(version.courseVersionId)}">Editar rascunho</button>
             <button class="button button-secondary button-small" type="button"
               data-refresh-course-version="${escapeHtml(version.courseVersionId)}">Atualizar do editor</button>
             <button class="button button-primary button-small" type="button"
@@ -7192,6 +7197,182 @@ async function refreshCourseVersionDraft(courseVersionId, triggerButton = null) 
   } finally {
     setBusy(triggerButton, false);
   }
+}
+
+function moveDraftEntity(ids, entityId, direction) {
+  const next = [...ids];
+  const index = next.indexOf(entityId);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= next.length) return next;
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
+async function showCourseVersionDraftEditor(courseVersionId, loadedResult = null, triggerButton = null) {
+  if (!courseVersionId) return;
+  setBusy(triggerButton, true, 'A abrir...');
+  try {
+    const result = loadedResult || await api.adminPreviewCourseVersion(courseVersionId);
+    if (result.courseVersion?.status !== 'DRAFT' || !result.draftEditor) {
+      throw new Error('Apenas versões em rascunho podem ser editadas.');
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'dialog-overlay';
+    document.body.appendChild(overlay);
+    renderCourseVersionDraftEditor(overlay, result);
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(triggerButton, false);
+  }
+}
+
+function renderCourseVersionDraftEditor(overlay, result) {
+  const version = result.courseVersion || {};
+  const editor = result.draftEditor || { course: {}, lessons: [] };
+  const course = editor.course || {};
+  const lessons = editor.lessons || [];
+  overlay.innerHTML = `
+    <div class="dialog-card course-version-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="courseVersionEditorTitle">
+      <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+      <div class="course-version-editor-heading">
+        <div>
+          <p class="eyebrow">Autoria versionada</p>
+          <h2 id="courseVersionEditorTitle">Editar versão ${escapeHtml(version.versionNumber || '')}</h2>
+          <p>As alterações são guardadas apenas neste rascunho.</p>
+        </div>
+        <span class="status-pill status-draft">Rascunho</span>
+      </div>
+      <form class="course-version-editor-course form-stack" data-draft-course-form>
+        <div class="course-form-grid">
+          <label><span>Código</span><input name="courseCode" required maxlength="80" value="${escapeHtml(course.courseCode || '')}"></label>
+          <label><span>Título</span><input name="title" required maxlength="240" value="${escapeHtml(course.title || '')}"></label>
+          <label><span>Carga horária</span><input name="totalHours" type="number" min="0" step="0.5" required value="${escapeHtml(course.totalHours || 0)}"></label>
+          <label><span>Nota mínima</span><input name="passingScore" type="number" min="0" max="100" step="0.1" required value="${escapeHtml(course.passingScore ?? 60)}"></label>
+        </div>
+        <label><span>Descrição</span><textarea name="description" rows="3" maxlength="5000">${escapeHtml(course.description || '')}</textarea></label>
+        <div class="dialog-actions"><button class="button button-primary" type="submit">Guardar dados do curso</button></div>
+      </form>
+      <section class="course-version-editor-outline" aria-label="Módulos e conteúdos do rascunho">
+        <div class="course-section-heading">
+          <div><h3>Módulos e conteúdos</h3><p>Use os controlos de ordenação para definir a sequência publicada.</p></div>
+        </div>
+        <div class="course-version-editor-lessons">
+          ${lessons.map((lesson, lessonIndex) => `
+            <article class="course-version-editor-lesson" data-draft-lesson="${escapeHtml(lesson.lessonId || '')}">
+              <div class="course-version-editor-row-heading">
+                <span class="course-version-editor-position">${lessonIndex + 1}</span>
+                <div><strong>${escapeHtml(lesson.title || 'Módulo sem título')}</strong><small>${escapeHtml(lesson.content?.length || 0)} conteúdo(s) · ${escapeHtml(lesson.questionCount || 0)} questão(ões)</small></div>
+                <div class="course-version-order-controls">
+                  <button type="button" class="icon-button" data-move-lesson="-1" aria-label="Mover módulo para cima" title="Mover para cima" ${lessonIndex === 0 ? 'disabled' : ''}>&uarr;</button>
+                  <button type="button" class="icon-button" data-move-lesson="1" aria-label="Mover módulo para baixo" title="Mover para baixo" ${lessonIndex === lessons.length - 1 ? 'disabled' : ''}>&darr;</button>
+                </div>
+              </div>
+              <form class="course-version-editor-fields" data-draft-lesson-form>
+                <input type="hidden" name="lessonId" value="${escapeHtml(lesson.lessonId || '')}">
+                <label><span>Título do módulo</span><input name="title" required maxlength="240" value="${escapeHtml(lesson.title || '')}"></label>
+                <label><span>Resumo</span><textarea name="summary" rows="2" maxlength="5000">${escapeHtml(lesson.summary || '')}</textarea></label>
+                <div class="dialog-actions"><button class="button button-secondary button-small" type="submit">Guardar módulo</button></div>
+              </form>
+              <div class="course-version-editor-content-list">
+                ${(lesson.content || []).map((item, contentIndex) => `
+                  <details class="course-version-editor-content" data-draft-content="${escapeHtml(item.contentId || '')}">
+                    <summary>
+                      <span>${contentIndex + 1}</span>
+                      <strong>${escapeHtml(item.title || 'Conteúdo sem título')}</strong>
+                      <small>${escapeHtml(item.sectionType || 'Conteúdo')}</small>
+                      <span class="course-version-order-controls">
+                        <button type="button" class="icon-button" data-move-content="-1" aria-label="Mover conteúdo para cima" title="Mover para cima" ${contentIndex === 0 ? 'disabled' : ''}>&uarr;</button>
+                        <button type="button" class="icon-button" data-move-content="1" aria-label="Mover conteúdo para baixo" title="Mover para baixo" ${contentIndex === lesson.content.length - 1 ? 'disabled' : ''}>&darr;</button>
+                      </span>
+                    </summary>
+                    <form class="course-version-editor-fields" data-draft-content-form>
+                      <input type="hidden" name="lessonId" value="${escapeHtml(lesson.lessonId || '')}">
+                      <input type="hidden" name="contentId" value="${escapeHtml(item.contentId || '')}">
+                      <label><span>Título do conteúdo</span><input name="title" required maxlength="240" value="${escapeHtml(item.title || '')}"></label>
+                      <label><span>Conteúdo</span><textarea name="bodyHtml" rows="5" maxlength="100000">${escapeHtml(item.bodyHtml || '')}</textarea></label>
+                      <div class="course-version-editor-inline-fields">
+                        <label><span>Duração estimada</span><input name="estimatedMinutes" type="number" min="0" step="1" value="${escapeHtml(item.estimatedMinutes || 0)}"></label>
+                        <label class="checkbox-field"><input name="isRequired" type="checkbox" ${item.isRequired ? 'checked' : ''}><span>Obrigatório</span></label>
+                      </div>
+                      <div class="dialog-actions"><button class="button button-secondary button-small" type="submit">Guardar conteúdo</button></div>
+                    </form>
+                  </details>
+                `).join('') || '<p class="empty-note">Este módulo não possui conteúdos.</p>'}
+              </div>
+            </article>
+          `).join('') || '<div class="student-empty-state">Nenhum módulo no rascunho.</div>'}
+        </div>
+      </section>
+      <div class="dialog-actions course-version-editor-footer">
+        <button class="button button-secondary" type="button" data-close-draft-editor>Fechar</button>
+        <button class="button button-primary" type="button" data-preview-draft>Pré-visualizar e validar</button>
+      </div>
+    </div>
+  `;
+
+  bindDialogClose(overlay);
+  overlay.querySelector('[data-close-draft-editor]').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-preview-draft]').addEventListener('click', () => {
+    overlay.remove();
+    showCourseVersionPreview(version.courseVersionId);
+  });
+
+  const mutate = async (operation, changes, button) => {
+    setBusy(button, true, 'A guardar...');
+    try {
+      const updated = await api.adminEditCourseVersionDraft(
+        version.courseVersionId,
+        operation,
+        changes,
+        version.updatedAt || ''
+      );
+      showToast('Rascunho atualizado.', 'success');
+      renderCourseVersionDraftEditor(overlay, updated);
+      await loadCourses({ force: true });
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
+  };
+
+  overlay.querySelector('[data-draft-course-form]').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(event.currentTarget));
+    mutate('UPDATE_COURSE', values, event.currentTarget.querySelector('button[type="submit"]'));
+  });
+  overlay.querySelectorAll('[data-draft-lesson-form]').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      mutate('UPDATE_LESSON', Object.fromEntries(new FormData(form)), form.querySelector('button[type="submit"]'));
+    });
+  });
+  overlay.querySelectorAll('[data-draft-content-form]').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(form));
+      values.isRequired = form.elements.isRequired.checked;
+      mutate('UPDATE_CONTENT', values, form.querySelector('button[type="submit"]'));
+    });
+  });
+  overlay.querySelectorAll('[data-move-lesson]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const lessonId = button.closest('[data-draft-lesson]').dataset.draftLesson;
+      const lessonIds = moveDraftEntity(lessons.map((lesson) => lesson.lessonId), lessonId, Number(button.dataset.moveLesson));
+      mutate('REORDER_LESSONS', { lessonIds }, button);
+    });
+  });
+  overlay.querySelectorAll('[data-move-content]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      const lessonNode = button.closest('[data-draft-lesson]');
+      const lesson = lessons.find((item) => item.lessonId === lessonNode.dataset.draftLesson);
+      const contentId = button.closest('[data-draft-content]').dataset.draftContent;
+      const contentIds = moveDraftEntity((lesson.content || []).map((item) => item.contentId), contentId, Number(button.dataset.moveContent));
+      mutate('REORDER_CONTENT', { lessonId: lesson.lessonId, contentIds }, button);
+    });
+  });
 }
 
 async function showCourseVersionPreview(courseVersionId, loadedResult = null, triggerButton = null) {
