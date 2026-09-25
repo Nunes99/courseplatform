@@ -9230,6 +9230,16 @@ body:has(.admin-layout) .button-secondary {
   font-weight: 800;
 }
 
+.course-version-draft-note {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
 .course-version-validation,
 .course-version-outline {
   margin-top: 18px;

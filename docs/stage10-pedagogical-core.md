@@ -9,10 +9,10 @@ conclusão.
 
 ## Pré-publicação
 
-O painel de administração permite pré-visualizar qualquer versão. Para um
-rascunho, a pré-visualização representa a estrutura atual que seria capturada
-no momento da publicação. Para uma versão já publicada, utiliza o snapshot
-imutável guardado nessa versão.
+O painel de administração permite pré-visualizar qualquer versão usando sempre
+o snapshot guardado nela. Criar um rascunho captura a estrutura atual do editor;
+alterações posteriores só entram nesse rascunho através da ação explícita
+`Atualizar do editor`. Publicar usa exatamente o snapshot pré-visualizado.
 
 A resposta contém apenas o resumo necessário para o editor: metadados do curso,
 ordem dos módulos e contagens de conteúdos e questões. Respostas corretas e o
@@ -39,13 +39,15 @@ validação; a interface não é a barreira de segurança.
 ## Compatibilidade e dados
 
 Esta fatia não altera o esquema nem reescreve versões publicadas. O rascunho
-continua a capturar a estrutura atual apenas quando é publicado. As ofertas,
-matrículas, progressos, tentativas e certificados existentes permanecem
-inalterados.
+guarda uma cópia independente no campo `content_snapshot_json`, já existente.
+Atualizá-lo substitui apenas essa cópia e regista `COURSE_VERSION_DRAFT_REFRESHED`
+na auditoria. As ofertas, matrículas, progressos, tentativas e certificados
+existentes permanecem inalterados.
 
 ## Trabalho ainda pendente na Etapa 10
 
-- editar o conteúdo dentro de um rascunho independente das tabelas de trabalho;
+- oferecer edição direta do snapshot do rascunho, além da atualização integral
+  e explícita a partir das tabelas de trabalho;
 - ordenar módulos e conteúdos com uma operação transacional explícita;
 - versionar e reutilizar um banco de questões;
 - configurar limites de tentativa, janela, tempo e randomização por avaliação;

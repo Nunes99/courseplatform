@@ -1,11 +1,55 @@
 import inspect
+import json
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 from backend.courseplatform.domains import catalog
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _Result:
+    def __init__(self, row=None):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
+
+
+class _DraftConnection:
+    def __init__(self, status="DRAFT"):
+        self.version = {
+            "course_version_id": "VERSION-2",
+            "course_id": "COURSE-1",
+            "version_number": 2,
+            "status": status,
+            "content_snapshot_json": {"course": {}, "lessons": []},
+        }
+        self.updated_snapshot = None
+        self.committed = False
+
+    def execute(self, query, params=()):
+        normalized = " ".join(query.lower().split())
+        if normalized.startswith("select * from courseplatform.course_versions"):
+            return _Result(self.version)
+        if normalized.startswith("update courseplatform.course_versions"):
+            self.updated_snapshot = json.loads(params[4])
+            self.version = {
+                **self.version,
+                "title": params[0],
+                "description": params[1],
+                "total_hours": params[2],
+                "passing_score": params[3],
+                "content_snapshot_json": self.updated_snapshot,
+            }
+            return _Result(self.version)
+        raise AssertionError(normalized)
+
+    def commit(self):
+        self.committed = True
 
 
 def valid_snapshot():
@@ -101,6 +145,20 @@ class CoursePublicationValidationTests(unittest.TestCase):
         self.assertNotIn("questions", preview["lessons"][1])
         self.assertNotIn("correct_answer", str(preview).lower())
 
+    def test_stored_draft_snapshot_is_parsed_without_reading_live_content(self):
+        snapshot = valid_snapshot()
+        parsed = catalog.stored_course_version_snapshot({
+            "content_snapshot_json": json.dumps(snapshot),
+        })
+
+        self.assertEqual(snapshot, parsed)
+
+    def test_invalid_stored_snapshot_is_rejected_explicitly(self):
+        with self.assertRaises(catalog.ApiError) as raised:
+            catalog.stored_course_version_snapshot({"content_snapshot_json": "not-json"})
+
+        self.assertEqual("COURSE_VERSION_SNAPSHOT_INVALID", raised.exception.code)
+
     def test_publish_action_enforces_the_same_validation_as_preview(self):
         publish_source = inspect.getsource(catalog.admin_publish_course_version_action)
         preview_source = inspect.getsource(catalog.admin_preview_course_version_action)
@@ -108,6 +166,73 @@ class CoursePublicationValidationTests(unittest.TestCase):
         self.assertIn("validate_course_version_snapshot(snapshot)", publish_source)
         self.assertIn('"COURSE_VERSION_INVALID"', publish_source)
         self.assertIn("validate_course_version_snapshot(snapshot)", preview_source)
+        self.assertIn("stored_course_version_snapshot(version)", publish_source)
+        self.assertIn("stored_course_version_snapshot(version)", preview_source)
+        self.assertNotIn("course_structure_snapshot_with_conn", publish_source)
+        self.assertNotIn("course_structure_snapshot_with_conn", preview_source)
+
+    def test_only_explicit_refresh_replaces_the_draft_snapshot(self):
+        refresh_source = inspect.getsource(catalog.admin_refresh_course_version_draft_action)
+
+        self.assertIn("course_structure_snapshot_with_conn", refresh_source)
+        self.assertIn("where course_version_id = %s and status = 'DRAFT'", refresh_source)
+        self.assertIn("COURSE_VERSION_DRAFT_REFRESHED", refresh_source)
+
+    def test_explicit_refresh_replaces_only_a_draft_and_is_audited(self):
+        connection = _DraftConnection()
+        audits = []
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        runtime = SimpleNamespace(
+            admin_context=lambda payload, roles: ({}, {"admin_id": "ADMIN-1", "role": "ADMIN"}),
+            audit=lambda *args: audits.append(args),
+            connection=connect,
+            course_structure_snapshot_with_conn=lambda conn, course_id: valid_snapshot(),
+            float_value=lambda value, fallback=0: float(value if value not in (None, "") else fallback),
+            public_course_version=lambda row: row,
+            require_fields=lambda payload, fields: None,
+            success=lambda data: data,
+        )
+
+        result = catalog.admin_refresh_course_version_draft_action(
+            {"courseVersionId": "VERSION-2"},
+            runtime=runtime,
+        )
+
+        self.assertEqual(valid_snapshot(), connection.updated_snapshot)
+        self.assertTrue(connection.committed)
+        self.assertEqual("COURSE_VERSION_DRAFT_REFRESHED", audits[0][3])
+        self.assertTrue(result["validation"]["valid"])
+
+    def test_published_version_cannot_be_refreshed_from_the_editor(self):
+        connection = _DraftConnection(status="PUBLISHED")
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        runtime = SimpleNamespace(
+            admin_context=lambda payload, roles: ({}, {"admin_id": "ADMIN-1", "role": "ADMIN"}),
+            audit=lambda *args: None,
+            connection=connect,
+            course_structure_snapshot_with_conn=lambda conn, course_id: valid_snapshot(),
+            float_value=float,
+            public_course_version=lambda row: row,
+            require_fields=lambda payload, fields: None,
+            success=lambda data: data,
+        )
+
+        with self.assertRaises(catalog.ApiError) as raised:
+            catalog.admin_refresh_course_version_draft_action(
+                {"courseVersionId": "VERSION-2"},
+                runtime=runtime,
+            )
+
+        self.assertEqual("COURSE_VERSION_NOT_DRAFT", raised.exception.code)
+        self.assertIsNone(connection.updated_snapshot)
 
 
 class CourseAuthoringFrontendContractTests(unittest.TestCase):
@@ -118,6 +243,8 @@ class CourseAuthoringFrontendContractTests(unittest.TestCase):
         self.assertIn("data-preview-course-version", admin_source)
         self.assertIn("course-version-validation", admin_source)
         self.assertIn("adminPreviewCourseVersion", api_source)
+        self.assertIn("adminRefreshCourseVersionDraft", api_source)
+        self.assertIn("Atualizar do editor", admin_source)
         self.assertIn("Corrija os bloqueios antes de publicar", admin_source)
 
 

@@ -106,6 +106,7 @@ class CourseVersionsAndOfferingsTests(unittest.TestCase):
     def test_course_actions_are_registered(self):
         for action in (
             "adminCreateCourseVersion",
+            "adminRefreshCourseVersionDraft",
             "adminPreviewCourseVersion",
             "adminPublishCourseVersion",
             "adminSaveCourseOffering",

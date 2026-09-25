@@ -6463,6 +6463,9 @@ function renderCourses() {
   root.querySelectorAll('[data-preview-course-version]').forEach((button) => {
     button.addEventListener('click', () => showCourseVersionPreview(button.dataset.previewCourseVersion, null, button));
   });
+  root.querySelectorAll('[data-refresh-course-version]').forEach((button) => {
+    button.addEventListener('click', () => refreshCourseVersionDraft(button.dataset.refreshCourseVersion, button));
+  });
   root.querySelectorAll('[data-edit-course-offering]').forEach((button) => {
     button.addEventListener('click', () => showCourseOfferingDialog(button.dataset.editCourseOffering));
   });
@@ -6529,7 +6532,7 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
           <div>
             <p class="eyebrow">Publicação e calendário</p>
             <h2>Versões e edições do curso</h2>
-            <p>As versões publicadas preservam o conteúdo histórico de cada matrícula.</p>
+            <p>As versões publicadas preservam o histórico. Um rascunho só recebe alterações do editor quando é atualizado explicitamente.</p>
           </div>
           ${canManagePlatform() ? `<div class="admin-heading-actions">
             <button class="button button-secondary" id="createCourseDraft" type="button" ${hasDraft ? 'disabled' : ''}>Nova versão</button>
@@ -6670,13 +6673,15 @@ function courseVersionCardTemplate(version) {
       <dl>
         <div><dt>Carga horária</dt><dd>${escapeHtml(version.totalHours || 0)} h</dd></div>
         <div><dt>Nota mínima</dt><dd>${escapeHtml(version.passingScore || 0)}%</dd></div>
-        <div><dt>Publicada</dt><dd>${escapeHtml(formatDate(version.publishedAt))}</dd></div>
+        <div><dt>${version.status === 'DRAFT' ? 'Rascunho atualizado' : 'Publicada'}</dt><dd>${escapeHtml(formatDate(version.status === 'DRAFT' ? version.updatedAt : version.publishedAt))}</dd></div>
       </dl>
       ${canManagePlatform() ? `
         <div class="admin-row-actions">
           <button class="button button-secondary button-small" type="button"
             data-preview-course-version="${escapeHtml(version.courseVersionId)}">Pré-visualizar</button>
           ${version.status === 'DRAFT' ? `
+            <button class="button button-secondary button-small" type="button"
+              data-refresh-course-version="${escapeHtml(version.courseVersionId)}">Atualizar do editor</button>
             <button class="button button-primary button-small" type="button"
               data-publish-course-version="${escapeHtml(version.courseVersionId)}">Publicar versão</button>
           ` : ''}
@@ -7173,6 +7178,22 @@ async function createCourseDraft() {
   }
 }
 
+async function refreshCourseVersionDraft(courseVersionId, triggerButton = null) {
+  if (!courseVersionId) return;
+  if (!confirmAdminAction('Substituir o snapshot deste rascunho pela estrutura atual do editor?')) return;
+  setBusy(triggerButton, true, 'A atualizar...');
+  try {
+    const result = await api.adminRefreshCourseVersionDraft(courseVersionId);
+    showToast('Rascunho atualizado a partir do editor.', 'success');
+    await loadCourses();
+    await showCourseVersionPreview(courseVersionId, result);
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(triggerButton, false);
+  }
+}
+
 async function showCourseVersionPreview(courseVersionId, loadedResult = null, triggerButton = null) {
   if (!courseVersionId) return;
   setBusy(triggerButton, true, 'A validar...');
@@ -7205,6 +7226,9 @@ async function showCourseVersionPreview(courseVersionId, loadedResult = null, tr
           <div><dt>Bloqueios</dt><dd>${escapeHtml(summary.errorCount || 0)}</dd></div>
           <div><dt>Avisos</dt><dd>${escapeHtml(summary.warningCount || 0)}</dd></div>
         </dl>
+        ${version.status === 'DRAFT' ? `
+          <p class="course-version-draft-note">Esta pré-visualização usa o snapshot guardado no rascunho. Alterações posteriores no editor não são incluídas automaticamente.</p>
+        ` : ''}
         <section class="course-version-validation" aria-labelledby="courseVersionValidationTitle">
           <h3 id="courseVersionValidationTitle">Validação</h3>
           ${issues.length ? `

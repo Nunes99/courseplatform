@@ -133,6 +133,7 @@ async function main() {
     assert.equal(await page.getByText('Versão 1', { exact: false }).count() > 0, true);
     assert.equal(await page.getByText('Edição de janeiro de 2027', { exact: true }).count(), 1);
     assert.equal(await page.locator('[data-publish-course-version="CV-2"]').count(), 1);
+    assert.equal(await page.locator('[data-refresh-course-version="CV-2"]').count(), 1);
 
     for (const [label, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
       await page.setViewportSize({ width, height });
@@ -175,6 +176,7 @@ async function main() {
     const previewDialog = page.locator('.course-version-preview-dialog');
     await previewDialog.getByRole('heading', { name: 'Versão 2' }).waitFor();
     await previewDialog.getByText('Pronta para publicar', { exact: true }).waitFor();
+    await previewDialog.getByText('Alterações posteriores no editor não são incluídas automaticamente.', { exact: false }).waitFor();
     const previewGeometry = await previewDialog.evaluate((node) => ({
       right: node.getBoundingClientRect().right,
       left: node.getBoundingClientRect().left,

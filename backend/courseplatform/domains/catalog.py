@@ -15,6 +15,7 @@ ACTION_BINDINGS = (
     ("adminListCourses", "admin_list_courses"),
     ("adminGetCourseStructure", "admin_course_structure"),
     ("adminCreateCourseVersion", "admin_create_course_version"),
+    ("adminRefreshCourseVersionDraft", "admin_refresh_course_version_draft"),
     ("adminPreviewCourseVersion", "admin_preview_course_version"),
     ("adminPublishCourseVersion", "admin_publish_course_version"),
     ("adminSaveMediaConfig", "admin_save_media_config"),
@@ -423,6 +424,24 @@ def course_version_preview(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def stored_course_version_snapshot(version: dict[str, Any]) -> dict[str, Any]:
+    snapshot = version.get("content_snapshot_json") or {}
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except json.JSONDecodeError as exc:
+            raise ApiError(
+                "COURSE_VERSION_SNAPSHOT_INVALID",
+                "O snapshot desta versão não é válido e precisa de intervenção administrativa.",
+            ) from exc
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("course"), dict):
+        raise ApiError(
+            "COURSE_VERSION_SNAPSHOT_INVALID",
+            "O snapshot desta versão não é válido e precisa de intervenção administrativa.",
+        )
+    return snapshot
+
+
 def admin_list_courses_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
     admin_context = runtime.admin_context
     cursor_page_limit = runtime.cursor_page_limit
@@ -664,40 +683,7 @@ def admin_create_course_version_action(payload: dict[str, Any], *, runtime: Cata
     return success({"courseVersion": public_course_version(row), "created": True})
 
 
-def admin_preview_course_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
-    admin_context = runtime.admin_context
-    connection = runtime.connection
-    course_structure_snapshot_with_conn = runtime.course_structure_snapshot_with_conn
-    public_course_version = runtime.public_course_version
-    require_fields = runtime.require_fields
-    success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN"})
-    require_fields(payload, ["courseVersionId"])
-    with connection() as conn:
-        version = conn.execute(
-            "select * from courseplatform.course_versions where course_version_id = %s",
-            (payload["courseVersionId"],),
-        ).fetchone()
-        if not version:
-            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
-        if version.get("status") == "DRAFT":
-            snapshot = course_structure_snapshot_with_conn(conn, version["course_id"])
-        else:
-            snapshot = version.get("content_snapshot_json") or {}
-            if isinstance(snapshot, str):
-                try:
-                    snapshot = json.loads(snapshot)
-                except json.JSONDecodeError:
-                    snapshot = {}
-    validation = validate_course_version_snapshot(snapshot)
-    return success({
-        "courseVersion": public_course_version(version),
-        "validation": validation,
-        "preview": course_version_preview(snapshot),
-    })
-
-
-def admin_publish_course_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+def admin_refresh_course_version_draft_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
     admin_context = runtime.admin_context
     audit = runtime.audit
     connection = runtime.connection
@@ -716,8 +702,88 @@ def admin_publish_course_version_action(payload: dict[str, Any], *, runtime: Cat
         if not version:
             raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
         if version.get("status") != "DRAFT":
-            raise ApiError("COURSE_VERSION_NOT_DRAFT", "Apenas uma versão em rascunho pode ser publicada.")
+            raise ApiError("COURSE_VERSION_NOT_DRAFT", "Apenas um rascunho pode ser atualizado pelo editor.")
         snapshot = course_structure_snapshot_with_conn(conn, version["course_id"])
+        course_data = snapshot["course"]
+        row = conn.execute(
+            """
+            update courseplatform.course_versions
+            set title = %s, description = %s, total_hours = %s, passing_score = %s,
+                content_snapshot_json = %s, updated_at = now()
+            where course_version_id = %s and status = 'DRAFT'
+            returning *
+            """,
+            (
+                course_data.get("title"),
+                course_data.get("description"),
+                float_value(course_data.get("total_hours")),
+                float_value(course_data.get("passing_score"), 60),
+                json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
+                version["course_version_id"],
+            ),
+        ).fetchone()
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "COURSE_VERSION_DRAFT_REFRESHED",
+            "COURSE_VERSION",
+            row["course_version_id"],
+            {"courseId": row["course_id"], "versionNumber": row["version_number"]},
+        )
+        conn.commit()
+    validation = validate_course_version_snapshot(snapshot)
+    return success({
+        "courseVersion": public_course_version(row),
+        "validation": validation,
+        "preview": course_version_preview(snapshot),
+    })
+
+
+def admin_preview_course_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    admin_context = runtime.admin_context
+    connection = runtime.connection
+    public_course_version = runtime.public_course_version
+    require_fields = runtime.require_fields
+    success = runtime.success
+    admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["courseVersionId"])
+    with connection() as conn:
+        version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s",
+            (payload["courseVersionId"],),
+        ).fetchone()
+        if not version:
+            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
+        snapshot = stored_course_version_snapshot(version)
+    validation = validate_course_version_snapshot(snapshot)
+    return success({
+        "courseVersion": public_course_version(version),
+        "validation": validation,
+        "preview": course_version_preview(snapshot),
+    })
+
+
+def admin_publish_course_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    admin_context = runtime.admin_context
+    audit = runtime.audit
+    connection = runtime.connection
+    float_value = runtime.float_value
+    public_course_version = runtime.public_course_version
+    require_fields = runtime.require_fields
+    success = runtime.success
+    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["courseVersionId"])
+    with connection() as conn:
+        version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s for update",
+            (payload["courseVersionId"],),
+        ).fetchone()
+        if not version:
+            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
+        if version.get("status") != "DRAFT":
+            raise ApiError("COURSE_VERSION_NOT_DRAFT", "Apenas uma versão em rascunho pode ser publicada.")
+        snapshot = stored_course_version_snapshot(version)
         validation = validate_course_version_snapshot(snapshot)
         if not validation["valid"]:
             raise ApiError(
