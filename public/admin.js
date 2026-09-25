@@ -6460,6 +6460,9 @@ function renderCourses() {
   root.querySelectorAll('[data-publish-course-version]').forEach((button) => {
     button.addEventListener('click', () => publishCourseVersion(button.dataset.publishCourseVersion));
   });
+  root.querySelectorAll('[data-preview-course-version]').forEach((button) => {
+    button.addEventListener('click', () => showCourseVersionPreview(button.dataset.previewCourseVersion, null, button));
+  });
   root.querySelectorAll('[data-edit-course-offering]').forEach((button) => {
     button.addEventListener('click', () => showCourseOfferingDialog(button.dataset.editCourseOffering));
   });
@@ -6669,10 +6672,14 @@ function courseVersionCardTemplate(version) {
         <div><dt>Nota mínima</dt><dd>${escapeHtml(version.passingScore || 0)}%</dd></div>
         <div><dt>Publicada</dt><dd>${escapeHtml(formatDate(version.publishedAt))}</dd></div>
       </dl>
-      ${version.status === 'DRAFT' && canManagePlatform() ? `
+      ${canManagePlatform() ? `
         <div class="admin-row-actions">
-          <button class="button button-primary button-small" type="button"
-            data-publish-course-version="${escapeHtml(version.courseVersionId)}">Publicar versão</button>
+          <button class="button button-secondary button-small" type="button"
+            data-preview-course-version="${escapeHtml(version.courseVersionId)}">Pré-visualizar</button>
+          ${version.status === 'DRAFT' ? `
+            <button class="button button-primary button-small" type="button"
+              data-publish-course-version="${escapeHtml(version.courseVersionId)}">Publicar versão</button>
+          ` : ''}
         </div>
       ` : ''}
     </article>
@@ -7166,16 +7173,119 @@ async function createCourseDraft() {
   }
 }
 
-async function publishCourseVersion(courseVersionId) {
-  if (!courseVersionId || !confirmAdminAction('Publicar esta versão? O conteúdo publicado ficará imutável.')) return;
-  const button = document.querySelector(`[data-publish-course-version="${CSS.escape(courseVersionId)}"]`);
+async function showCourseVersionPreview(courseVersionId, loadedResult = null, triggerButton = null) {
+  if (!courseVersionId) return;
+  setBusy(triggerButton, true, 'A validar...');
+  try {
+    const result = loadedResult || await api.adminPreviewCourseVersion(courseVersionId);
+    const validation = result.validation || { valid: false, issues: [], summary: {} };
+    const summary = validation.summary || {};
+    const issues = validation.issues || [];
+    const preview = result.preview || {};
+    const version = result.courseVersion || {};
+    const overlay = document.createElement('div');
+    overlay.className = 'dialog-overlay';
+    overlay.innerHTML = `
+      <div class="dialog-card course-version-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="courseVersionPreviewTitle">
+        <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+        <div class="course-version-preview-heading">
+          <div>
+            <p class="eyebrow">Pré-publicação</p>
+            <h2 id="courseVersionPreviewTitle">Versão ${escapeHtml(version.versionNumber || '')}</h2>
+            <p>${escapeHtml(preview.course?.title || version.title || 'Curso sem título')}</p>
+          </div>
+          <span class="status-pill ${validation.valid ? 'status-active' : 'status-blocked'}">
+            ${validation.valid ? 'Pronta para publicar' : 'Publicação bloqueada'}
+          </span>
+        </div>
+        <dl class="course-version-preview-metrics">
+          <div><dt>Módulos</dt><dd>${escapeHtml(summary.lessonCount || 0)}</dd></div>
+          <div><dt>Conteúdos</dt><dd>${escapeHtml(summary.contentCount || 0)}</dd></div>
+          <div><dt>Questões</dt><dd>${escapeHtml(summary.questionCount || 0)}</dd></div>
+          <div><dt>Bloqueios</dt><dd>${escapeHtml(summary.errorCount || 0)}</dd></div>
+          <div><dt>Avisos</dt><dd>${escapeHtml(summary.warningCount || 0)}</dd></div>
+        </dl>
+        <section class="course-version-validation" aria-labelledby="courseVersionValidationTitle">
+          <h3 id="courseVersionValidationTitle">Validação</h3>
+          ${issues.length ? `
+            <ul>
+              ${issues.map((issue) => `
+                <li class="is-${escapeHtml((issue.severity || 'warning').toLowerCase())}">
+                  <strong>${issue.severity === 'ERROR' ? 'Corrigir' : 'Verificar'}</strong>
+                  <span>${escapeHtml(issue.message || '')}</span>
+                </li>
+              `).join('')}
+            </ul>
+          ` : '<p class="course-version-validation-ok">Nenhum bloqueio ou aviso encontrado.</p>'}
+        </section>
+        <section class="course-version-outline" aria-labelledby="courseVersionOutlineTitle">
+          <h3 id="courseVersionOutlineTitle">Estrutura que será publicada</h3>
+          <div class="course-version-outline-list">
+            ${(preview.lessons || []).map((lesson) => `
+              <article>
+                <span>${escapeHtml(lesson.lessonNumber || '')}</span>
+                <div>
+                  <strong>${escapeHtml(lesson.title || 'Módulo sem título')}</strong>
+                  <small>${escapeHtml(lesson.contentCount || 0)} conteúdo(s) · ${escapeHtml(lesson.questionCount || 0)} questão(ões)</small>
+                </div>
+              </article>
+            `).join('') || '<p class="empty-note">Nenhum módulo ativo.</p>'}
+          </div>
+        </section>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-preview>Fechar</button>
+          ${version.status === 'DRAFT' && validation.valid && canManagePlatform() ? `
+            <button class="button button-primary" type="button" data-publish-preview>Publicar versão</button>
+          ` : ''}
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    bindDialogClose(overlay);
+    overlay.querySelector('[data-close-preview]').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('[data-publish-preview]')?.addEventListener('click', async (event) => {
+      const published = await publishCourseVersion(courseVersionId, validation, event.currentTarget);
+      if (published) overlay.remove();
+    });
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(triggerButton, false);
+  }
+}
+
+async function publishCourseVersion(courseVersionId, knownValidation = null, triggerButton = null) {
+  if (!courseVersionId) return false;
+  let validation = knownValidation;
+  let previewResult = null;
+  const button = triggerButton || document.querySelector(`[data-publish-course-version="${CSS.escape(courseVersionId)}"]`);
+  if (!validation) {
+    setBusy(button, true, 'A validar...');
+    try {
+      previewResult = await api.adminPreviewCourseVersion(courseVersionId);
+      validation = previewResult.validation;
+    } catch (error) {
+      handleAdminError(error);
+      setBusy(button, false);
+      return false;
+    }
+    setBusy(button, false);
+  }
+  if (!validation?.valid) {
+    showToast('Corrija os bloqueios antes de publicar a versão.', 'error');
+    await showCourseVersionPreview(courseVersionId, previewResult, button);
+    return false;
+  }
+  if (!confirmAdminAction('Publicar esta versão? O conteúdo publicado ficará imutável.')) return false;
   setBusy(button, true, 'A publicar...');
   try {
     await api.adminPublishCourseVersion(courseVersionId);
     showToast('Versão publicada.', 'success');
     await loadCourses();
+    return true;
   } catch (error) {
     handleAdminError(error);
+    return false;
   } finally {
     setBusy(button, false);
   }

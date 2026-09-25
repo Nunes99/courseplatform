@@ -15,6 +15,7 @@ ACTION_BINDINGS = (
     ("adminListCourses", "admin_list_courses"),
     ("adminGetCourseStructure", "admin_course_structure"),
     ("adminCreateCourseVersion", "admin_create_course_version"),
+    ("adminPreviewCourseVersion", "admin_preview_course_version"),
     ("adminPublishCourseVersion", "admin_publish_course_version"),
     ("adminSaveMediaConfig", "admin_save_media_config"),
     ("adminSaveCourse", "admin_save_course"),
@@ -249,6 +250,176 @@ def course_structure_snapshot_with_conn_action(conn, course_id: str, *, runtime:
             "passing_score": float(course.get("passing_score") or 0),
         },
         "lessons": snapshot_lessons,
+    }
+
+
+def validate_course_version_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    issues: list[dict[str, str]] = []
+
+    def add_issue(severity: str, code: str, message: str, entity_type: str = "COURSE", entity_id: str = "") -> None:
+        issues.append({
+            "severity": severity,
+            "code": code,
+            "message": message,
+            "entityType": entity_type,
+            "entityId": entity_id,
+        })
+
+    course = snapshot.get("course") if isinstance(snapshot.get("course"), dict) else {}
+    lessons = snapshot.get("lessons") if isinstance(snapshot.get("lessons"), list) else []
+    active_lessons = [
+        lesson for lesson in lessons
+        if isinstance(lesson, dict) and str(lesson.get("status") or "ACTIVE").upper() == "ACTIVE"
+    ]
+
+    if not str(course.get("course_code") or "").strip():
+        add_issue("ERROR", "COURSE_CODE_REQUIRED", "Defina o código do curso antes de publicar.")
+    if not str(course.get("title") or "").strip():
+        add_issue("ERROR", "COURSE_TITLE_REQUIRED", "Defina o título do curso antes de publicar.")
+    try:
+        total_hours = float(course.get("total_hours") or 0)
+    except (TypeError, ValueError):
+        total_hours = 0
+    if total_hours <= 0:
+        add_issue("ERROR", "COURSE_HOURS_REQUIRED", "A carga horária do curso deve ser superior a zero.")
+    try:
+        passing_score = float(course.get("passing_score"))
+    except (TypeError, ValueError):
+        passing_score = -1
+    if not 0 <= passing_score <= 100:
+        add_issue("ERROR", "COURSE_PASSING_SCORE_INVALID", "A nota mínima do curso deve estar entre 0 e 100.")
+    if not active_lessons:
+        add_issue("ERROR", "ACTIVE_LESSON_REQUIRED", "Adicione pelo menos um módulo ativo antes de publicar.")
+
+    lesson_ids = {str(lesson.get("lesson_id") or "") for lesson in active_lessons}
+    lesson_numbers: dict[str, int] = {}
+    number_owners: dict[int, str] = {}
+    prerequisite_by_lesson: dict[str, str] = {}
+    content_count = 0
+    question_count = 0
+
+    for lesson in active_lessons:
+        lesson_id = str(lesson.get("lesson_id") or "")
+        title = str(lesson.get("title") or "").strip()
+        try:
+            lesson_number = int(lesson.get("lesson_number") or 0)
+        except (TypeError, ValueError):
+            lesson_number = 0
+        lesson_numbers[lesson_id] = lesson_number
+        if not title:
+            add_issue("ERROR", "LESSON_TITLE_REQUIRED", "Existe um módulo ativo sem título.", "LESSON", lesson_id)
+        if lesson_number <= 0:
+            add_issue("ERROR", "LESSON_ORDER_INVALID", f'O módulo "{title or lesson_id}" precisa de uma posição positiva.', "LESSON", lesson_id)
+        elif lesson_number in number_owners:
+            add_issue("ERROR", "LESSON_ORDER_DUPLICATED", f'A posição {lesson_number} está atribuída a mais de um módulo.', "LESSON", lesson_id)
+        else:
+            number_owners[lesson_number] = lesson_id
+
+        prerequisite_id = str(lesson.get("prerequisite_lesson_id") or "").strip()
+        if prerequisite_id:
+            prerequisite_by_lesson[lesson_id] = prerequisite_id
+            if prerequisite_id not in lesson_ids:
+                add_issue("ERROR", "PREREQUISITE_NOT_ACTIVE", f'O pré-requisito de "{title or lesson_id}" não pertence aos módulos ativos.', "LESSON", lesson_id)
+            elif prerequisite_id == lesson_id:
+                add_issue("ERROR", "PREREQUISITE_SELF_REFERENCE", f'O módulo "{title or lesson_id}" não pode depender de si próprio.', "LESSON", lesson_id)
+
+        content = [
+            item for item in (lesson.get("content") or [])
+            if isinstance(item, dict) and str(item.get("status") or "ACTIVE").upper() == "ACTIVE"
+        ]
+        questions = [
+            item for item in (lesson.get("questions") or [])
+            if isinstance(item, dict) and str(item.get("status") or "ACTIVE").upper() == "ACTIVE"
+        ]
+        content_count += len(content)
+        question_count += len(questions)
+        if not content and not questions:
+            add_issue("ERROR", "LESSON_EMPTY", f'O módulo "{title or lesson_id}" não possui conteúdo nem atividade ativa.', "LESSON", lesson_id)
+        elif not content:
+            add_issue("WARNING", "LESSON_WITHOUT_CONTENT", f'O módulo "{title or lesson_id}" contém avaliação, mas não possui conteúdo ativo.', "LESSON", lesson_id)
+
+        for question in questions:
+            question_id = str(question.get("question_id") or "")
+            prompt = str(question.get("prompt") or "").strip()
+            question_type = str(question.get("question_type") or "").strip().upper()
+            if not prompt:
+                add_issue("ERROR", "QUESTION_PROMPT_REQUIRED", f'Existe uma questão sem enunciado no módulo "{title or lesson_id}".', "QUESTION", question_id)
+            try:
+                points = float(question.get("points") or 0)
+            except (TypeError, ValueError):
+                points = 0
+            if points <= 0:
+                add_issue("ERROR", "QUESTION_POINTS_INVALID", f'A questão "{prompt or question_id}" deve ter pontuação superior a zero.', "QUESTION", question_id)
+            if question_type in {"SINGLE_CHOICE", "TRUE_FALSE", "MULTIPLE_CHOICE"}:
+                options = [item for item in (question.get("options") or []) if isinstance(item, dict)]
+                valid_options = [item for item in options if str(item.get("option_text") or item.get("option_label") or "").strip()]
+                correct_options = [
+                    item for item in valid_options
+                    if item.get("is_correct") is True or str(item.get("is_correct") or "").lower() in {"true", "1", "yes", "sim"}
+                ]
+                has_legacy_answer = bool(str(question.get("correct_answer") or "").strip())
+                if len(valid_options) < 2:
+                    add_issue("ERROR", "QUESTION_OPTIONS_REQUIRED", f'A questão "{prompt or question_id}" precisa de pelo menos duas opções.', "QUESTION", question_id)
+                if not correct_options and not has_legacy_answer:
+                    add_issue("ERROR", "QUESTION_CORRECT_ANSWER_REQUIRED", f'A questão "{prompt or question_id}" não possui resposta correta.', "QUESTION", question_id)
+
+    for lesson_id, prerequisite_id in prerequisite_by_lesson.items():
+        if prerequisite_id in lesson_numbers and lesson_numbers.get(prerequisite_id, 0) >= lesson_numbers.get(lesson_id, 0):
+            add_issue("ERROR", "PREREQUISITE_ORDER_INVALID", "O pré-requisito deve aparecer antes do módulo dependente.", "LESSON", lesson_id)
+        seen = {lesson_id}
+        current = prerequisite_id
+        while current and current in prerequisite_by_lesson:
+            if current in seen:
+                add_issue("ERROR", "PREREQUISITE_CYCLE", "Foi detetado um ciclo entre os pré-requisitos dos módulos.", "LESSON", lesson_id)
+                break
+            seen.add(current)
+            current = prerequisite_by_lesson.get(current, "")
+
+    errors = sum(1 for issue in issues if issue["severity"] == "ERROR")
+    warnings = sum(1 for issue in issues if issue["severity"] == "WARNING")
+    return {
+        "valid": errors == 0,
+        "issues": issues,
+        "summary": {
+            "lessonCount": len(active_lessons),
+            "contentCount": content_count,
+            "questionCount": question_count,
+            "errorCount": errors,
+            "warningCount": warnings,
+        },
+    }
+
+
+def course_version_preview(snapshot: dict[str, Any]) -> dict[str, Any]:
+    course = snapshot.get("course") if isinstance(snapshot.get("course"), dict) else {}
+    lessons = snapshot.get("lessons") if isinstance(snapshot.get("lessons"), list) else []
+    return {
+        "course": {
+            "courseCode": course.get("course_code"),
+            "title": course.get("title"),
+            "description": course.get("description"),
+            "totalHours": course.get("total_hours"),
+            "passingScore": course.get("passing_score"),
+        },
+        "lessons": [
+            {
+                "lessonId": lesson.get("lesson_id"),
+                "lessonNumber": lesson.get("lesson_number"),
+                "title": lesson.get("title"),
+                "summary": lesson.get("summary"),
+                "prerequisiteLessonId": lesson.get("prerequisite_lesson_id"),
+                "contentCount": sum(
+                    1 for item in (lesson.get("content") or [])
+                    if isinstance(item, dict) and str(item.get("status") or "ACTIVE").upper() == "ACTIVE"
+                ),
+                "questionCount": sum(
+                    1 for item in (lesson.get("questions") or [])
+                    if isinstance(item, dict) and str(item.get("status") or "ACTIVE").upper() == "ACTIVE"
+                ),
+            }
+            for lesson in lessons
+            if isinstance(lesson, dict) and str(lesson.get("status") or "ACTIVE").upper() == "ACTIVE"
+        ],
     }
 
 
@@ -493,6 +664,39 @@ def admin_create_course_version_action(payload: dict[str, Any], *, runtime: Cata
     return success({"courseVersion": public_course_version(row), "created": True})
 
 
+def admin_preview_course_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    admin_context = runtime.admin_context
+    connection = runtime.connection
+    course_structure_snapshot_with_conn = runtime.course_structure_snapshot_with_conn
+    public_course_version = runtime.public_course_version
+    require_fields = runtime.require_fields
+    success = runtime.success
+    admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["courseVersionId"])
+    with connection() as conn:
+        version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s",
+            (payload["courseVersionId"],),
+        ).fetchone()
+        if not version:
+            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
+        if version.get("status") == "DRAFT":
+            snapshot = course_structure_snapshot_with_conn(conn, version["course_id"])
+        else:
+            snapshot = version.get("content_snapshot_json") or {}
+            if isinstance(snapshot, str):
+                try:
+                    snapshot = json.loads(snapshot)
+                except json.JSONDecodeError:
+                    snapshot = {}
+    validation = validate_course_version_snapshot(snapshot)
+    return success({
+        "courseVersion": public_course_version(version),
+        "validation": validation,
+        "preview": course_version_preview(snapshot),
+    })
+
+
 def admin_publish_course_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
     admin_context = runtime.admin_context
     audit = runtime.audit
@@ -514,6 +718,13 @@ def admin_publish_course_version_action(payload: dict[str, Any], *, runtime: Cat
         if version.get("status") != "DRAFT":
             raise ApiError("COURSE_VERSION_NOT_DRAFT", "Apenas uma versão em rascunho pode ser publicada.")
         snapshot = course_structure_snapshot_with_conn(conn, version["course_id"])
+        validation = validate_course_version_snapshot(snapshot)
+        if not validation["valid"]:
+            raise ApiError(
+                "COURSE_VERSION_INVALID",
+                "A versão possui bloqueios que precisam de ser corrigidos antes da publicação.",
+                validation,
+            )
         course_data = snapshot["course"]
         row = conn.execute(
             """
@@ -538,7 +749,7 @@ def admin_publish_course_version_action(payload: dict[str, Any], *, runtime: Cat
             {"courseId": row["course_id"], "versionNumber": row["version_number"]},
         )
         conn.commit()
-    return success({"courseVersion": public_course_version(row)})
+    return success({"courseVersion": public_course_version(row), "validation": validation})
 
 
 def admin_save_media_config_action(payload: dict[str, Any], *, runtime: CatalogRuntime):

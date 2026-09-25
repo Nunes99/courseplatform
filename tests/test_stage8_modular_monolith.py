@@ -30,7 +30,7 @@ class BackendModuleBoundaryTests(unittest.TestCase):
             set(DOMAIN_ACTION_BINDINGS),
         )
         action_names = [name for bindings in DOMAIN_ACTION_BINDINGS.values() for name, _ in bindings]
-        self.assertEqual(118, len(action_names))
+        self.assertEqual(119, len(action_names))
         self.assertEqual(len(action_names), len(set(action_names)))
         self.assertEqual(set(action_names), set(actions.ACTIONS))
         self.assertTrue(all(callable(handler) for handler in actions.ACTIONS.values()))
@@ -184,6 +184,7 @@ class BackendModuleBoundaryTests(unittest.TestCase):
             "admin_list_courses": "admin_list_courses_action",
             "admin_course_structure": "admin_course_structure_action",
             "admin_create_course_version": "admin_create_course_version_action",
+            "admin_preview_course_version": "admin_preview_course_version_action",
             "admin_publish_course_version": "admin_publish_course_version_action",
             "admin_save_media_config": "admin_save_media_config_action",
             "admin_save_course": "admin_save_course_action",

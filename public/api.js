@@ -856,6 +856,10 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminCreateCourseVersion', { courseId });
   }
 
+  adminPreviewCourseVersion(courseVersionId) {
+    return this.adminRequest('adminPreviewCourseVersion', { courseVersionId });
+  }
+
   adminPublishCourseVersion(courseVersionId) {
     return this.mutateAdmin('adminPublishCourseVersion', { courseVersionId });
   }

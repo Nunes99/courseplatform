@@ -69,6 +69,30 @@ async function main() {
         return route.fulfill({ contentType: 'text/css', body });
       }
       if (url.pathname === '/api/index') {
+        const payload = route.request().method() === 'POST' ? route.request().postDataJSON() || {} : {};
+        if (payload.action === 'adminPreviewCourseVersion') {
+          return route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({
+              success: true,
+              data: {
+                courseVersion: structure.versions[0],
+                validation: {
+                  valid: true,
+                  issues: [],
+                  summary: { lessonCount: 2, contentCount: 4, questionCount: 3, errorCount: 0, warningCount: 0 }
+                },
+                preview: {
+                  course,
+                  lessons: [
+                    { lessonId: 'LESSON-1', lessonNumber: 1, title: 'Fundamentos', contentCount: 2, questionCount: 1 },
+                    { lessonId: 'LESSON-2', lessonNumber: 2, title: 'Aplicação', contentCount: 2, questionCount: 2 }
+                  ]
+                }
+              }
+            })
+          });
+        }
         return route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({ success: true, data: { mediaConfig: {}, rooms: [], unreadCount: 0 } })
@@ -147,6 +171,22 @@ async function main() {
     }
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('[data-preview-course-version="CV-2"]').click();
+    const previewDialog = page.locator('.course-version-preview-dialog');
+    await previewDialog.getByRole('heading', { name: 'Versão 2' }).waitFor();
+    await previewDialog.getByText('Pronta para publicar', { exact: true }).waitFor();
+    const previewGeometry = await previewDialog.evaluate((node) => ({
+      right: node.getBoundingClientRect().right,
+      left: node.getBoundingClientRect().left,
+      viewport: window.innerWidth,
+      scrollWidth: node.scrollWidth,
+      clientWidth: node.clientWidth
+    }));
+    assert.ok(previewGeometry.left >= 0 && previewGeometry.right <= previewGeometry.viewport, 'mobile preview outside viewport');
+    assert.ok(previewGeometry.scrollWidth <= previewGeometry.clientWidth, 'mobile preview horizontal overflow');
+    await page.screenshot({ path: path.join(output, 'mobile-version-preview.png'), fullPage: true });
+    await page.locator('[data-close-preview]').click();
+
     await page.getByRole('button', { name: 'Editar edição de janeiro de 2027' }).click();
     await page.getByRole('heading', { name: 'Editar edição' }).waitFor();
     const dialogGeometry = await page.locator('.dialog-card').evaluate((node) => ({
