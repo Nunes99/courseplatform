@@ -1,17 +1,23 @@
+import inspect
 import unittest
 from pathlib import Path
 
 from backend.courseplatform.contracts import ApiError
+from backend.courseplatform.domains import assessments as assessment_domain
+from backend.courseplatform.domains import certificates as certificate_domain
 from backend.courseplatform.reviewer_scopes import (
     normalize_scope_payload,
     require_attempt_scope,
+    require_certificate_scope,
+    require_course_scope,
+    require_student_scope,
     reviewer_course_predicate,
     reviewer_scope_predicate,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "supabase" / "migrations" / "20260925120000_add_reviewer_scopes.sql"
+MIGRATION = ROOT / "supabase" / "migrations" / "20260925043513_add_reviewer_scopes.sql"
 
 
 class _Result:
@@ -50,6 +56,8 @@ class ReviewerScopeUnitTests(unittest.TestCase):
         self.assertIn("rs.course_id = e.course_id", sql)
         self.assertIn("rs.offering_id = e.offering_id", sql)
         self.assertIn("rs.group_id = e.group_id", sql)
+        self.assertIn("select max(", sql)
+        self.assertIn("effective_scope.status = 'ACTIVE'", sql)
         self.assertEqual(("ADM-2",), params)
 
     def test_course_parent_is_visible_for_any_scope_below_it(self):
@@ -66,6 +74,27 @@ class ReviewerScopeUnitTests(unittest.TestCase):
                 {"scopeType": "COURSE", "courseId": "COURSE-1"},
             ])
 
+    def test_course_and_group_scopes_cannot_be_combined(self):
+        with self.assertRaises(ApiError) as error:
+            normalize_scope_payload([
+                {"scopeType": "COURSE", "courseId": "COURSE-1"},
+                {
+                    "scopeType": "GROUP",
+                    "courseId": "COURSE-1",
+                    "offeringId": "OFF-1",
+                    "groupId": "GROUP-1",
+                },
+            ])
+        self.assertEqual("INVALID_REVIEWER_SCOPE", error.exception.code)
+
+    def test_multiple_scopes_at_the_same_level_are_allowed(self):
+        scopes = normalize_scope_payload([
+            {"scopeType": "COURSE", "courseId": "COURSE-1"},
+            {"scopeType": "COURSE", "courseId": "COURSE-2"},
+        ])
+        self.assertEqual(2, len(scopes))
+        self.assertEqual({"COURSE"}, {scope["scopeType"] for scope in scopes})
+
     def test_attempt_outside_scope_is_denied(self):
         connection = _Connection(row=None)
         with self.assertRaises(ApiError) as error:
@@ -73,6 +102,33 @@ class ReviewerScopeUnitTests(unittest.TestCase):
                 connection,
                 {"role": "REVIEWER", "admin_id": "ADM-4"},
                 "ATT-1",
+            )
+        self.assertEqual("REVIEWER_SCOPE_REQUIRED", error.exception.code)
+
+    def test_course_outside_scope_is_denied(self):
+        with self.assertRaises(ApiError) as error:
+            require_course_scope(
+                _Connection(row=None),
+                {"role": "REVIEWER", "admin_id": "ADM-4"},
+                "COURSE-OUTSIDE",
+            )
+        self.assertEqual("REVIEWER_SCOPE_REQUIRED", error.exception.code)
+
+    def test_student_outside_scope_is_denied(self):
+        with self.assertRaises(ApiError) as error:
+            require_student_scope(
+                _Connection(row=None),
+                {"role": "REVIEWER", "admin_id": "ADM-4"},
+                "STU-OUTSIDE",
+            )
+        self.assertEqual("REVIEWER_SCOPE_REQUIRED", error.exception.code)
+
+    def test_certificate_download_outside_scope_is_denied(self):
+        with self.assertRaises(ApiError) as error:
+            require_certificate_scope(
+                _Connection(row=None),
+                {"role": "REVIEWER", "admin_id": "ADM-4"},
+                "CERT-OUTSIDE",
             )
         self.assertEqual("REVIEWER_SCOPE_REQUIRED", error.exception.code)
 
@@ -90,9 +146,23 @@ class ReviewerScopeContractTests(unittest.TestCase):
     def test_frontend_exposes_scope_editor_and_hides_restricted_controls(self):
         source = (ROOT / "public" / "admin.js").read_text(encoding="utf-8")
         self.assertIn("reviewerScopeOptionsTemplate", source)
+        self.assertIn("reviewerEffectiveAccess", source)
+        self.assertIn("reviewerScopeMode", source)
         self.assertIn("values.reviewScopes", source)
         self.assertIn("function canManagePlatform()", source)
         self.assertIn("Comprovativo protegido. Apenas administradores", source)
+
+    def test_sensitive_reviewer_operations_enforce_resource_scope(self):
+        download_source = inspect.getsource(assessment_domain.submission_file_download_payload_action)
+        review_source = inspect.getsource(assessment_domain.admin_review_submission_action)
+        certificate_source = inspect.getsource(certificate_domain.admin_certificate_pdf_payload_action)
+
+        self.assertIn("require_attempt_scope(conn, admin, row.get(\"attempt_id\"))", download_source)
+        self.assertIn("require_attempt_scope(conn, admin, attempt[\"attempt_id\"])", review_source)
+        self.assertIn(
+            "require_certificate_scope(conn, admin, cert[\"certificate_id\"])",
+            certificate_source,
+        )
 
 
 if __name__ == "__main__":

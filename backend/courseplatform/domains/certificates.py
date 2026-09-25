@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..contracts import ApiError
-from ..reviewer_scopes import admin_from_context, require_course_scope, reviewer_course_predicate, reviewer_scope_predicate
+from ..reviewer_scopes import (
+    admin_from_context,
+    require_certificate_scope,
+    require_course_scope,
+    reviewer_course_predicate,
+    reviewer_scope_predicate,
+)
 
 
 ACTION_BINDINGS = (
@@ -886,7 +892,7 @@ def admin_certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certi
             (payload["certificateId"],),
         ).fetchone()
         if cert:
-            require_course_scope(conn, admin, cert["course_id"])
+            require_certificate_scope(conn, admin, cert["certificate_id"])
         snapshot = cert.get("template_snapshot_json") if cert else None
         if cert and not snapshot:
             version = conn.execute(

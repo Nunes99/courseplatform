@@ -10,7 +10,7 @@ executado na base normal.
 
 | Etapa | Evidência automática e de dados | Validação operacional |
 | --- | --- | --- |
-| 3 - Supabase, RLS e views | Concluída para RLS e papéis atuais | Estudante, revisor e proprietário validados; âmbito fino do revisor ainda não existe |
+| 3 - Supabase, RLS, views e âmbito do revisor | Concluída | Estudante, revisor e proprietário validados; âmbito por curso confirmado e exclusividade por nível coberta por testes, aguardando apenas validação visual pós-deploy |
 | 4 - Migrações e health checks | Concluída localmente e reconciliada com o histórico remoto | Concluída em produção |
 | 6 - Storage privado | Backfill e reconciliação concluídos | Encerrada: estudante, revisor e proprietário validados com ficheiros privados reais; comprovativo recusado ao revisor |
 | 8 - Domínios e rotas tipadas | Suíte e verificadores de compatibilidade concluídos | Leituras reais de estudante, revisor e proprietário concluídas |
@@ -44,11 +44,10 @@ para Supabase Auth.
 
 ### Etapa 4
 
-- Na validação encerrada, a base reportava a versão de aplicação
-  `20260921120000`, então igual a `EXPECTED_SCHEMA_VERSION`. A implementação
-  posterior de âmbitos de revisor elevou o contrato local para `20260925120000`;
-  a respetiva migração continua pendente até ser aplicada com autorização.
-- O histórico remoto contém as 15 migrações esperadas.
+- A base reporta a versão de aplicação `20260925120000`, igual a
+  `EXPECTED_SCHEMA_VERSION`.
+- O histórico remoto contém a migração `20260925043513_add_reviewer_scopes`,
+  além das 15 migrações anteriores reconciliadas.
 - Os três timestamps locais divergentes foram alinhados aos identificadores
   remotos sem alterar o SQL, os dados ou as chaves internas de reconciliação.
 - A role de runtime e os endpoints não possuem caminho de reparação automática
@@ -177,8 +176,9 @@ As sessões e conteúdos usados no teste não são identificados neste documento
 
 1. [confirmado] Entrar com as mesmas credenciais da conta normal nas áreas de
    estudante e administração, mantendo as duas sessões ativas.
-2. [limitação conhecida] O revisor lê submissões e cursos, mas a plataforma
-   ainda não modela atribuições por curso/grupo; o âmbito atual é global.
+2. [confirmado] O revisor lê apenas cursos abrangidos pelo seu âmbito; a sessão
+   real deixou de apresentar o segundo curso. O refinamento para um único nível
+   efetivo possui testes automáticos e requer confirmação visual após deploy.
 3. [confirmado] Abrir um trabalho autorizado.
 4. [confirmado] Staff e Credenciais ficaram ocultos e o comprovativo foi
    recusado pelo backend.
@@ -218,11 +218,15 @@ com credenciais ou respostas privadas neste documento.
   recarregamento concluiu dashboard e cursos sem novo erro. Deve ser acompanhado
   nos logs e tratado como resiliência/observabilidade, não como falha de login.
 
-## Limitação que impede âmbito fino de revisão
+## Âmbito fino de revisão
 
-O papel `REVIEWER` continua global. Não existe ainda uma relação versionada que
-associe o membro de staff a cursos, edições, grupos ou filas de revisão. Por
-isso, não é possível provar isolamento entre dois âmbitos de revisão: a lista
-real apresentou todas as submissões visíveis ao papel. A correção exige uma
-migração aditiva, autorização no backend e filtros em todas as consultas de
-revisor; ocultar registos no frontend não é suficiente.
+A relação versionada `courseplatform.reviewer_scopes` está aplicada e é usada
+nas consultas e mutações de estudantes, submissões, ficheiros, cursos,
+certificados, pedidos e inquéritos. Uma sessão real confirmou o recorte por
+curso e a ocultação dos controlos reservados ao proprietário.
+
+O contrato local agora aceita apenas um nível por revisor. Se encontrar dados
+legados com níveis mistos, o backend usa o nível mais restritivo e ignora os
+níveis amplos. O painel apresenta o acesso efetivo antes de guardar e substitui
+os registos pela seleção exclusiva. A validação visual desta última melhoria em
+produção depende do próximo deploy; não exige migração adicional.

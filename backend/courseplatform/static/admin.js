@@ -2146,7 +2146,7 @@ async function showStaffDialog(adminId = '') {
         <section id="reviewerScopeSection" class="admin-content-panel reviewer-scope-editor">
           <div class="profile-section-heading">
             <h3>Âmbito de revisão</h3>
-            <p>Escolha exatamente os cursos, turmas ou grupos que este revisor pode consultar e avaliar.</p>
+            <p>Defina um único nível de acesso para consulta e avaliação.</p>
           </div>
           ${reviewerScopeOptionsTemplate(state.reviewerScopeOptions, admin.reviewScopes || [])}
         </section>
@@ -2216,30 +2216,59 @@ async function showStaffDialog(adminId = '') {
   };
   roleSelect.addEventListener('change', syncReviewerScopeVisibility);
   syncReviewerScopeVisibility();
-  const globalScope = overlay.querySelector('[data-review-scope="GLOBAL"]');
-  const syncGlobalReviewerScope = () => {
-    const globalSelected = Boolean(globalScope?.checked);
-    overlay.querySelectorAll('[data-review-scope]:not([data-review-scope="GLOBAL"])').forEach((input) => {
-      input.disabled = globalSelected;
-      if (globalSelected) input.checked = false;
+  const scopeModeInputs = [...overlay.querySelectorAll('[name="reviewerScopeMode"]')];
+  const effectiveAccess = overlay.querySelector('#reviewerEffectiveAccess');
+  const syncReviewerScopeMode = () => {
+    const mode = scopeModeInputs.find((input) => input.checked)?.value || 'COURSE';
+    overlay.querySelectorAll('[data-review-scope-panel]').forEach((panel) => {
+      const active = panel.dataset.reviewScopePanel === mode;
+      panel.hidden = !active;
+      panel.querySelectorAll('[data-review-scope]').forEach((input) => {
+        input.disabled = !active;
+        if (!active) input.checked = false;
+      });
     });
+    if (!effectiveAccess) return;
+    if (mode === 'GLOBAL') {
+      effectiveAccess.innerHTML = '<strong>Acesso efetivo</strong><span>Todos os cursos, turmas e grupos.</span>';
+      return;
+    }
+    const selected = [...overlay.querySelectorAll(`[data-review-scope="${mode}"]:checked`)]
+      .map((input) => input.closest('label')?.textContent.trim() || '')
+      .filter(Boolean);
+    const levelLabel = { COURSE: 'curso', OFFERING: 'turma', GROUP: 'grupo' }[mode];
+    effectiveAccess.innerHTML = selected.length
+      ? `<strong>Acesso efetivo</strong><span>${selected.length} ${levelLabel}${selected.length === 1 ? '' : 's'}: ${escapeHtml(selected.join(', '))}</span>`
+      : `<strong>Acesso efetivo</strong><span>Nenhum ${levelLabel} selecionado.</span>`;
   };
-  globalScope?.addEventListener('change', syncGlobalReviewerScope);
-  syncGlobalReviewerScope();
+  scopeModeInputs.forEach((input) => input.addEventListener('change', syncReviewerScopeMode));
+  overlay.querySelectorAll('[data-review-scope]').forEach((input) => {
+    input.addEventListener('change', syncReviewerScopeMode);
+  });
+  syncReviewerScopeMode();
   overlay.querySelector('#staffForm').addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (!confirmAdminAction('Deseja atribuir estas permissões ao utilizador selecionado?')) return;
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const values = Object.fromEntries(new FormData(form));
-    values.reviewScopes = values.role === 'REVIEWER'
-      ? [...form.querySelectorAll('[data-review-scope]:checked')].map((input) => ({
+    if (values.role === 'REVIEWER') {
+      const mode = form.querySelector('[name="reviewerScopeMode"]:checked')?.value || '';
+      values.reviewScopes = mode === 'GLOBAL'
+        ? [{ scopeType: 'GLOBAL', courseId: '', offeringId: '', groupId: '' }]
+        : [...form.querySelectorAll(`[data-review-scope="${mode}"]:checked:not(:disabled)`)].map((input) => ({
           scopeType: input.dataset.reviewScope,
           courseId: input.dataset.courseId || '',
           offeringId: input.dataset.offeringId || '',
           groupId: input.dataset.groupId || ''
-        }))
-      : [];
+        }));
+      if (!values.reviewScopes.length) {
+        showToast('Selecione pelo menos um item para o âmbito do revisor.', 'error');
+        return;
+      }
+    } else {
+      values.reviewScopes = [];
+    }
+    if (!confirmAdminAction('Deseja atribuir estas permissões ao utilizador selecionado?')) return;
     setBusy(button, true, 'A guardar...');
     try {
       await api.adminSaveStaff(values);
@@ -2255,30 +2284,47 @@ async function showStaffDialog(adminId = '') {
 }
 
 function reviewerScopeOptionsTemplate(options, selectedScopes) {
-  const selected = new Set((selectedScopes || []).map((scope) => [
+  const scopeRank = { GLOBAL: 0, COURSE: 1, OFFERING: 2, GROUP: 3 };
+  const selectedType = (selectedScopes || []).reduce((effective, scope) =>
+    (scopeRank[scope.scopeType] ?? -1) > (scopeRank[effective] ?? -1) ? scope.scopeType : effective,
+  '') || 'COURSE';
+  const selected = new Set((selectedScopes || [])
+    .filter((scope) => scope.scopeType === selectedType)
+    .map((scope) => [
     scope.scopeType, scope.courseId || '', scope.offeringId || '', scope.groupId || ''
   ].join('|')));
   const checked = (type, courseId = '', offeringId = '', groupId = '') =>
     selected.has([type, courseId, offeringId, groupId].join('|')) ? 'checked' : '';
+  const modeChecked = (type) => selectedType === type ? 'checked' : '';
   const unique = (items, key) => [...new Map(items.filter((item) => item[key]).map((item) => [item[key], item])).values()];
   const courses = unique(options, 'courseId');
   const offerings = unique(options, 'offeringId');
   const groups = unique(options, 'groupId');
   return `
-    <div class="reviewer-scope-options">
-      <label><input type="checkbox" data-review-scope="GLOBAL" ${checked('GLOBAL')}> Todos os cursos</label>
+    <div class="reviewer-scope-mode" role="radiogroup" aria-label="Nível do âmbito de revisão">
+      <label><input type="radio" name="reviewerScopeMode" value="GLOBAL" ${modeChecked('GLOBAL')}><span>Todos</span></label>
+      <label><input type="radio" name="reviewerScopeMode" value="COURSE" ${modeChecked('COURSE')}><span>Cursos</span></label>
+      <label><input type="radio" name="reviewerScopeMode" value="OFFERING" ${modeChecked('OFFERING')}><span>Turmas</span></label>
+      <label><input type="radio" name="reviewerScopeMode" value="GROUP" ${modeChecked('GROUP')}><span>Grupos</span></label>
+    </div>
+    <div class="reviewer-scope-options" data-review-scope-panel="COURSE" ${selectedType === 'COURSE' ? '' : 'hidden'}>
       ${courses.map((item) => `<label><input type="checkbox" data-review-scope="COURSE"
         data-course-id="${escapeHtml(item.courseId)}" ${checked('COURSE', item.courseId)}>
-        Curso: ${escapeHtml(item.courseTitle)}</label>`).join('')}
+        <span>${escapeHtml(item.courseTitle)}</span></label>`).join('') || '<p class="empty-note">Nenhum curso disponível.</p>'}
+    </div>
+    <div class="reviewer-scope-options" data-review-scope-panel="OFFERING" ${selectedType === 'OFFERING' ? '' : 'hidden'}>
       ${offerings.map((item) => `<label><input type="checkbox" data-review-scope="OFFERING"
         data-course-id="${escapeHtml(item.courseId)}" data-offering-id="${escapeHtml(item.offeringId)}"
         ${checked('OFFERING', item.courseId, item.offeringId)}>
-        Turma: ${escapeHtml(item.courseTitle)} / ${escapeHtml(item.offeringName)}</label>`).join('')}
+        <span>${escapeHtml(item.courseTitle)} / ${escapeHtml(item.offeringName)}</span></label>`).join('') || '<p class="empty-note">Nenhuma turma disponível.</p>'}
+    </div>
+    <div class="reviewer-scope-options" data-review-scope-panel="GROUP" ${selectedType === 'GROUP' ? '' : 'hidden'}>
       ${groups.map((item) => `<label><input type="checkbox" data-review-scope="GROUP"
         data-course-id="${escapeHtml(item.courseId)}" data-offering-id="${escapeHtml(item.offeringId)}"
         data-group-id="${escapeHtml(item.groupId)}" ${checked('GROUP', item.courseId, item.offeringId, item.groupId)}>
-        Grupo: ${escapeHtml(item.courseTitle)} / ${escapeHtml(item.offeringName)} / ${escapeHtml(item.groupName)}</label>`).join('')}
+        <span>${escapeHtml(item.courseTitle)} / ${escapeHtml(item.offeringName)} / ${escapeHtml(item.groupName)}</span></label>`).join('') || '<p class="empty-note">Nenhum grupo disponível.</p>'}
     </div>
+    <output id="reviewerEffectiveAccess" class="reviewer-effective-access" aria-live="polite"></output>
   `;
 }
 

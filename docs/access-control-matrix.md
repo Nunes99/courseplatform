@@ -99,6 +99,12 @@ ou grupos ativos atribuídos. Um âmbito de grupo não concede acesso aos restan
 grupos da mesma turma. As mutações de configuração continuam reservadas a
 `ADMIN` e `OWNER`.
 
+Cada revisor usa um único nível efetivo: global, curso, turma ou grupo. Pode
+receber vários itens dentro desse nível, mas não pode combinar níveis. Registos
+legados mistos são avaliados pelo nível mais restritivo (`GROUP`, `OFFERING`,
+`COURSE`, `GLOBAL`), impedindo que um curso amplo neutralize uma atribuição de
+grupo. Ao guardar novamente, o painel persiste apenas o nível selecionado.
+
 A migração inicial atribui `GLOBAL` aos revisores existentes para preservar o
 comportamento anterior. O proprietário deve substituir essa atribuição pelos
 âmbitos específicos pretendidos no painel de Staff.
@@ -171,7 +177,7 @@ Alterações futuras devem repetir o inventário de dependências e usar migraç
 | Estudante inspeciona JSON da aula | Sem resposta correta antes da política permitir |
 | REVIEWER tenta criar staff/curso | Recusado |
 | REVIEWER revê submissão atribuída | Permitido e auditado |
-| REVIEWER revê curso fora do âmbito futuro | Recusado |
+| REVIEWER revê curso fora do âmbito | Recusado |
 | ADMIN tenta promover/desativar OWNER | Recusado |
 | OWNER altera staff | Permitido, auditado e sessões revistas |
 | URL de ficheiro privado sem sessão | Recusada/expirada |
@@ -188,7 +194,7 @@ Alterações futuras devem repetir o inventário de dependências e usar migraç
 - Políticas de Storage após a criação do bucket privado.
 - WAF, rate limiting, CAPTCHA e proteção contra enumeração.
 - MFA e SSO para staff.
-- Atribuição de revisores a cursos/grupos.
+- Validação operacional do seletor exclusivo de âmbito após o próximo deploy.
 - Gestão de consentimento/retensão conforme requisitos legais aplicáveis.
 - Revogação de todas as formas de acesso após mudança de papel, email ou estado.
 

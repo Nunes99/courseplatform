@@ -65,6 +65,18 @@ async function main() {
             summary: { active: 1, blocked: 0, completed: 0, averageProgress: 0 },
           }));
         }
+        if (payload.action === 'adminReviewerScopeOptions') {
+          return route.fulfill(json({
+            options: [{
+              courseId: 'COURSE-QA-1',
+              courseTitle: 'Curso de Validação',
+              offeringId: 'OFFERING-QA-1',
+              offeringName: 'Turma de Validação',
+              groupId: 'GROUP-QA-1',
+              groupName: 'Grupo de Validação',
+            }],
+          }));
+        }
         return route.fulfill(json({}));
       }
       if (url.pathname === '/admin.js') {
@@ -111,11 +123,36 @@ async function main() {
         text: 'Utilizador de Validação - reviewer@example.test (STU-12345)',
       },
     ]);
+
+    const scopeModes = page.locator('[name="reviewerScopeMode"]');
+    assert.equal(await scopeModes.count(), 4);
+    await page.locator('[name="reviewerScopeMode"][value="GROUP"]').check();
+    const groupScope = page.locator('[data-review-scope="GROUP"]');
+    await groupScope.check();
+    assert.match(await page.locator('#reviewerEffectiveAccess').innerText(), /1 grupo:.*Grupo de Validação/);
+
+    await page.locator('[name="reviewerScopeMode"][value="COURSE"]').check();
+    assert.equal(await groupScope.isChecked(), false);
+    assert.equal(await groupScope.isDisabled(), true);
+    await page.locator('[data-review-scope="COURSE"]').check();
+    assert.match(await page.locator('#reviewerEffectiveAccess').innerText(), /1 curso:.*Curso de Validação/);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const dialogBox = await page.locator('.course-lesson-dialog').boundingBox();
+    assert.ok(dialogBox, 'O diálogo de staff deve permanecer visível no ecrã móvel.');
+    assert.ok(dialogBox.x >= 0 && dialogBox.x + dialogBox.width <= 391, 'O diálogo não deve ultrapassar a largura móvel.');
+    const horizontalOverflow = await page.evaluate(() => (
+      document.documentElement.scrollWidth - document.documentElement.clientWidth
+    ));
+    assert.ok(horizontalOverflow <= 1, 'O editor de âmbito não deve criar scroll horizontal no ecrã móvel.');
+    assert.equal(await page.locator('.reviewer-scope-mode').evaluate((element) => (
+      getComputedStyle(element).gridTemplateColumns.split(' ').length
+    )), 2);
     assert.deepEqual(failures, []);
   } finally {
     await browser.close();
   }
-  process.stdout.write('Staff assignment lists registered users with stable identity values.\n');
+  process.stdout.write('Staff assignment validates registered identities and one effective reviewer scope level.\n');
 }
 
 main().catch((error) => {
