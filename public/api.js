@@ -869,6 +869,31 @@ export class CoursePlatformApi {
     });
   }
 
+  adminQuestionBank(filters = {}, options = {}) {
+    const [payload, cacheOptions] = splitPayloadOptions(filters, options);
+    return this.cachedAdminRequest('adminListQuestionBank', payload, cacheOptions);
+  }
+
+  adminQuestionBankItem(bankQuestionId) {
+    return this.adminRequest('adminGetQuestionBankItem', { bankQuestionId });
+  }
+
+  adminSaveQuestionBankDraft(payload) {
+    return this.mutateAdmin('adminSaveQuestionBankDraft', payload);
+  }
+
+  adminPublishQuestionBankVersion(bankQuestionVersionId) {
+    return this.mutateAdmin('adminPublishQuestionBankVersion', { bankQuestionVersionId });
+  }
+
+  adminAttachQuestionBankVersion(courseVersionId, lessonId, bankQuestionVersionId) {
+    return this.mutateAdmin('adminAttachQuestionBankVersion', {
+      courseVersionId,
+      lessonId,
+      bankQuestionVersionId
+    });
+  }
+
   adminPreviewCourseVersion(courseVersionId) {
     return this.adminRequest('adminPreviewCourseVersion', { courseVersionId });
   }

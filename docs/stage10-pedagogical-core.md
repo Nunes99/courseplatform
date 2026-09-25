@@ -50,16 +50,25 @@ validação; a interface não é a barreira de segurança.
 
 ## Compatibilidade e dados
 
-Esta fatia não altera o esquema nem reescreve versões publicadas. O rascunho
-guarda uma cópia independente no campo `content_snapshot_json`, já existente.
+O editor guarda uma cópia independente no campo `content_snapshot_json`, já existente.
 Atualizá-lo substitui apenas essa cópia e regista `COURSE_VERSION_DRAFT_REFRESHED`
 na auditoria. As edições diretas registam `COURSE_VERSION_DRAFT_EDITED`, incluindo
 o tipo de operação. As ofertas, matrículas, progressos, tentativas e certificados
 existentes permanecem inalterados.
 
+O banco de questões separa a identidade reutilizável das versões. Cada versão
+guarda tipo, opções, explicação, dificuldade, etiquetas, pontuação e resposta de
+referência. Ao anexar uma versão publicada a um módulo, a API copia os dados para
+o snapshot e preserva os identificadores de origem. Alterações posteriores no
+banco não modificam cursos publicados, tentativas ou avaliações históricas.
+
+A migração `20260925071234_add_versioned_question_bank.sql` é expansiva e não
+reescreve questões existentes. As tabelas privadas têm RLS ativo, não concedem
+acesso a `anon` ou `authenticated`, e versões publicadas, incluindo as respetivas
+opções, tornam-se imutáveis. A migração foi apenas preparada localmente.
+
 ## Trabalho ainda pendente na Etapa 10
 
-- versionar e reutilizar um banco de questões;
 - configurar limites de tentativa, janela, tempo e randomização por avaliação;
 - introduzir rubricas, pauta consolidada e histórico de alterações de notas;
 - formalizar regras de conclusão, exceções individuais e calendário de prazos;
@@ -67,5 +76,7 @@ existentes permanecem inalterados.
 
 ## Reversão
 
-Reverter a aplicação remove a nova pré-visualização e a validação de publicação.
-Não existe rollback de banco para esta fatia porque nenhuma migração foi criada.
+Antes de aplicar a migração, reverter a aplicação remove o editor sem impacto nos
+dados. Depois de aplicada, reverta primeiro a aplicação e mantenha as tabelas até
+confirmar que nenhum rascunho referencia versões do banco; uma remoção física
+exige uma migração posterior e backup validado.

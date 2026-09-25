@@ -2935,6 +2935,26 @@ def admin_edit_course_version_draft(payload: dict[str, Any]):
     return catalog_domain.admin_edit_course_version_draft_action(payload, runtime=_catalog_runtime())
 
 
+def admin_list_question_bank(payload: dict[str, Any]):
+    return catalog_domain.admin_list_question_bank_action(payload, runtime=_catalog_runtime())
+
+
+def admin_get_question_bank_item(payload: dict[str, Any]):
+    return catalog_domain.admin_get_question_bank_item_action(payload, runtime=_catalog_runtime())
+
+
+def admin_save_question_bank_draft(payload: dict[str, Any]):
+    return catalog_domain.admin_save_question_bank_draft_action(payload, runtime=_catalog_runtime())
+
+
+def admin_publish_question_bank_version(payload: dict[str, Any]):
+    return catalog_domain.admin_publish_question_bank_version_action(payload, runtime=_catalog_runtime())
+
+
+def admin_attach_question_bank_version(payload: dict[str, Any]):
+    return catalog_domain.admin_attach_question_bank_version_action(payload, runtime=_catalog_runtime())
+
+
 def admin_preview_course_version(payload: dict[str, Any]):
     return catalog_domain.admin_preview_course_version_action(payload, runtime=_catalog_runtime())
 

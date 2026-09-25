@@ -114,6 +114,25 @@ async function main() {
             })
           });
         }
+        if (payload.action === 'adminListQuestionBank') {
+          return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { questions: [{
+            bankQuestionId: 'QBANK-1', questionCode: 'QA-Q-001', courseId: course.courseId,
+            title: 'Risco de execução do projeto', status: 'ACTIVE',
+            latestVersion: { bankQuestionVersionId: 'QBVER-2', versionNumber: 2, status: 'DRAFT', questionType: 'SINGLE_CHOICE', difficulty: 'MEDIUM', points: 2 },
+            publishedVersion: { bankQuestionVersionId: 'QBVER-1', versionNumber: 1 }
+          }] } }) });
+        }
+        if (payload.action === 'adminGetQuestionBankItem') {
+          return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data: { question: {
+            bankQuestionId: 'QBANK-1', questionCode: 'QA-Q-001', courseId: course.courseId,
+            title: 'Risco de execução do projeto', status: 'ACTIVE', versions: [{
+              bankQuestionVersionId: 'QBVER-2', versionNumber: 2, status: 'DRAFT', questionType: 'SINGLE_CHOICE',
+              prompt: 'Qual medida reduz o risco de execução?', explanation: 'O planeamento reduz a incerteza.',
+              difficulty: 'MEDIUM', tags: ['risco', 'planeamento'], points: 2, correctAnswer: '',
+              options: [{ optionText: 'Planeamento faseado', isCorrect: true }, { optionText: 'Ignorar dependências', isCorrect: false }]
+            }]
+          } } }) });
+        }
         return route.fulfill({
           contentType: 'application/json',
           body: JSON.stringify({ success: true, data: { mediaConfig: {}, rooms: [], unreadCount: 0 } })
@@ -156,6 +175,23 @@ async function main() {
     assert.equal(await page.locator('[data-publish-course-version="CV-2"]').count(), 1);
     assert.equal(await page.locator('[data-refresh-course-version="CV-2"]').count(), 1);
     assert.equal(await page.locator('[data-edit-course-version="CV-2"]').count(), 1);
+
+    await page.getByRole('button', { name: 'Banco de questões' }).click();
+    const questionBankDialog = page.locator('.question-bank-dialog');
+    await questionBankDialog.getByRole('heading', { name: 'Banco de questões' }).waitFor();
+    await questionBankDialog.getByText('Risco de execução do projeto', { exact: true }).click();
+    await page.locator('.question-bank-dialog [name="prompt"]').waitFor();
+    for (const [label, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
+      await page.setViewportSize({ width, height });
+      const geometry = await page.locator('.question-bank-dialog').evaluate((node) => ({
+        left: node.getBoundingClientRect().left, right: node.getBoundingClientRect().right,
+        viewport: window.innerWidth, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth
+      }));
+      assert.ok(geometry.left >= 0 && geometry.right <= geometry.viewport, `${label}: question bank outside viewport`);
+      assert.ok(geometry.scrollWidth <= geometry.clientWidth, `${label}: question bank horizontal overflow`);
+      await page.screenshot({ path: path.join(output, `${label}-question-bank.png`), fullPage: true });
+    }
+    await page.locator('.question-bank-dialog .dialog-close').click();
 
     for (const [label, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
       await page.setViewportSize({ width, height });
@@ -221,6 +257,18 @@ async function main() {
     assert.equal(await draftDialog.locator('[data-create-draft-content]').count(), 2);
     assert.equal(await draftDialog.locator('[data-remove-draft-lesson]').count(), 2);
     assert.equal(await draftDialog.locator('[data-remove-draft-content]').count(), 3);
+    assert.equal(await draftDialog.locator('[data-attach-bank-question]').count(), 2);
+    await draftDialog.locator('[data-attach-bank-question]').first().click();
+    const picker = page.locator('.question-bank-picker');
+    await picker.getByRole('heading', { name: 'Adicionar questão publicada' }).waitFor();
+    await picker.getByText('Risco de execução do projeto', { exact: true }).waitFor();
+    const pickerGeometry = await picker.evaluate((node) => ({
+      left: node.getBoundingClientRect().left, right: node.getBoundingClientRect().right,
+      viewport: window.innerWidth, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth
+    }));
+    assert.ok(pickerGeometry.left >= 0 && pickerGeometry.right <= pickerGeometry.viewport, 'mobile question picker outside viewport');
+    assert.ok(pickerGeometry.scrollWidth <= pickerGeometry.clientWidth, 'mobile question picker horizontal overflow');
+    await picker.locator('.dialog-close').click();
     const draftGeometry = await draftDialog.evaluate((node) => ({
       right: node.getBoundingClientRect().right,
       left: node.getBoundingClientRect().left,

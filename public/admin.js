@@ -181,7 +181,8 @@ const state = {
   notificationPagination: {
     cursor: '', nextCursor: '', hasMore: false, returned: 0, limit: 80, history: []
   },
-  notificationTemplateKey: ''
+  notificationTemplateKey: '',
+  questionBank: []
 };
 
 let activeAdminChatWorkspace = null;
@@ -6456,6 +6457,7 @@ function renderCourses() {
   document.querySelector('#newGroup')?.addEventListener('click', () => showGroupDialog());
   document.querySelector('#newLesson')?.addEventListener('click', () => showLessonDialog());
   document.querySelector('#createCourseDraft')?.addEventListener('click', createCourseDraft);
+  document.querySelector('#openQuestionBank')?.addEventListener('click', () => showQuestionBankDialog());
   document.querySelector('#newCourseOffering')?.addEventListener('click', () => showCourseOfferingDialog());
   root.querySelectorAll('[data-publish-course-version]').forEach((button) => {
     button.addEventListener('click', () => publishCourseVersion(button.dataset.publishCourseVersion));
@@ -6538,6 +6540,7 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
             <p>As versões publicadas preservam o histórico. Um rascunho só recebe alterações do editor quando é atualizado explicitamente.</p>
           </div>
           ${canManagePlatform() ? `<div class="admin-heading-actions">
+            <button class="button button-secondary" id="openQuestionBank" type="button">Banco de questões</button>
             <button class="button button-secondary" id="createCourseDraft" type="button" ${hasDraft ? 'disabled' : ''}>Nova versão</button>
             <button class="button button-primary" id="newCourseOffering" type="button">Nova edição</button>
           </div>` : ''}
@@ -7286,6 +7289,10 @@ function renderCourseVersionDraftEditor(overlay, result) {
                 <label><span>Resumo</span><textarea name="summary" rows="2" maxlength="5000">${escapeHtml(lesson.summary || '')}</textarea></label>
                 <div class="dialog-actions"><button class="button button-secondary button-small" type="submit">Guardar módulo</button></div>
               </form>` : '<p class="empty-note">Restaure o módulo para voltar a editá-lo.</p>'}
+              ${lesson.status !== 'DELETED' ? `<div class="course-version-question-actions">
+                <span>${escapeHtml(lesson.questionCount || 0)} questão(ões) no snapshot</span>
+                <button class="button button-secondary button-small" type="button" data-attach-bank-question>Adicionar do banco</button>
+              </div>` : ''}
               <div class="course-version-editor-content-list">
                 ${(lesson.content || []).map((item, contentIndex) => `
                   <details class="course-version-editor-content ${item.status === 'DELETED' ? 'is-deleted' : ''}" data-draft-content="${escapeHtml(item.contentId || '')}">
@@ -7432,6 +7439,100 @@ function renderCourseVersionDraftEditor(overlay, result) {
       mutate('REORDER_CONTENT', { lessonId: lesson.lessonId, contentIds }, button);
     });
   });
+  overlay.querySelectorAll('[data-attach-bank-question]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const lessonId = button.closest('[data-draft-lesson]').dataset.draftLesson;
+      showQuestionBankPicker(version.courseVersionId, lessonId, overlay);
+    });
+  });
+}
+
+function questionBankTypeLabel(type) {
+  return ({ SINGLE_CHOICE: 'Escolha única', MULTIPLE_CHOICE: 'Escolha múltipla', TRUE_FALSE: 'Verdadeiro ou falso',
+    SHORT_TEXT: 'Resposta curta', LONG_TEXT: 'Resposta longa', NUMERIC: 'Resposta numérica' })[type] || type || 'Questão';
+}
+
+function parseQuestionBankOptions(value) {
+  return String(value || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line, index) => ({
+    optionLabel: String.fromCharCode(65 + index), optionText: line.replace(/^\*\s*/, ''), isCorrect: /^\*/.test(line)
+  }));
+}
+
+async function showQuestionBankDialog(selectedId = '') {
+  try {
+    const result = await api.adminQuestionBank({ courseId: state.selectedCourseId, limit: 200 }, { force: true });
+    state.questionBank = result.questions || [];
+    const selected = selectedId ? (await api.adminQuestionBankItem(selectedId)).question : null;
+    const draft = selected?.versions?.find((item) => item.status === 'DRAFT') || null;
+    const current = draft || selected?.versions?.[0] || null;
+    const overlay = document.createElement('div');
+    overlay.className = 'dialog-overlay';
+    overlay.innerHTML = `
+      <div class="dialog-card question-bank-dialog" role="dialog" aria-modal="true" aria-labelledby="questionBankTitle">
+        <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+        <div class="course-version-editor-heading">
+          <div><p class="eyebrow">Autoria versionada</p><h2 id="questionBankTitle">Banco de questões</h2><p>Crie rascunhos reutilizáveis e publique versões imutáveis.</p></div>
+          <button class="button button-secondary" type="button" data-new-bank-question>Nova questão</button>
+        </div>
+        <div class="question-bank-layout">
+          <aside class="question-bank-list" aria-label="Questões existentes">
+            ${state.questionBank.length ? state.questionBank.map((item) => `
+              <button type="button" class="question-bank-list-item ${item.bankQuestionId === selectedId ? 'is-active' : ''}" data-open-bank-question="${escapeHtml(item.bankQuestionId)}">
+                <strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(questionBankTypeLabel(item.latestVersion?.questionType))} · ${escapeHtml(item.latestVersion?.difficulty || '')}</span>
+                <small>${item.publishedVersion ? `Publicada v${escapeHtml(item.publishedVersion.versionNumber)}` : 'Sem versão publicada'}</small>
+              </button>`).join('') : '<p class="empty-note">Nenhuma questão criada para este curso.</p>'}
+          </aside>
+          <form class="question-bank-form form-stack" data-question-bank-form>
+            <input type="hidden" name="bankQuestionId" value="${escapeHtml(selected?.bankQuestionId || '')}">
+            <div class="course-form-grid">
+              <label><span>Título interno</span><input name="title" required maxlength="240" value="${escapeHtml(selected?.title || '')}"></label>
+              <label><span>Tipo</span><select name="questionType">${['SINGLE_CHOICE','MULTIPLE_CHOICE','TRUE_FALSE','SHORT_TEXT','LONG_TEXT','NUMERIC'].map((type) => `<option value="${type}" ${current?.questionType === type ? 'selected' : ''}>${questionBankTypeLabel(type)}</option>`).join('')}</select></label>
+              <label><span>Dificuldade</span><select name="difficulty">${[['EASY','Fácil'],['MEDIUM','Média'],['HARD','Difícil']].map(([value,label]) => `<option value="${value}" ${current?.difficulty === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+              <label><span>Pontuação</span><input name="points" type="number" min="0.01" step="0.01" value="${escapeHtml(current?.points || 1)}"></label>
+            </div>
+            <label><span>Enunciado</span><textarea name="prompt" required rows="4" maxlength="10000">${escapeHtml(current?.prompt || '')}</textarea></label>
+            <label><span>Opções, uma por linha; use * na resposta correta</span><textarea name="options" rows="5">${escapeHtml((current?.options || []).map((option) => `${option.isCorrect ? '* ' : ''}${option.optionText}`).join('\n'))}</textarea></label>
+            <label><span>Resposta de referência</span><textarea name="correctAnswer" rows="2" maxlength="10000">${escapeHtml(current?.correctAnswer || '')}</textarea></label>
+            <label><span>Explicação pedagógica</span><textarea name="explanation" rows="3" maxlength="10000">${escapeHtml(current?.explanation || '')}</textarea></label>
+            <label><span>Etiquetas, separadas por vírgula</span><input name="tags" value="${escapeHtml((current?.tags || []).join(', '))}"></label>
+            <div class="dialog-actions">${draft ? `<button class="button button-secondary" type="button" data-publish-bank-version="${escapeHtml(draft.bankQuestionVersionId)}">Publicar versão ${escapeHtml(draft.versionNumber)}</button>` : ''}<button class="button button-primary" type="submit">Guardar rascunho</button></div>
+          </form>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay); bindDialogClose(overlay);
+    overlay.querySelector('[data-new-bank-question]').addEventListener('click', () => { overlay.remove(); showQuestionBankDialog(); });
+    overlay.querySelectorAll('[data-open-bank-question]').forEach((button) => button.addEventListener('click', () => { overlay.remove(); showQuestionBankDialog(button.dataset.openBankQuestion); }));
+    overlay.querySelector('[data-question-bank-form]').addEventListener('submit', async (event) => {
+      event.preventDefault(); const button = event.currentTarget.querySelector('button[type="submit"]');
+      const values = Object.fromEntries(new FormData(event.currentTarget)); setBusy(button, true, 'A guardar...');
+      try {
+        const saved = await api.adminSaveQuestionBankDraft({ ...values, courseId: state.selectedCourseId,
+          options: parseQuestionBankOptions(values.options), tags: values.tags.split(',').map((tag) => tag.trim()).filter(Boolean) });
+        showToast('Rascunho da questão guardado.', 'success'); overlay.remove(); showQuestionBankDialog(saved.question.bankQuestionId);
+      } catch (error) { handleAdminError(error); } finally { setBusy(button, false); }
+    });
+    overlay.querySelector('[data-publish-bank-version]')?.addEventListener('click', async (event) => {
+      if (!confirmAdminAction('Publicar esta versão? Depois de publicada, não poderá ser alterada.')) return;
+      const button = event.currentTarget; setBusy(button, true, 'A publicar...');
+      try { await api.adminPublishQuestionBankVersion(button.dataset.publishBankVersion); showToast('Versão publicada.', 'success'); overlay.remove(); showQuestionBankDialog(selectedId); }
+      catch (error) { handleAdminError(error); } finally { setBusy(button, false); }
+    });
+  } catch (error) { handleAdminError(error); }
+}
+
+async function showQuestionBankPicker(courseVersionId, lessonId, draftOverlay) {
+  try {
+    const result = await api.adminQuestionBank({ courseId: state.selectedCourseId, status: 'ACTIVE', limit: 200 }, { force: true });
+    const available = (result.questions || []).filter((item) => item.publishedVersion);
+    const picker = document.createElement('div'); picker.className = 'dialog-overlay dialog-overlay-nested';
+    picker.innerHTML = `<div class="dialog-card question-bank-picker" role="dialog" aria-modal="true" aria-labelledby="questionPickerTitle"><button class="dialog-close" type="button" aria-label="Fechar">x</button><div class="dialog-heading"><p class="eyebrow">Snapshot do módulo</p><h2 id="questionPickerTitle">Adicionar questão publicada</h2></div><div class="question-bank-list">${available.length ? available.map((item) => `<button type="button" class="question-bank-list-item" data-select-bank-version="${escapeHtml(item.publishedVersion.bankQuestionVersionId)}"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(questionBankTypeLabel(item.publishedVersion?.questionType))}</span><small>Versão ${escapeHtml(item.publishedVersion.versionNumber)}</small></button>`).join('') : '<p class="empty-note">Publique uma questão antes de adicioná-la ao curso.</p>'}</div></div>`;
+    document.body.appendChild(picker); bindDialogClose(picker);
+    picker.querySelectorAll('[data-select-bank-version]').forEach((button) => button.addEventListener('click', async () => {
+      setBusy(button, true, 'A adicionar...');
+      try { const updated = await api.adminAttachQuestionBankVersion(courseVersionId, lessonId, button.dataset.selectBankVersion); picker.remove(); showToast('Questão adicionada ao snapshot.', 'success'); renderCourseVersionDraftEditor(draftOverlay, updated); await loadCourses({ force: true }); }
+      catch (error) { handleAdminError(error); } finally { setBusy(button, false); }
+    }));
+  } catch (error) { handleAdminError(error); }
 }
 
 async function showCourseVersionPreview(courseVersionId, loadedResult = null, triggerButton = null) {

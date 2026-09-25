@@ -18,6 +18,11 @@ ACTION_BINDINGS = (
     ("adminCreateCourseVersion", "admin_create_course_version"),
     ("adminRefreshCourseVersionDraft", "admin_refresh_course_version_draft"),
     ("adminEditCourseVersionDraft", "admin_edit_course_version_draft"),
+    ("adminListQuestionBank", "admin_list_question_bank"),
+    ("adminGetQuestionBankItem", "admin_get_question_bank_item"),
+    ("adminSaveQuestionBankDraft", "admin_save_question_bank_draft"),
+    ("adminPublishQuestionBankVersion", "admin_publish_question_bank_version"),
+    ("adminAttachQuestionBankVersion", "admin_attach_question_bank_version"),
     ("adminPreviewCourseVersion", "admin_preview_course_version"),
     ("adminPublishCourseVersion", "admin_publish_course_version"),
     ("adminSaveMediaConfig", "admin_save_media_config"),
@@ -492,6 +497,379 @@ def _draft_entity(items: list[dict[str, Any]], id_field: str, entity_id: Any, la
         if isinstance(item, dict) and str(item.get(id_field) or "") == normalized_id:
             return item
     raise ApiError("COURSE_VERSION_ENTITY_NOT_FOUND", f"{label} não encontrado no rascunho.")
+
+
+QUESTION_BANK_TYPES = {
+    "SINGLE_CHOICE", "MULTIPLE_CHOICE", "TRUE_FALSE", "SHORT_TEXT", "LONG_TEXT", "NUMERIC",
+}
+QUESTION_BANK_DIFFICULTIES = {"EASY", "MEDIUM", "HARD"}
+QUESTION_BANK_OBJECTIVE_TYPES = {"SINGLE_CHOICE", "MULTIPLE_CHOICE", "TRUE_FALSE"}
+
+
+def normalize_question_bank_draft(payload: dict[str, Any], *, require_publishable: bool = True) -> dict[str, Any]:
+    question_type = str(payload.get("questionType") or "").strip().upper()
+    difficulty = str(payload.get("difficulty") or "MEDIUM").strip().upper()
+    if question_type not in QUESTION_BANK_TYPES:
+        raise ApiError("QUESTION_BANK_TYPE_INVALID", "Selecione um tipo de questão válido.")
+    if difficulty not in QUESTION_BANK_DIFFICULTIES:
+        raise ApiError("QUESTION_BANK_DIFFICULTY_INVALID", "Selecione uma dificuldade válida.")
+    title = _draft_text(payload.get("title"), "título da questão", required=True, maximum=240)
+    prompt = _draft_text(payload.get("prompt"), "enunciado", required=True, maximum=10000)
+    explanation = _draft_text(payload.get("explanation"), "explicação", maximum=10000)
+    points = _draft_number(payload.get("points", 1), "pontuação", minimum=0.01, maximum=10000)
+    tags_value = payload.get("tags") or []
+    if isinstance(tags_value, str):
+        tags_value = tags_value.split(",")
+    if not isinstance(tags_value, list):
+        raise ApiError("QUESTION_BANK_TAGS_INVALID", "As etiquetas da questão são inválidas.")
+    tags = list(dict.fromkeys(str(tag).strip().lower() for tag in tags_value if str(tag).strip()))
+    if len(tags) > 20 or any(len(tag) > 60 for tag in tags):
+        raise ApiError("QUESTION_BANK_TAGS_INVALID", "Use no máximo 20 etiquetas com até 60 caracteres.")
+    options = []
+    raw_options = payload.get("options") or []
+    if not isinstance(raw_options, list):
+        raise ApiError("QUESTION_BANK_OPTIONS_INVALID", "As opções da questão são inválidas.")
+    for index, option in enumerate(raw_options, start=1):
+        if not isinstance(option, dict):
+            raise ApiError("QUESTION_BANK_OPTIONS_INVALID", "As opções da questão são inválidas.")
+        option_text = _draft_text(option.get("optionText"), f"opção {index}", required=True, maximum=2000)
+        options.append({
+            "optionOrder": index,
+            "optionLabel": _draft_text(option.get("optionLabel"), f"rótulo da opção {index}", maximum=20),
+            "optionText": option_text,
+            "isCorrect": bool(option.get("isCorrect")),
+        })
+    if question_type in QUESTION_BANK_OBJECTIVE_TYPES:
+        if require_publishable and len(options) < 2:
+            raise ApiError("QUESTION_BANK_OPTIONS_REQUIRED", "Questões objetivas precisam de pelo menos duas opções.")
+        correct_count = sum(1 for option in options if option["isCorrect"])
+        expected = 1 if question_type in {"SINGLE_CHOICE", "TRUE_FALSE"} else None
+        if (require_publishable and correct_count < 1) or (expected is not None and correct_count > 1):
+            message = "Indique pelo menos uma opção correta."
+            if expected == 1:
+                message = "Este tipo de questão deve ter exatamente uma opção correta."
+            raise ApiError("QUESTION_BANK_CORRECT_OPTION_INVALID", message)
+        if question_type == "TRUE_FALSE" and ((require_publishable and len(options) != 2) or len(options) > 2):
+            raise ApiError("QUESTION_BANK_TRUE_FALSE_INVALID", "Questões de verdadeiro ou falso devem ter duas opções.")
+    elif options:
+        raise ApiError("QUESTION_BANK_OPTIONS_NOT_ALLOWED", "Este tipo de questão não utiliza opções.")
+    return {
+        "title": title,
+        "questionType": question_type,
+        "prompt": prompt,
+        "explanation": explanation,
+        "difficulty": difficulty,
+        "tags": tags,
+        "points": points,
+        "correctAnswer": _draft_text(payload.get("correctAnswer"), "resposta de referência", maximum=10000),
+        "options": options,
+    }
+
+
+def public_question_bank_version(row: dict[str, Any], options: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "bankQuestionVersionId": row.get("bank_question_version_id"),
+        "bankQuestionId": row.get("bank_question_id"),
+        "versionNumber": row.get("version_number"),
+        "status": row.get("status"),
+        "questionType": row.get("question_type"),
+        "prompt": row.get("prompt"),
+        "explanation": row.get("explanation") or "",
+        "difficulty": row.get("difficulty"),
+        "tags": row.get("tags") or [],
+        "points": float(row.get("points") or 0),
+        "correctAnswer": row.get("correct_answer") or "",
+        "updatedAt": row.get("updated_at").isoformat() if row.get("updated_at") else None,
+        "publishedAt": row.get("published_at").isoformat() if row.get("published_at") else None,
+        "options": [{
+            "bankOptionId": option.get("bank_option_id"),
+            "optionOrder": option.get("option_order"),
+            "optionLabel": option.get("option_label") or "",
+            "optionText": option.get("option_text"),
+            "isCorrect": bool(option.get("is_correct")),
+        } for option in (options or [])],
+    }
+
+
+def admin_list_question_bank_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    course_id = str(payload.get("courseId") or "").strip()
+    query = str(payload.get("query") or "").strip()
+    status = str(payload.get("status") or "ALL").strip().upper()
+    params: list[Any] = []
+    clauses = ["1 = 1"]
+    if course_id:
+        clauses.append("(item.course_id = %s or item.course_id is null)")
+        params.append(course_id)
+    if status in {"ACTIVE", "ARCHIVED"}:
+        clauses.append("item.status = %s")
+        params.append(status)
+    if query:
+        clauses.append("(item.title ilike %s or item.question_code ilike %s or coalesce(latest.prompt, '') ilike %s)")
+        params.extend([f"%{query}%"] * 3)
+    params.append(min(max(runtime.int_value(payload.get("limit"), 100), 1), 200))
+    sql = f"""
+        select item.*, latest.bank_question_version_id, latest.version_number,
+               latest.status as version_status, latest.question_type, latest.prompt,
+               latest.difficulty, latest.tags, latest.points, latest.updated_at as version_updated_at
+               , published.bank_question_version_id as published_version_id,
+               published.version_number as published_version_number,
+               published.question_type as published_question_type,
+               published.difficulty as published_difficulty
+        from courseplatform.question_bank_items item
+        left join lateral (
+          select version.* from courseplatform.question_bank_versions version
+          where version.bank_question_id = item.bank_question_id
+          order by (version.status = 'DRAFT') desc, version.version_number desc limit 1
+        ) latest on true
+        left join lateral (
+          select version.bank_question_version_id, version.version_number, version.question_type, version.difficulty
+          from courseplatform.question_bank_versions version
+          where version.bank_question_id = item.bank_question_id and version.status = 'PUBLISHED'
+          order by version.version_number desc limit 1
+        ) published on true
+        where {' and '.join(clauses)}
+        order by item.updated_at desc, item.bank_question_id
+        limit %s
+    """
+    with runtime.connection() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    return runtime.success({"questions": [{
+        "bankQuestionId": row.get("bank_question_id"),
+        "questionCode": row.get("question_code"),
+        "courseId": row.get("course_id"),
+        "title": row.get("title"),
+        "status": row.get("status"),
+        "latestVersion": {
+            "bankQuestionVersionId": row.get("bank_question_version_id"),
+            "versionNumber": row.get("version_number"),
+            "status": row.get("version_status"),
+            "questionType": row.get("question_type"),
+            "prompt": row.get("prompt"),
+            "difficulty": row.get("difficulty"),
+            "tags": row.get("tags") or [],
+            "points": float(row.get("points") or 0),
+        } if row.get("bank_question_version_id") else None,
+        "publishedVersion": {
+            "bankQuestionVersionId": row.get("published_version_id"),
+            "versionNumber": row.get("published_version_number"),
+            "questionType": row.get("published_question_type"),
+            "difficulty": row.get("published_difficulty"),
+        } if row.get("published_version_id") else None,
+    } for row in rows]})
+
+
+def _question_bank_detail(conn, bank_question_id: str) -> dict[str, Any]:
+    item = conn.execute(
+        "select * from courseplatform.question_bank_items where bank_question_id = %s",
+        (bank_question_id,),
+    ).fetchone()
+    if not item:
+        raise ApiError("QUESTION_BANK_NOT_FOUND", "Questão não encontrada no banco.")
+    versions = conn.execute(
+        "select * from courseplatform.question_bank_versions where bank_question_id = %s order by version_number desc",
+        (bank_question_id,),
+    ).fetchall()
+    version_ids = [row["bank_question_version_id"] for row in versions]
+    option_rows = []
+    if version_ids:
+        option_rows = conn.execute(
+            "select * from courseplatform.question_bank_options where bank_question_version_id = any(%s) order by bank_question_version_id, option_order",
+            (version_ids,),
+        ).fetchall()
+    options_by_version: dict[str, list[dict[str, Any]]] = {}
+    for option in option_rows:
+        options_by_version.setdefault(option["bank_question_version_id"], []).append(option)
+    return {
+        "bankQuestionId": item.get("bank_question_id"),
+        "questionCode": item.get("question_code"),
+        "courseId": item.get("course_id"),
+        "title": item.get("title"),
+        "status": item.get("status"),
+        "versions": [public_question_bank_version(row, options_by_version.get(row["bank_question_version_id"], [])) for row in versions],
+    }
+
+
+def admin_get_question_bank_item_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    runtime.require_fields(payload, ["bankQuestionId"])
+    with runtime.connection() as conn:
+        item = _question_bank_detail(conn, str(payload["bankQuestionId"]))
+    return runtime.success({"question": item})
+
+
+def admin_save_question_bank_draft_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    _, admin = runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    normalized = normalize_question_bank_draft(payload, require_publishable=False)
+    bank_question_id = str(payload.get("bankQuestionId") or "").strip() or runtime.generate_id("QBANK")
+    course_id = str(payload.get("courseId") or "").strip() or None
+    with runtime.connection() as conn:
+        item = conn.execute(
+            "select * from courseplatform.question_bank_items where bank_question_id = %s for update",
+            (bank_question_id,),
+        ).fetchone()
+        if not item:
+            item = conn.execute(
+                """insert into courseplatform.question_bank_items
+                   (bank_question_id, course_id, question_code, title, created_by, created_at, updated_at)
+                   values (%s, %s, %s, %s, %s, now(), now()) returning *""",
+                (bank_question_id, course_id, str(payload.get("questionCode") or bank_question_id), normalized["title"], admin["admin_id"]),
+            ).fetchone()
+        else:
+            if course_id != item.get("course_id"):
+                raise ApiError("QUESTION_BANK_COURSE_IMMUTABLE", "O âmbito do curso não pode ser alterado depois da criação.")
+            item = conn.execute(
+                "update courseplatform.question_bank_items set title = %s, updated_at = now() where bank_question_id = %s returning *",
+                (normalized["title"], bank_question_id),
+            ).fetchone()
+        version = conn.execute(
+            "select * from courseplatform.question_bank_versions where bank_question_id = %s and status = 'DRAFT' for update",
+            (bank_question_id,),
+        ).fetchone()
+        if not version:
+            latest = conn.execute(
+                "select coalesce(max(version_number), 0) as version_number from courseplatform.question_bank_versions where bank_question_id = %s",
+                (bank_question_id,),
+            ).fetchone() or {}
+            version = conn.execute(
+                """insert into courseplatform.question_bank_versions
+                   (bank_question_version_id, bank_question_id, version_number, status, question_type,
+                    prompt, explanation, difficulty, tags, points, correct_answer, created_by, created_at, updated_at)
+                   values (%s, %s, %s, 'DRAFT', %s, %s, %s, %s, %s, %s, %s, %s, now(), now()) returning *""",
+                (runtime.generate_id("QBVER"), bank_question_id, int(latest.get("version_number") or 0) + 1,
+                 normalized["questionType"], normalized["prompt"], normalized["explanation"], normalized["difficulty"],
+                 normalized["tags"], normalized["points"], normalized["correctAnswer"], admin["admin_id"]),
+            ).fetchone()
+        else:
+            version = conn.execute(
+                """update courseplatform.question_bank_versions set question_type = %s, prompt = %s,
+                   explanation = %s, difficulty = %s, tags = %s, points = %s, correct_answer = %s, updated_at = now()
+                   where bank_question_version_id = %s and status = 'DRAFT' returning *""",
+                (normalized["questionType"], normalized["prompt"], normalized["explanation"], normalized["difficulty"],
+                 normalized["tags"], normalized["points"], normalized["correctAnswer"], version["bank_question_version_id"]),
+            ).fetchone()
+        conn.execute("delete from courseplatform.question_bank_options where bank_question_version_id = %s", (version["bank_question_version_id"],))
+        for option in normalized["options"]:
+            conn.execute(
+                """insert into courseplatform.question_bank_options
+                   (bank_option_id, bank_question_version_id, option_order, option_label, option_text, is_correct)
+                   values (%s, %s, %s, %s, %s, %s)""",
+                (runtime.generate_id("QBOPT"), version["bank_question_version_id"], option["optionOrder"],
+                 option["optionLabel"] or None, option["optionText"], option["isCorrect"]),
+            )
+        runtime.audit(conn, "ADMIN", admin["admin_id"], "QUESTION_BANK_DRAFT_SAVED", "QUESTION_BANK", bank_question_id,
+                      {"courseId": course_id, "versionNumber": version["version_number"]})
+        conn.commit()
+        detail = _question_bank_detail(conn, bank_question_id)
+    return runtime.success({"question": detail})
+
+
+def admin_publish_question_bank_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    _, admin = runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    runtime.require_fields(payload, ["bankQuestionVersionId"])
+    version_id = str(payload["bankQuestionVersionId"])
+    with runtime.connection() as conn:
+        version = conn.execute(
+            "select * from courseplatform.question_bank_versions where bank_question_version_id = %s for update",
+            (version_id,),
+        ).fetchone()
+        if not version:
+            raise ApiError("QUESTION_BANK_VERSION_NOT_FOUND", "Versão da questão não encontrada.")
+        if version.get("status") != "DRAFT":
+            raise ApiError("QUESTION_BANK_VERSION_NOT_DRAFT", "Apenas um rascunho pode ser publicado.")
+        options = conn.execute(
+            "select * from courseplatform.question_bank_options where bank_question_version_id = %s order by option_order",
+            (version_id,),
+        ).fetchall()
+        normalize_question_bank_draft({
+            "title": "Publicação", "questionType": version.get("question_type"), "prompt": version.get("prompt"),
+            "explanation": version.get("explanation"), "difficulty": version.get("difficulty"), "tags": version.get("tags"),
+            "points": version.get("points"), "correctAnswer": version.get("correct_answer"),
+            "options": [{"optionText": row.get("option_text"), "optionLabel": row.get("option_label"), "isCorrect": row.get("is_correct")} for row in options],
+        })
+        published = conn.execute(
+            """update courseplatform.question_bank_versions set status = 'PUBLISHED', published_by = %s,
+               published_at = now(), updated_at = now() where bank_question_version_id = %s and status = 'DRAFT' returning *""",
+            (admin["admin_id"], version_id),
+        ).fetchone()
+        runtime.audit(conn, "ADMIN", admin["admin_id"], "QUESTION_BANK_VERSION_PUBLISHED", "QUESTION_BANK_VERSION", version_id,
+                      {"bankQuestionId": version["bank_question_id"], "versionNumber": version["version_number"]})
+        conn.commit()
+    return runtime.success({"version": public_question_bank_version(published, options)})
+
+
+def admin_attach_question_bank_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    _, admin = runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    runtime.require_fields(payload, ["courseVersionId", "lessonId", "bankQuestionVersionId"])
+    with runtime.connection() as conn:
+        course_version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s for update",
+            (payload["courseVersionId"],),
+        ).fetchone()
+        if not course_version:
+            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
+        if course_version.get("status") != "DRAFT":
+            raise ApiError("COURSE_VERSION_NOT_DRAFT", "Questões só podem ser adicionadas a um rascunho.")
+        version = conn.execute(
+            """select version.*, item.course_id, item.title as bank_title
+               from courseplatform.question_bank_versions version
+               join courseplatform.question_bank_items item on item.bank_question_id = version.bank_question_id
+               where version.bank_question_version_id = %s and version.status = 'PUBLISHED'""",
+            (payload["bankQuestionVersionId"],),
+        ).fetchone()
+        if not version:
+            raise ApiError("QUESTION_BANK_VERSION_NOT_PUBLISHED", "Selecione uma versão publicada da questão.")
+        if version.get("course_id") and version.get("course_id") != course_version.get("course_id"):
+            raise ApiError("QUESTION_BANK_COURSE_FORBIDDEN", "Esta questão pertence a outro curso.")
+        options = conn.execute(
+            "select * from courseplatform.question_bank_options where bank_question_version_id = %s order by option_order",
+            (version["bank_question_version_id"],),
+        ).fetchall()
+        snapshot = stored_course_version_snapshot(course_version)
+        lesson = _draft_entity(snapshot.get("lessons") or [], "lesson_id", payload["lessonId"], "Módulo")
+        questions = lesson.setdefault("questions", [])
+        if any(str(question.get("bank_question_version_id") or "") == version["bank_question_version_id"] for question in questions if isinstance(question, dict)):
+            raise ApiError("QUESTION_BANK_ALREADY_ATTACHED", "Esta versão da questão já está no módulo.")
+        questions.append({
+            "question_id": runtime.generate_id("QSN"),
+            "question_order": len(questions) + 1,
+            "question_type": version["question_type"],
+            "prompt": version["prompt"],
+            "explanation": version.get("explanation") or "",
+            "difficulty": version["difficulty"],
+            "tags": version.get("tags") or [],
+            "points": float(version.get("points") or 1),
+            "correct_answer": version.get("correct_answer") or "",
+            "bank_question_id": version["bank_question_id"],
+            "bank_question_version_id": version["bank_question_version_id"],
+            "bank_question_version_number": version["version_number"],
+            "status": "ACTIVE",
+            "options": [{
+                "option_id": runtime.generate_id("OPT"),
+                "option_order": option["option_order"],
+                "option_label": option.get("option_label"),
+                "option_text": option["option_text"],
+                "is_correct": bool(option.get("is_correct")),
+            } for option in options],
+        })
+        course_data = snapshot["course"]
+        row = conn.execute(
+            """update courseplatform.course_versions set title = %s, description = %s, total_hours = %s,
+               passing_score = %s, content_snapshot_json = %s, updated_at = now()
+               where course_version_id = %s and status = 'DRAFT' returning *""",
+            (course_data.get("title"), course_data.get("description"), runtime.float_value(course_data.get("total_hours")),
+             runtime.float_value(course_data.get("passing_score"), 60), json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
+             course_version["course_version_id"]),
+        ).fetchone()
+        runtime.audit(conn, "ADMIN", admin["admin_id"], "QUESTION_BANK_VERSION_ATTACHED", "COURSE_VERSION", row["course_version_id"],
+                      {"lessonId": payload["lessonId"], "bankQuestionVersionId": version["bank_question_version_id"]})
+        conn.commit()
+    return runtime.success({
+        "courseVersion": runtime.public_course_version(row),
+        "validation": validate_course_version_snapshot(snapshot),
+        "preview": course_version_preview(snapshot),
+        "draftEditor": course_version_draft_editor(snapshot),
+    })
 
 
 def _reorder_draft_items(items: list[dict[str, Any]], ids: Any, id_field: str, order_field: str, label: str) -> None:
