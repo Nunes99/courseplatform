@@ -21,6 +21,11 @@ faz uma única gravação antes do commit. Uma versão publicada nunca aceita es
 operações. O contrato do editor não devolve perguntas, respostas corretas ou
 gabaritos.
 
+Módulos e conteúdos também podem ser criados, removidos e restaurados dentro do
+rascunho. A remoção é lógica: o item e o respetivo identificador permanecem no
+snapshot com estado `DELETED`, permitindo restauro sem perda de texto, ordem ou
+relações. Novos identificadores são sempre gerados pelo backend.
+
 A resposta contém apenas o resumo necessário para o editor: metadados do curso,
 ordem dos módulos e contagens de conteúdos e questões. Respostas corretas e o
 conteúdo integral do banco de questões não são devolvidos pela pré-visualização.
@@ -54,8 +59,6 @@ existentes permanecem inalterados.
 
 ## Trabalho ainda pendente na Etapa 10
 
-- permitir criar, remover ou restaurar módulos e conteúdos diretamente no
-  rascunho, sem reutilizar as tabelas de trabalho;
 - versionar e reutilizar um banco de questões;
 - configurar limites de tentativa, janela, tempo e randomização por avaliação;
 - introduzir rubricas, pauta consolidada e histórico de alterações de notas;

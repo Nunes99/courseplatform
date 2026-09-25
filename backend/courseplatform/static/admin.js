@@ -7257,36 +7257,51 @@ function renderCourseVersionDraftEditor(overlay, result) {
         <div class="course-section-heading">
           <div><h3>Módulos e conteúdos</h3><p>Use os controlos de ordenação para definir a sequência publicada.</p></div>
         </div>
+        <details class="course-version-editor-create">
+          <summary>Adicionar módulo</summary>
+          <form class="course-version-editor-fields" data-create-draft-lesson>
+            <label><span>Título do módulo</span><input name="title" required maxlength="240"></label>
+            <label><span>Resumo</span><textarea name="summary" rows="2" maxlength="5000"></textarea></label>
+            <div class="dialog-actions"><button class="button button-primary button-small" type="submit">Criar módulo</button></div>
+          </form>
+        </details>
         <div class="course-version-editor-lessons">
           ${lessons.map((lesson, lessonIndex) => `
-            <article class="course-version-editor-lesson" data-draft-lesson="${escapeHtml(lesson.lessonId || '')}">
+            <article class="course-version-editor-lesson ${lesson.status === 'DELETED' ? 'is-deleted' : ''}" data-draft-lesson="${escapeHtml(lesson.lessonId || '')}">
               <div class="course-version-editor-row-heading">
                 <span class="course-version-editor-position">${lessonIndex + 1}</span>
                 <div><strong>${escapeHtml(lesson.title || 'Módulo sem título')}</strong><small>${escapeHtml(lesson.content?.length || 0)} conteúdo(s) · ${escapeHtml(lesson.questionCount || 0)} questão(ões)</small></div>
+                <span class="status-pill ${lesson.status === 'DELETED' ? 'status-blocked' : 'status-active'}">${lesson.status === 'DELETED' ? 'Removido' : 'Ativo'}</span>
                 <div class="course-version-order-controls">
                   <button type="button" class="icon-button" data-move-lesson="-1" aria-label="Mover módulo para cima" title="Mover para cima" ${lessonIndex === 0 ? 'disabled' : ''}>&uarr;</button>
                   <button type="button" class="icon-button" data-move-lesson="1" aria-label="Mover módulo para baixo" title="Mover para baixo" ${lessonIndex === lessons.length - 1 ? 'disabled' : ''}>&darr;</button>
+                  <button type="button" class="button button-secondary button-small" data-${lesson.status === 'DELETED' ? 'restore' : 'remove'}-draft-lesson>
+                    ${lesson.status === 'DELETED' ? 'Restaurar' : 'Remover'}
+                  </button>
                 </div>
               </div>
-              <form class="course-version-editor-fields" data-draft-lesson-form>
+              ${lesson.status !== 'DELETED' ? `<form class="course-version-editor-fields" data-draft-lesson-form>
                 <input type="hidden" name="lessonId" value="${escapeHtml(lesson.lessonId || '')}">
                 <label><span>Título do módulo</span><input name="title" required maxlength="240" value="${escapeHtml(lesson.title || '')}"></label>
                 <label><span>Resumo</span><textarea name="summary" rows="2" maxlength="5000">${escapeHtml(lesson.summary || '')}</textarea></label>
                 <div class="dialog-actions"><button class="button button-secondary button-small" type="submit">Guardar módulo</button></div>
-              </form>
+              </form>` : '<p class="empty-note">Restaure o módulo para voltar a editá-lo.</p>'}
               <div class="course-version-editor-content-list">
                 ${(lesson.content || []).map((item, contentIndex) => `
-                  <details class="course-version-editor-content" data-draft-content="${escapeHtml(item.contentId || '')}">
+                  <details class="course-version-editor-content ${item.status === 'DELETED' ? 'is-deleted' : ''}" data-draft-content="${escapeHtml(item.contentId || '')}">
                     <summary>
                       <span>${contentIndex + 1}</span>
                       <strong>${escapeHtml(item.title || 'Conteúdo sem título')}</strong>
-                      <small>${escapeHtml(item.sectionType || 'Conteúdo')}</small>
+                      <small>${item.status === 'DELETED' ? 'Removido' : escapeHtml(item.sectionType || 'Conteúdo')}</small>
                       <span class="course-version-order-controls">
                         <button type="button" class="icon-button" data-move-content="-1" aria-label="Mover conteúdo para cima" title="Mover para cima" ${contentIndex === 0 ? 'disabled' : ''}>&uarr;</button>
                         <button type="button" class="icon-button" data-move-content="1" aria-label="Mover conteúdo para baixo" title="Mover para baixo" ${contentIndex === lesson.content.length - 1 ? 'disabled' : ''}>&darr;</button>
+                        <button type="button" class="button button-secondary button-small" data-${item.status === 'DELETED' ? 'restore' : 'remove'}-draft-content>
+                          ${item.status === 'DELETED' ? 'Restaurar' : 'Remover'}
+                        </button>
                       </span>
                     </summary>
-                    <form class="course-version-editor-fields" data-draft-content-form>
+                    ${item.status !== 'DELETED' ? `<form class="course-version-editor-fields" data-draft-content-form>
                       <input type="hidden" name="lessonId" value="${escapeHtml(lesson.lessonId || '')}">
                       <input type="hidden" name="contentId" value="${escapeHtml(item.contentId || '')}">
                       <label><span>Título do conteúdo</span><input name="title" required maxlength="240" value="${escapeHtml(item.title || '')}"></label>
@@ -7296,9 +7311,23 @@ function renderCourseVersionDraftEditor(overlay, result) {
                         <label class="checkbox-field"><input name="isRequired" type="checkbox" ${item.isRequired ? 'checked' : ''}><span>Obrigatório</span></label>
                       </div>
                       <div class="dialog-actions"><button class="button button-secondary button-small" type="submit">Guardar conteúdo</button></div>
-                    </form>
+                    </form>` : '<p class="empty-note course-version-editor-restore-note">Restaure este conteúdo para voltar a editá-lo.</p>'}
                   </details>
                 `).join('') || '<p class="empty-note">Este módulo não possui conteúdos.</p>'}
+                ${lesson.status !== 'DELETED' ? `<details class="course-version-editor-create">
+                  <summary>Adicionar conteúdo</summary>
+                  <form class="course-version-editor-fields" data-create-draft-content>
+                    <input type="hidden" name="lessonId" value="${escapeHtml(lesson.lessonId || '')}">
+                    <label><span>Tipo</span><select name="sectionType"><option value="TEORIA">Teoria</option><option value="VIDEO">Vídeo</option><option value="EXERCICIO">Exercício</option><option value="RECURSO">Recurso</option></select></label>
+                    <label><span>Título</span><input name="title" required maxlength="240"></label>
+                    <label><span>Conteúdo</span><textarea name="bodyHtml" rows="4" maxlength="100000"></textarea></label>
+                    <div class="course-version-editor-inline-fields">
+                      <label><span>Duração estimada</span><input name="estimatedMinutes" type="number" min="0" step="1" value="0"></label>
+                      <label class="checkbox-field"><input name="isRequired" type="checkbox" checked><span>Obrigatório</span></label>
+                    </div>
+                    <div class="dialog-actions"><button class="button button-primary button-small" type="submit">Criar conteúdo</button></div>
+                  </form>
+                </details>` : ''}
               </div>
             </article>
           `).join('') || '<div class="student-empty-state">Nenhum módulo no rascunho.</div>'}
@@ -7342,6 +7371,10 @@ function renderCourseVersionDraftEditor(overlay, result) {
     const values = Object.fromEntries(new FormData(event.currentTarget));
     mutate('UPDATE_COURSE', values, event.currentTarget.querySelector('button[type="submit"]'));
   });
+  overlay.querySelector('[data-create-draft-lesson]').addEventListener('submit', (event) => {
+    event.preventDefault();
+    mutate('CREATE_LESSON', Object.fromEntries(new FormData(event.currentTarget)), event.currentTarget.querySelector('button[type="submit"]'));
+  });
   overlay.querySelectorAll('[data-draft-lesson-form]').forEach((form) => {
     form.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -7354,6 +7387,32 @@ function renderCourseVersionDraftEditor(overlay, result) {
       const values = Object.fromEntries(new FormData(form));
       values.isRequired = form.elements.isRequired.checked;
       mutate('UPDATE_CONTENT', values, form.querySelector('button[type="submit"]'));
+    });
+  });
+  overlay.querySelectorAll('[data-create-draft-content]').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(form));
+      values.isRequired = form.elements.isRequired.checked;
+      mutate('CREATE_CONTENT', values, form.querySelector('button[type="submit"]'));
+    });
+  });
+  overlay.querySelectorAll('[data-remove-draft-lesson], [data-restore-draft-lesson]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const lessonId = button.closest('[data-draft-lesson]').dataset.draftLesson;
+      const restoring = button.hasAttribute('data-restore-draft-lesson');
+      if (!confirmAdminAction(`${restoring ? 'Restaurar' : 'Remover'} este módulo no rascunho?`)) return;
+      mutate(restoring ? 'RESTORE_LESSON' : 'REMOVE_LESSON', { lessonId }, button);
+    });
+  });
+  overlay.querySelectorAll('[data-remove-draft-content], [data-restore-draft-content]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      const lessonId = button.closest('[data-draft-lesson]').dataset.draftLesson;
+      const contentId = button.closest('[data-draft-content]').dataset.draftContent;
+      const restoring = button.hasAttribute('data-restore-draft-content');
+      if (!confirmAdminAction(`${restoring ? 'Restaurar' : 'Remover'} este conteúdo no rascunho?`)) return;
+      mutate(restoring ? 'RESTORE_CONTENT' : 'REMOVE_CONTENT', { lessonId, contentId }, button);
     });
   });
   overlay.querySelectorAll('[data-move-lesson]').forEach((button) => {

@@ -9279,11 +9279,35 @@ body:has(.admin-layout) .button-secondary {
   gap: 12px;
 }
 
+.course-version-editor-create {
+  margin: 12px 0;
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-small);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+
+.course-version-editor-create > summary {
+  padding: 12px 14px;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.course-version-editor-create > .course-version-editor-fields {
+  padding: 0 14px 14px;
+}
+
 .course-version-editor-lesson {
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius-small);
   background: var(--surface-soft);
+}
+
+.course-version-editor-lesson.is-deleted,
+.course-version-editor-content.is-deleted {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--danger) 4%, var(--surface));
 }
 
 .course-version-editor-row-heading > div:nth-child(2) {
@@ -9306,6 +9330,8 @@ body:has(.admin-layout) .button-secondary {
 
 .course-version-order-controls {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
   margin-left: auto;
 }
@@ -9351,6 +9377,12 @@ body:has(.admin-layout) .button-secondary {
   border-top: 1px solid var(--line);
 }
 
+.course-version-editor-restore-note {
+  margin: 0;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+
 .course-version-editor-inline-fields > label:first-child {
   flex: 0 1 240px;
 }
@@ -9375,6 +9407,15 @@ body:has(.admin-layout) .button-secondary {
   .course-version-editor-inline-fields {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .course-version-editor-row-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .course-version-editor-row-heading .course-version-order-controls {
+    width: 100%;
   }
 
   .course-version-editor-content-list {

@@ -217,6 +217,10 @@ async function main() {
     await draftDialog.getByText('As alterações são guardadas apenas neste rascunho.', { exact: true }).waitFor();
     const firstLesson = draftDialog.getByText('Fundamentos', { exact: true }).first();
     await firstLesson.waitFor();
+    assert.equal(await draftDialog.locator('[data-create-draft-lesson]').count(), 1);
+    assert.equal(await draftDialog.locator('[data-create-draft-content]').count(), 2);
+    assert.equal(await draftDialog.locator('[data-remove-draft-lesson]').count(), 2);
+    assert.equal(await draftDialog.locator('[data-remove-draft-content]').count(), 3);
     const draftGeometry = await draftDialog.evaluate((node) => ({
       right: node.getBoundingClientRect().right,
       left: node.getBoundingClientRect().left,

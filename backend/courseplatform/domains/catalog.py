@@ -524,6 +524,32 @@ def edit_course_version_draft_snapshot(snapshot: dict[str, Any], operation: Any,
         lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
         lesson["title"] = _draft_text(changes.get("title"), "título do módulo", required=True, maximum=240)
         lesson["summary"] = _draft_text(changes.get("summary"), "resumo do módulo", maximum=5000)
+    elif operation_name == "CREATE_LESSON":
+        lesson_id = _draft_text(changes.get("lessonId"), "identificador do módulo", required=True, maximum=100)
+        if any(str(item.get("lesson_id") or "") == lesson_id for item in lessons if isinstance(item, dict)):
+            raise ApiError("COURSE_VERSION_ENTITY_EXISTS", "Já existe um módulo com este identificador no rascunho.")
+        lessons.append({
+            "lesson_id": lesson_id,
+            "lesson_number": len(lessons) + 1,
+            "title": _draft_text(changes.get("title"), "título do módulo", required=True, maximum=240),
+            "slug": "",
+            "summary": _draft_text(changes.get("summary"), "resumo do módulo", maximum=5000),
+            "theory_minutes": 0,
+            "exercise_minutes": 0,
+            "individual_minutes": 0,
+            "submission_duration_minutes": 180,
+            "passing_score": 60,
+            "feedback_release_mode": "AFTER_REVIEW",
+            "show_correct_answers": False,
+            "show_explanations": False,
+            "prerequisite_lesson_id": None,
+            "status": "ACTIVE",
+            "content": [],
+            "questions": [],
+        })
+    elif operation_name in {"REMOVE_LESSON", "RESTORE_LESSON"}:
+        lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
+        lesson["status"] = "DELETED" if operation_name == "REMOVE_LESSON" else "ACTIVE"
     elif operation_name == "UPDATE_CONTENT":
         lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
         content = _draft_entity(lesson.get("content") or [], "content_id", changes.get("contentId"), "Conteúdo")
@@ -531,6 +557,26 @@ def edit_course_version_draft_snapshot(snapshot: dict[str, Any], operation: Any,
         content["body_html"] = _draft_text(changes.get("bodyHtml"), "conteúdo", maximum=100000)
         content["estimated_minutes"] = _draft_number(changes.get("estimatedMinutes"), "duração estimada")
         content["is_required"] = bool(changes.get("isRequired"))
+    elif operation_name == "CREATE_CONTENT":
+        lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
+        content_items = lesson.setdefault("content", [])
+        content_id = _draft_text(changes.get("contentId"), "identificador do conteúdo", required=True, maximum=100)
+        if any(str(item.get("content_id") or "") == content_id for item in content_items if isinstance(item, dict)):
+            raise ApiError("COURSE_VERSION_ENTITY_EXISTS", "Já existe um conteúdo com este identificador no rascunho.")
+        content_items.append({
+            "content_id": content_id,
+            "section_order": len(content_items) + 1,
+            "section_type": _draft_text(changes.get("sectionType") or "TEORIA", "tipo de conteúdo", required=True, maximum=80).upper(),
+            "title": _draft_text(changes.get("title"), "título do conteúdo", required=True, maximum=240),
+            "body_html": _draft_text(changes.get("bodyHtml"), "conteúdo", maximum=100000),
+            "estimated_minutes": _draft_number(changes.get("estimatedMinutes") or 0, "duração estimada"),
+            "is_required": bool(changes.get("isRequired", True)),
+            "status": "ACTIVE",
+        })
+    elif operation_name in {"REMOVE_CONTENT", "RESTORE_CONTENT"}:
+        lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
+        content = _draft_entity(lesson.get("content") or [], "content_id", changes.get("contentId"), "Conteúdo")
+        content["status"] = "DELETED" if operation_name == "REMOVE_CONTENT" else "ACTIVE"
     elif operation_name == "REORDER_LESSONS":
         _reorder_draft_items(lessons, changes.get("lessonIds"), "lesson_id", "lesson_number", "módulos")
     elif operation_name == "REORDER_CONTENT":
@@ -876,10 +922,16 @@ def admin_edit_course_version_draft_action(payload: dict[str, Any], *, runtime: 
                 "COURSE_VERSION_CONFLICT",
                 "Este rascunho foi alterado por outra sessão. Atualize a página antes de continuar.",
             )
+        operation = str(payload.get("operation") or "").strip().upper()
+        changes = copy.deepcopy(payload.get("changes") or {})
+        if operation == "CREATE_LESSON":
+            changes["lessonId"] = runtime.generate_id("LESSON")
+        elif operation == "CREATE_CONTENT":
+            changes["contentId"] = runtime.generate_id("CNT")
         snapshot = edit_course_version_draft_snapshot(
             stored_course_version_snapshot(version),
-            payload.get("operation"),
-            payload.get("changes"),
+            operation,
+            changes,
         )
         course_data = snapshot["course"]
         row = conn.execute(
@@ -909,7 +961,8 @@ def admin_edit_course_version_draft_action(payload: dict[str, Any], *, runtime: 
             {
                 "courseId": row["course_id"],
                 "versionNumber": row["version_number"],
-                "operation": str(payload.get("operation") or "").upper(),
+                "operation": operation,
+                "entityId": changes.get("lessonId") if operation.endswith("LESSON") else changes.get("contentId"),
             },
         )
         conn.commit()

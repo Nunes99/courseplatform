@@ -209,6 +209,64 @@ class CoursePublicationValidationTests(unittest.TestCase):
 
         self.assertEqual("COURSE_VERSION_ORDER_INCOMPLETE", raised.exception.code)
 
+    def test_draft_entities_are_created_removed_and_restored_without_losing_data(self):
+        snapshot = catalog.edit_course_version_draft_snapshot(
+            valid_snapshot(),
+            "CREATE_LESSON",
+            {"lessonId": "LESSON-3", "title": "Novo módulo", "summary": "Resumo"},
+        )
+        snapshot = catalog.edit_course_version_draft_snapshot(
+            snapshot,
+            "CREATE_CONTENT",
+            {
+                "lessonId": "LESSON-3",
+                "contentId": "CONTENT-3",
+                "sectionType": "TEORIA",
+                "title": "Novo conteúdo",
+                "bodyHtml": "Texto preservado",
+                "estimatedMinutes": 15,
+                "isRequired": True,
+            },
+        )
+        snapshot = catalog.edit_course_version_draft_snapshot(
+            snapshot,
+            "REMOVE_CONTENT",
+            {"lessonId": "LESSON-3", "contentId": "CONTENT-3"},
+        )
+        snapshot = catalog.edit_course_version_draft_snapshot(
+            snapshot,
+            "REMOVE_LESSON",
+            {"lessonId": "LESSON-3"},
+        )
+
+        lesson = snapshot["lessons"][2]
+        self.assertEqual("DELETED", lesson["status"])
+        self.assertEqual("DELETED", lesson["content"][0]["status"])
+        self.assertEqual("Texto preservado", lesson["content"][0]["body_html"])
+
+        snapshot = catalog.edit_course_version_draft_snapshot(
+            snapshot,
+            "RESTORE_LESSON",
+            {"lessonId": "LESSON-3"},
+        )
+        snapshot = catalog.edit_course_version_draft_snapshot(
+            snapshot,
+            "RESTORE_CONTENT",
+            {"lessonId": "LESSON-3", "contentId": "CONTENT-3"},
+        )
+        self.assertEqual("ACTIVE", snapshot["lessons"][2]["status"])
+        self.assertEqual("ACTIVE", snapshot["lessons"][2]["content"][0]["status"])
+
+    def test_duplicate_draft_entity_id_is_rejected(self):
+        with self.assertRaises(catalog.ApiError) as raised:
+            catalog.edit_course_version_draft_snapshot(
+                valid_snapshot(),
+                "CREATE_LESSON",
+                {"lessonId": "LESSON-1", "title": "Duplicado"},
+            )
+
+        self.assertEqual("COURSE_VERSION_ENTITY_EXISTS", raised.exception.code)
+
     def test_stored_draft_snapshot_is_parsed_without_reading_live_content(self):
         snapshot = valid_snapshot()
         parsed = catalog.stored_course_version_snapshot({
@@ -333,6 +391,37 @@ class CoursePublicationValidationTests(unittest.TestCase):
         self.assertEqual("REORDER_LESSONS", audits[0][6]["operation"])
         self.assertEqual("LESSON-2", result["draftEditor"]["lessons"][0]["lessonId"])
 
+    def test_draft_creation_uses_a_server_generated_identifier(self):
+        connection = _DraftConnection()
+        connection.version["content_snapshot_json"] = valid_snapshot()
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        runtime = SimpleNamespace(
+            admin_context=lambda payload, roles: ({}, {"admin_id": "ADMIN-1", "role": "ADMIN"}),
+            audit=lambda *args: None,
+            connection=connect,
+            float_value=lambda value, fallback=0: float(value if value not in (None, "") else fallback),
+            generate_id=lambda prefix: f"{prefix}-SERVER",
+            iso=lambda value: value.isoformat() if value else None,
+            public_course_version=lambda row: row,
+            require_fields=lambda payload, fields: None,
+            success=lambda data: data,
+        )
+
+        result = catalog.admin_edit_course_version_draft_action(
+            {
+                "courseVersionId": "VERSION-2",
+                "operation": "CREATE_LESSON",
+                "changes": {"lessonId": "CLIENT-ID", "title": "Módulo criado"},
+            },
+            runtime=runtime,
+        )
+
+        self.assertEqual("LESSON-SERVER", result["draftEditor"]["lessons"][-1]["lessonId"])
+
     def test_published_version_cannot_be_edited(self):
         connection = _DraftConnection(status="PUBLISHED")
 
@@ -402,6 +491,10 @@ class CourseAuthoringFrontendContractTests(unittest.TestCase):
         self.assertIn("data-edit-course-version", admin_source)
         self.assertIn("REORDER_LESSONS", admin_source)
         self.assertIn("REORDER_CONTENT", admin_source)
+        self.assertIn("CREATE_LESSON", admin_source)
+        self.assertIn("CREATE_CONTENT", admin_source)
+        self.assertIn("REMOVE_LESSON", admin_source)
+        self.assertIn("RESTORE_CONTENT", admin_source)
         self.assertIn("Atualizar do editor", admin_source)
         self.assertIn("Corrija os bloqueios antes de publicar", admin_source)
 
