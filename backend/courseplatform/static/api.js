@@ -766,6 +766,10 @@ export class CoursePlatformApi {
     });
   }
 
+  adminReviewerScopeOptions(options = {}) {
+    return this.cachedAdminRequest('adminReviewerScopeOptions', {}, options);
+  }
+
   adminSetStaffStatus(adminId, status) {
     return this.mutateAdmin('adminSetStaffStatus', {
       targetAdminId: adminId,

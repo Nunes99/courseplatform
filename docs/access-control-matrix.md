@@ -92,9 +92,16 @@ Os handlers usam `student_context` ou `student_context_with_conn`. Ações princ
 
 ### Todos os papéis de staff ativos
 
-Leitura administrativa e revisão usam `admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})`. Atualmente isto inclui estatísticas, cursos, estrutura, grupos, estudantes, staff, submissões, revisão/reabertura/alteração de tentativas, listas/configuração de certificados em leitura, inquéritos em leitura, notificações e chat não direto.
+Leitura administrativa e revisão usam `admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})`.
+Para `REVIEWER`, `courseplatform.reviewer_scopes` limita estudantes, submissões,
+ficheiros, cursos, certificados, pedidos e inquéritos aos cursos, edições/turmas
+ou grupos ativos atribuídos. Um âmbito de grupo não concede acesso aos restantes
+grupos da mesma turma. As mutações de configuração continuam reservadas a
+`ADMIN` e `OWNER`.
 
-Limitação conhecida: a autorização é sobretudo por papel global; a noção de “revisor apenas do curso/grupo atribuído” ainda não está modelada de forma consistente. Portanto “âmbito” na matriz é um objetivo a validar/implementar gradualmente.
+A migração inicial atribui `GLOBAL` aos revisores existentes para preservar o
+comportamento anterior. O proprietário deve substituir essa atribuição pelos
+âmbitos específicos pretendidos no painel de Staff.
 
 ### ADMIN e OWNER
 
@@ -106,7 +113,8 @@ triggers no Postgres.
 
 ### Apenas OWNER
 
-`adminSaveStaff` e `adminSetStaffStatus` exigem `OWNER`.
+`adminSaveStaff`, `adminSetStaffStatus` e `adminReviewerScopeOptions` exigem
+`OWNER`.
 
 ## Regras de dados
 

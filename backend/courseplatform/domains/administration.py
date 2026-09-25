@@ -8,6 +8,13 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..contracts import ApiError
+from ..reviewer_scopes import (
+    admin_from_context,
+    normalize_scope_payload,
+    replace_reviewer_scopes,
+    require_student_scope,
+    reviewer_scope_predicate,
+)
 
 
 ACTION_BINDINGS = (
@@ -15,6 +22,7 @@ ACTION_BINDINGS = (
     ("healthDiagnostics", "health_diagnostics"),
     ("adminGetPlatformStatistics", "admin_platform_statistics"),
     ("adminListStaff", "admin_list_staff"),
+    ("adminReviewerScopeOptions", "admin_reviewer_scope_options"),
     ("adminListStudents", "admin_list_students"),
     ("adminGetStudentDetails", "admin_student_details"),
     ("adminUploadBrandLogo", "admin_upload_brand_logo"),
@@ -268,7 +276,7 @@ def admin_platform_statistics_action(payload: dict[str, Any], *, runtime: Admini
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
     success = runtime.success
     utc_now = runtime.utc_now
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin_context(payload, {"OWNER", "ADMIN"})
     prepare_chat_feature_schema()
     prepare_notification_feature_schema()
     with connection() as conn:
@@ -434,7 +442,7 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
     public_student = runtime.public_student
     str_value = runtime.str_value
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     prepare_notification_feature_schema()
     status = (payload.get("status") or "ALL").upper()
     query = str_value(payload.get("query")).lower()
@@ -491,6 +499,12 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
             else:
                 cursor_sql = "where (last_login_at < %s or last_login_at is null or (last_login_at = %s and student_id < %s))"
                 cursor_params.extend((cursor_value, cursor_value, cursor_id))
+    scope_sql, scope_params = reviewer_scope_predicate(
+        admin,
+        course_expr="e.course_id",
+        offering_expr="e.offering_id",
+        group_expr="e.group_id",
+    )
     rows = fetch_all(
         f"""
         with student_rows as (
@@ -506,6 +520,7 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
           where (%s = 'ALL' or s.status = %s)
             and (%s = '' or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
               coalesce(s.public_student_id, '') || ' ' || coalesce(s.country, '') || ' ' || coalesce(s.organization, '')) like %s)
+            and ({scope_sql})
           group by s.student_id
         ), filtered_students as (
           select * from student_rows where {progress_sql}
@@ -523,7 +538,7 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
         order by {order_sql}
         limit %s
         """,
-        (status, status, query, f"%{query}%", *cursor_params, limit + 1),
+        (status, status, query, f"%{query}%", *scope_params, *cursor_params, limit + 1),
     )
     summary_row = rows[0] if rows else {}
     total = int(summary_row.get("total_count") or 0)
@@ -582,9 +597,20 @@ def admin_list_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
             s.student_id as identity_student_id,
             s.email as identity_email,
             s.status as identity_status,
+            coalesce(sc.reviewer_scopes, '[]'::jsonb) as reviewer_scopes,
             lower(coalesce(a.full_name, '')) as pagination_sort_text
           from courseplatform.admins a
           left join courseplatform.students s on s.student_id = a.student_id
+          left join lateral (
+            select jsonb_agg(jsonb_build_object(
+              'scopeType', rs.scope_type,
+              'courseId', coalesce(rs.course_id, ''),
+              'offeringId', coalesce(rs.offering_id, ''),
+              'groupId', coalesce(rs.group_id, '')
+            ) order by rs.scope_type, rs.course_id, rs.offering_id, rs.group_id) as reviewer_scopes
+            from courseplatform.reviewer_scopes rs
+            where rs.admin_id = a.admin_id and rs.status = 'ACTIVE'
+          ) sc on true
           where (%s = 'ALL' or a.status = %s)
             and (%s = 'ALL' or a.role = %s)
             and (%s = '' or lower(coalesce(a.full_name, '') || ' ' || coalesce(s.email, a.email, '') || ' ' || coalesce(a.role, '')) like %s)
@@ -639,6 +665,8 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     status = str_value(payload.get("status") or "ACTIVE").upper()
     if status not in {"ACTIVE", "INACTIVE", "BLOCKED", "DELETED"}:
         raise ApiError("INVALID_STAFF_STATUS", "Estado de staff inválido.")
+    scopes_supplied = "reviewScopes" in payload
+    scopes = normalize_scope_payload(payload.get("reviewScopes")) if scopes_supplied else []
     with connection() as conn:
         existing = conn.execute(
             "select * from courseplatform.admins where admin_id = %s for update",
@@ -700,6 +728,22 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
                 status,
             ),
         ).fetchone()
+        if role == "REVIEWER":
+            if not scopes_supplied and not existing:
+                scopes = [{"scopeType": "GLOBAL", "courseId": "", "offeringId": "", "groupId": ""}]
+            if scopes_supplied and not scopes:
+                raise ApiError("REVIEWER_SCOPE_REQUIRED", "Defina pelo menos um âmbito para o revisor.")
+            if scopes_supplied or not existing:
+                replace_reviewer_scopes(
+                    conn,
+                    admin_id=admin_id,
+                    actor_admin_id=admin["admin_id"],
+                    scopes=scopes,
+                    generate_id=generate_id,
+                )
+                row = {**row, "reviewer_scopes": scopes}
+        else:
+            conn.execute("delete from courseplatform.reviewer_scopes where admin_id = %s", (admin_id,))
         if student_id:
             row = {
                 **row,
@@ -714,12 +758,13 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
             "STAFF_SAVED",
             "ADMIN",
             admin_id,
-            {"identitySource": "STUDENT", "studentId": student_id},
+            {"identitySource": "STUDENT", "studentId": student_id, "reviewScopeCount": len(scopes)},
         )
         if existing and (
             existing.get("role") != role
             or existing.get("status") != status
             or existing.get("student_id") != student_id
+            or scopes_supplied
         ):
             conn.execute(
                 "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
@@ -727,6 +772,34 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
             )
         conn.commit()
     return success({"admin": public_admin(row), "adminPassword": ""})
+
+
+def admin_reviewer_scope_options_action(payload: dict[str, Any], *, runtime: AdministrationRuntime):
+    _, _admin = runtime.admin_context(payload, {"OWNER"})
+    rows = runtime.fetch_all(
+        """
+        select c.course_id, c.course_code, c.title as course_title,
+               o.offering_id, o.name as offering_name,
+               g.group_id, g.name as group_name
+        from courseplatform.courses c
+        left join courseplatform.course_offerings o
+          on o.course_id = c.course_id and coalesce(o.status, 'ACTIVE') <> 'DELETED'
+        left join courseplatform.groups g
+          on g.course_id = c.course_id and g.offering_id = o.offering_id
+         and coalesce(g.status, 'ACTIVE') <> 'DELETED'
+        where coalesce(c.status, 'ACTIVE') <> 'DELETED'
+        order by c.title, o.start_date desc nulls last, o.name, g.name
+        """
+    )
+    return runtime.success({"options": [{
+        "courseId": row.get("course_id") or "",
+        "courseCode": row.get("course_code") or "",
+        "courseTitle": row.get("course_title") or "Curso",
+        "offeringId": row.get("offering_id") or "",
+        "offeringName": row.get("offering_name") or "",
+        "groupId": row.get("group_id") or "",
+        "groupName": row.get("group_name") or "",
+    } for row in rows]})
 
 
 def admin_set_staff_status_action(payload: dict[str, Any], *, runtime: AdministrationRuntime):
@@ -1205,7 +1278,7 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
     require_fields = runtime.require_fields
     staff_attempt = runtime.staff_attempt
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     require_fields(payload, ["studentId"])
     prepare_assessment_feature_schema()
     student_id = payload["studentId"]
@@ -1214,19 +1287,26 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
         student = conn.execute("select * from courseplatform.students where student_id = %s", (student_id,)).fetchone()
         if not student:
             raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
+        require_student_scope(conn, admin, student_id)
+        enrollment_scope_sql, enrollment_scope_params = reviewer_scope_predicate(
+            admin, course_expr="e.course_id", offering_expr="e.offering_id", group_expr="e.group_id"
+        )
         enrollment_rows = conn.execute(
-            """
+            f"""
             select e.*, c.title as course_title, c.course_code, g.name as group_name
             from courseplatform.enrollments e
             left join courseplatform.courses c on c.course_id = e.course_id
             left join courseplatform.groups g on g.group_id = e.group_id
-            where e.student_id = %s
+            where e.student_id = %s and ({enrollment_scope_sql})
             order by coalesce(e.updated_at, e.enrolled_at) desc nulls last
             """,
-            (student_id,),
+            (student_id, *enrollment_scope_params),
         ).fetchall()
+        progress_scope_sql, progress_scope_params = reviewer_scope_predicate(
+            admin, course_expr="e.course_id", offering_expr="e.offering_id", group_expr="e.group_id"
+        )
         progress_rows = conn.execute(
-            """
+            f"""
             select p.*, l.course_id, l.lesson_number, l.title as lesson_title,
                    a.attempt_id, a.attempt_number, a.status as attempt_status,
                    a.score as attempt_score, a.submitted_at as attempt_submitted_at,
@@ -1234,6 +1314,7 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
                    coalesce(f.file_count, 0) as file_count
             from courseplatform.lesson_progress p
             join courseplatform.lessons l on l.lesson_id = p.lesson_id
+            left join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
             left join lateral (
               select *
               from courseplatform.attempts a
@@ -1247,42 +1328,53 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
               where f.student_id = p.student_id and f.lesson_id = p.lesson_id
                 and coalesce(f.status, 'ACTIVE') <> 'DELETED'
             ) f on true
-            where p.student_id = %s
+            where p.student_id = %s and ({progress_scope_sql})
             order by l.course_id, l.lesson_number
             """,
-            (student_id,),
+            (student_id, *progress_scope_params),
         ).fetchall()
+        group_scope_sql, group_scope_params = reviewer_scope_predicate(
+            admin, course_expr="g.course_id", offering_expr="g.offering_id", group_expr="g.group_id"
+        )
         group_rows = conn.execute(
-            """
+            f"""
             select gm.*, g.name, g.group_code, g.course_id, g.start_date, g.end_date
             from courseplatform.group_members gm
             join courseplatform.groups g on g.group_id = gm.group_id
-            where gm.student_id = %s
+            where gm.student_id = %s and ({group_scope_sql})
             order by g.name
             """,
-            (student_id,),
+            (student_id, *group_scope_params),
         ).fetchall()
+        certificate_scope_sql, certificate_scope_params = reviewer_scope_predicate(
+            admin, course_expr="cert.course_id", offering_expr="cert.offering_id", group_expr="e.group_id"
+        )
         certificates = conn.execute(
-            """
+            f"""
             select cert.*, c.title as course_title, s.full_name as student_name
             from courseplatform.certificates cert
             join courseplatform.courses c on c.course_id = cert.course_id
             join courseplatform.students s on s.student_id = cert.student_id
-            where cert.student_id = %s
+            left join courseplatform.enrollments e on e.enrollment_id = cert.enrollment_id
+            where cert.student_id = %s and ({certificate_scope_sql})
             order by cert.issue_date desc nulls last
             """,
-            (student_id,),
+            (student_id, *certificate_scope_params),
         ).fetchall()
+        request_scope_sql, request_scope_params = reviewer_scope_predicate(
+            admin, course_expr="cr.course_id", offering_expr="e.offering_id", group_expr="e.group_id"
+        )
         requests = conn.execute(
-            """
+            f"""
             select cr.*, s.full_name, s.email, c.title
             from courseplatform.certificate_requests cr
             join courseplatform.students s on s.student_id = cr.student_id
             join courseplatform.courses c on c.course_id = cr.course_id
-            where cr.student_id = %s
+            left join courseplatform.enrollments e on e.enrollment_id = cr.enrollment_id
+            where cr.student_id = %s and ({request_scope_sql})
             order by coalesce(cr.updated_at, cr.created_at) desc
             """,
-            (student_id,),
+            (student_id, *request_scope_params),
         ).fetchall()
     return success({
         "student": public_student(student),

@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from ..contracts import ApiError
+from ..reviewer_scopes import admin_from_context, require_course_scope, reviewer_course_predicate
 
 
 ACTION_BINDINGS = (
@@ -173,8 +174,11 @@ def admin_media_config_action(payload: dict[str, Any], *, runtime: CatalogRuntim
     get_settings = runtime.get_settings
     read_media_config = runtime.read_media_config
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
-    media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    with runtime.connection() as conn:
+        require_course_scope(conn, admin, course_id)
+    media = read_media_config(course_id)
     return success({"mediaConfig": media})
 
 
@@ -258,7 +262,7 @@ def admin_list_courses_action(payload: dict[str, Any], *, runtime: CatalogRuntim
     public_course = runtime.public_course
     str_value = runtime.str_value
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     limit = cursor_page_limit(payload)
     query = str_value(payload.get("query")).lower()
     status = (payload.get("status") or "ALL").upper()
@@ -269,6 +273,9 @@ def admin_list_courses_action(payload: dict[str, Any], *, runtime: CatalogRuntim
     cursor = decode_list_cursor(payload.get("cursor"), "admin-courses", scope, sort_type="text")
     conditions = ["(%s = 'ALL' or c.status = %s)"]
     params: list[Any] = [status, status]
+    reviewer_sql, reviewer_params = reviewer_course_predicate(admin, "c.course_id")
+    conditions.append(f"({reviewer_sql})")
+    params.extend(reviewer_params)
     if query:
         conditions.append("(lower(c.course_id || ' ' || c.course_code || ' ' || c.title || ' ' || coalesce(c.description,'')) like %s)")
         params.append(f"%{query}%")
@@ -354,8 +361,20 @@ def admin_course_structure_action(payload: dict[str, Any], *, runtime: CatalogRu
     staff_option = runtime.staff_option
     staff_question = runtime.staff_question
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     course_id = payload.get("courseId") or get_settings().default_course_id
+    if admin.get("role") == "REVIEWER":
+        allowed = fetch_one(
+            """
+            select 1 from courseplatform.reviewer_scopes
+            where admin_id = %s and status = 'ACTIVE'
+              and (scope_type = 'GLOBAL' or course_id = %s)
+            limit 1
+            """,
+            (admin["admin_id"], course_id),
+        )
+        if not allowed:
+            raise ApiError("REVIEWER_SCOPE_REQUIRED", "Este curso está fora do seu âmbito de revisão.")
     course = fetch_one("select * from courseplatform.courses where course_id = %s", (course_id,))
     if not course:
         raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")

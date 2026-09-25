@@ -4,6 +4,7 @@ from datetime import timezone
 from typing import Any
 
 from ..contracts import ApiError
+from ..reviewer_scopes import admin_from_context, reviewer_scope_predicate
 
 
 ACTION_BINDINGS = (
@@ -350,7 +351,7 @@ def admin_list_groups_action(payload: dict[str, Any], *, runtime: EnrollmentRunt
     iso = runtime.iso
     str_value = runtime.str_value
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     course_id = str_value(payload.get("courseId"))
     status = str_value(payload.get("status") or "ALL").upper()
     query = str_value(payload.get("query")).lower()
@@ -363,6 +364,12 @@ def admin_list_groups_action(payload: dict[str, Any], *, runtime: EnrollmentRunt
         cursor_name, cursor_id = cursor
         cursor_sql = "where (pagination_sort_text > %s or (pagination_sort_text = %s and group_id > %s))"
         cursor_params.extend((cursor_name, cursor_name, cursor_id))
+    reviewer_sql, reviewer_params = reviewer_scope_predicate(
+        admin,
+        course_expr="g.course_id",
+        offering_expr="g.offering_id",
+        group_expr="g.group_id",
+    )
     rows = fetch_all(
         f"""
         with group_rows as (
@@ -373,6 +380,7 @@ def admin_list_groups_action(payload: dict[str, Any], *, runtime: EnrollmentRunt
           where (%s = '' or g.course_id = %s)
             and (%s = 'ALL' or (%s = 'NON_DELETED' and g.status <> 'DELETED') or g.status = %s)
             and (%s = '' or lower(coalesce(g.name, '') || ' ' || coalesce(g.group_code, '') || ' ' || coalesce(g.group_id, '')) like %s)
+            and ({reviewer_sql})
           group by g.group_id
         ), numbered_groups as (
           select *, count(*) over() as total_count from group_rows
@@ -382,7 +390,7 @@ def admin_list_groups_action(payload: dict[str, Any], *, runtime: EnrollmentRunt
         order by pagination_sort_text, group_id
         limit %s
         """,
-        (course_id, course_id, status, status, status, query, f"%{query}%", *cursor_params, limit + 1),
+        (course_id, course_id, status, status, status, query, f"%{query}%", *reviewer_params, *cursor_params, limit + 1),
     )
     total = int(rows[0]["total_count"]) if rows else 0
     rows, page_info = cursor_pagination_result(

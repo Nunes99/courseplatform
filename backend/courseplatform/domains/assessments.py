@@ -6,6 +6,7 @@ from datetime import timedelta, timezone
 from typing import Any
 
 from ..contracts import ApiError
+from ..reviewer_scopes import admin_from_context, require_attempt_scope, reviewer_scope_predicate
 from ..storage import StorageError
 
 
@@ -593,11 +594,14 @@ def submission_file_download_payload_action(payload: dict[str, Any], runtime: As
     student_context = runtime.student_context
     require_fields(payload, ["fileId"])
     if str_value(payload.get("adminToken")):
-        admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+        admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
         row = fetch_one(
             "select * from courseplatform.files where file_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'",
             (payload["fileId"],),
         )
+        if row:
+            with runtime.connection() as conn:
+                require_attempt_scope(conn, admin, row.get("attempt_id"))
     else:
         _, student = student_context(payload)
         row = fetch_one(
@@ -630,7 +634,7 @@ def admin_list_submissions_action(payload: dict[str, Any], runtime: AssessmentRu
     fetch_all = runtime.fetch_all
     submission_item = runtime.submission_item
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     expire_overdue_attempts()
     status = (payload.get("status") or "ALL").upper()
     query = (payload.get("query") or "").strip().lower()
@@ -651,6 +655,12 @@ def admin_list_submissions_action(payload: dict[str, Any], runtime: AssessmentRu
           )
         """
         cursor_params.extend((cursor_at, cursor_at, cursor_id))
+    scope_sql, scope_params = reviewer_scope_predicate(
+        admin,
+        course_expr="l.course_id",
+        offering_expr="e.offering_id",
+        group_expr="e.group_id",
+    )
     rows = fetch_all(
         f"""
         with latest_reviews as (
@@ -684,6 +694,7 @@ def admin_list_submissions_action(payload: dict[str, Any], runtime: AssessmentRu
         left join courseplatform.students s on s.student_id = a.student_id
         left join courseplatform.lessons l on l.lesson_id = a.lesson_id
         left join courseplatform.lesson_progress p on p.progress_id = a.progress_id
+        left join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
         left join latest_reviews lr on lr.attempt_id = a.attempt_id
         left join file_counts fc on fc.attempt_id = a.attempt_id
         where
@@ -698,12 +709,13 @@ def admin_list_submissions_action(payload: dict[str, Any], runtime: AssessmentRu
               coalesce(l.title, '') || ' ' || coalesce(a.review_comments, '') || ' ' ||
               coalesce(l.lesson_id, '') || ' ' || coalesce(a.attempt_id, '')) like %s
           )
+          and ({scope_sql})
           {cursor_sql}
         order by coalesce(a.submitted_at, a.started_at, a.created_at) desc nulls last,
                  a.attempt_id desc
         limit %s
         """,
-        (status, status, status, query, f"%{query}%", *cursor_params, limit + 1),
+        (status, status, status, query, f"%{query}%", *scope_params, *cursor_params, limit + 1),
     )
     rows, page_info = cursor_pagination_result(
         rows,
@@ -737,12 +749,14 @@ def admin_get_submission_action(payload: dict[str, Any], runtime: AssessmentRunt
     staff_option = runtime.staff_option
     staff_question = runtime.staff_question
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     require_fields(payload, ["attemptId"])
     prepare_assessment_feature_schema()
     attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
     if not attempt:
         raise ApiError("ATTEMPT_NOT_FOUND", "Submissão não encontrada.")
+    with connection() as conn:
+        require_attempt_scope(conn, admin, attempt["attempt_id"])
     student = fetch_one("select * from courseplatform.students where student_id = %s", (attempt["student_id"],))
     lesson = fetch_one("select * from courseplatform.lessons where lesson_id = %s", (attempt["lesson_id"],))
     progress = fetch_one(
@@ -812,7 +826,7 @@ def admin_review_submission_action(payload: dict[str, Any], runtime: AssessmentR
     str_value = runtime.str_value
     success = runtime.success
     utc_now = runtime.utc_now
-    _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     require_fields(payload, ["attemptId", "decision"])
     prepare_assessment_feature_schema()
     prepare_notification_feature_schema()
@@ -835,6 +849,7 @@ def admin_review_submission_action(payload: dict[str, Any], runtime: AssessmentR
         raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
     notification_ids: list[str] = []
     with connection() as conn:
+        require_attempt_scope(conn, admin, attempt["attempt_id"])
         conn.execute("select progress_id from courseplatform.lesson_progress where progress_id = %s for update", (attempt["progress_id"],)).fetchone()
         attempt = conn.execute("select * from courseplatform.attempts where attempt_id = %s for update", (attempt["attempt_id"],)).fetchone()
         require_latest_attempt(conn, attempt)
@@ -936,7 +951,7 @@ def admin_authorize_retry_action(payload: dict[str, Any], runtime: AssessmentRun
     staff_attempt = runtime.staff_attempt
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     require_fields(payload, ["attemptId"])
     prepare_assessment_feature_schema()
     prepare_notification_feature_schema()
@@ -959,6 +974,7 @@ def admin_authorize_retry_action(payload: dict[str, Any], runtime: AssessmentRun
         ).fetchone()
         if not pending:
             raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
+        require_attempt_scope(conn, admin, pending["attempt_id"])
         conn.execute(
             "select progress_id from courseplatform.lesson_progress where progress_id = %s for update",
             (pending["progress_id"],),
@@ -1026,7 +1042,7 @@ def admin_update_attempt_action(payload: dict[str, Any], runtime: AssessmentRunt
     str_value = runtime.str_value
     success = runtime.success
     utc_now = runtime.utc_now
-    _, admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     require_fields(payload, ["attemptId", "status"])
     prepare_assessment_feature_schema()
     prepare_notification_feature_schema()
@@ -1053,6 +1069,7 @@ def admin_update_attempt_action(payload: dict[str, Any], runtime: AssessmentRunt
         ).fetchone()
         if not attempt:
             raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
+        require_attempt_scope(conn, admin, attempt["attempt_id"])
         progress = conn.execute(
             "select * from courseplatform.lesson_progress where progress_id = %s",
             (attempt.get("progress_id"),),

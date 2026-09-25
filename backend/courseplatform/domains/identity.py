@@ -158,6 +158,7 @@ def serialize_admin(row: dict[str, Any] | None, *, as_iso: Callable[[Any], str |
             row.get("status") == "ACTIVE"
             and (not student_id or identity_status == "ACTIVE")
         ),
+        "reviewScopes": row.get("reviewer_scopes") or [],
         "createdAt": as_iso(row.get("created_at")),
         "updatedAt": as_iso(row.get("updated_at")),
     }

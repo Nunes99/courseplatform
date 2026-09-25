@@ -2854,6 +2854,10 @@ def admin_list_staff(payload: dict[str, Any]):
     return administration_domain.admin_list_staff_action(payload, runtime=_administration_runtime())
 
 
+def admin_reviewer_scope_options(payload: dict[str, Any]):
+    return administration_domain.admin_reviewer_scope_options_action(payload, runtime=_administration_runtime())
+
+
 def submission_item(row: dict[str, Any]):
     student = {
         "student_id": row.get("attempt_student_id") or row.get("student_id"),

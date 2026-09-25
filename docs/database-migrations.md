@@ -6,7 +6,7 @@
 executa `supabase/schema.sql`, `supabase/chat_realtime.sql` ou
 `backend/courseplatform/schema.sql` durante pedidos.
 
-A versão exigida pelo backend é `20260921120000`. A última migração grava esse
+A versão exigida pelo backend é `20260925120000`. A última migração grava esse
 valor em `courseplatform.schema_versions`. Uma ausência ou diferença produz
 `DATABASE_MIGRATION_REQUIRED`; a aplicação não tenta corrigir a base.
 
@@ -40,6 +40,7 @@ emite um certificado numa transação e não altera o esquema.
 7. `20260915173343_model_course_versions_and_offerings.sql`: separa catálogo, versão publicada, edição/turma e matrícula histórica.
 8. `20260920221040_unify_staff_student_identity.sql`: liga atribuições administrativas à identidade de estudante sem remover credenciais legadas não associadas.
 9. `20260920232716_unified_account_registration.sql`: adiciona verificação de email para novos cadastros, preserva contas históricas e materializa tokens de confirmação de utilização única.
+10. `20260925120000_add_reviewer_scopes.sql`: adiciona âmbitos de revisão por curso, edição/turma ou grupo e preserva revisores existentes com um âmbito global inicial.
 
 As migrações da Etapa 4 são aditivas e repetíveis. A migração histórica da role
 runtime é a exceção deliberada: uma segunda execução falha antes de alterar

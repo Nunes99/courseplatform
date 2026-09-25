@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..contracts import ApiError
+from ..reviewer_scopes import admin_from_context, reviewer_scope_predicate
 from ..storage import StorageError
 
 
@@ -153,7 +154,7 @@ def admin_list_certificate_requests_action(payload: dict[str, Any], runtime: Fin
     ensure_certificate_feature_schema = runtime.ensure_certificate_feature_schema
     public_certificate_request = runtime.public_certificate_request
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     status = (payload.get("status") or "ALL").upper()
     query = (payload.get("query") or "").strip().lower()
     survey_only = as_bool(payload.get("surveyOnly"))
@@ -174,6 +175,12 @@ def admin_list_certificate_requests_action(payload: dict[str, Any], runtime: Fin
               )
         """
         cursor_params.extend((cursor_at, cursor_at, cursor_id))
+    reviewer_sql, reviewer_params = reviewer_scope_predicate(
+        admin,
+        course_expr="cr.course_id",
+        offering_expr="e.offering_id",
+        group_expr="e.group_id",
+    )
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         rows = conn.execute(
@@ -186,6 +193,7 @@ def admin_list_certificate_requests_action(payload: dict[str, Any], runtime: Fin
             join courseplatform.students s on s.student_id = cr.student_id
             join courseplatform.courses c on c.course_id = cr.course_id
             left join courseplatform.certificates cert on cert.certificate_id = cr.certificate_id
+            left join courseplatform.enrollments e on e.enrollment_id = cr.enrollment_id
             where (%s = 'ALL' or cr.status = %s)
               and (%s = false or coalesce(cr.survey_answers_json, '{{}}'::jsonb) <> '{{}}'::jsonb)
               and (
@@ -193,12 +201,13 @@ def admin_list_certificate_requests_action(payload: dict[str, Any], runtime: Fin
                 or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
                   coalesce(c.title, '') || ' ' || coalesce(cr.request_id, '')) like %s
               )
+              and ({reviewer_sql})
               {cursor_sql}
             order by coalesce(cr.submitted_at, cr.updated_at, cr.created_at) desc,
                      cr.request_id desc
             limit %s
             """,
-            (status, status, survey_only, query, f"%{query}%", *cursor_params, limit + 1),
+            (status, status, survey_only, query, f"%{query}%", *reviewer_params, *cursor_params, limit + 1),
         ).fetchall()
         conn.commit()
     rows, page_info = cursor_pagination_result(

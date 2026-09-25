@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..contracts import ApiError
+from ..reviewer_scopes import admin_from_context, require_course_scope, reviewer_course_predicate, reviewer_scope_predicate
 
 
 ACTION_BINDINGS = (
@@ -335,7 +336,7 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
     public_certificate = runtime.public_certificate
     str_value = runtime.str_value
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     status = (payload.get("status") or "ACTIVE").upper()
     query = str_value(payload.get("query")).lower()
     limit = cursor_page_limit(payload)
@@ -362,6 +363,12 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
               )
             """
             cursor_params.extend((cursor_at, cursor_at, cursor_id))
+    reviewer_sql, reviewer_params = reviewer_scope_predicate(
+        admin,
+        course_expr="cert.course_id",
+        offering_expr="cert.offering_id",
+        group_expr="e.group_id",
+    )
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         rows = conn.execute(
@@ -372,6 +379,7 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
             join courseplatform.students s on s.student_id = cert.student_id
             join courseplatform.courses c on c.course_id = cert.course_id
             left join courseplatform.certificate_settings cs on cs.course_id = cert.course_id
+            left join courseplatform.enrollments e on e.enrollment_id = cert.enrollment_id
             where (
                 %s = 'ALL'
                 or (%s = 'ACTIVE' and coalesce(cert.status, 'ISSUED') <> 'DELETED')
@@ -383,11 +391,12 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
                   coalesce(c.title, '') || ' ' || coalesce(cert.certificate_number, '') || ' ' ||
                   coalesce(cert.verification_code, '')) like %s
               )
+              and ({reviewer_sql})
               {cursor_sql}
             order by cert.issue_date desc nulls last, cert.certificate_id desc
             limit %s
             """,
-            (status, status, status, query, f"%{query}%", *cursor_params, limit + 1),
+            (status, status, status, query, f"%{query}%", *reviewer_params, *cursor_params, limit + 1),
         ).fetchall()
         conn.commit()
     rows, page_info = cursor_pagination_result(
@@ -566,10 +575,11 @@ def admin_get_certificate_settings_action(payload: dict[str, Any], runtime: Cert
     get_settings = runtime.get_settings
     public_course = runtime.public_course
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     course_id = payload.get("courseId") or get_settings().default_course_id
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
+        require_course_scope(conn, admin, course_id)
         course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
         row = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
         conn.commit()
@@ -645,7 +655,7 @@ def admin_list_certificate_surveys_action(payload: dict[str, Any], runtime: Cert
     public_course = runtime.public_course
     str_value = runtime.str_value
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     query = str_value(payload.get("query")).lower()
     limit = cursor_page_limit(payload)
     scope = cursor_scope("admin-certificate-surveys", query)
@@ -656,6 +666,7 @@ def admin_list_certificate_surveys_action(payload: dict[str, Any], runtime: Cert
         cursor_title, cursor_id = cursor
         cursor_sql = "and (lower(coalesce(c.title, '')) > %s or (lower(coalesce(c.title, '')) = %s and c.course_id > %s))"
         cursor_params.extend((cursor_title, cursor_title, cursor_id))
+    reviewer_sql, reviewer_params = reviewer_course_predicate(admin, "c.course_id")
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
         rows = conn.execute(
@@ -667,6 +678,7 @@ def admin_list_certificate_surveys_action(payload: dict[str, Any], runtime: Cert
               left join courseplatform.certificate_settings cs on cs.course_id = c.course_id
               where coalesce(c.status, 'ACTIVE') <> 'DELETED'
                 and (%s = '' or lower(coalesce(c.title, '') || ' ' || coalesce(c.course_code, '') || ' ' || coalesce(c.course_id, '')) like %s)
+                and ({reviewer_sql})
             ), numbered_surveys as (
               select *, count(*) over() as total_count from survey_rows
             )
@@ -675,7 +687,7 @@ def admin_list_certificate_surveys_action(payload: dict[str, Any], runtime: Cert
             order by pagination_sort_text, course_id
             limit %s
             """,
-            (query, f"%{query}%", *cursor_params, limit + 1),
+            (query, f"%{query}%", *reviewer_params, *cursor_params, limit + 1),
         ).fetchall()
         conn.commit()
     total = int(rows[0]["total_count"]) if rows else 0
@@ -854,7 +866,7 @@ def admin_certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certi
     ensure_certificate_feature_schema = runtime.ensure_certificate_feature_schema
     require_fields = runtime.require_fields
     str_value = runtime.str_value
-    admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     require_fields(payload, ["certificateId"])
     verification_base_url = str_value(payload.get("verificationBaseUrl")) or "verify.html"
     with connection() as conn:
@@ -873,6 +885,8 @@ def admin_certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certi
             """,
             (payload["certificateId"],),
         ).fetchone()
+        if cert:
+            require_course_scope(conn, admin, cert["course_id"])
         snapshot = cert.get("template_snapshot_json") if cert else None
         if cert and not snapshot:
             version = conn.execute(

@@ -1,6 +1,6 @@
 # Validação das Etapas 3, 4, 6, 8 e 9
 
-Data da revisão: 24 de setembro de 2026.
+Data da revisão: 25 de setembro de 2026.
 
 Este documento separa evidência automática, diagnóstico somente leitura em
 produção e validação manual com contas reais. Nenhum teste destrutivo foi
@@ -12,7 +12,7 @@ executado na base normal.
 | --- | --- | --- |
 | 3 - Supabase, RLS e views | Concluída para RLS e papéis atuais | Estudante, revisor e proprietário validados; âmbito fino do revisor ainda não existe |
 | 4 - Migrações e health checks | Concluída localmente e reconciliada com o histórico remoto | Concluída em produção |
-| 6 - Storage privado | Backfill e reconciliação concluídos | Proprietário abriu trabalho/comprovativo; revisor abriu trabalho e teve comprovativo recusado; a confirmação do estudante depende do deploy do ajuste descrito abaixo |
+| 6 - Storage privado | Backfill e reconciliação concluídos | Encerrada: estudante, revisor e proprietário validados com ficheiros privados reais; comprovativo recusado ao revisor |
 | 8 - Domínios e rotas tipadas | Suíte e verificadores de compatibilidade concluídos | Leituras reais de estudante, revisor e proprietário concluídas |
 | 9 - Catálogo, versões e turmas | Esquema, vínculos e interface sintética validados | Leitura do estudante e gestão do proprietário concluídas |
 
@@ -44,8 +44,10 @@ para Supabase Auth.
 
 ### Etapa 4
 
-- A base reporta a versão de aplicação `20260921120000`, igual a
-  `EXPECTED_SCHEMA_VERSION`.
+- Na validação encerrada, a base reportava a versão de aplicação
+  `20260921120000`, então igual a `EXPECTED_SCHEMA_VERSION`. A implementação
+  posterior de âmbitos de revisor elevou o contrato local para `20260925120000`;
+  a respetiva migração continua pendente até ser aplicada com autorização.
 - O histórico remoto contém as 15 migrações esperadas.
 - Os três timestamps locais divergentes foram alinhados aos identificadores
   remotos sem alterar o SQL, os dados ou as chaves internas de reconciliação.
@@ -99,7 +101,7 @@ descartável.
 ```text
 python -m unittest discover -s tests -p "test_*.py" -v
 
-Resultado: 283 testes OK; 4 ignorados pela mesma razão.
+Resultado: 286 testes OK; 4 ignorados pela mesma razão.
 ```
 
 Verificadores do frontend concluídos:
@@ -116,22 +118,25 @@ como a visualização compacta de aula aprovada, para manter os ficheiros
 próprios da tentativa acessíveis ao estudante em modo somente leitura. O
 verificador de avaliações confirmou ambos os fluxos em desktop e mobile, com
 um botão `Abrir`, um botão `Baixar`, ausência de `Eliminar`, ausência de
-overflow e consola limpa. Os 29 testes de Storage privado também passaram. A
-confirmação com o estudante real permanece pendente até esta revisão ser
-publicada.
+overflow e consola limpa. Os 29 testes de Storage privado também passaram.
+Após o deploy, um estudante real abriu a própria tentativa aprovada e o
+ficheiro privado foi entregue numa URL `blob:` criada a partir da resposta
+autenticada.
 
 A primeira publicação confirmou que a rota individual da aula podia ser
 aberta sem o `activeAttempt` presente no estado restaurado do dashboard. A
 leitura tipada da aula passou a devolver explicitamente a tentativa mais
 recente e o frontend usa esse valor como fallback antes de consultar os
 ficheiros. Um teste de regressão cobre agora a navegação direta para uma aula
-aprovada.
+aprovada. Dois testes adicionais confirmam o isolamento da matrícula pela
+identidade autenticada, a limpeza do estado entre contas e a prioridade da
+tentativa devolvida pela API.
 
 ## Validação manual com contas reais
 
 Use contas que já existam e não altere dados apenas para testar.
 
-Execução de 24 de setembro de 2026:
+Execução de 24 e 25 de setembro de 2026:
 
 - estudante: dashboard, dois cursos matriculados, lista de atividades e
   certificações próprias carregaram sem alerta visível;
@@ -139,6 +144,9 @@ Execução de 24 de setembro de 2026:
   catálogo, versão publicada, edição e matrículas carregaram;
 - Storage: um trabalho submetido e um comprovativo de pagamento foram abertos
   com sucesso por URLs `blob:` criadas a partir da resposta autenticada;
+- estudante: depois do deploy, a aula aprovada apresentou apenas os ficheiros
+  da própria tentativa em modo somente leitura, com ações `Abrir` e `Baixar` e
+  sem ação de eliminação;
 - certificados: lista, pedidos, condições de pagamento e configuração por
   curso carregaram na administração;
 - revisor: login administrativo com a identidade normal, leitura de submissões,
@@ -156,11 +164,12 @@ As sessões e conteúdos usados no teste não são identificados neste documento
 
 1. [confirmado] Entrar na área do estudante e confirmar que home, cursos e
    media carregam.
-2. [pendente de deploy] Abrir um trabalho próprio no Storage. A interface
-   pós-revisão foi corrigida e validada localmente, mas a produção ainda serve
-   o bundle anterior.
-3. [pendente] Confirmar que não existe forma de obter o ficheiro de outro
-   estudante.
+2. [confirmado] Abrir um trabalho próprio no Storage numa aula aprovada; a
+   resposta autenticada criou uma URL `blob:` funcional em produção.
+3. [confirmado] A API restringe matrícula, tentativa e ficheiro pelo estudante
+   autenticado. O teste de regressão recusa o ficheiro de outro estudante e as
+   duas sessões reais observadas apresentaram somente a tentativa da própria
+   conta.
 4. [confirmado] Abrir certificados próprios e confirmar que cursos não
    matriculados não aparecem.
 

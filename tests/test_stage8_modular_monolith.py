@@ -30,7 +30,7 @@ class BackendModuleBoundaryTests(unittest.TestCase):
             set(DOMAIN_ACTION_BINDINGS),
         )
         action_names = [name for bindings in DOMAIN_ACTION_BINDINGS.values() for name, _ in bindings]
-        self.assertEqual(117, len(action_names))
+        self.assertEqual(118, len(action_names))
         self.assertEqual(len(action_names), len(set(action_names)))
         self.assertEqual(set(action_names), set(actions.ACTIONS))
         self.assertTrue(all(callable(handler) for handler in actions.ACTIONS.values()))

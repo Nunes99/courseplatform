@@ -165,6 +165,7 @@ const state = {
     videos: []
   },
   staff: [],
+  reviewerScopeOptions: [],
   staffSummary: {},
   staffFilters: {
     query: '', status: 'ALL', role: 'ALL'
@@ -268,7 +269,8 @@ async function initialize() {
       state.admin = result.admin;
       renderAdminShell();
       warmAdminCache();
-      loadPlatformStatistics();
+      if (canManagePlatform()) loadPlatformStatistics();
+      else loadPending();
     } catch (error) {
       handleAdminError(error);
     }
@@ -353,7 +355,8 @@ async function login(event) {
     adminIdentity.textContent = `${result.admin.fullName} · ${result.admin.role}`;
     renderAdminShell();
     warmAdminCache();
-    await loadPlatformStatistics();
+    if (canManagePlatform()) await loadPlatformStatistics();
+    else await loadPending();
   } catch (error) {
     if (error instanceof ApiError && error.code === 'INVALID_ADMIN_CREDENTIALS') {
       errorBox.innerHTML = `
@@ -571,11 +574,11 @@ function renderAdminShell() {
           ${brandSymbolTemplate('admin-sidebar-symbol')}
           <h2>Gestão da Summer School</h2>
         </div>
-        <button class="admin-nav is-active" data-admin-view="overview" aria-label="Visão geral" title="Visão geral">
+        ${canManagePlatform() ? `<button class="admin-nav is-active" data-admin-view="overview" aria-label="Visão geral" title="Visão geral">
           <img src="${iconUrl('classroom', blueIcon)}" alt="">
           <span>Visão geral</span>
-        </button>
-        <button class="admin-nav" data-admin-view="pending" aria-label="Submissões" title="Submissões">
+        </button>` : ''}
+        <button class="admin-nav ${canManagePlatform() ? '' : 'is-active'}" data-admin-view="pending" aria-label="Submissões" title="Submissões">
           <img src="${iconUrl('inbox', blueIcon)}" alt="">
           <span>Submissões</span>
         </button>
@@ -596,14 +599,16 @@ function renderAdminShell() {
           <img src="${iconUrl('book-shelf', blueIcon)}" alt="">
           <span>Cursos</span>
         </button>
-        <button class="admin-nav" data-admin-view="videos" aria-label="Vídeos" title="Vídeos">
-          <img src="${iconUrl('video-playlist', blueIcon)}" alt="">
-          <span>Vídeos</span>
-        </button>
-        <button class="admin-nav" data-admin-view="brand" aria-label="Marca" title="Marca">
-          <img src="${iconUrl('picture', blueIcon)}" alt="">
-          <span>Marca</span>
-        </button>
+        ${canManagePlatform() ? `
+          <button class="admin-nav" data-admin-view="videos" aria-label="Vídeos" title="Vídeos">
+            <img src="${iconUrl('video-playlist', blueIcon)}" alt="">
+            <span>Vídeos</span>
+          </button>
+          <button class="admin-nav" data-admin-view="brand" aria-label="Marca" title="Marca">
+            <img src="${iconUrl('picture', blueIcon)}" alt="">
+            <span>Marca</span>
+          </button>
+        ` : ''}
         <button class="admin-nav" data-admin-view="certifications" aria-label="Certificações" title="Certificações">
           <img src="${iconUrl('diploma', blueIcon)}" alt="">
           <span>Certificações</span>
@@ -1786,6 +1791,10 @@ function canManageCredentials() {
   return ['OWNER', 'ADMIN'].includes(state.admin?.role);
 }
 
+function canManagePlatform() {
+  return ['OWNER', 'ADMIN'].includes(state.admin?.role);
+}
+
 function renderCredentialsManagement() {
   const main = document.querySelector('#adminMain');
   const canRestoreStaff = state.admin?.role === 'OWNER';
@@ -2070,7 +2079,7 @@ function staffEligibleStudent(item) {
   };
 }
 
-function showStaffDialog(adminId = '') {
+async function showStaffDialog(adminId = '') {
   const admin = state.staff.find((item) => item.adminId === adminId) || {
     adminId: '',
     fullName: '',
@@ -2078,6 +2087,13 @@ function showStaffDialog(adminId = '') {
     role: 'REVIEWER',
     status: 'ACTIVE'
   };
+  try {
+    const result = await api.adminReviewerScopeOptions({ force: true });
+    state.reviewerScopeOptions = result.options || [];
+  } catch (error) {
+    handleAdminError(error);
+    return;
+  }
 
   const overlay = document.createElement('div');
   overlay.className = 'dialog-overlay';
@@ -2127,6 +2143,13 @@ function showStaffDialog(adminId = '') {
             </select>
           </label>
         </div>
+        <section id="reviewerScopeSection" class="admin-content-panel reviewer-scope-editor">
+          <div class="profile-section-heading">
+            <h3>Âmbito de revisão</h3>
+            <p>Escolha exatamente os cursos, turmas ou grupos que este revisor pode consultar e avaliar.</p>
+          </div>
+          ${reviewerScopeOptionsTemplate(state.reviewerScopeOptions, admin.reviewScopes || [])}
+        </section>
         <div class="dialog-actions">
           <button class="button button-secondary" type="button" data-cancel-dialog>Cancelar</button>
           <button class="button button-primary" type="submit">Guardar função</button>
@@ -2186,12 +2209,37 @@ function showStaffDialog(adminId = '') {
       userSearchTimer = setTimeout(() => loadEligibleUsers(query), 300);
     });
   }
+  const roleSelect = overlay.querySelector('[name="role"]');
+  const scopeSection = overlay.querySelector('#reviewerScopeSection');
+  const syncReviewerScopeVisibility = () => {
+    scopeSection.hidden = roleSelect.value !== 'REVIEWER';
+  };
+  roleSelect.addEventListener('change', syncReviewerScopeVisibility);
+  syncReviewerScopeVisibility();
+  const globalScope = overlay.querySelector('[data-review-scope="GLOBAL"]');
+  const syncGlobalReviewerScope = () => {
+    const globalSelected = Boolean(globalScope?.checked);
+    overlay.querySelectorAll('[data-review-scope]:not([data-review-scope="GLOBAL"])').forEach((input) => {
+      input.disabled = globalSelected;
+      if (globalSelected) input.checked = false;
+    });
+  };
+  globalScope?.addEventListener('change', syncGlobalReviewerScope);
+  syncGlobalReviewerScope();
   overlay.querySelector('#staffForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!confirmAdminAction('Deseja atribuir estas permissões ao utilizador selecionado?')) return;
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const values = Object.fromEntries(new FormData(form));
+    values.reviewScopes = values.role === 'REVIEWER'
+      ? [...form.querySelectorAll('[data-review-scope]:checked')].map((input) => ({
+          scopeType: input.dataset.reviewScope,
+          courseId: input.dataset.courseId || '',
+          offeringId: input.dataset.offeringId || '',
+          groupId: input.dataset.groupId || ''
+        }))
+      : [];
     setBusy(button, true, 'A guardar...');
     try {
       await api.adminSaveStaff(values);
@@ -2204,6 +2252,34 @@ function showStaffDialog(adminId = '') {
       setBusy(button, false);
     }
   });
+}
+
+function reviewerScopeOptionsTemplate(options, selectedScopes) {
+  const selected = new Set((selectedScopes || []).map((scope) => [
+    scope.scopeType, scope.courseId || '', scope.offeringId || '', scope.groupId || ''
+  ].join('|')));
+  const checked = (type, courseId = '', offeringId = '', groupId = '') =>
+    selected.has([type, courseId, offeringId, groupId].join('|')) ? 'checked' : '';
+  const unique = (items, key) => [...new Map(items.filter((item) => item[key]).map((item) => [item[key], item])).values()];
+  const courses = unique(options, 'courseId');
+  const offerings = unique(options, 'offeringId');
+  const groups = unique(options, 'groupId');
+  return `
+    <div class="reviewer-scope-options">
+      <label><input type="checkbox" data-review-scope="GLOBAL" ${checked('GLOBAL')}> Todos os cursos</label>
+      ${courses.map((item) => `<label><input type="checkbox" data-review-scope="COURSE"
+        data-course-id="${escapeHtml(item.courseId)}" ${checked('COURSE', item.courseId)}>
+        Curso: ${escapeHtml(item.courseTitle)}</label>`).join('')}
+      ${offerings.map((item) => `<label><input type="checkbox" data-review-scope="OFFERING"
+        data-course-id="${escapeHtml(item.courseId)}" data-offering-id="${escapeHtml(item.offeringId)}"
+        ${checked('OFFERING', item.courseId, item.offeringId)}>
+        Turma: ${escapeHtml(item.courseTitle)} / ${escapeHtml(item.offeringName)}</label>`).join('')}
+      ${groups.map((item) => `<label><input type="checkbox" data-review-scope="GROUP"
+        data-course-id="${escapeHtml(item.courseId)}" data-offering-id="${escapeHtml(item.offeringId)}"
+        data-group-id="${escapeHtml(item.groupId)}" ${checked('GROUP', item.courseId, item.offeringId, item.groupId)}>
+        Grupo: ${escapeHtml(item.courseTitle)} / ${escapeHtml(item.offeringName)} / ${escapeHtml(item.groupName)}</label>`).join('')}
+    </div>
+  `;
 }
 
 async function setStaffStatus(adminId, status) {
@@ -2625,7 +2701,7 @@ function renderCertifications() {
             placeholder="Nome, email, ID, curso ou certificado">
         </label>
         <button class="button button-secondary" id="refreshCertificateData" type="button">Atualizar dados</button>
-        <button class="button button-primary" id="refreshCertificateFormat" type="button">Atualizar formato</button>
+        ${canManagePlatform() ? '<button class="button button-primary" id="refreshCertificateFormat" type="button">Atualizar formato</button>' : ''}
       </div>
     </div>
 
@@ -2721,7 +2797,7 @@ function renderCertifications() {
             <h2>Configuração do curso</h2>
           </div>
         </div>
-        <form id="certificateSettingsForm" class="form-stack">
+        ${canManagePlatform() ? `<form id="certificateSettingsForm" class="form-stack">
           <label>
             <span>Curso</span>
             <select id="certificateCourse" name="courseId">
@@ -2734,7 +2810,12 @@ function renderCertifications() {
             <button class="button button-secondary" type="reset">Cancelar alterações</button>
             <button class="button button-primary" type="submit">Guardar configuração do curso</button>
           </div>
-        </form>
+        </form>` : `
+          <div class="read-only-panel">
+            <p>Configuração disponível apenas para administradores. Está a consultar o modelo do curso em modo de leitura.</p>
+            <label><span>Curso</span><select id="certificateCourse">${certificateCourseOptions()}</select></label>
+          </div>
+        `}
       </article>
 
       <article class="admin-content-panel certificate-model-preview-panel">
@@ -2771,11 +2852,11 @@ function renderCertifications() {
     state.certificateSettings = settingsResult.settings || {};
     renderCertifications();
   });
-  document.querySelector('#certificateSettingsForm').addEventListener('submit', saveCertificateSettings);
-  document.querySelector('#certificateSettingsForm').addEventListener('input', updateCertificateModelPreview);
-  document.querySelector('[name="participationEnabled"]').addEventListener('change', syncParticipationFields);
-  syncParticipationFields();
-  document.querySelector('#certificateSettingsForm').addEventListener('reset', () => {
+  document.querySelector('#certificateSettingsForm')?.addEventListener('submit', saveCertificateSettings);
+  document.querySelector('#certificateSettingsForm')?.addEventListener('input', updateCertificateModelPreview);
+  document.querySelector('[name="participationEnabled"]')?.addEventListener('change', syncParticipationFields);
+  if (document.querySelector('[name="participationEnabled"]')) syncParticipationFields();
+  document.querySelector('#certificateSettingsForm')?.addEventListener('reset', () => {
     requestAnimationFrame(() => { updateCertificateModelPreview(); syncParticipationFields(); });
   });
   root.querySelectorAll('[data-certificate-asset]').forEach((input) => {
@@ -2799,7 +2880,7 @@ function renderCertifications() {
     scheduleCertificateRefresh();
   });
   document.querySelector('#refreshCertificateData').addEventListener('click', () => loadCertifications({ force: true }));
-  document.querySelector('#refreshCertificateFormat').addEventListener('click', refreshCertificateFormatAll);
+  document.querySelector('#refreshCertificateFormat')?.addEventListener('click', refreshCertificateFormatAll);
   root.querySelectorAll('[data-cursor-pagination]').forEach((button) => {
     button.addEventListener('click', () => changeCertificatePage(
       button.dataset.cursorPagination,
@@ -3046,13 +3127,13 @@ function adminCertificateRowTemplate(certificate) {
         ${deleted ? '' : `
           <button class="button button-small button-secondary" type="button" data-open-admin-certificate ${dataset}>Visualizar</button>
           <button class="button button-small button-secondary" type="button" data-download-admin-certificate ${dataset}>Baixar</button>
-          <button class="button button-small button-secondary" type="button" data-refresh-certificate-format ${dataset}>Atualizar</button>
+          ${canManagePlatform() ? `<button class="button button-small button-secondary" type="button" data-refresh-certificate-format ${dataset}>Atualizar</button>` : ''}
         `}
-        <button class="button button-small ${blocked || deleted ? 'button-primary' : 'button-secondary'}" type="button"
+        ${canManagePlatform() ? `<button class="button button-small ${blocked || deleted ? 'button-primary' : 'button-secondary'}" type="button"
           data-set-certificate-status="${escapeHtml(nextStatus)}" ${dataset}>
           ${accessLabel}
-        </button>
-        ${deleted ? '' : `
+        </button>` : ''}
+        ${!canManagePlatform() || deleted ? '' : `
           <button class="button button-small button-danger" type="button" data-delete-certificate ${dataset}>Apagar</button>
         `}
       </div>
@@ -3110,14 +3191,14 @@ function adminCertificateActionDataset(certificate) {
 
 function certificateRequestCardTemplate(request) {
   const isParticipation = request.requestType === 'PARTICIPATION';
-  const receipt = request.paymentReceiptUrl ? adminFileCardTemplate({
+  const receipt = request.paymentReceiptUrl && canManagePlatform() ? adminFileCardTemplate({
     receiptRequestId: request.requestId,
     fileName: request.paymentReceiptName || 'Comprovativo',
     contentUrl: request.paymentReceiptUrl,
     mimeType: request.paymentReceiptMimeType,
     sizeBytes: request.paymentReceiptSizeBytes,
     uploadedAt: request.submittedAt
-  }) : `<p class="empty-note">${isParticipation ? 'Certificado de participação gratuito. Não requer comprovativo de pagamento.' : 'Sem comprovativo anexado. Em cursos com emissão livre, o pedido pode ser aprovado sem pagamento.'}</p>`;
+  }) : `<p class="empty-note">${request.paymentReceiptUrl ? 'Comprovativo protegido. Apenas administradores podem consultá-lo.' : (isParticipation ? 'Certificado de participação gratuito. Não requer comprovativo de pagamento.' : 'Sem comprovativo anexado. Em cursos com emissão livre, o pedido pode ser aprovado sem pagamento.')}</p>`;
   const canReview = request.status === 'PAYMENT_SUBMITTED';
   const canDelete = ['REQUESTED', 'REJECTED'].includes(request.status)
     && !request.certificateId
@@ -3158,7 +3239,7 @@ function certificateRequestCardTemplate(request) {
       </div>
       ${receipt}
       <div class="admin-row-actions">
-        <button class="button button-small button-primary" type="button"
+        ${canManagePlatform() ? `<button class="button button-small button-primary" type="button"
           data-review-certificate-request="${escapeHtml(request.requestId)}"
           data-decision="APPROVED" ${canReview ? '' : 'disabled'}>
           Aprovar
@@ -3167,9 +3248,9 @@ function certificateRequestCardTemplate(request) {
           data-review-certificate-request="${escapeHtml(request.requestId)}"
           data-decision="REJECTED" ${canReview ? '' : 'disabled'}>
           Rejeitar
-        </button>
+        </button>` : ''}
         ${certificateActions}
-        ${canDelete ? `
+        ${canManagePlatform() && canDelete ? `
           <button class="button button-small button-danger" type="button"
             data-delete-certificate-request="${escapeHtml(request.requestId)}">
             Apagar pedido
@@ -3430,9 +3511,9 @@ function certificateSurveyRowTemplate(item) {
         <div><dt>Perguntas</dt><dd>${escapeHtml(item.questionCount || 0)}</dd></div>
         <div><dt>Atualizado</dt><dd>${escapeHtml(formatDate(item.updatedAt))}</dd></div>
       </dl>
-      <button class="button button-secondary" type="button" data-edit-certificate-survey="${escapeHtml(course.courseId)}">
+      ${canManagePlatform() ? `<button class="button button-secondary" type="button" data-edit-certificate-survey="${escapeHtml(course.courseId)}">
         Abrir editor
-      </button>
+      </button>` : '<span class="status-pill">Somente leitura</span>'}
     </article>
   `;
 }
@@ -4994,9 +5075,9 @@ function renderStudents() {
         <p class="eyebrow">Participantes</p>
         <h1>Estudantes</h1>
       </div>
-      <button class="button button-primary" id="newStudent">
+      ${canManagePlatform() ? `<button class="button button-primary" id="newStudent">
         Adicionar estudante
-      </button>
+      </button>` : ''}
     </div>
 
     <section class="admin-summary-grid" aria-label="Resumo de participantes">
@@ -5039,7 +5120,7 @@ function renderStudents() {
             <strong>${enrollments[0]?.progressPercent || 0}%</strong>
           </div>
 
-          <div class="student-admin-actions">
+          ${canManagePlatform() ? `<div class="student-admin-actions">
             <button type="button" data-reset-access="${escapeHtml(student.studentId)}">
               Novo código
             </button>
@@ -5048,13 +5129,13 @@ function renderStudents() {
               data-current-status="${escapeHtml(student.status)}">
               ${student.status === 'ACTIVE' ? 'Bloquear' : 'Ativar'}
             </button>
-          </div>
+          </div>` : ''}
         </article>
       `).join('')}
     </div>
   `;
 
-  document.querySelector('#newStudent').addEventListener('click', showStudentDialog);
+  document.querySelector('#newStudent')?.addEventListener('click', showStudentDialog);
 
   root.querySelectorAll('[data-reset-access]').forEach((button) => {
     button.addEventListener('click', () => resetAccess(button.dataset.resetAccess));
@@ -5085,14 +5166,14 @@ function renderStudentsV2() {
         <p class="eyebrow">Participantes</p>
         <h1>Estudantes</h1>
       </div>
-      <div class="admin-heading-actions">
+      ${canManagePlatform() ? `<div class="admin-heading-actions">
         <button class="button button-secondary" id="restoreStudentCredentials" type="button">
           Restaurar credenciais
         </button>
         <button class="button button-primary" id="newStudent" type="button">
           Adicionar estudante
         </button>
-      </div>
+      </div>` : ''}
     </div>
 
     <section class="admin-summary-grid" aria-label="Resumo de participantes">
@@ -5204,8 +5285,8 @@ function renderStudentsV2() {
     ${cursorPaginationTemplate('students', state.studentPagination)}
   `;
 
-  document.querySelector('#newStudent').addEventListener('click', showStudentDialog);
-  document.querySelector('#restoreStudentCredentials').addEventListener('click', () => showCredentialRecoveryDialog('STUDENTS'));
+  document.querySelector('#newStudent')?.addEventListener('click', showStudentDialog);
+  document.querySelector('#restoreStudentCredentials')?.addEventListener('click', () => showCredentialRecoveryDialog('STUDENTS'));
   document.querySelector('#studentSearch').addEventListener('input', (event) => {
     state.studentFilters.query = event.currentTarget.value;
     resetCursorPagination(state.studentPagination);
@@ -5527,14 +5608,14 @@ function renderStudentDetailsOverlay(overlay, details) {
           Alterar email
         </button>
       ` : ''}
-      <button class="button button-secondary" type="button" data-reset-access="${escapeHtml(student.studentId)}">
+      ${canManagePlatform() ? `<button class="button button-secondary" type="button" data-reset-access="${escapeHtml(student.studentId)}">
         Nova palavra-passe
       </button>
       <button class="button button-primary" type="button"
         data-toggle-student="${escapeHtml(student.studentId)}"
         data-current-status="${escapeHtml(student.status)}">
         ${student.status === 'ACTIVE' ? 'Bloquear estudante' : 'Ativar estudante'}
-      </button>
+      </button>` : ''}
     </div>
   `;
 
@@ -5730,7 +5811,7 @@ function studentLessonAccessTemplate(item) {
         <div><dt>Submetido</dt><dd>${escapeHtml(formatDate(attempt?.submittedAt))}</dd></div>
       </dl>
       <div class="admin-row-actions">
-        <button class="button button-small button-secondary" type="button"
+        ${canManagePlatform() ? `<button class="button button-small button-secondary" type="button"
           data-student-lesson-access="AVAILABLE"
           data-course-id="${escapeHtml(item.courseId || '')}"
           data-lesson-id="${escapeHtml(lesson.lessonId || progress.lessonId || '')}">
@@ -5741,7 +5822,7 @@ function studentLessonAccessTemplate(item) {
           data-course-id="${escapeHtml(item.courseId || '')}"
           data-lesson-id="${escapeHtml(lesson.lessonId || progress.lessonId || '')}">
           Restringir
-        </button>
+        </button>` : ''}
       </div>
     </article>
   `;
@@ -5773,13 +5854,13 @@ function adminStudentCertificateTemplate(certificate) {
         <button class="button button-small button-primary" type="button" data-download-admin-certificate ${dataset}>
           Baixar
         </button>
-        <button class="button button-small button-secondary" type="button"
+        ${canManagePlatform() ? `<button class="button button-small button-secondary" type="button"
           data-set-certificate-status="${escapeHtml(nextStatus)}" ${dataset}>
           ${blocked ? 'Liberar' : 'Bloquear'}
         </button>
         <button class="button button-small button-danger" type="button" data-delete-certificate ${dataset}>
           Apagar
-        </button>
+        </button>` : ''}
       </div>
     </article>
   `;
@@ -5862,14 +5943,14 @@ function showStudentDetails(studentId) {
         <button class="button button-secondary" type="button" data-copy-email="${escapeHtml(student.email)}">
           Copiar email
         </button>
-        <button class="button button-secondary" type="button" data-reset-access="${escapeHtml(student.studentId)}">
+        ${canManagePlatform() ? `<button class="button button-secondary" type="button" data-reset-access="${escapeHtml(student.studentId)}">
           Nova palavra-passe
         </button>
         <button class="button button-primary" type="button"
           data-toggle-student="${escapeHtml(student.studentId)}"
           data-current-status="${escapeHtml(student.status)}">
           ${student.status === 'ACTIVE' ? 'Bloquear estudante' : 'Ativar estudante'}
-        </button>
+        </button>` : ''}
       </div>
     </div>
   `;
@@ -5882,8 +5963,8 @@ function showStudentDetails(studentId) {
   overlay.querySelector('[data-copy-email]').addEventListener('click', (event) => {
     copyText(event.currentTarget.dataset.copyEmail, 'Email copiado.');
   });
-  overlay.querySelector('[data-reset-access]').addEventListener('click', () => resetAccess(student.studentId));
-  overlay.querySelector('[data-toggle-student]').addEventListener('click', async () => {
+  overlay.querySelector('[data-reset-access]')?.addEventListener('click', () => resetAccess(student.studentId));
+  overlay.querySelector('[data-toggle-student]')?.addEventListener('click', async () => {
     overlay.remove();
     await toggleStudent(student.studentId, student.status);
   });
@@ -6044,7 +6125,7 @@ function renderCourseList() {
         <h1>Cursos</h1>
       </div>
       <div class="admin-heading-actions">
-        <button class="button button-primary" id="newCourse" type="button">Novo curso</button>
+        ${canManagePlatform() ? '<button class="button button-primary" id="newCourse" type="button">Novo curso</button>' : ''}
       </div>
     </div>
 
@@ -6107,7 +6188,7 @@ function renderCourseList() {
     ${cursorPaginationTemplate('courses', state.coursePagination)}
   `;
 
-  document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
+  document.querySelector('#newCourse')?.addEventListener('click', () => showCourseDialog());
   document.querySelector('#courseFilterForm').addEventListener('submit', (event) => {
     event.preventDefault();
     state.courseFilters.query = document.querySelector('#courseSearch').value;
@@ -6220,12 +6301,12 @@ function courseListCardTemplate(item) {
         </div>
       </dl>
       <div class="admin-course-card-actions">
-        ${isDeleted ? `
+        ${isDeleted && canManagePlatform() ? `
           <button class="button button-primary" type="button"
             data-restore-course="${escapeHtml(course.courseId || '')}">
             Restaurar curso
           </button>
-        ` : `
+        ` : isDeleted ? '<span class="empty-note">Curso indisponível</span>' : `
           <button class="button button-primary" type="button"
             data-open-course-detail="${escapeHtml(course.courseId || '')}">
             Abrir detalhes
@@ -6255,14 +6336,14 @@ function renderCourses() {
           <h1>Cursos e módulos</h1>
         </div>
         <div class="admin-heading-actions">
-          <button class="button button-primary" id="newCourse" type="button">Novo curso</button>
+          ${canManagePlatform() ? '<button class="button button-primary" id="newCourse" type="button">Novo curso</button>' : ''}
         </div>
       </div>
       <section class="student-empty-state">
         Nenhum curso ativo encontrado. Crie um curso para iniciar a gestão de conteúdos.
       </section>
     `;
-    document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
+    document.querySelector('#newCourse')?.addEventListener('click', () => showCourseDialog());
     return;
   }
   const lessons = (state.courseStructure?.lessons || []).filter(({ lesson }) => lesson?.status !== 'DELETED');
@@ -6282,7 +6363,7 @@ function renderCourses() {
       </div>
       <div class="admin-heading-actions">
         <button class="button button-secondary" id="backToCourseList" type="button">Todos os cursos</button>
-        <button class="button button-secondary" id="newCourse" type="button">Novo curso</button>
+        ${canManagePlatform() ? '<button class="button button-secondary" id="newCourse" type="button">Novo curso</button>' : ''}
       </div>
     </div>
 
@@ -6323,7 +6404,7 @@ function renderCourses() {
     state.courseMode = 'list';
     renderCourseList();
   });
-  document.querySelector('#newCourse').addEventListener('click', () => showCourseDialog());
+  document.querySelector('#newCourse')?.addEventListener('click', () => showCourseDialog());
   document.querySelector('#courseForm')?.addEventListener('submit', saveCourse);
   document.querySelector('#deleteCourse')?.addEventListener('click', deleteCurrentCourse);
   document.querySelector('#newGroup')?.addEventListener('click', () => showGroupDialog());
@@ -6401,10 +6482,10 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
             <h2>Versões e edições do curso</h2>
             <p>As versões publicadas preservam o conteúdo histórico de cada matrícula.</p>
           </div>
-          <div class="admin-heading-actions">
+          ${canManagePlatform() ? `<div class="admin-heading-actions">
             <button class="button button-secondary" id="createCourseDraft" type="button" ${hasDraft ? 'disabled' : ''}>Nova versão</button>
             <button class="button button-primary" id="newCourseOffering" type="button">Nova edição</button>
-          </div>
+          </div>` : ''}
         </div>
         <div class="course-edition-grid">
           <div>
@@ -6432,10 +6513,10 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
             <p class="eyebrow">Nível 2</p>
             <h2>Módulos do curso</h2>
           </div>
-          <div class="admin-heading-actions">
+          ${canManagePlatform() ? `<div class="admin-heading-actions">
             ${deletedToggle}
             <button class="button button-primary" id="newLesson" type="button">Novo módulo</button>
-          </div>
+          </div>` : ''}
         </div>
         <div class="course-module-list course-module-list-clean">
           ${lessons.length ? lessons.map(moduleCardTemplate).join('') : `
@@ -6454,10 +6535,10 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
             <p class="eyebrow">Nível 3</p>
             <h2>Grupos e estudantes</h2>
           </div>
-          <div class="admin-heading-actions">
+          ${canManagePlatform() ? `<div class="admin-heading-actions">
             ${deletedToggle}
             <button class="button button-primary" id="newGroup" type="button">Nova turma</button>
-          </div>
+          </div>` : ''}
         </div>
         <div class="course-module-list course-module-list-clean">
           ${groups.length ? groups.map(groupCardTemplate).join('') : `
@@ -6478,7 +6559,7 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
         </div>
       </div>
 
-      <form id="courseForm" class="course-overview-form form-stack">
+      ${canManagePlatform() ? `<form id="courseForm" class="course-overview-form form-stack">
         <input type="hidden" name="courseId" value="${escapeHtml(course.courseId || config.courseId || '')}">
         <div class="course-form-grid">
           <label>
@@ -6516,7 +6597,15 @@ function courseManagementPanel(course, lessons, groups, meta = {}) {
           <button class="button button-secondary" type="reset">Cancelar alterações</button>
           <button class="button button-primary" type="submit">Guardar curso</button>
         </div>
-      </form>
+      </form>` : `
+        <dl class="student-detail-list">
+          <div><dt>Código</dt><dd>${escapeHtml(course.courseCode || '-')}</dd></div>
+          <div><dt>Estado</dt><dd>${escapeHtml(statusLabel(course.status))}</dd></div>
+          <div><dt>Carga horária</dt><dd>${escapeHtml(course.totalHours || 0)} h</dd></div>
+          <div><dt>Nota mínima</dt><dd>${escapeHtml(course.passingScore || 60)}%</dd></div>
+          <div><dt>Descrição</dt><dd>${escapeHtml(course.description || 'Sem descrição.')}</dd></div>
+        </dl>
+      `}
     </section>
   `;
 }
@@ -6534,7 +6623,7 @@ function courseVersionCardTemplate(version) {
         <div><dt>Nota mínima</dt><dd>${escapeHtml(version.passingScore || 0)}%</dd></div>
         <div><dt>Publicada</dt><dd>${escapeHtml(formatDate(version.publishedAt))}</dd></div>
       </dl>
-      ${version.status === 'DRAFT' ? `
+      ${version.status === 'DRAFT' && canManagePlatform() ? `
         <div class="admin-row-actions">
           <button class="button button-primary button-small" type="button"
             data-publish-course-version="${escapeHtml(version.courseVersionId)}">Publicar versão</button>
@@ -6557,7 +6646,7 @@ function courseOfferingCardTemplate(offering) {
         <div><dt>Capacidade</dt><dd>${escapeHtml(offering.capacity || 'Sem limite')}</dd></div>
         <div><dt>Período</dt><dd>${escapeHtml(formatDate(offering.startDate))} - ${escapeHtml(formatDate(offering.endDate))}</dd></div>
       </dl>
-      <div class="admin-row-actions">
+      ${canManagePlatform() ? `<div class="admin-row-actions">
         <button class="button button-secondary button-small" type="button"
           aria-label="Editar ${escapeHtml(offering.name || offering.offeringCode || 'edição')}"
           data-edit-course-offering="${escapeHtml(offering.offeringId)}">Editar</button>
@@ -6565,7 +6654,7 @@ function courseOfferingCardTemplate(offering) {
           aria-label="Matricular estudantes em ${escapeHtml(offering.name || offering.offeringCode || 'edição')}"
           data-enroll-course-offering="${escapeHtml(offering.offeringId)}"
           ${['OPEN', 'ACTIVE'].includes(offering.status) ? '' : 'disabled'}>Matricular estudantes</button>
-      </div>
+      </div>` : ''}
     </article>
   `;
 }
@@ -6591,7 +6680,7 @@ function moduleCardTemplate(item) {
         <div><dt>Conteúdos</dt><dd>${contentCount}</dd></div>
         <div><dt>Questões</dt><dd>${questionCount}</dd></div>
       </dl>
-      <div class="admin-row-actions">
+      ${canManagePlatform() ? `<div class="admin-row-actions">
         ${isDeleted ? `
           <button class="button button-primary button-small" type="button"
             data-restore-lesson="${escapeHtml(lesson.lessonId)}">
@@ -6615,7 +6704,7 @@ function moduleCardTemplate(item) {
             Eliminar
           </button>
         `}
-      </div>
+      </div>` : ''}
     </article>
   `;
 }
@@ -6637,7 +6726,7 @@ function groupCardTemplate(item) {
         <div><dt>Fim</dt><dd>${escapeHtml(formatDate(group.endDate))}</dd></div>
         <div><dt>Estado</dt><dd>${escapeHtml(statusLabel(group.status))}</dd></div>
       </dl>
-      <div class="admin-row-actions">
+      ${canManagePlatform() ? `<div class="admin-row-actions">
         ${isDeleted ? `
           <button class="button button-primary button-small" type="button"
             data-restore-group="${escapeHtml(group.groupId)}">
@@ -6657,7 +6746,7 @@ function groupCardTemplate(item) {
             Eliminar
           </button>
         `}
-      </div>
+      </div>` : ''}
     </article>
   `;
 }
