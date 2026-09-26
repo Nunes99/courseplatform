@@ -18,6 +18,7 @@
     "qa:stage7-lists": "node scripts/verify_stage7_admin_lists.cjs",
     "qa:staff-assignment": "node scripts/verify_staff_assignment_browser.cjs",
     "qa:student-dashboard": "node scripts/verify_student_dashboard_resilience.cjs",
+    "qa:api-config": "node scripts/verify_api_configuration.cjs",
     "qa:typed-api-client": "node scripts/verify_versioned_api_client.cjs"
   },
   "devDependencies": {

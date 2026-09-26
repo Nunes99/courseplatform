@@ -1,9 +1,10 @@
+const IS_VERCEL_DEPLOYMENT = window.location.hostname.endsWith('.vercel.app');
 const COURSE_PLATFORM_API_URL =
   window.COURSE_PLATFORM_API_URL ||
-  localStorage.getItem('coursePlatformApiUrl') ||
-  (window.location.hostname.endsWith('.vercel.app')
+  (IS_VERCEL_DEPLOYMENT
     ? `${window.location.origin}/api/index`
-    : 'https://courseplatform-mauve.vercel.app/api/index');
+    : localStorage.getItem('coursePlatformApiUrl') ||
+      'https://lmtwebnairs.vercel.app/api/index');
 
 window.COURSE_PLATFORM_CONFIG = Object.freeze({
   apiUrl: COURSE_PLATFORM_API_URL,
@@ -14,6 +15,7 @@ window.COURSE_PLATFORM_CONFIG = Object.freeze({
   institutionalUrl: 'https://lmtwebnairs.com/summer_school_2026',
   supportEmail: '',
   pollIntervalMs: 60000,
+  requestTimeoutMs: 30000,
   maxImageDimension: 1800,
   imageQuality: 0.84
 });

@@ -41,6 +41,7 @@ export class CoursePlatformApi {
     this.cache = new Map();
     this.cacheVersion = 0;
     this.cacheTtlMs = Number(config.apiCacheTtlMs || 45000);
+    this.requestTimeoutMs = Math.max(1, Number(config.requestTimeoutMs || 30000));
 
     if (!this.apiUrl || this.apiUrl.includes('CHANGE_ME') || this.apiUrl.includes('YOUR_API_URL')) {
       throw new ApiError(
@@ -62,7 +63,7 @@ export class CoursePlatformApi {
 
     let response;
     try {
-      response = await fetch(url.toString(), {
+      response = await this.fetchWithTimeout(url.toString(), {
         method: 'GET',
         redirect: 'follow',
         cache: 'no-store'
@@ -78,7 +79,7 @@ export class CoursePlatformApi {
     let response;
 
     try {
-      response = await fetch(this.apiUrl, {
+      response = await this.fetchWithTimeout(this.apiUrl, {
         method: 'POST',
         redirect: 'follow',
         cache: 'no-store',
@@ -106,7 +107,7 @@ export class CoursePlatformApi {
 
     let response;
     try {
-      response = await fetch(url.toString(), {
+      response = await this.fetchWithTimeout(url.toString(), {
         method: 'GET',
         redirect: 'follow',
         cache: 'no-store',
@@ -144,7 +145,7 @@ export class CoursePlatformApi {
     const url = new URL(path, apiUrl.origin);
     let response;
     try {
-      response = await fetch(url.toString(), {
+      response = await this.fetchWithTimeout(url.toString(), {
         method: 'POST',
         redirect: 'follow',
         cache: 'no-store',
@@ -196,6 +197,7 @@ export class CoursePlatformApi {
   }
 
   networkError(error) {
+    if (error instanceof ApiError) return error;
     if (error?.name === 'AbortError') {
       return new ApiError('Pedido cancelado.', 'REQUEST_ABORTED');
     }
@@ -204,6 +206,39 @@ export class CoursePlatformApi {
       'NETWORK_ERROR',
       { originalMessage: error.message }
     );
+  }
+
+  async fetchWithTimeout(url, options = {}) {
+    const controller = new AbortController();
+    const externalSignal = options.signal;
+    let timedOut = false;
+    const abortFromCaller = () => controller.abort(externalSignal?.reason);
+
+    if (externalSignal?.aborted) {
+      abortFromCaller();
+    } else {
+      externalSignal?.addEventListener('abort', abortFromCaller, { once: true });
+    }
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.requestTimeoutMs);
+
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } catch (error) {
+      if (timedOut) {
+        throw new ApiError(
+          'A API demorou demasiado a responder. Tente novamente.',
+          'REQUEST_TIMEOUT'
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      externalSignal?.removeEventListener('abort', abortFromCaller);
+    }
   }
 
   async parseResponse(response) {

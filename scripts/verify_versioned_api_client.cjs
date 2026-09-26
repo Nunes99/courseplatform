@@ -172,7 +172,23 @@ async function main() {
     assert.equal(unavailableCalls, 1);
   }
 
-  process.stdout.write('Sete leituras versionadas e respetivos fallbacks foram validados.\n');
+  const timeoutApi = new CoursePlatformApi({
+    apiUrl: 'https://courseplatform.example.test/api/index',
+    requestTimeoutMs: 10
+  });
+  global.fetch = async (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => {
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      reject(error);
+    }, { once: true });
+  });
+  await assert.rejects(
+    () => timeoutApi.publicGet('health'),
+    (error) => error.code === 'REQUEST_TIMEOUT'
+  );
+
+  process.stdout.write('Sete leituras versionadas, fallbacks e timeout da API foram validados.\n');
 }
 
 
