@@ -217,32 +217,43 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
         self.assertEqual(forbidden_fields(body["data"]["questions"]), set())
 
     def test_authorized_reviewer_contract_contains_answer_key(self):
-        def fetch_one(query, params):
-            return {"course_id": "C1", "title": "Curso", "status": "ACTIVE"}
+        class CourseStructureConnection:
+            def execute(self, query, params=()):
+                normalized = " ".join(query.lower().split())
+                if "from courseplatform.reviewer_scopes" in normalized:
+                    return QueryResult(row={"allowed": 1})
+                if "from courseplatform.courses" in normalized:
+                    return QueryResult(row={"course_id": "C1", "title": "Curso", "status": "ACTIVE"})
+                if "from courseplatform.course_versions" in normalized:
+                    return QueryResult(rows=[])
+                if "from courseplatform.course_offerings" in normalized:
+                    return QueryResult(rows=[])
+                if "from courseplatform.lessons" in normalized:
+                    return QueryResult(rows=[lesson_row()])
+                if "lesson_content" in normalized:
+                    return QueryResult(rows=[])
+                if "question_options" in normalized:
+                    return QueryResult(rows=option_rows())
+                if "courseplatform.questions" in normalized:
+                    return QueryResult(rows=[question_row()])
+                raise AssertionError(normalized)
 
-        def fetch_all(query, params):
-            if "from courseplatform.course_versions" in query:
-                return []
-            if "from courseplatform.course_offerings" in query:
-                return []
-            if "from courseplatform.lessons" in query:
-                return [lesson_row()]
-            if "lesson_content" in query:
-                return []
-            if "question_options" in query:
-                return option_rows()
-            if "courseplatform.questions" in query:
-                return [question_row()]
-            raise AssertionError(query)
+        connection_count = 0
+
+        @contextmanager
+        def connect():
+            nonlocal connection_count
+            connection_count += 1
+            yield CourseStructureConnection()
 
         with (
             patch.object(actions, "admin_context", return_value=({}, {"admin_id": "R1", "role": "REVIEWER"})) as authorize,
-            patch.object(actions, "fetch_one", side_effect=fetch_one),
-            patch.object(actions, "fetch_all", side_effect=fetch_all),
+            patch.object(actions, "connection", connect),
         ):
             data = actions.admin_course_structure({"courseId": "C1"})["data"]
 
         authorize.assert_called_once_with({"courseId": "C1"}, {"OWNER", "ADMIN", "REVIEWER"})
+        self.assertEqual(connection_count, 1)
         question = data["lessons"][0]["questions"][0]
         self.assertEqual(question["question"]["correctAnswer"], "O1")
         self.assertTrue(question["options"][0]["isCorrect"])

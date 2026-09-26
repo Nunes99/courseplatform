@@ -1081,8 +1081,7 @@ def admin_list_courses_action(payload: dict[str, Any], *, runtime: CatalogRuntim
 
 def admin_course_structure_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
     admin_context = runtime.admin_context
-    fetch_all = runtime.fetch_all
-    fetch_one = runtime.fetch_one
+    connection = runtime.connection
     get_settings = runtime.get_settings
     public_content = runtime.public_content
     public_course = runtime.public_course
@@ -1094,57 +1093,76 @@ def admin_course_structure_action(payload: dict[str, Any], *, runtime: CatalogRu
     success = runtime.success
     admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     course_id = payload.get("courseId") or get_settings().default_course_id
-    if admin.get("role") == "REVIEWER":
-        allowed = fetch_one(
+    with connection() as conn:
+        if admin.get("role") == "REVIEWER":
+            allowed = conn.execute(
+                """
+                select 1 from courseplatform.reviewer_scopes
+                where admin_id = %s and status = 'ACTIVE'
+                  and (scope_type = 'GLOBAL' or course_id = %s)
+                limit 1
+                """,
+                (admin["admin_id"], course_id),
+            ).fetchone()
+            if not allowed:
+                raise ApiError("REVIEWER_SCOPE_REQUIRED", "Este curso está fora do seu âmbito de revisão.")
+        course = conn.execute(
+            "select * from courseplatform.courses where course_id = %s",
+            (course_id,),
+        ).fetchone()
+        if not course:
+            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
+        lessons = conn.execute(
+            "select * from courseplatform.lessons where course_id = %s order by lesson_number",
+            (course_id,),
+        ).fetchall()
+        versions = conn.execute(
             """
-            select 1 from courseplatform.reviewer_scopes
-            where admin_id = %s and status = 'ACTIVE'
-              and (scope_type = 'GLOBAL' or course_id = %s)
-            limit 1
+            select * from courseplatform.course_versions
+            where course_id = %s
+            order by version_number desc
             """,
-            (admin["admin_id"], course_id),
-        )
-        if not allowed:
-            raise ApiError("REVIEWER_SCOPE_REQUIRED", "Este curso está fora do seu âmbito de revisão.")
-    course = fetch_one("select * from courseplatform.courses where course_id = %s", (course_id,))
-    if not course:
-        raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
-    lessons = fetch_all("select * from courseplatform.lessons where course_id = %s order by lesson_number", (course_id,))
-    versions = fetch_all(
-        """
-        select * from courseplatform.course_versions
-        where course_id = %s
-        order by version_number desc
-        """,
-        (course_id,),
-    )
-    offerings = fetch_all(
-        """
-        select o.*, count(e.enrollment_id) as enrollment_count
-        from courseplatform.course_offerings o
-        left join courseplatform.enrollments e on e.offering_id = o.offering_id
-        where o.course_id = %s
-        group by o.offering_id
-        order by o.start_date desc nulls last, o.created_at desc
-        """,
-        (course_id,),
-    )
-    lesson_ids = [row["lesson_id"] for row in lessons]
-    content_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
-    questions_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
-    if lesson_ids:
-        content = fetch_all("select * from courseplatform.lesson_content where lesson_id = any(%s) order by section_order", (lesson_ids,))
-        questions = fetch_all("select * from courseplatform.questions where lesson_id = any(%s) order by question_order", (lesson_ids,))
-        question_ids = [row["question_id"] for row in questions]
-        options_by_question: dict[str, list[dict[str, Any]]] = {question_id: [] for question_id in question_ids}
-        if question_ids:
-            options = fetch_all("select * from courseplatform.question_options where question_id = any(%s) order by option_order", (question_ids,))
-            for option in options:
-                options_by_question[option["question_id"]].append(option)
-        for item in content:
-            content_by_lesson[item["lesson_id"]].append(item)
-        for question in questions:
-            questions_by_lesson[question["lesson_id"]].append({"question": question, "options": options_by_question.get(question["question_id"], [])})
+            (course_id,),
+        ).fetchall()
+        offerings = conn.execute(
+            """
+            select o.*, count(e.enrollment_id) as enrollment_count
+            from courseplatform.course_offerings o
+            left join courseplatform.enrollments e on e.offering_id = o.offering_id
+            where o.course_id = %s
+            group by o.offering_id
+            order by o.start_date desc nulls last, o.created_at desc
+            """,
+            (course_id,),
+        ).fetchall()
+        lesson_ids = [row["lesson_id"] for row in lessons]
+        content_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
+        questions_by_lesson: dict[str, list[dict[str, Any]]] = {lesson_id: [] for lesson_id in lesson_ids}
+        if lesson_ids:
+            content = conn.execute(
+                "select * from courseplatform.lesson_content where lesson_id = any(%s) order by section_order",
+                (lesson_ids,),
+            ).fetchall()
+            questions = conn.execute(
+                "select * from courseplatform.questions where lesson_id = any(%s) order by question_order",
+                (lesson_ids,),
+            ).fetchall()
+            question_ids = [row["question_id"] for row in questions]
+            options_by_question: dict[str, list[dict[str, Any]]] = {question_id: [] for question_id in question_ids}
+            if question_ids:
+                options = conn.execute(
+                    "select * from courseplatform.question_options where question_id = any(%s) order by option_order",
+                    (question_ids,),
+                ).fetchall()
+                for option in options:
+                    options_by_question[option["question_id"]].append(option)
+            for item in content:
+                content_by_lesson[item["lesson_id"]].append(item)
+            for question in questions:
+                questions_by_lesson[question["lesson_id"]].append({
+                    "question": question,
+                    "options": options_by_question.get(question["question_id"], []),
+                })
     return success({
         "course": public_course(course),
         "versions": [public_course_version(row) for row in versions],
