@@ -1,7 +1,8 @@
 import copy
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from ..contracts import ApiError
@@ -30,6 +31,20 @@ ACTION_BINDINGS = (
     ("adminSaveLesson", "admin_save_lesson"),
     ("adminSaveLessonContent", "admin_save_lesson_content"),
 )
+
+
+def _snapshot_value(value: Any, *, iso) -> Any:
+    if isinstance(value, datetime):
+        return iso(value)
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, dict):
+        return {key: _snapshot_value(item, iso=iso) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_snapshot_value(item, iso=iso) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -230,19 +245,25 @@ def course_structure_snapshot_with_conn_action(conn, course_id: str, *, runtime:
         row["question_id"]: [] for row in question_rows
     }
     for row in content_rows:
-        content_by_lesson[row["lesson_id"]].append({key: iso(value) if isinstance(value, datetime) else value for key, value in row.items()})
+        content_by_lesson[row["lesson_id"]].append(_snapshot_value(dict(row), iso=iso))
     for row in option_rows:
         options_by_question.setdefault(row["question_id"], []).append(
-            {key: iso(value) if isinstance(value, datetime) else value for key, value in row.items()}
+            _snapshot_value(dict(row), iso=iso)
         )
     for row in question_rows:
-        question = {key: iso(value) if isinstance(value, datetime) else value for key, value in row.items() if key != "lesson_id"}
+        question = _snapshot_value(
+            {key: value for key, value in row.items() if key != "lesson_id"},
+            iso=iso,
+        )
         question["options"] = options_by_question.get(row["question_id"], [])
         questions_by_lesson[row["lesson_id"]].append(question)
 
     snapshot_lessons = []
     for row in lessons:
-        lesson = {key: iso(value) if isinstance(value, datetime) else value for key, value in row.items() if key != "course_id"}
+        lesson = _snapshot_value(
+            {key: value for key, value in row.items() if key != "course_id"},
+            iso=iso,
+        )
         lesson["content"] = content_by_lesson.get(row["lesson_id"], [])
         lesson["questions"] = questions_by_lesson.get(row["lesson_id"], [])
         snapshot_lessons.append(lesson)

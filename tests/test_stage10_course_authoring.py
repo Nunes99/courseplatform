@@ -3,6 +3,7 @@ import json
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -100,6 +101,23 @@ def valid_snapshot():
 
 
 class CoursePublicationValidationTests(unittest.TestCase):
+    def test_snapshot_values_convert_postgres_numerics_without_losing_number_types(self):
+        normalized = catalog._snapshot_value(
+            {
+                "whole": Decimal("12.000"),
+                "fraction": Decimal("2.5"),
+                "created_at": datetime(2026, 9, 26, 8, 0, tzinfo=timezone.utc),
+                "nested": [Decimal("60")],
+            },
+            iso=lambda value: value.isoformat(),
+        )
+
+        self.assertEqual(12, normalized["whole"])
+        self.assertEqual(2.5, normalized["fraction"])
+        self.assertEqual([60], normalized["nested"])
+        self.assertEqual("2026-09-26T08:00:00+00:00", normalized["created_at"])
+        json.dumps(normalized)
+
     def test_complete_snapshot_is_ready_for_publication(self):
         result = catalog.validate_course_version_snapshot(valid_snapshot())
 
