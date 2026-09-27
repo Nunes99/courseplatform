@@ -2820,15 +2820,26 @@ function assessmentTemplate(lessonData, attempt, attemptData) {
     const minutes = lessonData.lesson.submissionDurationMinutes
       || lessonData.lesson.exerciseMinutes + lessonData.lesson.individualMinutes
       || 180;
+    const availableFrom = lessonData.lesson.availableFrom ? new Date(lessonData.lesson.availableFrom) : null;
+    const availableUntil = lessonData.lesson.availableUntil ? new Date(lessonData.lesson.availableUntil) : null;
+    const now = new Date();
+    if (availableFrom && availableFrom > now) {
+      return `<div class="start-assessment-card"><p class="eyebrow">Avaliação agendada</p><h2>Ainda não disponível</h2><p>Poderá iniciar a partir de ${escapeHtml(formatDate(availableFrom))}.</p></div>`;
+    }
+    if (availableUntil && availableUntil <= now) {
+      return '<div class="start-assessment-card"><p class="eyebrow">Avaliação encerrada</p><h2>A janela terminou</h2><p>Contacte a administração caso necessite de uma exceção individual.</p></div>';
+    }
+    const attemptLimit = Number(lessonData.lesson.attemptLimit || 1);
     return `
       <div class="start-assessment-card">
         <p class="eyebrow">Avaliação prática</p>
         <h2>Preparado para iniciar?</h2>
         <p>
-          Ao iniciar, o temporizador de ${minutes} minutos comecara no servidor
+          Ao iniciar, o temporizador de ${minutes} minutos começará no servidor
           e continuará mesmo que feche a página.
         </p>
-        <button class="button button-primary" id="startAttempt">Iniciar exercicios</button>
+        <p class="field-hint">Limite: ${attemptLimit} tentativa(s)${availableUntil ? ` · disponível até ${escapeHtml(formatDate(availableUntil))}` : ''}.</p>
+        <button class="button button-primary" id="startAttempt">Iniciar exercícios</button>
       </div>
     `;
   }

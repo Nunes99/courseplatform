@@ -6,7 +6,7 @@
 executa `supabase/schema.sql`, `supabase/chat_realtime.sql` ou
 `backend/courseplatform/schema.sql` durante pedidos.
 
-A versão exigida pelo backend é `20260925130000`. A última migração grava esse
+A versão exigida pelo backend é `20260926120000`. A última migração grava esse
 valor em `courseplatform.schema_versions`. Uma ausência ou diferença produz
 `DATABASE_MIGRATION_REQUIRED`; a aplicação não tenta corrigir a base.
 
@@ -43,12 +43,21 @@ emite um certificado numa transação e não altera o esquema.
 10. `20260925043513_add_reviewer_scopes.sql`: adiciona âmbitos de revisão por curso, edição/turma ou grupo e preserva revisores existentes com um âmbito global inicial.
 11. `20260925071234_add_versioned_question_bank.sql`: adiciona identidades reutilizáveis, versões imutáveis, opções, dificuldade e tags para o banco de questões.
 12. `20260925071409_add_question_bank_actor_indexes.sql`: adiciona índices de suporte às relações administrativas do banco de questões.
+13. `20260926120000_add_versioned_assessment_policies.sql`: versiona limites, janela, duração e randomização das avaliações e adiciona exceções individuais auditáveis.
+
+A migração `20260926120000` foi aplicada ao projeto Supabase principal em 27 de
+setembro de 2026 e registada no histórico remoto. A validação posterior confirmou
+o marcador da aplicação, a tabela e colunas novas e os privilégios mínimos da
+role runtime. O deploy da aplicação que exige esta versão deve ocorrer antes dos
+testes funcionais com contas reais.
 
 As migrações da Etapa 4 são aditivas e repetíveis. A migração histórica da role
 runtime é a exceção deliberada: uma segunda execução falha antes de alterar
 qualquer privilégio e exige inspeção manual. O teste confirma esse bloqueio,
 repete as restantes migrações e verifica que um registo sentinela permanece.
 Futuras migrações devem declarar o próprio comportamento e rollback operacional.
+A migração das políticas de avaliação é expansiva e repetível: mantém tentativas
+e módulos existentes, usa padrões compatíveis e atualiza o marcador de versão.
 
 ## Teste local descartável
 

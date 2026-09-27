@@ -20,6 +20,12 @@ COURSE_MODEL_MIGRATION = (
     / "migrations"
     / "20260915173343_model_course_versions_and_offerings.sql"
 )
+ASSESSMENT_POLICY_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "20260926120000_add_versioned_assessment_policies.sql"
+)
 
 
 class _Rows:
@@ -104,7 +110,7 @@ class RuntimeDatabaseRoleTests(unittest.TestCase):
         source = APPLICATION_SOURCE.read_text(encoding="utf-8")
         sql = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in (MIGRATION, COURSE_MODEL_MIGRATION)
+            for path in (MIGRATION, COURSE_MODEL_MIGRATION, ASSESSMENT_POLICY_MIGRATION)
         )
         expected = {
             "select": set(

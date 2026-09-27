@@ -1,4 +1,5 @@
 import base64
+import copy
 import hashlib
 import hmac
 import ipaddress
@@ -110,6 +111,7 @@ EVALUATION_STATUSES = {
     "TIME_EXCEEDED",
 }
 ATTEMPT_STATUSES = EVALUATION_STATUSES - {"NOT_STARTED"}
+ASSESSMENT_RANDOMIZATION_MODES = {"NONE", "QUESTION_ORDER", "QUESTIONS_AND_OPTIONS"}
 _ASSESSMENT_SCHEMA_READY = False
 _NOTIFICATION_SCHEMA_READY = False
 _CHAT_SCHEMA_READY = False
@@ -2332,6 +2334,7 @@ def _assessment_runtime() -> assessment_domain.AssessmentRuntime:
         decode_list_cursor=decode_list_cursor,
         dispatch_notification_deliveries=dispatch_notification_deliveries,
         editable_attempt=editable_attempt,
+        effective_assessment_policy_with_conn=effective_assessment_policy_with_conn,
         expire_attempt_if_needed=expire_attempt_if_needed,
         expire_overdue_attempts=expire_overdue_attempts,
         feedback_policy=feedback_policy,
@@ -2491,9 +2494,99 @@ def parse_assessment_snapshot(value: Any) -> dict[str, Any]:
     return {}
 
 
+def assessment_policy(source: dict[str, Any] | None) -> dict[str, Any]:
+    data = source or {}
+    configured_duration = int_value(data.get("timeLimitMinutes") or data.get("submission_duration_minutes"))
+    if configured_duration <= 0:
+        configured_duration = int_value(data.get("exercise_minutes")) + int_value(data.get("individual_minutes"))
+    attempt_limit = max(1, min(int_value(data.get("attemptLimit") or data.get("assessment_attempt_limit"), 1), 100))
+    randomization_mode = str_value(
+        data.get("randomizationMode") or data.get("assessment_randomization_mode") or "NONE"
+    ).upper()
+    if randomization_mode not in ASSESSMENT_RANDOMIZATION_MODES:
+        randomization_mode = "NONE"
+    question_limit_value = data.get("questionLimit")
+    if question_limit_value is None:
+        question_limit_value = data.get("assessment_question_limit")
+    question_limit = int_value(question_limit_value)
+    policy_source = data.get("feedbackPolicy") if isinstance(data.get("feedbackPolicy"), dict) else data
+    passing_score_value = data.get("passingScore")
+    if passing_score_value is None:
+        passing_score_value = data.get("passing_score")
+    return {
+        "attemptLimit": attempt_limit,
+        "availableFrom": iso(data.get("availableFrom") or data.get("assessment_available_from")),
+        "availableUntil": iso(data.get("availableUntil") or data.get("assessment_available_until")),
+        "timeLimitMinutes": max(1, min(configured_duration or 180, 43200)),
+        "randomizationMode": randomization_mode,
+        "questionLimit": max(1, min(question_limit, 1000)) if question_limit > 0 else None,
+        "passingScore": max(0.0, min(float_value(passing_score_value, 60), 100.0)),
+        "feedbackPolicy": feedback_policy(policy_source),
+    }
+
+
+def effective_assessment_policy_with_conn(conn, progress: dict[str, Any], version_lesson: dict[str, Any], now: datetime):
+    policy = assessment_policy(version_lesson)
+    exception = conn.execute(
+        """
+        select * from courseplatform.assessment_policy_exceptions
+        where enrollment_id = %s and lesson_id = %s and status = 'ACTIVE'
+          and available_until > %s
+        order by created_at desc
+        limit 1
+        """,
+        (progress["enrollment_id"], progress["lesson_id"], now),
+    ).fetchone()
+    if not exception:
+        return policy, None
+    if exception.get("attempt_limit") is not None:
+        policy["attemptLimit"] = int_value(exception.get("attempt_limit"), policy["attemptLimit"])
+    if exception.get("available_from") is not None:
+        policy["availableFrom"] = iso(exception.get("available_from"))
+    policy["availableUntil"] = iso(exception.get("available_until"))
+    if exception.get("time_limit_minutes") is not None:
+        policy["timeLimitMinutes"] = int_value(exception.get("time_limit_minutes"), policy["timeLimitMinutes"])
+    policy["exception"] = {
+        "assessmentExceptionId": exception.get("assessment_exception_id"),
+        "validUntil": iso(exception.get("available_until")),
+    }
+    return policy, exception
+
+
+def randomized_assessment_questions(
+    questions: list[dict[str, Any]],
+    policy: dict[str, Any],
+    *,
+    rng: Any | None = None,
+) -> list[dict[str, Any]]:
+    randomized = copy.deepcopy(questions)
+    generator = rng or secrets.SystemRandom()
+    mode = str_value(policy.get("randomizationMode")).upper()
+    if mode in {"QUESTION_ORDER", "QUESTIONS_AND_OPTIONS"}:
+        generator.shuffle(randomized)
+    limit = int_value(policy.get("questionLimit"))
+    if limit > 0:
+        randomized = randomized[:limit]
+    if mode == "QUESTIONS_AND_OPTIONS":
+        for question in randomized:
+            options = question.get("options")
+            if isinstance(options, list):
+                generator.shuffle(options)
+    for question_index, question in enumerate(randomized, start=1):
+        question["question_order"] = question_index
+        for option_index, option in enumerate(question.get("options") or [], start=1):
+            if isinstance(option, dict):
+                option["option_order"] = option_index
+    return randomized
+
+
 def assessment_snapshot_with_conn(conn, lesson_id: str, lesson: dict[str, Any] | None = None) -> dict[str, Any]:
     lesson_row = lesson or conn.execute(
-        """select lesson_id, feedback_release_mode, show_correct_answers, show_explanations
+        """select lesson_id, submission_duration_minutes, exercise_minutes, individual_minutes,
+                  passing_score, assessment_attempt_limit, assessment_available_from,
+                  assessment_available_until, assessment_randomization_mode,
+                  assessment_question_limit, feedback_release_mode,
+                  show_correct_answers, show_explanations
            from courseplatform.lessons where lesson_id = %s""",
         (lesson_id,),
     ).fetchone()
@@ -2542,39 +2635,45 @@ def assessment_snapshot_with_conn(conn, lesson_id: str, lesson: dict[str, Any] |
         }
         for question in questions
     ]
-    policy = feedback_policy(lesson_row)
+    policy = assessment_policy(lesson_row)
     digest_payload = json.dumps(
-        {"feedbackPolicy": policy, "questions": snapshot_questions},
+        {"assessmentPolicy": policy, "questions": snapshot_questions},
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
     )
     return {
-        "version": 1,
+        "version": 2,
         "capturedAt": iso(utc_now()),
-        "feedbackPolicy": policy,
+        "assessmentPolicy": policy,
+        "feedbackPolicy": policy["feedbackPolicy"],
         "questions": snapshot_questions,
         "digest": hashlib.sha256(digest_payload.encode("utf-8")).hexdigest(),
     }
 
 
-def assessment_snapshot_from_version_lesson(lesson: dict[str, Any]) -> dict[str, Any]:
+def assessment_snapshot_from_version_lesson(
+    lesson: dict[str, Any],
+    policy_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     questions = [
         question for question in (lesson.get("questions") or [])
         if isinstance(question, dict)
         and str_value(question.get("status") or "ACTIVE").upper() == "ACTIVE"
     ]
-    policy = feedback_policy(lesson)
+    policy = policy_override or assessment_policy(lesson)
+    questions = randomized_assessment_questions(questions, policy)
     digest_payload = json.dumps(
-        {"feedbackPolicy": policy, "questions": questions},
+        {"assessmentPolicy": policy, "questions": questions},
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
     )
     return {
-        "version": 1,
+        "version": 2,
         "capturedAt": iso(utc_now()),
-        "feedbackPolicy": policy,
+        "assessmentPolicy": policy,
+        "feedbackPolicy": policy["feedbackPolicy"],
         "questions": questions,
         "digest": hashlib.sha256(digest_payload.encode("utf-8")).hexdigest(),
     }
@@ -2985,6 +3084,10 @@ def admin_review_submission(payload: dict[str, Any]):
 
 def admin_authorize_retry(payload: dict[str, Any]):
     return assessment_domain.admin_authorize_retry_action(payload, _assessment_runtime())
+
+
+def admin_set_assessment_exception(payload: dict[str, Any]):
+    return assessment_domain.admin_set_assessment_exception_action(payload, _assessment_runtime())
 
 
 def admin_update_attempt(payload: dict[str, Any]):

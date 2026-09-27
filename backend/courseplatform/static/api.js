@@ -837,6 +837,10 @@ export class CoursePlatformApi {
     return this.mutateAdmin('adminAuthorizeRetry', { ...options, attemptId });
   }
 
+  adminSetAssessmentException(payload) {
+    return this.mutateAdmin('adminSetAssessmentException', payload);
+  }
+
   adminUpdateAttempt(payload) {
     return this.mutateAdmin('adminUpdateAttempt', payload);
   }

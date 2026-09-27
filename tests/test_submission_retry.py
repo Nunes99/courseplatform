@@ -81,6 +81,8 @@ class SubmissionDatabase:
         if q.startswith("select correction_deadline"):
             rows = [r for r in self.reviews if r["attempt_id"] == params[0]]
             return Result(rows[-1] if rows else None)
+        if q.startswith("select * from courseplatform.assessment_policy_exceptions"):
+            return Result()
         if q.startswith("select title from"):
             return Result({"title": "Trabalho prático"})
         if q.startswith("select question_id, lesson_id"):
@@ -108,7 +110,7 @@ class SubmissionDatabase:
             return Result(row)
         if q.startswith("insert into courseplatform.attempts"):
             row = dict(zip(("attempt_id", "progress_id", "student_id", "lesson_id", "attempt_number", "started_at",
-                            "deadline_at", "assessment_snapshot_json", "created_at", "updated_at"), params))
+                            "deadline_at", "assessment_snapshot_json", "assessment_exception_id", "created_at", "updated_at"), params))
             row["assessment_snapshot_json"] = actions.parse_assessment_snapshot(row["assessment_snapshot_json"])
             row.update(status="IN_PROGRESS", retry_authorized=False)
             self.attempts[row["attempt_id"]] = row

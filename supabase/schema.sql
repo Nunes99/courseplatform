@@ -116,6 +116,12 @@ create table if not exists courseplatform.lessons (
   exercise_minutes numeric default 0,
   individual_minutes numeric default 0,
   submission_duration_minutes integer,
+  assessment_attempt_limit integer not null default 1 check (assessment_attempt_limit between 1 and 100),
+  assessment_available_from timestamptz,
+  assessment_available_until timestamptz,
+  assessment_randomization_mode text not null default 'NONE'
+    check (assessment_randomization_mode in ('NONE', 'QUESTION_ORDER', 'QUESTIONS_AND_OPTIONS')),
+  assessment_question_limit integer check (assessment_question_limit is null or assessment_question_limit between 1 and 1000),
   passing_score numeric default 60,
   feedback_release_mode text not null default 'AFTER_REVIEW'
     check (feedback_release_mode in ('NEVER', 'AFTER_SUBMISSION', 'AFTER_REVIEW')),
@@ -326,6 +332,24 @@ create table if not exists courseplatform.lesson_progress (
   unique(enrollment_id, lesson_id)
 );
 
+create table if not exists courseplatform.assessment_policy_exceptions (
+  assessment_exception_id text primary key,
+  enrollment_id text not null references courseplatform.enrollments(enrollment_id) on delete cascade,
+  lesson_id text not null references courseplatform.lessons(lesson_id) on delete cascade,
+  attempt_limit integer check (attempt_limit is null or attempt_limit between 1 and 100),
+  available_from timestamptz,
+  available_until timestamptz not null,
+  time_limit_minutes integer check (time_limit_minutes is null or time_limit_minutes between 1 and 43200),
+  reason text not null check (length(btrim(reason)) between 3 and 2000),
+  status text not null default 'ACTIVE' check (status in ('ACTIVE', 'REVOKED', 'EXPIRED')),
+  created_by text not null references courseplatform.admins(admin_id) on delete restrict,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  revoked_by text references courseplatform.admins(admin_id) on delete restrict,
+  revoked_at timestamptz,
+  check (available_from is null or available_until > available_from)
+);
+
 create table if not exists courseplatform.attempts (
   attempt_id text primary key,
   progress_id text references courseplatform.lesson_progress(progress_id) on delete set null,
@@ -339,6 +363,7 @@ create table if not exists courseplatform.attempts (
   score numeric,
   objective_score numeric,
   assessment_snapshot_json jsonb not null default '{}'::jsonb,
+  assessment_exception_id text references courseplatform.assessment_policy_exceptions(assessment_exception_id) on delete set null,
   reviewer_id text,
   reviewed_at timestamptz,
   review_comments text,
@@ -672,7 +697,7 @@ create table if not exists courseplatform.schema_versions (
 );
 
 insert into courseplatform.schema_versions (component, version, applied_at)
-values ('application', 20260913185739, now())
+values ('application', 20260926120000, now())
 on conflict (component) do update
 set version = excluded.version,
     applied_at = excluded.applied_at
@@ -692,6 +717,10 @@ create index if not exists idx_progress_student_lesson on courseplatform.lesson_
 create index if not exists idx_progress_access_evaluation on courseplatform.lesson_progress(content_access_status, evaluation_status);
 create index if not exists idx_attempts_student_lesson on courseplatform.attempts(student_id, lesson_id);
 create index if not exists idx_attempts_status_dates on courseplatform.attempts(status, submitted_at, reviewed_at);
+create unique index if not exists uq_assessment_policy_exception_active
+  on courseplatform.assessment_policy_exceptions(enrollment_id, lesson_id) where status = 'ACTIVE';
+create index if not exists idx_assessment_policy_exception_lookup
+  on courseplatform.assessment_policy_exceptions(enrollment_id, lesson_id, status, available_until desc);
 create index if not exists idx_reviews_attempt on courseplatform.reviews(attempt_id, reviewed_at);
 create index if not exists idx_notifications_student_created on courseplatform.notifications(student_id, created_at desc);
 create index if not exists idx_notifications_student_unread on courseplatform.notifications(student_id, read_at, created_at desc);
@@ -741,6 +770,7 @@ alter table courseplatform.chat_presence enable row level security;
 alter table courseplatform.chat_message_reports enable row level security;
 alter table courseplatform.lesson_progress enable row level security;
 alter table courseplatform.attempts enable row level security;
+alter table courseplatform.assessment_policy_exceptions enable row level security;
 alter table courseplatform.answers enable row level security;
 alter table courseplatform.files enable row level security;
 alter table courseplatform.reviews enable row level security;

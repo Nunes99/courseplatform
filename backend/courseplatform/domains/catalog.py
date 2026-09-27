@@ -352,6 +352,31 @@ def validate_course_version_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]
             elif prerequisite_id == lesson_id:
                 add_issue("ERROR", "PREREQUISITE_SELF_REFERENCE", f'O módulo "{title or lesson_id}" não pode depender de si próprio.', "LESSON", lesson_id)
 
+        try:
+            attempt_limit = int(lesson.get("assessment_attempt_limit") or 1)
+        except (TypeError, ValueError):
+            attempt_limit = 0
+        if not 1 <= attempt_limit <= 100:
+            add_issue("ERROR", "ASSESSMENT_ATTEMPT_LIMIT_INVALID", f'O limite de tentativas de "{title or lesson_id}" deve estar entre 1 e 100.', "LESSON", lesson_id)
+        try:
+            time_limit = int(lesson.get("submission_duration_minutes") or 180)
+        except (TypeError, ValueError):
+            time_limit = 0
+        if not 1 <= time_limit <= 43200:
+            add_issue("ERROR", "ASSESSMENT_TIME_LIMIT_INVALID", f'O tempo da avaliação de "{title or lesson_id}" deve estar entre 1 e 43200 minutos.', "LESSON", lesson_id)
+        randomization_mode = str(lesson.get("assessment_randomization_mode") or "NONE").upper()
+        if randomization_mode not in ASSESSMENT_RANDOMIZATION_MODES:
+            add_issue("ERROR", "ASSESSMENT_RANDOMIZATION_INVALID", f'A randomização de "{title or lesson_id}" é inválida.', "LESSON", lesson_id)
+        try:
+            available_from = _draft_optional_datetime(lesson.get("assessment_available_from"), "início da disponibilidade")
+            available_until = _draft_optional_datetime(lesson.get("assessment_available_until"), "fim da disponibilidade")
+        except ApiError:
+            available_from = None
+            available_until = None
+            add_issue("ERROR", "ASSESSMENT_WINDOW_INVALID", f'A janela da avaliação de "{title or lesson_id}" é inválida.', "LESSON", lesson_id)
+        if available_from and available_until and datetime.fromisoformat(available_until) <= datetime.fromisoformat(available_from):
+            add_issue("ERROR", "ASSESSMENT_WINDOW_INVALID", f'A janela da avaliação de "{title or lesson_id}" é inválida.', "LESSON", lesson_id)
+
         content = [
             item for item in (lesson.get("content") or [])
             if isinstance(item, dict) and str(item.get("status") or "ACTIVE").upper() == "ACTIVE"
@@ -471,6 +496,16 @@ def course_version_draft_editor(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "summary": lesson.get("summary"),
                 "status": lesson.get("status") or "ACTIVE",
                 "prerequisiteLessonId": lesson.get("prerequisite_lesson_id"),
+                "attemptLimit": lesson.get("assessment_attempt_limit") or 1,
+                "availableFrom": lesson.get("assessment_available_from"),
+                "availableUntil": lesson.get("assessment_available_until"),
+                "timeLimitMinutes": lesson.get("submission_duration_minutes") or 180,
+                "randomizationMode": lesson.get("assessment_randomization_mode") or "NONE",
+                "questionLimit": lesson.get("assessment_question_limit"),
+                "passingScore": lesson.get("passing_score") if lesson.get("passing_score") is not None else 60,
+                "feedbackReleaseMode": lesson.get("feedback_release_mode") or "AFTER_REVIEW",
+                "showCorrectAnswers": bool(lesson.get("show_correct_answers")),
+                "showExplanations": bool(lesson.get("show_explanations")),
                 "content": [
                     {
                         "contentId": item.get("content_id"),
@@ -525,6 +560,49 @@ QUESTION_BANK_TYPES = {
 }
 QUESTION_BANK_DIFFICULTIES = {"EASY", "MEDIUM", "HARD"}
 QUESTION_BANK_OBJECTIVE_TYPES = {"SINGLE_CHOICE", "MULTIPLE_CHOICE", "TRUE_FALSE"}
+ASSESSMENT_RANDOMIZATION_MODES = {"NONE", "QUESTION_ORDER", "QUESTIONS_AND_OPTIONS"}
+
+
+def _draft_optional_datetime(value: Any, field: str) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ApiError("COURSE_VERSION_FIELD_INVALID", f"O campo {field} deve conter uma data válida.") from exc
+    return parsed.isoformat()
+
+
+def _apply_assessment_policy_changes(lesson: dict[str, Any], changes: dict[str, Any]) -> None:
+    attempt_limit = int(_draft_number(changes.get("attemptLimit", 1), "limite de tentativas", minimum=1, maximum=100))
+    time_limit = int(_draft_number(changes.get("timeLimitMinutes", 180), "tempo da avaliação", minimum=1, maximum=43200))
+    question_limit_value = changes.get("questionLimit")
+    question_limit = None
+    if question_limit_value not in (None, ""):
+        question_limit = int(_draft_number(question_limit_value, "quantidade de questões", minimum=1, maximum=1000))
+    randomization_mode = str(changes.get("randomizationMode") or "NONE").strip().upper()
+    if randomization_mode not in ASSESSMENT_RANDOMIZATION_MODES:
+        raise ApiError("ASSESSMENT_RANDOMIZATION_INVALID", "Selecione uma política de randomização válida.")
+    feedback_mode = str(changes.get("feedbackReleaseMode") or "AFTER_REVIEW").strip().upper()
+    if feedback_mode not in {"NEVER", "AFTER_SUBMISSION", "AFTER_REVIEW"}:
+        raise ApiError("INVALID_FEEDBACK_POLICY", "A política de divulgação do feedback é inválida.")
+    available_from = _draft_optional_datetime(changes.get("availableFrom"), "início da disponibilidade")
+    available_until = _draft_optional_datetime(changes.get("availableUntil"), "fim da disponibilidade")
+    if available_from and available_until and datetime.fromisoformat(available_until) <= datetime.fromisoformat(available_from):
+        raise ApiError("ASSESSMENT_WINDOW_INVALID", "O fim da avaliação deve ser posterior ao início.")
+    lesson.update({
+        "assessment_attempt_limit": attempt_limit,
+        "assessment_available_from": available_from,
+        "assessment_available_until": available_until,
+        "submission_duration_minutes": time_limit,
+        "assessment_randomization_mode": randomization_mode,
+        "assessment_question_limit": question_limit,
+        "passing_score": _draft_number(changes.get("passingScore", 60), "nota mínima", maximum=100),
+        "feedback_release_mode": feedback_mode,
+        "show_correct_answers": bool(changes.get("showCorrectAnswers")),
+        "show_explanations": bool(changes.get("showExplanations")),
+    })
 
 
 def normalize_question_bank_draft(payload: dict[str, Any], *, require_publishable: bool = True) -> dict[str, Any]:
@@ -923,6 +1001,7 @@ def edit_course_version_draft_snapshot(snapshot: dict[str, Any], operation: Any,
         lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
         lesson["title"] = _draft_text(changes.get("title"), "título do módulo", required=True, maximum=240)
         lesson["summary"] = _draft_text(changes.get("summary"), "resumo do módulo", maximum=5000)
+        _apply_assessment_policy_changes(lesson, changes)
     elif operation_name == "CREATE_LESSON":
         lesson_id = _draft_text(changes.get("lessonId"), "identificador do módulo", required=True, maximum=100)
         if any(str(item.get("lesson_id") or "") == lesson_id for item in lessons if isinstance(item, dict)):
@@ -937,6 +1016,11 @@ def edit_course_version_draft_snapshot(snapshot: dict[str, Any], operation: Any,
             "exercise_minutes": 0,
             "individual_minutes": 0,
             "submission_duration_minutes": 180,
+            "assessment_attempt_limit": 1,
+            "assessment_available_from": None,
+            "assessment_available_until": None,
+            "assessment_randomization_mode": "NONE",
+            "assessment_question_limit": None,
             "passing_score": 60,
             "feedback_release_mode": "AFTER_REVIEW",
             "show_correct_answers": False,
@@ -1563,6 +1647,19 @@ def admin_save_lesson_action(payload: dict[str, Any], *, runtime: CatalogRuntime
     if submission_duration <= 0:
         submission_duration = int_value(payload.get("exerciseMinutes")) + int_value(payload.get("individualMinutes"))
     submission_duration = max(1, min(submission_duration or 180, 43200))
+    attempt_limit = int_value(payload.get("attemptLimit"), 1)
+    if not 1 <= attempt_limit <= 100:
+        raise ApiError("ASSESSMENT_ATTEMPT_LIMIT_INVALID", "O limite de tentativas deve estar entre 1 e 100.")
+    available_from = _draft_optional_datetime(payload.get("availableFrom"), "início da disponibilidade")
+    available_until = _draft_optional_datetime(payload.get("availableUntil"), "fim da disponibilidade")
+    if available_from and available_until and datetime.fromisoformat(available_until) <= datetime.fromisoformat(available_from):
+        raise ApiError("ASSESSMENT_WINDOW_INVALID", "O fim da avaliação deve ser posterior ao início.")
+    randomization_mode = str_value(payload.get("randomizationMode") or "NONE").upper()
+    if randomization_mode not in ASSESSMENT_RANDOMIZATION_MODES:
+        raise ApiError("ASSESSMENT_RANDOMIZATION_INVALID", "Selecione uma política de randomização válida.")
+    question_limit = int_value(payload.get("questionLimit"))
+    if question_limit and not 1 <= question_limit <= 1000:
+        raise ApiError("ASSESSMENT_QUESTION_LIMIT_INVALID", "A quantidade de questões deve estar entre 1 e 1000.")
     with connection() as conn:
         row = conn.execute(
             """
@@ -1570,8 +1667,10 @@ def admin_save_lesson_action(payload: dict[str, Any], *, runtime: CatalogRuntime
               (lesson_id, course_id, lesson_number, title, slug, summary, theory_minutes,
                exercise_minutes, individual_minutes, passing_score, prerequisite_lesson_id,
                submission_duration_minutes, feedback_release_mode, show_correct_answers,
-               show_explanations, status, created_at, updated_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+               show_explanations, assessment_attempt_limit, assessment_available_from,
+               assessment_available_until, assessment_randomization_mode,
+               assessment_question_limit, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
             on conflict (lesson_id) do update
             set course_id = excluded.course_id, lesson_number = excluded.lesson_number,
                 title = excluded.title, slug = excluded.slug, summary = excluded.summary,
@@ -1582,6 +1681,11 @@ def admin_save_lesson_action(payload: dict[str, Any], *, runtime: CatalogRuntime
                 feedback_release_mode = excluded.feedback_release_mode,
                 show_correct_answers = excluded.show_correct_answers,
                 show_explanations = excluded.show_explanations,
+                assessment_attempt_limit = excluded.assessment_attempt_limit,
+                assessment_available_from = excluded.assessment_available_from,
+                assessment_available_until = excluded.assessment_available_until,
+                assessment_randomization_mode = excluded.assessment_randomization_mode,
+                assessment_question_limit = excluded.assessment_question_limit,
                 status = excluded.status,
                 updated_at = now()
             returning *
@@ -1602,6 +1706,11 @@ def admin_save_lesson_action(payload: dict[str, Any], *, runtime: CatalogRuntime
                 release_mode,
                 show_correct_answers,
                 show_explanations,
+                attempt_limit,
+                available_from,
+                available_until,
+                randomization_mode,
+                question_limit or None,
                 status,
             ),
         ).fetchone()

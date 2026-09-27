@@ -4587,6 +4587,8 @@ function renderSubmission() {
   const attemptDeadline = data.attempt.deadlineAt ? toDatetimeLocalValue(data.attempt.deadlineAt) : '';
   const contentAccessStatus = data.progress?.contentAccessStatus
     || (data.progress?.status === 'LOCKED' ? 'LOCKED' : 'AVAILABLE');
+  const assessmentPolicy = data.assessmentPolicy || {};
+  const assessmentException = data.assessmentException || null;
 
   const answers = data.answers.map(({ question, answer }) => `
     <article class="admin-answer">
@@ -4688,6 +4690,25 @@ function renderSubmission() {
         </div>
 
         <div class="review-files">
+          <div>
+            <p class="eyebrow">Exceção individual</p>
+            <h2>Tentativas e disponibilidade</h2>
+            <p class="field-hint">A exceção aplica-se apenas a esta matrícula e fica registada na auditoria.</p>
+          </div>
+          <form id="assessmentExceptionForm" class="form-stack">
+            <div class="course-form-grid">
+              <label><span>Limite de tentativas</span><input name="attemptLimit" type="number" min="1" max="100" required value="${escapeHtml(assessmentException?.attemptLimit || Math.max(Number(assessmentPolicy.attemptLimit || 1), Number(data.attempt.attemptNumber || 0) + 1))}"></label>
+              <label><span>Tempo por tentativa (min)</span><input name="timeLimitMinutes" type="number" min="1" max="43200" value="${escapeHtml(assessmentException?.timeLimitMinutes || assessmentPolicy.timeLimitMinutes || '')}"></label>
+              <label><span>Válida desde</span><input name="availableFrom" type="datetime-local" value="${escapeHtml(toDatetimeLocalValue(assessmentException?.availableFrom || Date.now()))}"></label>
+              <label><span>Válida até</span><input name="availableUntil" type="datetime-local" required value="${escapeHtml(toDatetimeLocalValue(assessmentException?.availableUntil || Date.now() + 48 * 60 * 60 * 1000))}"></label>
+            </div>
+            <label><span>Motivo</span><textarea name="reason" rows="3" required minlength="3" maxlength="2000">${escapeHtml(assessmentException?.reason || '')}</textarea></label>
+            <button class="button button-primary button-block" type="submit">Guardar exceção individual</button>
+            ${assessmentException ? '<button class="button button-secondary button-block" id="revokeAssessmentException" type="button">Revogar exceção</button>' : ''}
+          </form>
+        </div>
+
+        <div class="review-files">
           <h2>Ficheiros</h2>
           ${enhancedFiles || '<p class="empty-note">Nenhum ficheiro.</p>'}
         </div>
@@ -4757,6 +4778,8 @@ function renderSubmission() {
   reviewForm.addEventListener('submit', submitReview);
   document.querySelector('#retryForm').addEventListener('submit', submitRetryAuthorization);
   document.querySelector('#revokeRetry')?.addEventListener('click', revokeRetryAuthorization);
+  document.querySelector('#assessmentExceptionForm')?.addEventListener('submit', submitAssessmentException);
+  document.querySelector('#revokeAssessmentException')?.addEventListener('click', revokeAssessmentException);
   document.querySelector('#attemptManagementForm')?.addEventListener('submit', submitAttemptManagement);
   root.querySelectorAll('[data-student-access]').forEach((button) => {
     button.addEventListener('click', () => applySingleStudentAccess(button.dataset.studentAccess));
@@ -5059,6 +5082,50 @@ async function revokeRetryAuthorization(event) {
     await api.adminAuthorizeRetry(attemptId, { authorized: false });
     showToast('Autorização de reenvio cancelada.', 'success');
     await openSubmission(attemptId);
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function submitAssessmentException(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = Object.fromEntries(new FormData(form));
+  if (!confirmAdminAction('Guardar esta exceção individual de avaliação?')) return;
+  const button = form.querySelector('button[type="submit"]');
+  setBusy(button, true, 'A guardar...');
+  try {
+    await api.adminSetAssessmentException({
+      attemptId: state.selectedSubmission.attempt.attemptId,
+      attemptLimit: Number(values.attemptLimit),
+      timeLimitMinutes: values.timeLimitMinutes ? Number(values.timeLimitMinutes) : null,
+      availableFrom: values.availableFrom ? new Date(values.availableFrom).toISOString() : '',
+      availableUntil: new Date(values.availableUntil).toISOString(),
+      reason: values.reason,
+      active: true
+    });
+    showToast('Exceção individual guardada.', 'success');
+    await openSubmission(state.selectedSubmission.attempt.attemptId);
+  } catch (error) {
+    handleAdminError(error);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function revokeAssessmentException(event) {
+  if (!confirmAdminAction('Revogar esta exceção individual?')) return;
+  const button = event.currentTarget;
+  setBusy(button, true, 'A revogar...');
+  try {
+    await api.adminSetAssessmentException({
+      attemptId: state.selectedSubmission.attempt.attemptId,
+      active: false
+    });
+    showToast('Exceção individual revogada.', 'success');
+    await openSubmission(state.selectedSubmission.attempt.attemptId);
   } catch (error) {
     handleAdminError(error);
   } finally {
@@ -7287,6 +7354,31 @@ function renderCourseVersionDraftEditor(overlay, result) {
                 <input type="hidden" name="lessonId" value="${escapeHtml(lesson.lessonId || '')}">
                 <label><span>Título do módulo</span><input name="title" required maxlength="240" value="${escapeHtml(lesson.title || '')}"></label>
                 <label><span>Resumo</span><textarea name="summary" rows="2" maxlength="5000">${escapeHtml(lesson.summary || '')}</textarea></label>
+                <fieldset class="form-section">
+                  <legend>Política versionada da avaliação</legend>
+                  <div class="course-form-grid">
+                    <label><span>Limite de tentativas</span><input name="attemptLimit" type="number" min="1" max="100" required value="${escapeHtml(lesson.attemptLimit || 1)}"></label>
+                    <label><span>Tempo por tentativa (min)</span><input name="timeLimitMinutes" type="number" min="1" max="43200" required value="${escapeHtml(lesson.timeLimitMinutes || 180)}"></label>
+                    <label><span>Questões por tentativa</span><input name="questionLimit" type="number" min="1" max="1000" placeholder="Todas" value="${escapeHtml(lesson.questionLimit || '')}"></label>
+                    <label><span>Nota mínima</span><input name="passingScore" type="number" min="0" max="100" step="0.1" required value="${escapeHtml(lesson.passingScore ?? 60)}"></label>
+                    <label><span>Disponível desde</span><input name="availableFrom" type="datetime-local" value="${escapeHtml(lesson.availableFrom ? toDatetimeLocalValue(lesson.availableFrom) : '')}"></label>
+                    <label><span>Disponível até</span><input name="availableUntil" type="datetime-local" value="${escapeHtml(lesson.availableUntil ? toDatetimeLocalValue(lesson.availableUntil) : '')}"></label>
+                    <label><span>Randomização</span><select name="randomizationMode">
+                      ${studentFilterOption('NONE', 'Sem randomização', lesson.randomizationMode || 'NONE')}
+                      ${studentFilterOption('QUESTION_ORDER', 'Ordem das questões', lesson.randomizationMode || 'NONE')}
+                      ${studentFilterOption('QUESTIONS_AND_OPTIONS', 'Questões e opções', lesson.randomizationMode || 'NONE')}
+                    </select></label>
+                    <label><span>Divulgação do feedback</span><select name="feedbackReleaseMode">
+                      ${studentFilterOption('NEVER', 'Nunca', lesson.feedbackReleaseMode || 'AFTER_REVIEW')}
+                      ${studentFilterOption('AFTER_SUBMISSION', 'Após a submissão', lesson.feedbackReleaseMode || 'AFTER_REVIEW')}
+                      ${studentFilterOption('AFTER_REVIEW', 'Após a revisão', lesson.feedbackReleaseMode || 'AFTER_REVIEW')}
+                    </select></label>
+                  </div>
+                  <div class="course-version-editor-inline-fields">
+                    <label class="checkbox-field"><input name="showCorrectAnswers" type="checkbox" ${lesson.showCorrectAnswers ? 'checked' : ''}><span>Mostrar respostas corretas</span></label>
+                    <label class="checkbox-field"><input name="showExplanations" type="checkbox" ${lesson.showExplanations ? 'checked' : ''}><span>Mostrar explicações</span></label>
+                  </div>
+                </fieldset>
                 <div class="dialog-actions"><button class="button button-secondary button-small" type="submit">Guardar módulo</button></div>
               </form>` : '<p class="empty-note">Restaure o módulo para voltar a editá-lo.</p>'}
               ${lesson.status !== 'DELETED' ? `<div class="course-version-question-actions">
@@ -7385,7 +7477,12 @@ function renderCourseVersionDraftEditor(overlay, result) {
   overlay.querySelectorAll('[data-draft-lesson-form]').forEach((form) => {
     form.addEventListener('submit', (event) => {
       event.preventDefault();
-      mutate('UPDATE_LESSON', Object.fromEntries(new FormData(form)), form.querySelector('button[type="submit"]'));
+      const values = Object.fromEntries(new FormData(form));
+      values.showCorrectAnswers = form.elements.showCorrectAnswers.checked;
+      values.showExplanations = form.elements.showExplanations.checked;
+      values.availableFrom = values.availableFrom ? new Date(values.availableFrom).toISOString() : '';
+      values.availableUntil = values.availableUntil ? new Date(values.availableUntil).toISOString() : '';
+      mutate('UPDATE_LESSON', values, form.querySelector('button[type="submit"]'));
     });
   });
   overlay.querySelectorAll('[data-draft-content-form]').forEach((form) => {
@@ -7938,6 +8035,11 @@ function showLessonDialog(lessonId = '') {
     individualMinutes: 0,
     submissionDurationMinutes: 180,
     passingScore: state.courseStructure?.course?.passingScore || 60,
+    attemptLimit: 1,
+    availableFrom: '',
+    availableUntil: '',
+    randomizationMode: 'NONE',
+    questionLimit: '',
     feedbackReleaseMode: 'AFTER_REVIEW',
     showCorrectAnswers: false,
     showExplanations: false,
@@ -8013,6 +8115,20 @@ function showLessonDialog(lessonId = '') {
           </select>
         </label>
         <fieldset class="form-section">
+          <legend>Política da avaliação</legend>
+          <div class="course-form-grid">
+            <label><span>Limite de tentativas</span><input type="number" name="attemptLimit" min="1" max="100" value="${escapeHtml(lesson.attemptLimit || 1)}" required></label>
+            <label><span>Questões por tentativa</span><input type="number" name="questionLimit" min="1" max="1000" placeholder="Todas" value="${escapeHtml(lesson.questionLimit || '')}"></label>
+            <label><span>Disponível desde</span><input type="datetime-local" name="availableFrom" value="${escapeHtml(lesson.availableFrom ? toDatetimeLocalValue(lesson.availableFrom) : '')}"></label>
+            <label><span>Disponível até</span><input type="datetime-local" name="availableUntil" value="${escapeHtml(lesson.availableUntil ? toDatetimeLocalValue(lesson.availableUntil) : '')}"></label>
+            <label><span>Randomização</span><select name="randomizationMode">
+              ${studentFilterOption('NONE', 'Sem randomização', lesson.randomizationMode || 'NONE')}
+              ${studentFilterOption('QUESTION_ORDER', 'Ordem das questões', lesson.randomizationMode || 'NONE')}
+              ${studentFilterOption('QUESTIONS_AND_OPTIONS', 'Questões e opções', lesson.randomizationMode || 'NONE')}
+            </select></label>
+          </div>
+        </fieldset>
+        <fieldset class="form-section">
           <legend>Divulgação do feedback</legend>
           <div class="course-form-grid">
             <label>
@@ -8058,9 +8174,11 @@ function showLessonDialog(lessonId = '') {
     const form = event.currentTarget;
     const button = form.querySelector('button[type="submit"]');
     const values = Object.fromEntries(new FormData(form));
-    ['lessonNumber', 'passingScore', 'theoryMinutes', 'exerciseMinutes', 'individualMinutes', 'submissionDurationMinutes'].forEach((field) => {
+    ['lessonNumber', 'passingScore', 'theoryMinutes', 'exerciseMinutes', 'individualMinutes', 'submissionDurationMinutes', 'attemptLimit', 'questionLimit'].forEach((field) => {
       values[field] = Number(values[field] || 0);
     });
+    values.availableFrom = values.availableFrom ? new Date(values.availableFrom).toISOString() : '';
+    values.availableUntil = values.availableUntil ? new Date(values.availableUntil).toISOString() : '';
     values.showCorrectAnswers = form.elements.showCorrectAnswers.checked;
     values.showExplanations = form.elements.showExplanations.checked;
 

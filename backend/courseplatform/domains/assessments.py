@@ -22,6 +22,7 @@ ACTION_BINDINGS = (
     ("adminGetSubmission", "admin_get_submission"),
     ("adminReviewSubmission", "admin_review_submission"),
     ("adminAuthorizeRetry", "admin_authorize_retry"),
+    ("adminSetAssessmentException", "admin_set_assessment_exception"),
     ("adminUpdateAttempt", "admin_update_attempt"),
 )
 
@@ -45,6 +46,7 @@ class AssessmentRuntime:
     decode_list_cursor: Callable[..., Any]
     dispatch_notification_deliveries: Callable[..., Any]
     editable_attempt: Callable[..., Any]
+    effective_assessment_policy_with_conn: Callable[..., Any]
     expire_attempt_if_needed: Callable[..., Any]
     expire_overdue_attempts: Callable[..., Any]
     feedback_policy: Callable[..., Any]
@@ -94,6 +96,26 @@ class AssessmentRuntime:
     upload_private_object: Callable[..., Any]
     utc_now: Callable[..., Any]
     validate_upload: Callable[..., Any]
+
+
+def public_assessment_exception(row: dict[str, Any] | None, *, iso) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "assessmentExceptionId": row.get("assessment_exception_id"),
+        "enrollmentId": row.get("enrollment_id"),
+        "lessonId": row.get("lesson_id"),
+        "attemptLimit": row.get("attempt_limit"),
+        "availableFrom": iso(row.get("available_from")),
+        "availableUntil": iso(row.get("available_until")),
+        "timeLimitMinutes": row.get("time_limit_minutes"),
+        "reason": row.get("reason"),
+        "status": row.get("status"),
+        "createdBy": row.get("created_by"),
+        "createdAt": iso(row.get("created_at")),
+        "revokedBy": row.get("revoked_by"),
+        "revokedAt": iso(row.get("revoked_at")),
+    }
 
 
 def attempt_status_action(payload: dict[str, Any], runtime: AssessmentRuntime):
@@ -164,6 +186,7 @@ def attempt_status_action(payload: dict[str, Any], runtime: AssessmentRuntime):
             "correctAnswersVisible": reveal_answers,
             "explanationsVisible": reveal_explanations,
         },
+        "assessmentPolicy": snapshot.get("assessmentPolicy") or {},
     })
 
 
@@ -188,6 +211,7 @@ def start_attempt_with_conn_action(conn, student, lesson_id, enrollment_id: str 
     assessment_snapshot_from_version_lesson = runtime.assessment_snapshot_from_version_lesson
     audit = runtime.audit
     editable_attempt = runtime.editable_attempt
+    effective_assessment_policy_with_conn = runtime.effective_assessment_policy_with_conn
     generate_id = runtime.generate_id
     int_value = runtime.int_value
     iso = runtime.iso
@@ -249,67 +273,97 @@ def start_attempt_with_conn_action(conn, student, lesson_id, enrollment_id: str 
         return success({"attempt": student_attempt(existing)})
 
     now = utc_now()
-    minutes = int_value(progress.get("submission_duration_minutes"))
-    if minutes <= 0:
-        minutes = int_value(progress.get("exercise_minutes")) + int_value(progress.get("individual_minutes"))
-    if minutes <= 0:
-        minutes = 180
-    deadline = now + timedelta(minutes=minutes)
     is_retry = bool(existing and progress_evaluation_status(progress) != "NOT_STARTED")
-    if is_retry:
-        if not as_bool(existing.get("retry_authorized")):
+    retry_authorized = bool(is_retry and as_bool(existing.get("retry_authorized")))
+    version_row = conn.execute(
+        """
+        select cv.content_snapshot_json
+        from courseplatform.enrollments e
+        join courseplatform.course_versions cv on cv.course_version_id = e.course_version_id
+        where e.enrollment_id = %s
+        """,
+        (progress["enrollment_id"],),
+    ).fetchone()
+    version_snapshot = (version_row or {}).get("content_snapshot_json") or {}
+    version_lesson = next(
+        (
+            item for item in version_snapshot.get("lessons", [])
+            if isinstance(item, dict) and item.get("lesson_id") == lesson_id
+        ),
+        None,
+    )
+    if not version_lesson:
+        raise ApiError("LESSON_VERSION_MISMATCH", "O módulo não pertence à versão desta matrícula.")
+    policy, policy_exception = effective_assessment_policy_with_conn(conn, progress, version_lesson, now)
+    available_from = parse_datetime(policy.get("availableFrom"))
+    available_until = parse_datetime(policy.get("availableUntil"))
+    if available_from and available_from.tzinfo is None:
+        available_from = available_from.replace(tzinfo=timezone.utc)
+    if available_until and available_until.tzinfo is None:
+        available_until = available_until.replace(tzinfo=timezone.utc)
+    if available_from and now < available_from:
+        raise ApiError("ASSESSMENT_NOT_OPEN", "Esta avaliação ainda não está disponível.")
+    if available_until and now >= available_until:
+        raise ApiError("ASSESSMENT_WINDOW_CLOSED", "A janela desta avaliação terminou.")
+
+    attempt_number = int_value(progress.get("attempt_count")) + 1
+    if existing:
+        attempt_number = max(attempt_number, int_value(existing.get("attempt_number")) + 1)
+    if attempt_number > int_value(policy.get("attemptLimit"), 1) and not retry_authorized:
+        if is_retry and int_value(policy.get("attemptLimit"), 1) == 1:
             raise ApiError("RETRY_NOT_AUTHORIZED", "A administração precisa de autorizar um novo envio.")
+        raise ApiError("ATTEMPT_LIMIT_REACHED", "O limite de tentativas desta avaliação foi atingido.")
+
+    deadline = now + timedelta(minutes=int_value(policy.get("timeLimitMinutes"), 180))
+    if available_until and available_until < deadline:
+        deadline = available_until
+    if retry_authorized:
         review = conn.execute(
             """select correction_deadline from courseplatform.reviews
                where attempt_id = %s order by reviewed_at desc nulls last limit 1""",
             (existing["attempt_id"],),
         ).fetchone()
         if review and review.get("correction_deadline"):
-            deadline = parse_datetime(review["correction_deadline"])
-            if deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=timezone.utc)
+            retry_deadline = parse_datetime(review["correction_deadline"])
+            if retry_deadline.tzinfo is None:
+                retry_deadline = retry_deadline.replace(tzinfo=timezone.utc)
+            deadline = retry_deadline
+            if available_until and available_until < deadline:
+                deadline = available_until
         if deadline <= now:
             raise ApiError("RETRY_DEADLINE_EXPIRED", "O prazo autorizado para o novo envio terminou. Solicite um novo prazo à administração.")
-    attempt_number = int_value(progress.get("attempt_count")) + 1
-    if existing:
-        attempt_number = max(attempt_number, int_value(existing.get("attempt_number")) + 1)
     existing_snapshot = parse_assessment_snapshot((existing or {}).get("assessment_snapshot_json"))
     if is_retry and isinstance(existing_snapshot.get("questions"), list):
-        snapshot = existing_snapshot
-    else:
-        version_row = conn.execute(
-            """
-            select cv.content_snapshot_json
-            from courseplatform.enrollments e
-            join courseplatform.course_versions cv on cv.course_version_id = e.course_version_id
-            where e.enrollment_id = %s
-            """,
-            (progress["enrollment_id"],),
-        ).fetchone()
-        version_snapshot = (version_row or {}).get("content_snapshot_json") or {}
-        version_lesson = next(
-            (
-                item for item in version_snapshot.get("lessons", [])
-                if isinstance(item, dict) and item.get("lesson_id") == lesson_id
-            ),
-            None,
+        snapshot = {
+            **existing_snapshot,
+            "version": 2,
+            "capturedAt": iso(now),
+            "assessmentPolicy": policy,
+            "feedbackPolicy": policy["feedbackPolicy"],
+        }
+        digest_payload = json.dumps(
+            {"assessmentPolicy": policy, "questions": snapshot["questions"]},
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
         )
-        if not version_lesson:
-            raise ApiError("LESSON_VERSION_MISMATCH", "O módulo não pertence à versão desta matrícula.")
-        snapshot = assessment_snapshot_from_version_lesson(version_lesson)
+        snapshot["digest"] = hashlib.sha256(digest_payload.encode("utf-8")).hexdigest()
+    else:
+        snapshot = assessment_snapshot_from_version_lesson(version_lesson, policy)
     attempt = conn.execute(
         """
         insert into courseplatform.attempts
           (attempt_id, progress_id, student_id, lesson_id, attempt_number, started_at,
            deadline_at, submitted_at, status, score, objective_score, assessment_snapshot_json,
-           retry_authorized, created_at, updated_at)
-        values (%s, %s, %s, %s, %s, %s, %s, null, 'IN_PROGRESS', null, null, %s, false, %s, %s)
+           retry_authorized, assessment_exception_id, created_at, updated_at)
+        values (%s, %s, %s, %s, %s, %s, %s, null, 'IN_PROGRESS', null, null, %s, false, %s, %s, %s)
         returning *
         """,
         (
             generate_id("ATT"), progress["progress_id"], student["student_id"], lesson_id,
             attempt_number, now, deadline,
             json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
+            (policy_exception or {}).get("assessment_exception_id"),
             now, now,
         ),
     ).fetchone()
@@ -340,6 +394,9 @@ def start_attempt_with_conn_action(conn, student, lesson_id, enrollment_id: str 
     audit(conn, "STUDENT", student["student_id"], "ATTEMPT_STARTED", "ATTEMPT", attempt["attempt_id"], {
         "previousAttemptId": existing["attempt_id"] if is_retry else None,
         "deadlineAt": iso(deadline),
+        "attemptLimit": policy.get("attemptLimit"),
+        "assessmentExceptionId": (policy_exception or {}).get("assessment_exception_id"),
+        "assessmentDigest": snapshot.get("digest"),
     })
     conn.commit()
     return success({"attempt": student_attempt(attempt)})
@@ -765,6 +822,17 @@ def admin_get_submission_action(payload: dict[str, Any], runtime: AssessmentRunt
     )
     with connection() as conn:
         snapshot = snapshot_for_attempt_with_conn(conn, attempt)
+        exception = conn.execute(
+            """
+            select exception.*
+            from courseplatform.assessment_policy_exceptions exception
+            join courseplatform.lesson_progress progress on progress.enrollment_id = exception.enrollment_id
+            where progress.progress_id = %s and exception.lesson_id = %s
+              and exception.status = 'ACTIVE' and exception.available_until > now()
+            order by exception.created_at desc limit 1
+            """,
+            (attempt.get("progress_id"), attempt["lesson_id"]),
+        ).fetchone()
     questions = [row for row in snapshot.get("questions", []) if isinstance(row, dict)]
     answers = fetch_all("select * from courseplatform.answers where attempt_id = %s", (attempt["attempt_id"],))
     answer_by_question = {row["question_id"]: row for row in answers}
@@ -800,6 +868,8 @@ def admin_get_submission_action(payload: dict[str, Any], runtime: AssessmentRunt
         ],
         "files": [public_file(row) for row in files],
         "reviews": [public_review(row) for row in reviews],
+        "assessmentPolicy": snapshot.get("assessmentPolicy") or {},
+        "assessmentException": public_assessment_exception(exception, iso=runtime.iso),
     })
 
 
@@ -1018,6 +1088,112 @@ def admin_authorize_retry_action(payload: dict[str, Any], runtime: AssessmentRun
         conn.commit()
     dispatch_notification_deliveries(notification_ids)
     return success({"attempt": staff_attempt(attempt)})
+
+
+def admin_set_assessment_exception_action(payload: dict[str, Any], runtime: AssessmentRuntime):
+    admin = admin_from_context(runtime.admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    runtime.require_fields(payload, ["attemptId"])
+    active = runtime.as_bool(payload.get("active", True))
+    now = runtime.utc_now()
+    with runtime.connection() as conn:
+        attempt = conn.execute(
+            "select * from courseplatform.attempts where attempt_id = %s for update",
+            (payload["attemptId"],),
+        ).fetchone()
+        if not attempt:
+            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
+        require_attempt_scope(conn, admin, attempt["attempt_id"])
+        runtime.require_latest_attempt(conn, attempt)
+        progress = conn.execute(
+            "select * from courseplatform.lesson_progress where progress_id = %s for update",
+            (attempt["progress_id"],),
+        ).fetchone()
+        if not progress or not progress.get("enrollment_id"):
+            raise ApiError("ENROLLMENT_REQUIRED", "A tentativa não está associada a uma matrícula válida.")
+        current = conn.execute(
+            """
+            select * from courseplatform.assessment_policy_exceptions
+            where enrollment_id = %s and lesson_id = %s and status = 'ACTIVE'
+            order by created_at desc limit 1 for update
+            """,
+            (progress["enrollment_id"], attempt["lesson_id"]),
+        ).fetchone()
+        if not active:
+            if current:
+                current = conn.execute(
+                    """
+                    update courseplatform.assessment_policy_exceptions
+                    set status = 'REVOKED', revoked_by = %s, revoked_at = %s, updated_at = %s
+                    where assessment_exception_id = %s returning *
+                    """,
+                    (admin["admin_id"], now, now, current["assessment_exception_id"]),
+                ).fetchone()
+                runtime.audit(conn, "ADMIN", admin["admin_id"], "ASSESSMENT_EXCEPTION_REVOKED",
+                              "ASSESSMENT_EXCEPTION", current["assessment_exception_id"], {
+                                  "attemptId": attempt["attempt_id"],
+                                  "enrollmentId": progress["enrollment_id"],
+                              })
+            conn.commit()
+            return runtime.success({"assessmentException": public_assessment_exception(current, iso=runtime.iso)})
+
+        runtime.require_fields(payload, ["availableUntil", "reason"])
+        available_until = runtime.parse_datetime(payload.get("availableUntil"))
+        available_from = runtime.parse_datetime(payload.get("availableFrom")) or now
+        if available_from.tzinfo is None:
+            available_from = available_from.replace(tzinfo=timezone.utc)
+        if not available_until:
+            raise ApiError("ASSESSMENT_EXCEPTION_DEADLINE_INVALID", "Indique o fim da exceção individual.")
+        if available_until.tzinfo is None:
+            available_until = available_until.replace(tzinfo=timezone.utc)
+        if available_until <= now or available_until <= available_from:
+            raise ApiError("ASSESSMENT_EXCEPTION_DEADLINE_INVALID", "O fim da exceção deve ser posterior ao início e ao momento atual.")
+        reason = runtime.str_value(payload.get("reason"))
+        if len(reason) < 3 or len(reason) > 2000:
+            raise ApiError("ASSESSMENT_EXCEPTION_REASON_INVALID", "Indique um motivo entre 3 e 2000 caracteres.")
+        attempt_limit = runtime.int_value(payload.get("attemptLimit"), int(attempt.get("attempt_number") or 0) + 1)
+        if not 1 <= attempt_limit <= 100:
+            raise ApiError("ASSESSMENT_ATTEMPT_LIMIT_INVALID", "O limite de tentativas deve estar entre 1 e 100.")
+        time_limit = runtime.int_value(payload.get("timeLimitMinutes"))
+        if time_limit and not 1 <= time_limit <= 43200:
+            raise ApiError("ASSESSMENT_TIME_LIMIT_INVALID", "O tempo da avaliação deve estar entre 1 e 43200 minutos.")
+        exception_id = current.get("assessment_exception_id") if current else runtime.generate_id("AEX")
+        if current:
+            exception = conn.execute(
+                """
+                update courseplatform.assessment_policy_exceptions
+                set attempt_limit = %s, available_from = %s, available_until = %s,
+                    time_limit_minutes = %s, reason = %s, updated_at = %s,
+                    revoked_by = null, revoked_at = null
+                where assessment_exception_id = %s returning *
+                """,
+                (attempt_limit, available_from, available_until, time_limit or None, reason, now, exception_id),
+            ).fetchone()
+        else:
+            exception = conn.execute(
+                """
+                insert into courseplatform.assessment_policy_exceptions
+                  (assessment_exception_id, enrollment_id, lesson_id, attempt_limit,
+                   available_from, available_until, time_limit_minutes, reason,
+                   status, created_by, created_at, updated_at)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', %s, %s, %s)
+                returning *
+                """,
+                (exception_id, progress["enrollment_id"], attempt["lesson_id"], attempt_limit,
+                 available_from, available_until, time_limit or None, reason,
+                 admin["admin_id"], now, now),
+            ).fetchone()
+        runtime.audit(conn, "ADMIN", admin["admin_id"], "ASSESSMENT_EXCEPTION_SAVED",
+                      "ASSESSMENT_EXCEPTION", exception_id, {
+                          "attemptId": attempt["attempt_id"],
+                          "enrollmentId": progress["enrollment_id"],
+                          "lessonId": attempt["lesson_id"],
+                          "attemptLimit": attempt_limit,
+                          "availableUntil": runtime.iso(available_until),
+                          "timeLimitMinutes": time_limit or None,
+                          "reason": reason,
+                      })
+        conn.commit()
+    return runtime.success({"assessmentException": public_assessment_exception(exception, iso=runtime.iso)})
 
 
 def admin_update_attempt_action(payload: dict[str, Any], runtime: AssessmentRuntime):
