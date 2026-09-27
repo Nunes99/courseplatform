@@ -15,7 +15,13 @@ declare
 {
   "schemaVersion": 1,
   "authoredAt": "2026-09-28",
-  "editorialStatus": "ACADEMIC_REVIEW_REQUIRED",
+  "editorialStatus": "ACADEMIC_REVIEW_COMPLETED",
+  "academicReview": {
+    "reviewedAt": "2026-09-28",
+    "basis": "Fontes institucionais do INP, MIREME e ENH",
+    "publicationApprovalRequired": true,
+    "notes": "Revisão factual e pedagógica concluída; a aprovação institucional e a consulta da legislação vigente continuam obrigatórias antes da publicação."
+  },
   "course": {
     "course_id": "COURSE-EPG-001",
     "course_code": "EPG-001",
@@ -189,7 +195,7 @@ declare
         {
           "content_id": "CONTENT-EPG-001-06", "section_order": 2, "section_type": "READING",
           "title": "Regulação, concessões e proteção do interesse público",
-          "body_html": "<p>O quadro regulatório estabelece como os direitos petrolíferos são atribuídos, exercidos, fiscalizados e encerrados. Na análise de uma concessão, importa considerar obrigações técnicas, fiscais, ambientais, de segurança, conteúdo local, prestação de informação e abandono responsável.</p><p>As normas podem mudar. Por isso, decisões operacionais devem consultar sempre a legislação e os instrumentos contratuais vigentes, além de orientação jurídica competente. O objetivo académico desta secção é compreender a função das regras e não prestar aconselhamento jurídico.</p>",
+          "body_html": "<p>O quadro regulatório estabelece como os direitos petrolíferos são atribuídos, exercidos, fiscalizados e encerrados. Em 2026, a Lei n.º 8/2026 aprovou a nova Lei do Petróleo e revogou a Lei n.º 21/2014 e a Lei n.º 16/2022; a Lei n.º 9/2026 aprovou a Lei do Conteúdo Local. Na análise de uma concessão, importa considerar obrigações técnicas, fiscais, ambientais, de segurança, conteúdo local, prestação de informação e abandono responsável.</p><p>As normas podem mudar. Por isso, decisões operacionais devem consultar sempre a legislação e os instrumentos contratuais vigentes, além de orientação jurídica competente. O objetivo académico desta secção é compreender a função das regras e não prestar aconselhamento jurídico.</p>",
           "estimated_minutes": 90, "is_required": true, "status": "ACTIVE",
           "sources": [
             {"title": "INP - Políticas e quadro legal", "url": "https://www.inp.gov.mz/politicas-e-quadro-legal/"},

@@ -7302,6 +7302,10 @@ function renderCourseVersionDraftEditor(overlay, result) {
   const editor = result.draftEditor || { course: {}, lessons: [] };
   const course = editor.course || {};
   const lessons = editor.lessons || [];
+  const approvalRequired = Boolean(editor.publicationApprovalRequired);
+  const approval = editor.institutionalApproval || { status: 'PENDING' };
+  const approvalStatus = String(approval.status || 'PENDING').toUpperCase();
+  const approvalGranted = approvalStatus === 'APPROVED';
   overlay.innerHTML = `
     <div class="dialog-card course-version-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="courseVersionEditorTitle">
       <button class="dialog-close" type="button" aria-label="Fechar">x</button>
@@ -7313,6 +7317,35 @@ function renderCourseVersionDraftEditor(overlay, result) {
         </div>
         <span class="status-pill status-draft">Rascunho</span>
       </div>
+      ${approvalRequired ? `
+        <section class="course-version-approval is-${escapeHtml(approvalStatus.toLowerCase())}" aria-labelledby="courseVersionApprovalTitle">
+          <div class="course-version-approval-heading">
+            <div>
+              <p class="eyebrow">Controlo institucional</p>
+              <h3 id="courseVersionApprovalTitle">${approvalGranted ? 'Aprovação institucional concluída' : approvalStatus === 'INVALIDATED' ? 'Aprovação institucional invalidada' : 'Aprovação institucional pendente'}</h3>
+              <p>${approvalGranted
+                ? `Aprovada por ${escapeHtml(approval.approvedByAdminId || 'administração')} em ${escapeHtml(formatDate(approval.approvedAt))}.`
+                : approvalStatus === 'INVALIDATED'
+                  ? 'O rascunho foi alterado depois da aprovação. É necessária uma nova revisão.'
+                  : 'Revise os conteúdos, avaliações, fontes e carga horária antes de aprovar.'}</p>
+            </div>
+            <span class="status-pill ${approvalGranted ? 'status-active' : 'status-pending'}">${approvalGranted ? 'Aprovada' : 'Pendente'}</span>
+          </div>
+          ${approvalGranted ? `
+            <dl class="course-version-approval-details">
+              <div><dt>Responsável</dt><dd>${escapeHtml(approval.approvedByAdminId || '-')}</dd></div>
+              <div><dt>Papel</dt><dd>${escapeHtml(approval.approvedByRole || '-')}</dd></div>
+              <div><dt>Observação</dt><dd>${escapeHtml(approval.note || '-')}</dd></div>
+            </dl>
+          ` : `
+            <form class="course-version-approval-form form-stack" data-institutional-approval-form>
+              <label><span>Observação da aprovação</span><textarea name="approvalNote" required minlength="10" maxlength="2000" rows="3" placeholder="Registe o âmbito da revisão e a decisão institucional."></textarea></label>
+              <label class="checkbox-field"><input name="confirmed" type="checkbox" required><span>Confirmo que os conteúdos, avaliações, fontes e carga horária foram revistos.</span></label>
+              <div class="dialog-actions"><button class="button button-primary" type="submit">Aprovar institucionalmente</button></div>
+            </form>
+          `}
+        </section>
+      ` : ''}
       <form class="course-version-editor-course form-stack" data-draft-course-form>
         <div class="course-form-grid">
           <label><span>Código</span><input name="courseCode" required maxlength="80" value="${escapeHtml(course.courseCode || '')}"></label>
@@ -7444,6 +7477,33 @@ function renderCourseVersionDraftEditor(overlay, result) {
   overlay.querySelector('[data-preview-draft]').addEventListener('click', () => {
     overlay.remove();
     showCourseVersionPreview(version.courseVersionId);
+  });
+
+  overlay.querySelector('[data-institutional-approval-form]')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (!form.elements.confirmed.checked) {
+      showToast('Confirme a revisão institucional antes de aprovar.', 'error');
+      return;
+    }
+    if (!confirmAdminAction('Aprovar institucionalmente este rascunho? Qualquer edição posterior exigirá nova aprovação.')) return;
+    const button = form.querySelector('button[type="submit"]');
+    setBusy(button, true, 'A aprovar...');
+    try {
+      const updated = await api.adminApproveCourseVersionDraft(
+        version.courseVersionId,
+        form.elements.approvalNote.value,
+        true,
+        version.updatedAt || ''
+      );
+      showToast(updated.alreadyApproved ? 'O rascunho já estava aprovado.' : 'Aprovação institucional registada.', 'success');
+      renderCourseVersionDraftEditor(overlay, updated);
+      await loadCourses({ force: true });
+    } catch (error) {
+      handleAdminError(error);
+    } finally {
+      setBusy(button, false);
+    }
   });
 
   const mutate = async (operation, changes, button) => {
@@ -7642,6 +7702,9 @@ async function showCourseVersionPreview(courseVersionId, loadedResult = null, tr
     const issues = validation.issues || [];
     const preview = result.preview || {};
     const version = result.courseVersion || {};
+    const approvalRequired = Boolean(result.draftEditor?.publicationApprovalRequired);
+    const approvalGranted = result.draftEditor?.institutionalApproval?.status === 'APPROVED';
+    const publicationReady = validation.valid && (!approvalRequired || approvalGranted);
     const overlay = document.createElement('div');
     overlay.className = 'dialog-overlay';
     overlay.innerHTML = `
@@ -7653,8 +7716,8 @@ async function showCourseVersionPreview(courseVersionId, loadedResult = null, tr
             <h2 id="courseVersionPreviewTitle">Versão ${escapeHtml(version.versionNumber || '')}</h2>
             <p>${escapeHtml(preview.course?.title || version.title || 'Curso sem título')}</p>
           </div>
-          <span class="status-pill ${validation.valid ? 'status-active' : 'status-blocked'}">
-            ${validation.valid ? 'Pronta para publicar' : 'Publicação bloqueada'}
+          <span class="status-pill ${publicationReady ? 'status-active' : 'status-blocked'}">
+            ${publicationReady ? 'Pronta para publicar' : 'Publicação bloqueada'}
           </span>
         </div>
         <dl class="course-version-preview-metrics">
@@ -7666,6 +7729,12 @@ async function showCourseVersionPreview(courseVersionId, loadedResult = null, tr
         </dl>
         ${version.status === 'DRAFT' ? `
           <p class="course-version-draft-note">Esta pré-visualização usa o snapshot guardado no rascunho. Alterações posteriores no editor não são incluídas automaticamente.</p>
+        ` : ''}
+        ${approvalRequired ? `
+          <div class="course-version-preview-approval ${approvalGranted ? 'is-approved' : 'is-pending'}">
+            <strong>${approvalGranted ? 'Aprovação institucional confirmada' : 'Aprovação institucional pendente'}</strong>
+            <span>${approvalGranted ? 'O rascunho pode avançar para decisão de publicação.' : 'Abra o editor do rascunho e conclua a aprovação antes de publicar.'}</span>
+          </div>
         ` : ''}
         <section class="course-version-validation" aria-labelledby="courseVersionValidationTitle">
           <h3 id="courseVersionValidationTitle">Validação</h3>
@@ -7696,7 +7765,7 @@ async function showCourseVersionPreview(courseVersionId, loadedResult = null, tr
         </section>
         <div class="dialog-actions">
           <button class="button button-secondary" type="button" data-close-preview>Fechar</button>
-          ${version.status === 'DRAFT' && validation.valid && canManagePlatform() ? `
+          ${version.status === 'DRAFT' && publicationReady && canManagePlatform() ? `
             <button class="button button-primary" type="button" data-publish-preview>Publicar versão</button>
           ` : ''}
         </div>

@@ -38,6 +38,8 @@ class EpgV2CourseContentTests(unittest.TestCase):
     def test_snapshot_is_publishable_after_academic_review(self):
         validation = validate_course_version_snapshot(self.snapshot)
 
+        self.assertEqual(self.snapshot["editorialStatus"], "ACADEMIC_REVIEW_COMPLETED")
+        self.assertTrue(self.snapshot["academicReview"]["publicationApprovalRequired"])
         self.assertTrue(validation["valid"], validation["issues"])
         self.assertEqual(
             validation["summary"],
@@ -94,6 +96,13 @@ class EpgV2CourseContentTests(unittest.TestCase):
             for source in content["sources"]:
                 host = source["url"].split("/", 3)[2]
                 self.assertIn(host, allowed_hosts)
+
+        regulatory_content = next(
+            item for item in self.contents if item["content_id"] == "CONTENT-EPG-001-06"
+        )
+        self.assertIn("Lei n.º 8/2026", regulatory_content["body_html"])
+        self.assertIn("Lei n.º 9/2026", regulatory_content["body_html"])
+        self.assertIn("não prestar aconselhamento jurídico", regulatory_content["body_html"])
 
     def test_migration_preserves_published_history_and_student_records(self):
         normalized = " ".join(self.sql.lower().split())

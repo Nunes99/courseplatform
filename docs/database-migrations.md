@@ -65,8 +65,11 @@ e o snapshot existente forem exatamente equivalentes; caso encontre outro
 rascunho ou uma colisão divergente, falha antes de substituir dados. Não atualiza
 o marcador estrutural de esquema, não publica o curso e não altera ofertas nem
 registos académicos históricos. Numa instalação onde `COURSE-EPG-001` não
-exista, termina sem alterações para não bloquear o baseline. Está preparada
-localmente e ainda não foi aplicada externamente.
+exista, termina sem alterações para não bloquear o baseline. Foi aplicada ao
+projeto Supabase principal em 28 de setembro de 2026, após autorização explícita,
+e registada em `supabase_migrations.schema_migrations`. A validação posterior
+confirmou estado `DRAFT`, dois módulos, oito conteúdos, dez questões e ausência
+de oferta associada.
 
 O rollback operacional é permitido apenas enquanto a versão 2 continuar em
 `DRAFT` e não tiver referências posteriores: remover primeiro a versão do curso

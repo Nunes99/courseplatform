@@ -165,13 +165,41 @@ class CoursePublicationValidationTests(unittest.TestCase):
         self.assertNotIn("correct_answer", str(preview).lower())
 
     def test_draft_editor_exposes_editable_content_without_answer_keys(self):
-        editor = catalog.course_version_draft_editor(valid_snapshot())
+        snapshot = valid_snapshot()
+        snapshot["academicReview"] = {"publicationApprovalRequired": True}
+        snapshot["institutionalApproval"] = {
+            "status": "APPROVED",
+            "approvedAt": "2026-09-28T10:00:00+00:00",
+            "approvedByAdminId": "ADMIN-1",
+            "approvedByRole": "ADMIN",
+            "note": "Revisão institucional concluída.",
+        }
+        editor = catalog.course_version_draft_editor(snapshot)
 
         self.assertEqual("Curso de validação", editor["course"]["title"])
         self.assertEqual("CONTENT-1", editor["lessons"][0]["content"][0]["contentId"])
         self.assertEqual(1, editor["lessons"][1]["questionCount"])
+        self.assertTrue(editor["publicationApprovalRequired"])
+        self.assertEqual("APPROVED", editor["institutionalApproval"]["status"])
+        self.assertEqual("Revisão institucional concluída.", editor["institutionalApproval"]["note"])
         self.assertNotIn("questions", editor["lessons"][1])
         self.assertNotIn("is_correct", str(editor).lower())
+
+    def test_editing_an_approved_snapshot_invalidates_institutional_approval(self):
+        snapshot = valid_snapshot()
+        snapshot["institutionalApproval"] = {"status": "APPROVED"}
+
+        catalog.invalidate_course_version_institutional_approval(
+            snapshot,
+            invalidated_at="2026-09-28T11:00:00+00:00",
+            invalidated_by_admin_id="ADMIN-2",
+            reason="DRAFT_EDITED",
+        )
+
+        approval = snapshot["institutionalApproval"]
+        self.assertEqual("INVALIDATED", approval["status"])
+        self.assertEqual("ADMIN-2", approval["invalidatedByAdminId"])
+        self.assertEqual("DRAFT_EDITED", approval["invalidatedReason"])
 
     def test_draft_reordering_is_complete_and_does_not_mutate_source(self):
         snapshot = valid_snapshot()
@@ -310,6 +338,141 @@ class CoursePublicationValidationTests(unittest.TestCase):
         self.assertIn("stored_course_version_snapshot(version)", preview_source)
         self.assertNotIn("course_structure_snapshot_with_conn", publish_source)
         self.assertNotIn("course_structure_snapshot_with_conn", preview_source)
+
+    def test_publish_rejects_a_required_but_unapproved_version(self):
+        connection = _DraftConnection()
+        snapshot = valid_snapshot()
+        snapshot["academicReview"] = {"publicationApprovalRequired": True}
+        connection.version["content_snapshot_json"] = snapshot
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        runtime = SimpleNamespace(
+            admin_context=lambda payload, roles: ({}, {"admin_id": "ADMIN-1", "role": "ADMIN"}),
+            audit=lambda *args: None,
+            connection=connect,
+            float_value=lambda value, fallback=0: float(value if value not in (None, "") else fallback),
+            public_course_version=lambda row: row,
+            require_fields=lambda payload, fields: None,
+            success=lambda data: data,
+        )
+
+        with self.assertRaises(catalog.ApiError) as raised:
+            catalog.admin_publish_course_version_action(
+                {"courseVersionId": "VERSION-2"},
+                runtime=runtime,
+            )
+
+        self.assertEqual("COURSE_VERSION_APPROVAL_REQUIRED", raised.exception.code)
+        self.assertFalse(connection.committed)
+
+    def test_institutional_approval_is_transactional_and_audited(self):
+        connection = _DraftConnection()
+        snapshot = valid_snapshot()
+        snapshot["academicReview"] = {"publicationApprovalRequired": True}
+        connection.version["content_snapshot_json"] = snapshot
+        connection.version["updated_at"] = datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)
+        audits = []
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        runtime = SimpleNamespace(
+            admin_context=lambda payload, roles: ({}, {"admin_id": "ADMIN-1", "role": "ADMIN"}),
+            as_bool=bool,
+            audit=lambda *args: audits.append(args),
+            connection=connect,
+            float_value=lambda value, fallback=0: float(value if value not in (None, "") else fallback),
+            iso=lambda value: value.isoformat() if value else None,
+            public_course_version=lambda row: row,
+            require_fields=lambda payload, fields: None,
+            success=lambda data: data,
+            utc_now=lambda: datetime(2026, 9, 28, 11, 0, tzinfo=timezone.utc),
+        )
+
+        result = catalog.admin_approve_course_version_draft_action(
+            {
+                "courseVersionId": "VERSION-2",
+                "approvalNote": "Conteúdos e avaliações revistos institucionalmente.",
+                "confirmed": True,
+                "expectedUpdatedAt": "2026-09-28T10:00:00+00:00",
+            },
+            runtime=runtime,
+        )
+
+        self.assertTrue(connection.committed)
+        self.assertEqual("APPROVED", connection.updated_snapshot["institutionalApproval"]["status"])
+        self.assertEqual("ADMIN-1", connection.updated_snapshot["institutionalApproval"]["approvedByAdminId"])
+        self.assertEqual("COURSE_VERSION_INSTITUTIONALLY_APPROVED", audits[0][3])
+        self.assertEqual("APPROVED", result["draftEditor"]["institutionalApproval"]["status"])
+        self.assertFalse(result["alreadyApproved"])
+
+    def test_institutional_approval_requires_explicit_confirmation(self):
+        runtime = SimpleNamespace(
+            admin_context=lambda payload, roles: ({}, {"admin_id": "ADMIN-1", "role": "ADMIN"}),
+            as_bool=bool,
+            require_fields=lambda payload, fields: None,
+        )
+
+        with self.assertRaises(catalog.ApiError) as raised:
+            catalog.admin_approve_course_version_draft_action(
+                {
+                    "courseVersionId": "VERSION-2",
+                    "approvalNote": "Revisão concluída.",
+                    "confirmed": False,
+                },
+                runtime=runtime,
+            )
+
+        self.assertEqual("COURSE_VERSION_APPROVAL_CONFIRMATION_REQUIRED", raised.exception.code)
+
+    def test_repeated_institutional_approval_is_idempotent(self):
+        connection = _DraftConnection()
+        snapshot = valid_snapshot()
+        snapshot["institutionalApproval"] = {
+            "status": "APPROVED",
+            "approvedAt": "2026-09-28T11:00:00+00:00",
+            "approvedByAdminId": "ADMIN-1",
+            "approvedByRole": "ADMIN",
+            "note": "Revisão concluída.",
+        }
+        connection.version["content_snapshot_json"] = snapshot
+        connection.version["updated_at"] = datetime(2026, 9, 28, 11, 0, tzinfo=timezone.utc)
+        audits = []
+
+        @contextmanager
+        def connect():
+            yield connection
+
+        runtime = SimpleNamespace(
+            admin_context=lambda payload, roles: ({}, {"admin_id": "ADMIN-1", "role": "ADMIN"}),
+            as_bool=bool,
+            audit=lambda *args: audits.append(args),
+            connection=connect,
+            float_value=float,
+            iso=lambda value: value.isoformat() if value else None,
+            public_course_version=lambda row: row,
+            require_fields=lambda payload, fields: None,
+            success=lambda data: data,
+            utc_now=lambda: datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc),
+        )
+
+        result = catalog.admin_approve_course_version_draft_action(
+            {
+                "courseVersionId": "VERSION-2",
+                "approvalNote": "Repetição segura do pedido.",
+                "confirmed": True,
+                "expectedUpdatedAt": "2026-09-28T10:00:00+00:00",
+            },
+            runtime=runtime,
+        )
+
+        self.assertTrue(result["alreadyApproved"])
+        self.assertFalse(connection.committed)
+        self.assertEqual([], audits)
 
     def test_only_explicit_refresh_replaces_the_draft_snapshot(self):
         refresh_source = inspect.getsource(catalog.admin_refresh_course_version_draft_action)
@@ -515,6 +678,9 @@ class CourseAuthoringFrontendContractTests(unittest.TestCase):
         self.assertIn("RESTORE_CONTENT", admin_source)
         self.assertIn("Atualizar do editor", admin_source)
         self.assertIn("Corrija os bloqueios antes de publicar", admin_source)
+        self.assertIn("data-institutional-approval-form", admin_source)
+        self.assertIn("publicationReady", admin_source)
+        self.assertIn("adminApproveCourseVersionDraft", api_source)
 
 
 if __name__ == "__main__":

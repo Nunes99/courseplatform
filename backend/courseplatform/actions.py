@@ -3034,6 +3034,10 @@ def admin_edit_course_version_draft(payload: dict[str, Any]):
     return catalog_domain.admin_edit_course_version_draft_action(payload, runtime=_catalog_runtime())
 
 
+def admin_approve_course_version_draft(payload: dict[str, Any]):
+    return catalog_domain.admin_approve_course_version_draft_action(payload, runtime=_catalog_runtime())
+
+
 def admin_list_question_bank(payload: dict[str, Any]):
     return catalog_domain.admin_list_question_bank_action(payload, runtime=_catalog_runtime())
 

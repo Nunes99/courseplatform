@@ -937,6 +937,15 @@ export class CoursePlatformApi {
     return this.adminRequest('adminPreviewCourseVersion', { courseVersionId });
   }
 
+  adminApproveCourseVersionDraft(courseVersionId, approvalNote, confirmed, expectedUpdatedAt = '') {
+    return this.mutateAdmin('adminApproveCourseVersionDraft', {
+      courseVersionId,
+      approvalNote,
+      confirmed,
+      expectedUpdatedAt
+    });
+  }
+
   adminPublishCourseVersion(courseVersionId) {
     return this.mutateAdmin('adminPublishCourseVersion', { courseVersionId });
   }

@@ -9273,6 +9273,91 @@ body:has(.admin-layout) .button-secondary {
   border-top: 1px solid var(--line);
 }
 
+.course-version-approval {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-small);
+  background: var(--surface-soft);
+}
+
+.course-version-approval.is-approved {
+  border-left-color: var(--success);
+  background: color-mix(in srgb, var(--success) 6%, var(--surface));
+}
+
+.course-version-approval.is-invalidated {
+  border-left-color: var(--warning);
+}
+
+.course-version-approval-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.course-version-approval-heading h3,
+.course-version-approval-heading p {
+  margin: 0;
+}
+
+.course-version-approval-heading .eyebrow {
+  margin-bottom: 5px;
+}
+
+.course-version-approval-heading h3 + p {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.course-version-approval-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.course-version-approval-details div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.course-version-approval-details dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.course-version-approval-details dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.course-version-preview-approval {
+  display: grid;
+  gap: 4px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warning);
+  background: var(--surface-soft);
+}
+
+.course-version-preview-approval.is-approved {
+  border-left-color: var(--success);
+}
+
+.course-version-preview-approval span {
+  color: var(--muted);
+}
+
 .course-version-editor-lessons,
 .course-version-editor-content-list {
   display: grid;
@@ -9492,6 +9577,7 @@ body:has(.admin-layout) .button-secondary {
   }
 
   .course-version-editor-heading,
+  .course-version-approval-heading,
   .course-version-editor-inline-fields {
     align-items: stretch;
     flex-direction: column;
@@ -9512,6 +9598,10 @@ body:has(.admin-layout) .button-secondary {
 
   .course-version-editor-content summary small {
     display: none;
+  }
+
+  .course-version-approval-details {
+    grid-template-columns: 1fr;
   }
 }
 

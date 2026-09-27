@@ -25,6 +25,7 @@ ACTION_BINDINGS = (
     ("adminPublishQuestionBankVersion", "admin_publish_question_bank_version"),
     ("adminAttachQuestionBankVersion", "admin_attach_question_bank_version"),
     ("adminPreviewCourseVersion", "admin_preview_course_version"),
+    ("adminApproveCourseVersionDraft", "admin_approve_course_version_draft"),
     ("adminPublishCourseVersion", "admin_publish_course_version"),
     ("adminSaveMediaConfig", "admin_save_media_config"),
     ("adminSaveCourse", "admin_save_course"),
@@ -480,6 +481,8 @@ def course_version_preview(snapshot: dict[str, Any]) -> dict[str, Any]:
 def course_version_draft_editor(snapshot: dict[str, Any]) -> dict[str, Any]:
     course = snapshot.get("course") if isinstance(snapshot.get("course"), dict) else {}
     lessons = snapshot.get("lessons") if isinstance(snapshot.get("lessons"), list) else []
+    academic_review = snapshot.get("academicReview") if isinstance(snapshot.get("academicReview"), dict) else {}
+    approval = snapshot.get("institutionalApproval") if isinstance(snapshot.get("institutionalApproval"), dict) else {}
     return {
         "course": {
             "courseCode": course.get("course_code"),
@@ -487,6 +490,16 @@ def course_version_draft_editor(snapshot: dict[str, Any]) -> dict[str, Any]:
             "description": course.get("description"),
             "totalHours": course.get("total_hours"),
             "passingScore": course.get("passing_score"),
+        },
+        "publicationApprovalRequired": bool(academic_review.get("publicationApprovalRequired")),
+        "institutionalApproval": {
+            "status": approval.get("status") or "PENDING",
+            "approvedAt": approval.get("approvedAt"),
+            "approvedByAdminId": approval.get("approvedByAdminId"),
+            "approvedByRole": approval.get("approvedByRole"),
+            "note": approval.get("note") or "",
+            "invalidatedAt": approval.get("invalidatedAt"),
+            "invalidatedReason": approval.get("invalidatedReason"),
         },
         "lessons": [
             {
@@ -526,6 +539,40 @@ def course_version_draft_editor(snapshot: dict[str, Any]) -> dict[str, Any]:
             if isinstance(lesson, dict)
         ],
     }
+
+
+def invalidate_course_version_institutional_approval(
+    snapshot: dict[str, Any],
+    *,
+    invalidated_at: str,
+    invalidated_by_admin_id: str,
+    reason: str,
+) -> None:
+    approval = snapshot.get("institutionalApproval")
+    if not isinstance(approval, dict) or str(approval.get("status") or "").upper() != "APPROVED":
+        return
+    approval.update({
+        "status": "INVALIDATED",
+        "invalidatedAt": invalidated_at,
+        "invalidatedByAdminId": invalidated_by_admin_id,
+        "invalidatedReason": reason,
+    })
+
+
+def course_version_requires_institutional_approval(snapshot: dict[str, Any]) -> bool:
+    academic_review = snapshot.get("academicReview")
+    return bool(
+        isinstance(academic_review, dict)
+        and academic_review.get("publicationApprovalRequired")
+    )
+
+
+def course_version_is_institutionally_approved(snapshot: dict[str, Any]) -> bool:
+    approval = snapshot.get("institutionalApproval")
+    return bool(
+        isinstance(approval, dict)
+        and str(approval.get("status") or "").upper() == "APPROVED"
+    )
 
 
 def _draft_text(value: Any, field: str, *, required: bool = False, maximum: int = 10000) -> str:
@@ -951,6 +998,13 @@ def admin_attach_question_bank_version_action(payload: dict[str, Any], *, runtim
                 "is_correct": bool(option.get("is_correct")),
             } for option in options],
         })
+        if course_version_is_institutionally_approved(snapshot):
+            invalidate_course_version_institutional_approval(
+                snapshot,
+                invalidated_at=runtime.iso(runtime.utc_now()),
+                invalidated_by_admin_id=admin["admin_id"],
+                reason="QUESTION_ATTACHED",
+            )
         course_data = snapshot["course"]
         row = conn.execute(
             """update courseplatform.course_versions set title = %s, description = %s, total_hours = %s,
@@ -1367,7 +1421,18 @@ def admin_refresh_course_version_draft_action(payload: dict[str, Any], *, runtim
             raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
         if version.get("status") != "DRAFT":
             raise ApiError("COURSE_VERSION_NOT_DRAFT", "Apenas um rascunho pode ser atualizado pelo editor.")
+        previous_snapshot = stored_course_version_snapshot(version)
         snapshot = course_structure_snapshot_with_conn(conn, version["course_id"])
+        for key in ("editorialStatus", "academicReview", "institutionalApproval"):
+            if key in previous_snapshot:
+                snapshot[key] = copy.deepcopy(previous_snapshot[key])
+        if course_version_is_institutionally_approved(snapshot):
+            invalidate_course_version_institutional_approval(
+                snapshot,
+                invalidated_at=runtime.iso(runtime.utc_now()),
+                invalidated_by_admin_id=admin["admin_id"],
+                reason="DRAFT_REFRESHED",
+            )
         course_data = snapshot["course"]
         row = conn.execute(
             """
@@ -1434,6 +1499,13 @@ def admin_edit_course_version_draft_action(payload: dict[str, Any], *, runtime: 
             operation,
             changes,
         )
+        if course_version_is_institutionally_approved(snapshot):
+            invalidate_course_version_institutional_approval(
+                snapshot,
+                invalidated_at=runtime.iso(runtime.utc_now()),
+                invalidated_by_admin_id=admin["admin_id"],
+                reason="DRAFT_EDITED",
+            )
         course_data = snapshot["course"]
         row = conn.execute(
             """
@@ -1502,6 +1574,92 @@ def admin_preview_course_version_action(payload: dict[str, Any], *, runtime: Cat
     return success(response)
 
 
+def admin_approve_course_version_draft_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    _, admin = runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    runtime.require_fields(payload, ["courseVersionId", "approvalNote"])
+    if not runtime.as_bool(payload.get("confirmed")):
+        raise ApiError(
+            "COURSE_VERSION_APPROVAL_CONFIRMATION_REQUIRED",
+            "Confirme a revisão institucional antes de aprovar o rascunho.",
+        )
+    approval_note = _draft_text(
+        payload.get("approvalNote"),
+        "observação da aprovação",
+        required=True,
+        maximum=2000,
+    )
+    with runtime.connection() as conn:
+        version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s for update",
+            (payload["courseVersionId"],),
+        ).fetchone()
+        if not version:
+            raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
+        if version.get("status") != "DRAFT":
+            raise ApiError("COURSE_VERSION_NOT_DRAFT", "Apenas um rascunho pode receber aprovação institucional.")
+        snapshot = stored_course_version_snapshot(version)
+        already_approved = course_version_is_institutionally_approved(snapshot)
+        expected_updated_at = str(payload.get("expectedUpdatedAt") or "").strip()
+        current_updated_at = runtime.iso(version.get("updated_at")) or ""
+        if not already_approved and expected_updated_at and expected_updated_at != current_updated_at:
+            raise ApiError(
+                "COURSE_VERSION_CONFLICT",
+                "Este rascunho foi alterado por outra sessão. Atualize a página antes de continuar.",
+            )
+        validation = validate_course_version_snapshot(snapshot)
+        if not validation["valid"]:
+            raise ApiError(
+                "COURSE_VERSION_INVALID",
+                "Corrija os bloqueios académicos antes da aprovação institucional.",
+                validation,
+            )
+        if not already_approved:
+            snapshot["institutionalApproval"] = {
+                "status": "APPROVED",
+                "approvedAt": runtime.iso(runtime.utc_now()),
+                "approvedByAdminId": admin["admin_id"],
+                "approvedByRole": admin.get("role") or "ADMIN",
+                "note": approval_note,
+            }
+            course_data = snapshot["course"]
+            row = conn.execute(
+                """
+                update courseplatform.course_versions
+                set title = %s, description = %s, total_hours = %s, passing_score = %s,
+                    content_snapshot_json = %s, updated_at = now()
+                where course_version_id = %s and status = 'DRAFT'
+                returning *
+                """,
+                (
+                    course_data.get("title"),
+                    course_data.get("description"),
+                    runtime.float_value(course_data.get("total_hours")),
+                    runtime.float_value(course_data.get("passing_score"), 60),
+                    json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")),
+                    version["course_version_id"],
+                ),
+            ).fetchone()
+            runtime.audit(
+                conn,
+                "ADMIN",
+                admin["admin_id"],
+                "COURSE_VERSION_INSTITUTIONALLY_APPROVED",
+                "COURSE_VERSION",
+                row["course_version_id"],
+                {"courseId": row["course_id"], "versionNumber": row["version_number"]},
+            )
+            conn.commit()
+        else:
+            row = version
+    return runtime.success({
+        "courseVersion": runtime.public_course_version(row),
+        "validation": validation,
+        "preview": course_version_preview(snapshot),
+        "draftEditor": course_version_draft_editor(snapshot),
+        "alreadyApproved": already_approved,
+    })
+
+
 def admin_publish_course_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
     admin_context = runtime.admin_context
     audit = runtime.audit
@@ -1528,6 +1686,14 @@ def admin_publish_course_version_action(payload: dict[str, Any], *, runtime: Cat
                 "COURSE_VERSION_INVALID",
                 "A versão possui bloqueios que precisam de ser corrigidos antes da publicação.",
                 validation,
+            )
+        if (
+            course_version_requires_institutional_approval(snapshot)
+            and not course_version_is_institutionally_approved(snapshot)
+        ):
+            raise ApiError(
+                "COURSE_VERSION_APPROVAL_REQUIRED",
+                "A versão precisa de aprovação institucional antes da publicação.",
             )
         course_data = snapshot["course"]
         row = conn.execute(

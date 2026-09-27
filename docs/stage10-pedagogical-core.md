@@ -147,10 +147,44 @@ A migração é deliberadamente conservadora:
 - não cria ofertas nem altera matrículas, progresso, tentativas ou certificados;
 - mantém a versão do curso em `DRAFT`, marcada para revisão académica.
 
-Esta migração está preparada localmente e ainda não foi aplicada ao Supabase.
-Antes de publicação, um responsável académico deve rever factos, linguagem,
-fontes, adequação das rubricas e nível de dificuldade. A publicação e a associação
-a uma oferta devem ser decisões posteriores e separadas.
+Em 28 de setembro de 2026, o rascunho recebeu revisão factual e pedagógica com
+base em fontes institucionais do INP, MIREME e ENH. A revisão confirmou os marcos
+históricos, os papéis institucionais e os quatro pilares da Estratégia de
+Transição Energética, e atualizou a referência às Leis n.º 8/2026 e 9/2026.
+A aprovação institucional, a publicação e a associação a uma oferta continuam a
+ser decisões posteriores e separadas.
+
+Após autorização explícita, a migração foi aplicada ao projeto Supabase
+principal e registada no histórico remoto. A leitura posterior confirmou a
+versão 2 em `DRAFT`, dois módulos, oito unidades de conteúdo, dez questões no
+snapshot, dez versões publicadas no banco de questões e nenhuma oferta associada.
+O contrato usado pelo editor administrativo foi validado diretamente sobre o
+snapshot remoto: a validação de publicação não encontrou erros ou avisos e os
+dados de pré-visualização e edição foram produzidos corretamente. A confirmação
+visual no browser não foi automatizada porque o controlo de browser estava
+indisponível; não houve publicação do curso.
+
+## Aprovação institucional do rascunho
+
+O editor administrativo separa agora três decisões: revisão do rascunho,
+aprovação institucional e publicação. Para cursos cujo snapshot define
+`academicReview.publicationApprovalRequired`, apenas proprietários e
+administradores podem registar a aprovação institucional, mediante confirmação
+explícita e observação obrigatória. A operação bloqueia a linha do rascunho,
+verifica concorrência e valida novamente todo o snapshot antes de guardar a
+decisão e o respetivo evento de auditoria. A repetição do mesmo pedido depois de
+uma aprovação concluída é idempotente e não cria uma segunda decisão.
+
+Qualquer edição, atualização a partir do editor ou associação de uma nova versão
+de questão invalida automaticamente uma aprovação anterior. O backend recusa a
+publicação enquanto a aprovação exigida estiver pendente ou invalidada; ocultar
+o botão no frontend é apenas um reforço visual desse controlo. Cursos legados
+sem a marca de aprovação obrigatória mantêm o comportamento anterior.
+
+Esta alteração usa os metadados versionados de `content_snapshot_json` e não
+exige migração de esquema. A publicação da versão 2 e a associação a uma oferta
+ou turma permanecem ações posteriores, independentes e não executadas nesta
+etapa.
 
 ## Trabalho ainda pendente na Etapa 10
 
@@ -160,7 +194,8 @@ a uma oferta devem ser decisões posteriores e separadas.
   sem iniciar nem alterar uma tentativa histórica;
 - produzir conteúdos e questões para o segundo curso, agora com metadados
   reparados, antes de o considerar pedagogicamente publicável. O rascunho técnico
-  está preparado, mas ainda depende de revisão académica e aplicação autorizada.
+  está revisto e aplicado como rascunho, mas ainda depende de aprovação
+  institucional antes de qualquer publicação.
 
 ## Reversão
 
