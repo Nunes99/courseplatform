@@ -99,14 +99,68 @@ explícita, e registada em `supabase_migrations.schema_migrations`.
 
 A validação remota confirmou a versão `20260926120000`, as novas colunas, a
 tabela de exceções e os privilégios mínimos `SELECT`, `INSERT` e `UPDATE` da role
-`courseplatform_runtime`, sem privilégio `DELETE`. O deploy correspondente da
-aplicação e os testes com contas reais continuam pendentes.
+`courseplatform_runtime`, sem privilégio `DELETE`. Após o deploy, em 28 de
+setembro de 2026, os endpoints públicos de liveness e readiness responderam com
+HTTP 200. Uma sessão administrativa real confirmou o editor das políticas
+versionadas e o formulário de exceção individual no detalhe da submissão. Uma
+sessão real de estudante confirmou o dashboard, a lista de cursos, o bloqueio
+sequencial dos módulos, uma tentativa histórica aprovada e, numa aula ainda não
+iniciada, a apresentação do limite de tentativas e da duração.
+
+Em 28 de setembro de 2026, uma validação controlada com sessão administrativa
+real criou uma exceção individual temporária, confirmou no detalhe da submissão
+o limite de quatro tentativas, a duração de 45 minutos, a janela de 30 minutos e
+o motivo, e revogou-a em seguida. A leitura direta posterior confirmou estado
+`REVOKED`, zero exceções ativas e os eventos de auditoria de gravação e
+revogação. Nenhuma tentativa de estudante foi iniciada durante o teste.
+
+A migração de dados `20260928120000_repair_epg_course_metadata.sql` também foi
+aplicada ao projeto principal em 28 de setembro de 2026. Ela corrigiu o título do
+curso, a ordem e os títulos dos dois módulos importados, preservando IDs,
+matrículas, progressos, tentativas e a versão publicada. O estado anterior ficou
+guardado em `migration_reconciliation_issues` para rollback operacional. A
+interface do estudante confirmou os metadados corrigidos. A versão publicada
+continua sem conteúdos e questões; qualquer autoria posterior deve entrar numa
+nova versão.
+
+## Rascunho académico do curso EPG
+
+A migração de dados `20260928133000_seed_epg_v2_draft_content.sql` prepara a
+versão 2 do curso `COURSE-EPG-001`, sem alterar a versão 1 publicada. O rascunho
+contém dois módulos sequenciais, oito unidades de conteúdo e dez questões, com
+uma carga estimada total de 720 minutos. Cada avaliação vale 100 pontos, permite
+duas tentativas, tem 60 minutos de duração e só apresenta feedback depois da
+revisão.
+
+O conteúdo cobre cronologia do setor, cadeia de valor, instituições,
+infraestruturas de gás e GNL, regulação, valor nacional e transição energética.
+As fontes anexadas ao snapshot são páginas institucionais do INP e a Estratégia
+de Transição Energética publicada pelo MIREME. Questões discursivas incluem
+rubricas de referência e as questões objetivas têm versões imutáveis no banco de
+questões.
+
+A migração é deliberadamente conservadora:
+
+- recusa executar se existir outro rascunho para o curso;
+- recusa colisões de identificadores ou conteúdo divergente numa repetição;
+- cria as opções antes de publicar a versão da questão;
+- não cria ofertas nem altera matrículas, progresso, tentativas ou certificados;
+- mantém a versão do curso em `DRAFT`, marcada para revisão académica.
+
+Esta migração está preparada localmente e ainda não foi aplicada ao Supabase.
+Antes de publicação, um responsável académico deve rever factos, linguagem,
+fontes, adequação das rubricas e nível de dificuldade. A publicação e a associação
+a uma oferta devem ser decisões posteriores e separadas.
 
 ## Trabalho ainda pendente na Etapa 10
 
 - introduzir rubricas, pauta consolidada e histórico de alterações de notas;
 - formalizar regras de conclusão e calendário académico consolidado;
-- validar o fluxo completo em Preview com contas administrativas reais.
+- validar numa conta de estudante uma exceção individual ativa durante a janela,
+  sem iniciar nem alterar uma tentativa histórica;
+- produzir conteúdos e questões para o segundo curso, agora com metadados
+  reparados, antes de o considerar pedagogicamente publicável. O rascunho técnico
+  está preparado, mas ainda depende de revisão académica e aplicação autorizada.
 
 ## Reversão
 

@@ -44,12 +44,34 @@ emite um certificado numa transação e não altera o esquema.
 11. `20260925071234_add_versioned_question_bank.sql`: adiciona identidades reutilizáveis, versões imutáveis, opções, dificuldade e tags para o banco de questões.
 12. `20260925071409_add_question_bank_actor_indexes.sql`: adiciona índices de suporte às relações administrativas do banco de questões.
 13. `20260926120000_add_versioned_assessment_policies.sql`: versiona limites, janela, duração e randomização das avaliações e adiciona exceções individuais auditáveis.
+14. `20260928120000_repair_epg_course_metadata.sql`: reparação de dados do curso EPG importado sem títulos ou ordem; preserva IDs, matrículas, progressos e a versão publicada, guardando o estado anterior para rollback operacional.
+15. `20260928133000_seed_epg_v2_draft_content.sql`: cria a versão 2 em rascunho do curso EPG e dez versões imutáveis de questões, sem publicar o curso nem alterar registos académicos históricos.
 
 A migração `20260926120000` foi aplicada ao projeto Supabase principal em 27 de
 setembro de 2026 e registada no histórico remoto. A validação posterior confirmou
 o marcador da aplicação, a tabela e colunas novas e os privilégios mínimos da
 role runtime. O deploy da aplicação que exige esta versão deve ocorrer antes dos
 testes funcionais com contas reais.
+
+A migração de reparação `20260928120000` foi aplicada ao projeto Supabase
+principal em 28 de setembro de 2026 e registada em
+`supabase_migrations.schema_migrations`. A validação posterior confirmou o
+backup de reconciliação, os metadados corrigidos na interface do estudante e a
+preservação dos identificadores históricos. A migração é exclusivamente de
+dados e não altera a versão estrutural do esquema.
+
+A migração de dados `20260928133000` é repetível apenas quando os identificadores
+e o snapshot existente forem exatamente equivalentes; caso encontre outro
+rascunho ou uma colisão divergente, falha antes de substituir dados. Não atualiza
+o marcador estrutural de esquema, não publica o curso e não altera ofertas nem
+registos académicos históricos. Numa instalação onde `COURSE-EPG-001` não
+exista, termina sem alterações para não bloquear o baseline. Está preparada
+localmente e ainda não foi aplicada externamente.
+
+O rollback operacional é permitido apenas enquanto a versão 2 continuar em
+`DRAFT` e não tiver referências posteriores: remover primeiro a versão do curso
+e depois as opções, versões e itens `QB-EPG-001-*`. A versão 1 publicada nunca
+deve ser removida ou reescrita durante esse rollback.
 
 As migrações da Etapa 4 são aditivas e repetíveis. A migração histórica da role
 runtime é a exceção deliberada: uma segunda execução falha antes de alterar
