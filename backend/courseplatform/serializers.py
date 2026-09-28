@@ -79,6 +79,8 @@ def serialize_enrollment(row: dict[str, Any] | None, *, as_iso: IsoSerializer):
         "progressPercent": float(row.get("progress_percent") or 0),
         "finalScore": None if row.get("final_score") is None else float(row["final_score"]),
         "certificateId": row.get("certificate_id"),
+        "completionReason": row.get("completion_reason"),
+        "completionSnapshot": row.get("completion_snapshot_json") or {},
     }
 
 

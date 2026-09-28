@@ -81,6 +81,9 @@ class SubmissionDatabase:
         if q.startswith("select correction_deadline"):
             rows = [r for r in self.reviews if r["attempt_id"] == params[0]]
             return Result(rows[-1] if rows else None)
+        if q.startswith("select * from courseplatform.reviews"):
+            rows = [r for r in self.reviews if r["attempt_id"] == params[0]]
+            return Result(rows[-1] if rows else None)
         if q.startswith("select * from courseplatform.assessment_policy_exceptions"):
             return Result()
         if q.startswith("select title from"):
@@ -105,9 +108,13 @@ class SubmissionDatabase:
             return Result(file if file and file["student_id"] == params[1] else None)
         if q.startswith("insert into courseplatform.reviews"):
             row = dict(zip(("review_id", "attempt_id", "reviewer_id", "decision", "score", "comments",
-                            "correction_deadline", "unlock_next_lesson", "reviewed_at"), params))
+                            "correction_deadline", "unlock_next_lesson", "reviewed_at",
+                            "rubric_snapshot_json", "rubric_scores_json", "previous_score",
+                            "revision_number", "grade_reason"), params))
             self.reviews.append(row)
             return Result(row)
+        if q.startswith("insert into courseplatform.grade_change_log"):
+            return Result()
         if q.startswith("insert into courseplatform.attempts"):
             row = dict(zip(("attempt_id", "progress_id", "student_id", "lesson_id", "attempt_number", "started_at",
                             "deadline_at", "assessment_snapshot_json", "assessment_exception_id", "created_at", "updated_at"), params))

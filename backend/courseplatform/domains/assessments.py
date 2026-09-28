@@ -24,6 +24,7 @@ ACTION_BINDINGS = (
     ("adminAuthorizeRetry", "admin_authorize_retry"),
     ("adminSetAssessmentException", "admin_set_assessment_exception"),
     ("adminUpdateAttempt", "admin_update_attempt"),
+    ("adminListGradebook", "admin_list_gradebook"),
 )
 
 
@@ -116,6 +117,79 @@ def public_assessment_exception(row: dict[str, Any] | None, *, iso) -> dict[str,
         "revokedBy": row.get("revoked_by"),
         "revokedAt": iso(row.get("revoked_at")),
     }
+
+
+def normalize_rubric_definition(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ApiError("RUBRIC_INVALID", "A rubrica configurada não é válida.") from exc
+    source = value if isinstance(value, dict) else {}
+    raw_criteria = source.get("criteria") if isinstance(source.get("criteria"), list) else []
+    criteria: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_criteria, start=1):
+        if not isinstance(item, dict):
+            raise ApiError("RUBRIC_INVALID", "Os critérios da rubrica são inválidos.")
+        criterion_id = str(item.get("criterionId") or item.get("criterion_id") or f"criterion-{index}").strip()
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        try:
+            max_points = float(item.get("maxPoints", item.get("max_points", 0)) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ApiError("RUBRIC_INVALID", "A pontuação máxima da rubrica é inválida.") from exc
+        if not criterion_id or criterion_id in seen or not title or not 0 < max_points <= 10000:
+            raise ApiError("RUBRIC_INVALID", "Cada critério precisa de identificador, título e pontuação positiva.")
+        if len(criteria) >= 30:
+            raise ApiError("RUBRIC_INVALID", "A rubrica pode ter no máximo 30 critérios.")
+        seen.add(criterion_id)
+        criteria.append({
+            "criterionId": criterion_id,
+            "title": title[:240],
+            "description": description[:2000],
+            "maxPoints": max_points,
+        })
+    return {"criteria": criteria, "totalPoints": sum(item["maxPoints"] for item in criteria)}
+
+
+def score_rubric(rubric: dict[str, Any], value: Any) -> tuple[list[dict[str, Any]], float | None]:
+    criteria = rubric.get("criteria") or []
+    if not criteria:
+        return [], None
+    if not isinstance(value, list):
+        raise ApiError("RUBRIC_SCORES_REQUIRED", "Preencha todos os critérios da rubrica.")
+    submitted: dict[str, dict[str, Any]] = {}
+    expected_ids = {criterion["criterionId"] for criterion in criteria}
+    for item in value:
+        if not isinstance(item, dict):
+            raise ApiError("RUBRIC_SCORE_INVALID", "A pontuação de um critério é inválida.")
+        criterion_id = str(item.get("criterionId") or "").strip()
+        if criterion_id not in expected_ids or criterion_id in submitted:
+            raise ApiError("RUBRIC_SCORE_INVALID", "A pontuação contém um critério inválido ou repetido.")
+        submitted[criterion_id] = item
+    scores: list[dict[str, Any]] = []
+    awarded_total = 0.0
+    maximum_total = 0.0
+    for criterion in criteria:
+        entry = submitted.get(criterion["criterionId"])
+        if entry is None:
+            raise ApiError("RUBRIC_SCORES_REQUIRED", "Preencha todos os critérios da rubrica.")
+        try:
+            awarded = float(entry.get("awardedPoints"))
+        except (TypeError, ValueError) as exc:
+            raise ApiError("RUBRIC_SCORE_INVALID", "A pontuação de um critério é inválida.") from exc
+        maximum = float(criterion["maxPoints"])
+        if not 0 <= awarded <= maximum:
+            raise ApiError("RUBRIC_SCORE_INVALID", "A pontuação de cada critério deve respeitar o máximo configurado.")
+        scores.append({
+            "criterionId": criterion["criterionId"],
+            "awardedPoints": awarded,
+            "comments": str(entry.get("comments") or "").strip()[:2000],
+        })
+        awarded_total += awarded
+        maximum_total += maximum
+    return scores, round((awarded_total / maximum_total) * 100, 2) if maximum_total else None
 
 
 def attempt_status_action(payload: dict[str, Any], runtime: AssessmentRuntime):
@@ -788,6 +862,116 @@ def admin_list_submissions_action(payload: dict[str, Any], runtime: AssessmentRu
     })
 
 
+def admin_list_gradebook_action(payload: dict[str, Any], runtime: AssessmentRuntime):
+    admin = admin_from_context(runtime.admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    course_id = runtime.str_value(payload.get("courseId"))
+    offering_id = runtime.str_value(payload.get("offeringId"))
+    group_id = runtime.str_value(payload.get("groupId"))
+    query = runtime.str_value(payload.get("query")).lower()
+    status = runtime.str_value(payload.get("status") or "ALL").upper()
+    if status not in {"ALL", "ACTIVE", "COMPLETED", "BLOCKED", "INACTIVE", "CANCELLED"}:
+        raise ApiError("INVALID_ENROLLMENT_STATUS", "O estado da matrícula é inválido.")
+    limit = runtime.cursor_page_limit(payload, default_limit=50, max_limit=200)
+    scope = runtime.cursor_scope("admin-gradebook", course_id, offering_id, group_id, query, status)
+    cursor = runtime.decode_list_cursor(payload.get("cursor"), "admin-gradebook", scope)
+    cursor_sql = ""
+    cursor_params: list[Any] = []
+    if cursor:
+        cursor_at, cursor_id = cursor
+        cursor_sql = """
+          and (coalesce(e.updated_at, e.enrolled_at) < %s
+            or (coalesce(e.updated_at, e.enrolled_at) = %s and e.enrollment_id < %s))
+        """
+        cursor_params.extend((cursor_at, cursor_at, cursor_id))
+    scope_sql, scope_params = reviewer_scope_predicate(
+        admin,
+        course_expr="e.course_id",
+        offering_expr="e.offering_id",
+        group_expr="e.group_id",
+    )
+    rows = runtime.fetch_all(
+        f"""
+        select e.enrollment_id, e.student_id, e.course_id, e.course_version_id,
+               e.offering_id, e.group_id, e.status, e.enrolled_at, e.completed_at,
+               e.progress_percent, e.final_score, e.completion_reason,
+               e.completion_snapshot_json,
+               s.public_student_id, s.full_name, s.email,
+               c.course_code, c.title as course_title,
+               v.version_number, o.offering_code, o.name as offering_name,
+               g.group_code, g.name as group_name,
+               count(p.progress_id) as lesson_count,
+               count(p.progress_id) filter (where p.evaluation_status = 'APPROVED') as approved_count,
+               count(p.progress_id) filter (where p.evaluation_status in ('UNDER_REVIEW', 'IN_PROGRESS')) as pending_count,
+               coalesce(e.updated_at, e.enrolled_at) as pagination_sort_at
+        from courseplatform.enrollments e
+        join courseplatform.students s on s.student_id = e.student_id
+        join courseplatform.courses c on c.course_id = e.course_id
+        join courseplatform.course_versions v on v.course_version_id = e.course_version_id
+        join courseplatform.course_offerings o on o.offering_id = e.offering_id
+        left join courseplatform.groups g on g.group_id = e.group_id
+        left join courseplatform.lesson_progress p on p.enrollment_id = e.enrollment_id
+        where (%s = '' or e.course_id = %s)
+          and (%s = '' or e.offering_id = %s)
+          and (%s = '' or e.group_id = %s)
+          and (%s = 'ALL' or e.status = %s)
+          and (%s = '' or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
+              coalesce(s.public_student_id, '') || ' ' || coalesce(o.offering_code, '') || ' ' ||
+              coalesce(g.group_code, '')) like %s)
+          and ({scope_sql})
+          {cursor_sql}
+        group by e.enrollment_id, s.public_student_id, s.full_name, s.email,
+                 c.course_code, c.title, v.version_number, o.offering_code, o.name,
+                 g.group_code, g.name
+        order by coalesce(e.updated_at, e.enrolled_at) desc nulls last, e.enrollment_id desc
+        limit %s
+        """,
+        (
+            course_id, course_id, offering_id, offering_id, group_id, group_id,
+            status, status, query, f"%{query}%", *scope_params, *cursor_params, limit + 1,
+        ),
+    )
+    rows, pagination = runtime.cursor_pagination_result(
+        rows, limit, "admin-gradebook", scope, "pagination_sort_at", "enrollment_id"
+    )
+    return runtime.success({
+        "entries": [{
+            "enrollmentId": row.get("enrollment_id"),
+            "student": {
+                "studentId": row.get("student_id"),
+                "publicStudentId": row.get("public_student_id"),
+                "fullName": row.get("full_name"),
+                "email": row.get("email"),
+            },
+            "course": {
+                "courseId": row.get("course_id"),
+                "courseCode": row.get("course_code"),
+                "title": row.get("course_title"),
+                "versionNumber": int(row.get("version_number") or 0),
+            },
+            "offering": {
+                "offeringId": row.get("offering_id"),
+                "offeringCode": row.get("offering_code"),
+                "name": row.get("offering_name"),
+            },
+            "group": {
+                "groupId": row.get("group_id"),
+                "groupCode": row.get("group_code"),
+                "name": row.get("group_name"),
+            } if row.get("group_id") else None,
+            "status": row.get("status"),
+            "progressPercent": float(row.get("progress_percent") or 0),
+            "finalScore": None if row.get("final_score") is None else float(row["final_score"]),
+            "lessonCount": int(row.get("lesson_count") or 0),
+            "approvedCount": int(row.get("approved_count") or 0),
+            "pendingCount": int(row.get("pending_count") or 0),
+            "completedAt": runtime.iso(row.get("completed_at")),
+            "completionReason": row.get("completion_reason"),
+            "completionSnapshot": row.get("completion_snapshot_json") or {},
+        } for row in rows],
+        "pagination": pagination,
+    })
+
+
 def admin_get_submission_action(payload: dict[str, Any], runtime: AssessmentRuntime):
     admin_context = runtime.admin_context
     connection = runtime.connection
@@ -841,6 +1025,11 @@ def admin_get_submission_action(payload: dict[str, Any], runtime: AssessmentRunt
         (attempt["attempt_id"],),
     )
     reviews = fetch_all("select * from courseplatform.reviews where attempt_id = %s order by reviewed_at desc nulls last", (attempt["attempt_id"],))
+    grade_changes = fetch_all(
+        "select * from courseplatform.grade_change_log where attempt_id = %s order by created_at desc, grade_change_id desc",
+        (attempt["attempt_id"],),
+    )
+    rubric = normalize_rubric_definition(snapshot.get("rubric"))
     return success({
         "student": public_student(student or {"student_id": attempt["student_id"], "full_name": "Estudante sem cadastro", "email": "", "status": "UNKNOWN"}),
         "lesson": public_lesson(lesson or {"lesson_id": attempt["lesson_id"], "title": attempt["lesson_id"]}),
@@ -868,6 +1057,20 @@ def admin_get_submission_action(payload: dict[str, Any], runtime: AssessmentRunt
         ],
         "files": [public_file(row) for row in files],
         "reviews": [public_review(row) for row in reviews],
+        "rubric": rubric,
+        "gradeHistory": [{
+            "gradeChangeId": row.get("grade_change_id"),
+            "reviewId": row.get("review_id"),
+            "actorAdminId": row.get("actor_admin_id"),
+            "previousScore": None if row.get("previous_score") is None else float(row["previous_score"]),
+            "newScore": None if row.get("new_score") is None else float(row["new_score"]),
+            "previousDecision": row.get("previous_decision"),
+            "newDecision": row.get("new_decision"),
+            "reason": row.get("reason"),
+            "rubric": row.get("rubric_snapshot_json") or {"criteria": []},
+            "rubricScores": row.get("rubric_scores_json") or [],
+            "createdAt": runtime.iso(row.get("created_at")),
+        } for row in grade_changes],
         "assessmentPolicy": snapshot.get("assessmentPolicy") or {},
         "assessmentException": public_assessment_exception(exception, iso=runtime.iso),
     })
@@ -913,6 +1116,7 @@ def admin_review_submission_action(payload: dict[str, Any], runtime: AssessmentR
     score = None if payload.get("score") in (None, "") else float_value(payload.get("score"))
     if score is not None and not 0 <= score <= 100:
         raise ApiError("INVALID_SCORE", "A classificação deve estar entre 0 e 100.")
+    grade_reason = str_value(payload.get("gradeReason"))
     now = utc_now()
     attempt = fetch_one("select * from courseplatform.attempts where attempt_id = %s", (payload["attemptId"],))
     if not attempt:
@@ -923,12 +1127,35 @@ def admin_review_submission_action(payload: dict[str, Any], runtime: AssessmentR
         conn.execute("select progress_id from courseplatform.lesson_progress where progress_id = %s for update", (attempt["progress_id"],)).fetchone()
         attempt = conn.execute("select * from courseplatform.attempts where attempt_id = %s for update", (attempt["attempt_id"],)).fetchone()
         require_latest_attempt(conn, attempt)
+        snapshot = runtime.snapshot_for_attempt_with_conn(conn, attempt)
+        rubric = normalize_rubric_definition(snapshot.get("rubric"))
+        rubric_scores, rubric_score = score_rubric(rubric, payload.get("rubricScores"))
+        if rubric_score is not None:
+            if score is not None and abs(score - rubric_score) > 0.01:
+                raise ApiError("RUBRIC_SCORE_MISMATCH", "A classificação deve corresponder ao total calculado pela rubrica.")
+            score = rubric_score
+        previous_review = conn.execute(
+            "select * from courseplatform.reviews where attempt_id = %s order by reviewed_at desc nulls last, review_id desc limit 1 for update",
+            (attempt["attempt_id"],),
+        ).fetchone()
+        previous_score = previous_review.get("score") if previous_review else attempt.get("score")
+        previous_decision = previous_review.get("decision") if previous_review else None
+        grade_changed = previous_review and (
+            previous_decision != decision
+            or (None if previous_score is None else float(previous_score)) != score
+        )
+        if grade_changed and len(grade_reason) < 3:
+            raise ApiError("GRADE_CHANGE_REASON_REQUIRED", "Indique o motivo da alteração da decisão ou classificação.")
+        revision_number = int((previous_review or {}).get("revision_number") or 0) + 1
+        history_reason = grade_reason or str_value(payload.get("comments")) or "Avaliação inicial."
         review = conn.execute(
             """
             insert into courseplatform.reviews
               (review_id, attempt_id, reviewer_id, decision, score, comments,
-               correction_deadline, unlock_next_lesson, reviewed_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               correction_deadline, unlock_next_lesson, reviewed_at,
+               rubric_snapshot_json, rubric_scores_json, previous_score,
+               revision_number, grade_reason)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             returning *
             """,
             (
@@ -941,8 +1168,32 @@ def admin_review_submission_action(payload: dict[str, Any], runtime: AssessmentR
                 deadline,
                 status == "APPROVED",
                 now,
+                json.dumps(rubric, ensure_ascii=True, separators=(",", ":")),
+                json.dumps(rubric_scores, ensure_ascii=True, separators=(",", ":")),
+                previous_score,
+                revision_number,
+                grade_reason or None,
             ),
         ).fetchone()
+        conn.execute(
+            """
+            insert into courseplatform.grade_change_log
+              (grade_change_id, attempt_id, progress_id, enrollment_id, review_id,
+               actor_admin_id, previous_score, new_score, previous_decision,
+               new_decision, reason, rubric_snapshot_json, rubric_scores_json, created_at)
+            values (%s, %s, %s,
+                    (select progress.enrollment_id from courseplatform.lesson_progress progress where progress.progress_id = %s),
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                generate_id("GCH"), attempt["attempt_id"], attempt.get("progress_id"),
+                attempt.get("progress_id"), review["review_id"], admin["admin_id"], previous_score, score,
+                previous_decision, decision, history_reason,
+                json.dumps(rubric, ensure_ascii=True, separators=(",", ":")),
+                json.dumps(rubric_scores, ensure_ascii=True, separators=(",", ":")),
+                now,
+            ),
+        )
         updated = conn.execute(
             """
             update courseplatform.attempts
@@ -997,7 +1248,9 @@ def admin_review_submission_action(payload: dict[str, Any], runtime: AssessmentR
         if notification_id:
             notification_ids.append(notification_id)
         audit(conn, "ADMIN", admin["admin_id"], "SUBMISSION_REVIEWED", "ATTEMPT", attempt["attempt_id"], {
-            "decision": decision, "score": score, "retryAuthorized": authorize_retry, "correctionDeadline": iso(deadline),
+            "decision": decision, "score": score, "retryAuthorized": authorize_retry,
+            "correctionDeadline": iso(deadline), "revisionNumber": revision_number,
+            "gradeReason": grade_reason, "rubricApplied": bool(rubric.get("criteria")),
         })
         conn.commit()
     dispatch_notification_deliveries(notification_ids)

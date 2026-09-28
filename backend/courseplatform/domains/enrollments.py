@@ -15,7 +15,49 @@ ACTION_BINDINGS = (
     ("adminListGroups", "admin_list_groups"),
     ("adminSaveGroup", "admin_save_group"),
     ("adminAssignStudentsToGroup", "admin_assign_students_to_group"),
+    ("adminListAcademicCalendar", "admin_list_academic_calendar"),
+    ("adminSaveAcademicCalendar", "admin_save_academic_calendar"),
 )
+
+
+CALENDAR_EVENT_TYPES = {"CLASS", "ASSESSMENT", "DEADLINE", "SESSION", "OTHER"}
+
+
+def normalize_academic_calendar(value: Any, *, parse_datetime, iso, generate_id) -> list[dict[str, Any]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list) or len(value) > 200:
+        raise ApiError("ACADEMIC_CALENDAR_INVALID", "O calendário académico é inválido.")
+    events = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise ApiError("ACADEMIC_CALENDAR_INVALID", "Os eventos do calendário são inválidos.")
+        event_id = str(item.get("eventId") or generate_id("CAL")).strip()
+        title = str(item.get("title") or "").strip()
+        event_type = str(item.get("eventType") or "OTHER").strip().upper()
+        start_at = parse_datetime(item.get("startAt"))
+        end_at = parse_datetime(item.get("endAt")) if item.get("endAt") else None
+        if not event_id or event_id in seen or not title or len(title) > 240 or event_type not in CALENDAR_EVENT_TYPES or not start_at:
+            raise ApiError("ACADEMIC_CALENDAR_INVALID", "Cada evento precisa de título, tipo e data inicial válidos.")
+        if end_at and end_at < start_at:
+            raise ApiError("ACADEMIC_CALENDAR_INVALID", "O fim do evento não pode ser anterior ao início.")
+        seen.add(event_id)
+        try:
+            notify_before = int(item.get("notifyBeforeMinutes") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ApiError("ACADEMIC_CALENDAR_INVALID", "O aviso prévio do evento é inválido.") from exc
+        events.append({
+            "eventId": event_id,
+            "eventType": event_type,
+            "title": title,
+            "description": str(item.get("description") or "").strip()[:2000],
+            "startAt": iso(start_at),
+            "endAt": iso(end_at) if end_at else None,
+            "lessonId": str(item.get("lessonId") or "").strip() or None,
+            "notifyBeforeMinutes": max(0, min(notify_before, 43200)),
+        })
+    return sorted(events, key=lambda item: (item["startAt"] or "", item["eventId"]))
 
 
 @dataclass(frozen=True)
@@ -444,8 +486,20 @@ def admin_save_course_offering_action(payload: dict[str, Any], *, runtime: Enrol
         raise ApiError("INVALID_OFFERING_CAPACITY", "A capacidade deve ser superior a zero.")
     offering_id = str_value(payload.get("offeringId")) or generate_id("COFF")
     rules = payload.get("rules") if isinstance(payload.get("rules"), dict) else {}
-    calendar = payload.get("calendar") if isinstance(payload.get("calendar"), list) else []
     with connection() as conn:
+        existing = conn.execute(
+            "select calendar_json from courseplatform.course_offerings where offering_id = %s",
+            (offering_id,),
+        ).fetchone()
+        if isinstance(payload.get("calendar"), list):
+            calendar = normalize_academic_calendar(
+                payload.get("calendar"),
+                parse_datetime=parse_datetime,
+                iso=iso,
+                generate_id=generate_id,
+            )
+        else:
+            calendar = (existing or {}).get("calendar_json") or []
         version = conn.execute(
             """
             select * from courseplatform.course_versions
@@ -496,6 +550,87 @@ def admin_save_course_offering_action(payload: dict[str, Any], *, runtime: Enrol
         )
         conn.commit()
     return success({"offering": public_course_offering(row)})
+
+
+def admin_list_academic_calendar_action(payload: dict[str, Any], *, runtime: EnrollmentRuntime):
+    admin = admin_from_context(runtime.admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    course_id = runtime.str_value(payload.get("courseId"))
+    offering_id = runtime.str_value(payload.get("offeringId"))
+    scope_sql, scope_params = reviewer_scope_predicate(
+        admin,
+        course_expr="o.course_id",
+        offering_expr="o.offering_id",
+        group_expr="g.group_id",
+    )
+    rows = runtime.fetch_all(
+        f"""
+        select distinct o.*, c.course_code, c.title as course_title, v.version_number
+        from courseplatform.course_offerings o
+        join courseplatform.courses c on c.course_id = o.course_id
+        join courseplatform.course_versions v on v.course_version_id = o.course_version_id
+        left join courseplatform.groups g on g.offering_id = o.offering_id
+        where (%s = '' or o.course_id = %s)
+          and (%s = '' or o.offering_id = %s)
+          and ({scope_sql})
+        order by o.start_date desc nulls last, o.offering_id
+        """,
+        (course_id, course_id, offering_id, offering_id, *scope_params),
+    )
+    events = []
+    for row in rows:
+        calendar = row.get("calendar_json") if isinstance(row.get("calendar_json"), list) else []
+        for event in calendar:
+            if not isinstance(event, dict):
+                continue
+            events.append({
+                **event,
+                "courseId": row.get("course_id"),
+                "courseCode": row.get("course_code"),
+                "courseTitle": row.get("course_title"),
+                "courseVersionId": row.get("course_version_id"),
+                "versionNumber": int(row.get("version_number") or 0),
+                "offeringId": row.get("offering_id"),
+                "offeringCode": row.get("offering_code"),
+                "offeringName": row.get("name"),
+            })
+    events.sort(key=lambda item: (item.get("startAt") or "", item.get("eventId") or ""))
+    return runtime.success({
+        "offerings": [runtime.public_course_offering(row) for row in rows],
+        "events": events,
+    })
+
+
+def admin_save_academic_calendar_action(payload: dict[str, Any], *, runtime: EnrollmentRuntime):
+    _, admin = runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    runtime.require_fields(payload, ["offeringId", "events"])
+    with runtime.connection() as conn:
+        offering = conn.execute(
+            "select * from courseplatform.course_offerings where offering_id = %s for update",
+            (payload["offeringId"],),
+        ).fetchone()
+        if not offering:
+            raise ApiError("OFFERING_NOT_FOUND", "Edição/turma não encontrada.")
+        events = normalize_academic_calendar(
+            payload.get("events"),
+            parse_datetime=runtime.parse_datetime,
+            iso=runtime.iso,
+            generate_id=runtime.generate_id,
+        )
+        row = conn.execute(
+            """
+            update courseplatform.course_offerings
+            set calendar_json = %s, updated_at = now()
+            where offering_id = %s
+            returning *
+            """,
+            (json.dumps(events, ensure_ascii=True, separators=(",", ":")), offering["offering_id"]),
+        ).fetchone()
+        runtime.audit(
+            conn, "ADMIN", admin["admin_id"], "ACADEMIC_CALENDAR_SAVED",
+            "COURSE_OFFERING", offering["offering_id"], {"eventCount": len(events)},
+        )
+        conn.commit()
+    return runtime.success({"offering": runtime.public_course_offering(row), "events": events})
 
 
 def admin_enroll_students_in_offering_action(payload: dict[str, Any], *, runtime: EnrollmentRuntime):

@@ -1360,6 +1360,7 @@ function normalizeStudentDashboard(home = {}) {
   ) || {};
   const course = dashboard.course || currentCourse.course || {};
   const enrollment = dashboard.enrollment || currentCourse.enrollment || {};
+  const offering = dashboard.offering || currentCourse.offering || {};
   const student = dashboard.student || home.student || {};
   const lessons = Array.isArray(dashboard.lessons) ? dashboard.lessons : [];
   const totalHours = Number(course.totalHours || course.workloadHours || 0);
@@ -1379,6 +1380,10 @@ function normalizeStudentDashboard(home = {}) {
       ...enrollment,
       status: enrollment.status || 'ACTIVE',
       progressPercent
+    },
+    offering: {
+      ...offering,
+      calendar: Array.isArray(offering.calendar) ? offering.calendar : []
     },
     lessons: lessons.map((item) => {
       const progress = item.progress || { status: 'LOCKED' };
@@ -1416,6 +1421,16 @@ function moduleEvaluationStatus(progress = {}, attempt = null) {
   if (supported.includes(progress.evaluationStatus)) return progress.evaluationStatus;
   if (supported.includes(attempt?.status)) return attempt.status;
   return supported.includes(progress.status) ? progress.status : 'NOT_STARTED';
+}
+
+function calendarEventTypeStudentLabel(value) {
+  return ({
+    CLASS: 'Aula agendada',
+    ASSESSMENT: 'Avaliação agendada',
+    DEADLINE: 'Prazo académico',
+    SESSION: 'Sessão agendada',
+    OTHER: 'Evento académico'
+  })[String(value || '').toUpperCase()] || 'Evento académico';
 }
 
 function moduleStatusPairTemplate(progress = {}, attempt = null) {
@@ -1492,7 +1507,15 @@ async function renderDashboard(view = 'overview') {
   const selectedCourseEntry = state.myCourses.find(
     (item) => item.enrollment?.enrollmentId === state.selectedEnrollmentId
   );
-  const nextDeadlineValue = nextLessonItem?.activeAttempt?.deadlineAt || selectedCourseEntry?.group?.endDate || '';
+  const upcomingCalendarEvents = dashboard.offering.calendar
+    .filter((item) => item && item.startAt && new Date(item.startAt).getTime() >= Date.now())
+    .sort((left, right) => new Date(left.startAt).getTime() - new Date(right.startAt).getTime());
+  const nextCalendarDeadline = upcomingCalendarEvents.find((item) => ['ASSESSMENT', 'DEADLINE'].includes(item.eventType));
+  const nextDeadlineValue = nextLessonItem?.activeAttempt?.deadlineAt
+    || nextCalendarDeadline?.startAt
+    || selectedCourseEntry?.group?.endDate
+    || dashboard.offering.endDate
+    || '';
   const nextDeadlineLabel = nextDeadlineValue ? formatDate(nextDeadlineValue) : 'Sem prazo definido';
 
   const certificateButton = dashboard.enrollment.status === 'COMPLETED'
@@ -1657,7 +1680,7 @@ async function renderDashboard(view = 'overview') {
       <div class="information-grid">
         <div><strong>1.</strong><span>Consulte os materiais da aula.</span></div>
         <div><strong>2.</strong><span>Inicie a atividade prática.</span></div>
-        <div><strong>3.</strong><span>Responda e carregue evidencias.</span></div>
+        <div><strong>3.</strong><span>Responda e carregue evidências.</span></div>
         <div><strong>4.</strong><span>Acompanhe a avaliação.</span></div>
       </div>
     </section>
@@ -1698,7 +1721,7 @@ async function renderDashboard(view = 'overview') {
         <img src="${iconUrl('play-circle', goldIcon)}" alt="">
         <div>
           <span>Próxima aula</span>
-          <strong>${escapeHtml(nextLessonItem?.lesson?.title || 'Percurso concluido')}</strong>
+          <strong>${escapeHtml(nextLessonItem?.lesson?.title || 'Percurso concluído')}</strong>
         </div>
       </article>
       <article class="insight-card priority-card">
@@ -1717,6 +1740,25 @@ async function renderDashboard(view = 'overview') {
         </div>
       </article>
     </section>
+    <section class="student-calendar-panel" aria-label="Próximos eventos académicos">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Calendário académico</p>
+          <h2>Próximos eventos</h2>
+        </div>
+      </div>
+      <div class="student-calendar-list">
+        ${upcomingCalendarEvents.length ? upcomingCalendarEvents.slice(0, 4).map((event) => `
+          <article class="student-calendar-event">
+            <time datetime="${escapeHtml(event.startAt)}">${escapeHtml(formatDate(event.startAt))}</time>
+            <div>
+              <strong>${escapeHtml(event.title || 'Evento académico')}</strong>
+              <span>${escapeHtml(event.description || calendarEventTypeStudentLabel(event.eventType))}</span>
+            </div>
+          </article>
+        `).join('') : '<div class="video-empty">Não existem eventos futuros agendados para esta edição.</div>'}
+      </div>
+    </section>
     <section class="video-panel" aria-label="Galeria de vídeos">
       <div class="video-panel-copy">
         <p class="eyebrow">Galeria</p>
@@ -1732,7 +1774,7 @@ async function renderDashboard(view = 'overview') {
       <div class="information-grid">
         <div><strong>1.</strong><span>Consulte os materiais da aula.</span></div>
         <div><strong>2.</strong><span>Inicie a atividade prática.</span></div>
-        <div><strong>3.</strong><span>Responda e carregue evidencias.</span></div>
+        <div><strong>3.</strong><span>Responda e carregue evidências.</span></div>
         <div><strong>4.</strong><span>Acompanhe a avaliação.</span></div>
       </div>
     </section>

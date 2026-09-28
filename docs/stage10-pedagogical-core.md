@@ -2,10 +2,17 @@
 
 ## Estado
 
-Etapa em desenvolvimento. Estão implementados a barreira de qualidade da
-autoria, o banco de questões versionado e as regras versionadas das avaliações.
-Não estão concluídos rubricas, pauta, calendário académico ou regras avançadas
-de conclusão.
+Implementação técnica concluída localmente em 28 de setembro de 2026. A etapa
+inclui a barreira de qualidade da autoria, banco de questões, regras e exceções
+versionadas das avaliações, rubricas congeladas, histórico imutável de notas,
+pauta consolidada, calendário académico e regras de conclusão por versão.
+
+A migração final foi aplicada ao projeto Supabase principal em 28 de setembro
+de 2026, após autorização explícita, e registada no histórico remoto. A leitura
+posterior confirmou o marcador `20260928190000`, as novas colunas, a tabela
+privada de histórico de notas, RLS ativo e os privilégios mínimos da role de
+runtime. O deploy compatível e a validação funcional com contas reais continuam
+atividades de release, não lacunas de implementação desta etapa.
 
 ## Pré-publicação
 
@@ -186,21 +193,62 @@ exige migração de esquema. A publicação da versão 2 e a associação a uma 
 ou turma permanecem ações posteriores, independentes e não executadas nesta
 etapa.
 
-## Trabalho ainda pendente na Etapa 10
+## Rubricas e histórico de notas
 
-- introduzir rubricas, pauta consolidada e histórico de alterações de notas;
-- formalizar regras de conclusão e calendário académico consolidado;
-- validar numa conta de estudante uma exceção individual ativa durante a janela,
-  sem iniciar nem alterar uma tentativa histórica;
-- produzir conteúdos e questões para o segundo curso, agora com metadados
-  reparados, antes de o considerar pedagogicamente publicável. O rascunho técnico
-  está revisto e aplicado como rascunho, mas ainda depende de aprovação
-  institucional antes de qualquer publicação.
+Cada módulo pode definir até 30 critérios, com identificador, título, descrição
+e pontuação máxima. A rubrica entra no snapshot imutável da tentativa. A revisão
+exige todos os critérios, calcula a nota normalizada no backend e rejeita
+critérios ausentes, desconhecidos, repetidos ou fora do limite. O valor enviado
+pelo frontend não pode divergir do total calculado.
+
+Cada revisão cria uma nova revisão e um registo imutável em
+`courseplatform.grade_change_log`. Alterar uma decisão ou nota já registada exige
+motivo. O detalhe da submissão apresenta a rubrica congelada e o histórico sem
+reescrever avaliações anteriores.
+
+## Pauta e conclusão
+
+A pauta administrativa consolida estudante, curso, versão, edição/turma, grupo,
+progresso, nota final e estado de conclusão. Usa paginação por cursor e aplica o
+âmbito do revisor no backend antes de devolver os registos. A exportação CSV usa
+somente a página já autorizada pela API.
+
+O progresso é recalculado com o snapshot da versão associada à matrícula, nunca
+com a estrutura viva do editor. A política versionada define os módulos
+obrigatórios, a nota mínima e se todos precisam de aprovação. A matrícula guarda
+o snapshot e o motivo da decisão de conclusão. Estados `BLOCKED`, `INACTIVE` e
+`CANCELLED` não são reativados pelo recálculo.
+
+## Calendário académico
+
+O calendário pertence à edição/turma e guarda eventos normalizados com tipo,
+início, fim, descrição e antecedência de aviso. Revisores podem ler apenas
+calendários dentro do respetivo âmbito; apenas `ADMIN` e `OWNER` podem alterar.
+Toda gravação bloqueia a edição, substitui o calendário numa transação e gera
+auditoria. O painel do estudante mostra os próximos eventos da edição da própria
+matrícula e usa avaliações/prazos futuros no resumo do próximo prazo.
+
+`notifyBeforeMinutes` preserva a regra de antecedência necessária para avisos. O
+disparo multicanal no instante calculado não ocorre dentro do pedido HTTP: será
+consumido pelo worker durável da Etapa 13. Esta separação evita temporizadores
+efémeros em funções Vercel e duplicação de notificações.
+
+## Validação de release ainda necessária
+
+- fazer o deploy da aplicação compatível com o marcador `20260928190000`;
+- validar pauta, calendário e revisão por rubrica com contas reais de cada papel;
+- confirmar desktop/mobile, consola, teclado e estados vazio/erro/carregamento;
+- confirmar o backup e o plano de reversão operacional antes dos testes que
+  alterem notas ou estados de conclusão.
+
+A produção de conteúdos de outros cursos, a aprovação institucional e a
+associação de versões a novas ofertas continuam decisões académicas do produto;
+não fazem parte da infraestrutura concluída nesta etapa.
 
 ## Reversão
 
-Antes de aplicar as migrações, reverter a aplicação remove os novos controlos sem
-impacto nos dados. Depois de aplicadas, reverta primeiro a aplicação e mantenha as
-tabelas e colunas aditivas. A remoção física do banco de questões, das políticas
-ou das exceções exige uma migração posterior, confirmação de ausência de leitores
-e backup validado.
+Antes de aplicar a migração final, reverter a aplicação remove os novos controlos
+sem impacto nos dados. Depois de aplicada, reverta primeiro a aplicação para uma
+versão compatível e mantenha as tabelas e colunas aditivas. A remoção física do
+banco de questões, das políticas, exceções ou histórico de notas exige uma
+migração posterior, confirmação de ausência de leitores e backup validado.

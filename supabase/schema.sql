@@ -127,6 +127,7 @@ create table if not exists courseplatform.lessons (
     check (feedback_release_mode in ('NEVER', 'AFTER_SUBMISSION', 'AFTER_REVIEW')),
   show_correct_answers boolean not null default false,
   show_explanations boolean not null default false,
+  rubric_json jsonb not null default '{"criteria":[]}'::jsonb,
   prerequisite_lesson_id text,
   status text default 'ACTIVE',
   created_at timestamptz,
@@ -195,6 +196,8 @@ create table if not exists courseplatform.enrollments (
   progress_percent numeric default 0,
   final_score numeric,
   certificate_id text,
+  completion_snapshot_json jsonb not null default '{}'::jsonb,
+  completion_reason text,
   updated_at timestamptz,
   unique(student_id, course_id)
 );
@@ -411,9 +414,33 @@ create table if not exists courseplatform.reviews (
   decision text not null,
   score numeric,
   comments text,
+  rubric_snapshot_json jsonb not null default '{"criteria":[]}'::jsonb,
+  rubric_scores_json jsonb not null default '[]'::jsonb,
+  previous_score numeric,
+  revision_number integer not null default 1,
+  grade_reason text,
   correction_deadline timestamptz,
   unlock_next_lesson boolean,
   reviewed_at timestamptz
+);
+
+create table if not exists courseplatform.grade_change_log (
+  grade_change_id text primary key,
+  attempt_id text not null references courseplatform.attempts(attempt_id) on delete restrict,
+  progress_id text references courseplatform.lesson_progress(progress_id) on delete set null,
+  enrollment_id text references courseplatform.enrollments(enrollment_id) on delete set null,
+  review_id text not null references courseplatform.reviews(review_id) on delete restrict,
+  actor_admin_id text references courseplatform.admins(admin_id) on delete set null,
+  previous_score numeric,
+  new_score numeric,
+  previous_decision text,
+  new_decision text not null,
+  reason text not null,
+  rubric_snapshot_json jsonb not null default '{"criteria":[]}'::jsonb,
+  rubric_scores_json jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  check ((previous_score is null or previous_score between 0 and 100) and (new_score is null or new_score between 0 and 100)),
+  check (length(btrim(reason)) between 3 and 2000)
 );
 
 create table if not exists courseplatform.notifications (
@@ -697,7 +724,7 @@ create table if not exists courseplatform.schema_versions (
 );
 
 insert into courseplatform.schema_versions (component, version, applied_at)
-values ('application', 20260926120000, now())
+values ('application', 20260928190000, now())
 on conflict (component) do update
 set version = excluded.version,
     applied_at = excluded.applied_at
@@ -717,6 +744,8 @@ create index if not exists idx_progress_student_lesson on courseplatform.lesson_
 create index if not exists idx_progress_access_evaluation on courseplatform.lesson_progress(content_access_status, evaluation_status);
 create index if not exists idx_attempts_student_lesson on courseplatform.attempts(student_id, lesson_id);
 create index if not exists idx_attempts_status_dates on courseplatform.attempts(status, submitted_at, reviewed_at);
+create index if not exists idx_grade_change_log_attempt_created on courseplatform.grade_change_log(attempt_id, created_at desc, grade_change_id desc);
+create index if not exists idx_grade_change_log_enrollment_created on courseplatform.grade_change_log(enrollment_id, created_at desc, grade_change_id desc);
 create unique index if not exists uq_assessment_policy_exception_active
   on courseplatform.assessment_policy_exceptions(enrollment_id, lesson_id) where status = 'ACTIVE';
 create index if not exists idx_assessment_policy_exception_lookup
@@ -774,6 +803,7 @@ alter table courseplatform.assessment_policy_exceptions enable row level securit
 alter table courseplatform.answers enable row level security;
 alter table courseplatform.files enable row level security;
 alter table courseplatform.reviews enable row level security;
+alter table courseplatform.grade_change_log enable row level security;
 alter table courseplatform.notifications enable row level security;
 alter table courseplatform.notification_deliveries enable row level security;
 alter table courseplatform.notification_channel_settings enable row level security;

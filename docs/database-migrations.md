@@ -6,7 +6,7 @@
 executa `supabase/schema.sql`, `supabase/chat_realtime.sql` ou
 `backend/courseplatform/schema.sql` durante pedidos.
 
-A versão exigida pelo backend é `20260926120000`. A última migração grava esse
+A versão exigida pelo backend é `20260928190000`. A última migração estrutural grava esse
 valor em `courseplatform.schema_versions`. Uma ausência ou diferença produz
 `DATABASE_MIGRATION_REQUIRED`; a aplicação não tenta corrigir a base.
 
@@ -46,6 +46,7 @@ emite um certificado numa transação e não altera o esquema.
 13. `20260926120000_add_versioned_assessment_policies.sql`: versiona limites, janela, duração e randomização das avaliações e adiciona exceções individuais auditáveis.
 14. `20260928120000_repair_epg_course_metadata.sql`: reparação de dados do curso EPG importado sem títulos ou ordem; preserva IDs, matrículas, progressos e a versão publicada, guardando o estado anterior para rollback operacional.
 15. `20260928133000_seed_epg_v2_draft_content.sql`: cria a versão 2 em rascunho do curso EPG e dez versões imutáveis de questões, sem publicar o curso nem alterar registos académicos históricos.
+16. `20260928190000_complete_stage10_pedagogical_core.sql`: adiciona rubricas, histórico imutável de notas e snapshots de conclusão por matrícula.
 
 A migração `20260926120000` foi aplicada ao projeto Supabase principal em 27 de
 setembro de 2026 e registada no histórico remoto. A validação posterior confirmou
@@ -76,13 +77,23 @@ O rollback operacional é permitido apenas enquanto a versão 2 continuar em
 e depois as opções, versões e itens `QB-EPG-001-*`. A versão 1 publicada nunca
 deve ser removida ou reescrita durante esse rollback.
 
+A migração `20260928190000` é expansiva e repetível: adiciona colunas com valores
+padrão compatíveis e cria o histórico privado de alterações de notas sem
+reescrever revisões, tentativas, progressos ou matrículas existentes. Revoga
+acesso de `public`, `anon` e `authenticated`; `courseplatform_runtime` recebe
+somente `SELECT` e `INSERT`. Foi aplicada ao projeto Supabase principal em 28 de
+setembro de 2026 e registada em `supabase_migrations.schema_migrations`. A
+validação posterior confirmou o marcador `20260928190000`, as colunas novas,
+RLS ativo e a ausência de privilégios para `anon` e `authenticated`.
+
 As migrações da Etapa 4 são aditivas e repetíveis. A migração histórica da role
 runtime é a exceção deliberada: uma segunda execução falha antes de alterar
 qualquer privilégio e exige inspeção manual. O teste confirma esse bloqueio,
 repete as restantes migrações e verifica que um registo sentinela permanece.
 Futuras migrações devem declarar o próprio comportamento e rollback operacional.
-A migração das políticas de avaliação é expansiva e repetível: mantém tentativas
-e módulos existentes, usa padrões compatíveis e atualiza o marcador de versão.
+As migrações das políticas e do fecho pedagógico são expansivas e repetíveis:
+mantêm tentativas e módulos existentes, usam padrões compatíveis e atualizam o
+marcador de versão quando alteram o contrato estrutural exigido pela aplicação.
 
 ## Teste local descartável
 

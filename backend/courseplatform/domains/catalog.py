@@ -318,6 +318,13 @@ def validate_course_version_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]
         passing_score = -1
     if not 0 <= passing_score <= 100:
         add_issue("ERROR", "COURSE_PASSING_SCORE_INVALID", "A nota mínima do curso deve estar entre 0 e 100.")
+    completion_policy = snapshot.get("completionPolicy") if isinstance(snapshot.get("completionPolicy"), dict) else {}
+    try:
+        completion_minimum = float(completion_policy.get("minimumScore", passing_score))
+    except (TypeError, ValueError):
+        completion_minimum = -1
+    if not 0 <= completion_minimum <= 100:
+        add_issue("ERROR", "COMPLETION_SCORE_INVALID", "A nota mínima de conclusão deve estar entre 0 e 100.")
     if not active_lessons:
         add_issue("ERROR", "ACTIVE_LESSON_REQUIRED", "Adicione pelo menos um módulo ativo antes de publicar.")
 
@@ -377,6 +384,10 @@ def validate_course_version_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]
             add_issue("ERROR", "ASSESSMENT_WINDOW_INVALID", f'A janela da avaliação de "{title or lesson_id}" é inválida.', "LESSON", lesson_id)
         if available_from and available_until and datetime.fromisoformat(available_until) <= datetime.fromisoformat(available_from):
             add_issue("ERROR", "ASSESSMENT_WINDOW_INVALID", f'A janela da avaliação de "{title or lesson_id}" é inválida.', "LESSON", lesson_id)
+        try:
+            _draft_rubric(lesson.get("rubric_json") or {"criteria": []})
+        except ApiError:
+            add_issue("ERROR", "RUBRIC_INVALID", f'A rubrica de "{title or lesson_id}" é inválida.', "LESSON", lesson_id)
 
         content = [
             item for item in (lesson.get("content") or [])
@@ -483,6 +494,7 @@ def course_version_draft_editor(snapshot: dict[str, Any]) -> dict[str, Any]:
     lessons = snapshot.get("lessons") if isinstance(snapshot.get("lessons"), list) else []
     academic_review = snapshot.get("academicReview") if isinstance(snapshot.get("academicReview"), dict) else {}
     approval = snapshot.get("institutionalApproval") if isinstance(snapshot.get("institutionalApproval"), dict) else {}
+    completion_policy = snapshot.get("completionPolicy") if isinstance(snapshot.get("completionPolicy"), dict) else {}
     return {
         "course": {
             "courseCode": course.get("course_code"),
@@ -490,6 +502,8 @@ def course_version_draft_editor(snapshot: dict[str, Any]) -> dict[str, Any]:
             "description": course.get("description"),
             "totalHours": course.get("total_hours"),
             "passingScore": course.get("passing_score"),
+            "completionMinimumScore": completion_policy.get("minimumScore", course.get("passing_score")),
+            "completionRequireAllLessons": bool(completion_policy.get("requireAllLessons", True)),
         },
         "publicationApprovalRequired": bool(academic_review.get("publicationApprovalRequired")),
         "institutionalApproval": {
@@ -519,6 +533,8 @@ def course_version_draft_editor(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "feedbackReleaseMode": lesson.get("feedback_release_mode") or "AFTER_REVIEW",
                 "showCorrectAnswers": bool(lesson.get("show_correct_answers")),
                 "showExplanations": bool(lesson.get("show_explanations")),
+                "completionRequired": bool(lesson.get("completion_required", True)),
+                "rubric": lesson.get("rubric_json") or {"criteria": []},
                 "content": [
                     {
                         "contentId": item.get("content_id"),
@@ -621,6 +637,32 @@ def _draft_optional_datetime(value: Any, field: str) -> str | None:
     return parsed.isoformat()
 
 
+def _draft_rubric(value: Any) -> dict[str, Any]:
+    criteria_value = value.get("criteria") if isinstance(value, dict) else value
+    if criteria_value in (None, ""):
+        criteria_value = []
+    if not isinstance(criteria_value, list):
+        raise ApiError("RUBRIC_INVALID", "A rubrica deve conter uma lista de critérios.")
+    criteria = []
+    seen = set()
+    for index, item in enumerate(criteria_value, start=1):
+        if not isinstance(item, dict):
+            raise ApiError("RUBRIC_INVALID", "Os critérios da rubrica são inválidos.")
+        criterion_id = _draft_text(item.get("criterionId") or f"criterion-{index}", "identificador do critério", required=True, maximum=100)
+        if criterion_id in seen:
+            raise ApiError("RUBRIC_INVALID", "Os identificadores dos critérios não podem repetir-se.")
+        seen.add(criterion_id)
+        criteria.append({
+            "criterionId": criterion_id,
+            "title": _draft_text(item.get("title"), "título do critério", required=True, maximum=240),
+            "description": _draft_text(item.get("description"), "descrição do critério", maximum=2000),
+            "maxPoints": _draft_number(item.get("maxPoints"), "pontuação máxima do critério", minimum=0.01, maximum=10000),
+        })
+    if len(criteria) > 30:
+        raise ApiError("RUBRIC_INVALID", "A rubrica pode ter no máximo 30 critérios.")
+    return {"criteria": criteria}
+
+
 def _apply_assessment_policy_changes(lesson: dict[str, Any], changes: dict[str, Any]) -> None:
     attempt_limit = int(_draft_number(changes.get("attemptLimit", 1), "limite de tentativas", minimum=1, maximum=100))
     time_limit = int(_draft_number(changes.get("timeLimitMinutes", 180), "tempo da avaliação", minimum=1, maximum=43200))
@@ -649,6 +691,8 @@ def _apply_assessment_policy_changes(lesson: dict[str, Any], changes: dict[str, 
         "feedback_release_mode": feedback_mode,
         "show_correct_answers": bool(changes.get("showCorrectAnswers")),
         "show_explanations": bool(changes.get("showExplanations")),
+        "rubric_json": _draft_rubric(changes.get("rubric") or {"criteria": []}),
+        "completion_required": bool(changes.get("completionRequired", True)),
     })
 
 
@@ -1051,6 +1095,14 @@ def edit_course_version_draft_snapshot(snapshot: dict[str, Any], operation: Any,
         course["description"] = _draft_text(changes.get("description"), "descrição", maximum=5000)
         course["total_hours"] = _draft_number(changes.get("totalHours"), "carga horária")
         course["passing_score"] = _draft_number(changes.get("passingScore"), "nota mínima", maximum=100)
+        edited["completionPolicy"] = {
+            "minimumScore": _draft_number(
+                changes.get("completionMinimumScore", changes.get("passingScore")),
+                "nota mínima de conclusão",
+                maximum=100,
+            ),
+            "requireAllLessons": bool(changes.get("completionRequireAllLessons", True)),
+        }
     elif operation_name == "UPDATE_LESSON":
         lesson = _draft_entity(lessons, "lesson_id", changes.get("lessonId"), "Módulo")
         lesson["title"] = _draft_text(changes.get("title"), "título do módulo", required=True, maximum=240)
@@ -1079,6 +1131,8 @@ def edit_course_version_draft_snapshot(snapshot: dict[str, Any], operation: Any,
             "feedback_release_mode": "AFTER_REVIEW",
             "show_correct_answers": False,
             "show_explanations": False,
+            "completion_required": True,
+            "rubric_json": {"criteria": []},
             "prerequisite_lesson_id": None,
             "status": "ACTIVE",
             "content": [],

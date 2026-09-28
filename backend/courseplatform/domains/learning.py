@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -232,49 +233,101 @@ def refresh_enrollment_progress_action(conn, progress_id: str | None, *, runtime
     ).fetchone()
     if not progress:
         return None
-    summary = conn.execute(
+    enrollment = conn.execute(
         """
-        select
-          count(*) filter (where coalesce(l.status, 'ACTIVE') = 'ACTIVE') as lesson_total,
-          count(*) filter (
-            where coalesce(l.status, 'ACTIVE') = 'ACTIVE'
-              and coalesce(p.evaluation_status, p.status) = 'APPROVED'
-          ) as approved_total,
-          avg(p.score) filter (
-            where coalesce(l.status, 'ACTIVE') = 'ACTIVE' and p.score is not null
-          ) as average_score
+        select e.*, v.content_snapshot_json, v.version_number,
+               v.passing_score as version_passing_score
         from courseplatform.enrollments e
-        join courseplatform.lessons l on l.course_id = e.course_id
-        left join courseplatform.lesson_progress p
-          on p.enrollment_id = e.enrollment_id and p.lesson_id = l.lesson_id
+        join courseplatform.course_versions v on v.course_version_id = e.course_version_id
         where e.enrollment_id = %s
+        for update of e
         """,
         (progress["enrollment_id"],),
     ).fetchone()
-    total = int((summary or {}).get("lesson_total") or 0)
-    approved = int((summary or {}).get("approved_total") or 0)
+    if not enrollment:
+        return None
+    snapshot = enrollment.get("content_snapshot_json") or {}
+    lessons = snapshot.get("lessons") if isinstance(snapshot, dict) else []
+    if not isinstance(lessons, list):
+        lessons = []
+    required_lessons = [
+        item for item in lessons
+        if isinstance(item, dict)
+        and str(item.get("status") or "ACTIVE").upper() == "ACTIVE"
+        and bool(item.get("completion_required", True))
+    ]
+    lesson_ids = [str(item.get("lesson_id") or "") for item in required_lessons if item.get("lesson_id")]
+    progress_rows = []
+    if lesson_ids:
+        progress_rows = conn.execute(
+            """
+            select lesson_id, evaluation_status, status, score
+            from courseplatform.lesson_progress
+            where enrollment_id = %s and lesson_id = any(%s)
+            """,
+            (progress["enrollment_id"], lesson_ids),
+        ).fetchall()
+    by_lesson = {row["lesson_id"]: row for row in progress_rows}
+    approved_rows = [
+        by_lesson[lesson_id] for lesson_id in lesson_ids
+        if lesson_id in by_lesson
+        and str(by_lesson[lesson_id].get("evaluation_status") or by_lesson[lesson_id].get("status") or "").upper() == "APPROVED"
+    ]
+    scores = [float(row["score"]) for row in approved_rows if row.get("score") is not None]
+    total = len(lesson_ids)
+    approved = len(approved_rows)
+    average_score = round(sum(scores) / len(scores), 2) if scores else None
     percent = round((approved / total) * 100, 2) if total else 0
-    completed = total > 0 and approved >= total
+    completion_policy = snapshot.get("completionPolicy") if isinstance(snapshot, dict) else {}
+    if not isinstance(completion_policy, dict):
+        completion_policy = {}
+    try:
+        minimum_score = float(completion_policy.get("minimumScore", enrollment.get("version_passing_score") or 0))
+    except (TypeError, ValueError):
+        minimum_score = float(enrollment.get("version_passing_score") or 0)
+    require_all = bool(completion_policy.get("requireAllLessons", True))
+    lessons_complete = approved >= total if require_all else approved > 0
+    score_complete = average_score is not None and average_score >= minimum_score
+    completed = total > 0 and lessons_complete and score_complete
+    reason = "COMPLETED" if completed else (
+        "NO_REQUIRED_LESSONS" if total == 0
+        else "LESSONS_PENDING" if not lessons_complete
+        else "MINIMUM_SCORE_NOT_REACHED"
+    )
+    completion_snapshot = {
+        "courseVersionId": enrollment.get("course_version_id"),
+        "versionNumber": int(enrollment.get("version_number") or 0),
+        "requiredLessonIds": lesson_ids,
+        "requiredLessonCount": total,
+        "approvedLessonCount": approved,
+        "minimumScore": minimum_score,
+        "finalScore": average_score,
+        "requireAllLessons": require_all,
+    }
     return conn.execute(
         """
         update courseplatform.enrollments
         set progress_percent = %s,
             final_score = %s,
             status = case
-              when status in ('BLOCKED', 'INACTIVE') then status
+              when status in ('BLOCKED', 'INACTIVE', 'CANCELLED') then status
               when %s then 'COMPLETED'
               else 'ACTIVE'
             end,
             completed_at = case when %s then coalesce(completed_at, now()) else null end,
+            completion_snapshot_json = %s,
+            completion_reason = %s,
             updated_at = now()
         where enrollment_id = %s
         returning *
         """,
         (
             percent,
-            None if (summary or {}).get("average_score") is None else float(summary["average_score"]),
+            average_score,
             completed,
             completed,
+            json.dumps(completion_snapshot, ensure_ascii=True, separators=(",", ":")),
+            reason,
             progress["enrollment_id"],
         ),
     ).fetchone()

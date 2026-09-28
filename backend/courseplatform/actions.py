@@ -342,6 +342,11 @@ def public_review(row: dict[str, Any] | None):
         "decision": row.get("decision"),
         "score": None if row.get("score") is None else float(row["score"]),
         "comments": row.get("comments"),
+        "gradeReason": row.get("grade_reason"),
+        "previousScore": None if row.get("previous_score") is None else float(row["previous_score"]),
+        "revisionNumber": int(row.get("revision_number") or 1),
+        "rubric": row.get("rubric_snapshot_json") or {"criteria": []},
+        "rubricScores": row.get("rubric_scores_json") or [],
         "correctionDeadline": iso(row.get("correction_deadline")),
         "unlockNextLesson": as_bool(row.get("unlock_next_lesson")),
         "reviewedAt": iso(row.get("reviewed_at")),
@@ -355,6 +360,9 @@ def student_review(row: dict[str, Any] | None):
         "decision": row.get("decision"),
         "score": None if row.get("score") is None else float(row["score"]),
         "comments": row.get("comments"),
+        "revisionNumber": int(row.get("revision_number") or 1),
+        "rubric": row.get("rubric_snapshot_json") or {"criteria": []},
+        "rubricScores": row.get("rubric_scores_json") or [],
         "correctionDeadline": iso(row.get("correction_deadline")),
         "reviewedAt": iso(row.get("reviewed_at")),
     }
@@ -2586,7 +2594,7 @@ def assessment_snapshot_with_conn(conn, lesson_id: str, lesson: dict[str, Any] |
                   passing_score, assessment_attempt_limit, assessment_available_from,
                   assessment_available_until, assessment_randomization_mode,
                   assessment_question_limit, feedback_release_mode,
-                  show_correct_answers, show_explanations
+                  show_correct_answers, show_explanations, rubric_json
            from courseplatform.lessons where lesson_id = %s""",
         (lesson_id,),
     ).fetchone()
@@ -2636,8 +2644,14 @@ def assessment_snapshot_with_conn(conn, lesson_id: str, lesson: dict[str, Any] |
         for question in questions
     ]
     policy = assessment_policy(lesson_row)
+    rubric = lesson_row.get("rubric_json") or {"criteria": []}
+    if isinstance(rubric, str):
+        try:
+            rubric = json.loads(rubric)
+        except json.JSONDecodeError:
+            rubric = {"criteria": []}
     digest_payload = json.dumps(
-        {"assessmentPolicy": policy, "questions": snapshot_questions},
+        {"assessmentPolicy": policy, "questions": snapshot_questions, "rubric": rubric},
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -2647,6 +2661,7 @@ def assessment_snapshot_with_conn(conn, lesson_id: str, lesson: dict[str, Any] |
         "capturedAt": iso(utc_now()),
         "assessmentPolicy": policy,
         "feedbackPolicy": policy["feedbackPolicy"],
+        "rubric": rubric,
         "questions": snapshot_questions,
         "digest": hashlib.sha256(digest_payload.encode("utf-8")).hexdigest(),
     }
@@ -2663,8 +2678,9 @@ def assessment_snapshot_from_version_lesson(
     ]
     policy = policy_override or assessment_policy(lesson)
     questions = randomized_assessment_questions(questions, policy)
+    rubric = lesson.get("rubric_json") or {"criteria": []}
     digest_payload = json.dumps(
-        {"assessmentPolicy": policy, "questions": questions},
+        {"assessmentPolicy": policy, "questions": questions, "rubric": rubric},
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -2674,6 +2690,7 @@ def assessment_snapshot_from_version_lesson(
         "capturedAt": iso(utc_now()),
         "assessmentPolicy": policy,
         "feedbackPolicy": policy["feedbackPolicy"],
+        "rubric": rubric,
         "questions": questions,
         "digest": hashlib.sha256(digest_payload.encode("utf-8")).hexdigest(),
     }
@@ -3020,6 +3037,18 @@ def submission_item(row: dict[str, Any]):
 
 def admin_list_submissions(payload: dict[str, Any]):
     return assessment_domain.admin_list_submissions_action(payload, _assessment_runtime())
+
+
+def admin_list_gradebook(payload: dict[str, Any]):
+    return assessment_domain.admin_list_gradebook_action(payload, _assessment_runtime())
+
+
+def admin_list_academic_calendar(payload: dict[str, Any]):
+    return enrollment_domain.admin_list_academic_calendar_action(payload, runtime=_enrollment_runtime())
+
+
+def admin_save_academic_calendar(payload: dict[str, Any]):
+    return enrollment_domain.admin_save_academic_calendar_action(payload, runtime=_enrollment_runtime())
 
 
 def admin_create_course_version(payload: dict[str, Any]):

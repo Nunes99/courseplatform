@@ -8,7 +8,7 @@ Esta é a **política esperada**, derivada dos handlers e do produto atual. Não
 
 - **Público**: operação sem sessão, com resposta de dados mínimos.
 - **Próprio**: apenas dados pertencentes ao estudante e ao seu contexto autorizado.
-- **Âmbito**: acesso limitado a cursos, grupos, submissões ou tarefas atribuídas ao membro de staff. A implementação atual aplica papel, mas ainda não modela todos estes âmbitos finos.
+- **Âmbito**: acesso limitado aos cursos, edições/turmas ou grupos atribuídos ao membro de staff. O backend aplica sempre o nível efetivo mais restritivo do revisor.
 - **Gestão**: criar/editar/bloquear de acordo com a operação.
 - **Não**: acesso deve ser recusado pelo backend, mesmo que o botão esteja oculto.
 
@@ -45,6 +45,9 @@ identidade.
 | Pontuação interna por questão | Não | Não | No âmbito de revisão | Sim | Sim |
 | Snapshot histórico da avaliação | Não | Apenas representação filtrada da própria tentativa | Leitura integral no âmbito | Leitura integral | Leitura integral |
 | Progresso e notas | Não | Próprios | Leitura/atualização no âmbito | Gestão | Gestão |
+| Pauta consolidada | Não | Não | Leitura no âmbito | Leitura/gestão académica | Leitura/gestão académica |
+| Histórico de alterações de notas | Não | Próprio resultado conforme feedback, sem log interno | Leitura no âmbito | Leitura integral | Leitura integral |
+| Calendário académico | Não | Pela edição da própria matrícula | Leitura no âmbito | Leitura/gestão | Leitura/gestão |
 | Iniciar tentativa/responder | Não | Próprio e dentro das regras | Não | Não | Não |
 | Upload/remover trabalho | Não | Própria tentativa editável | Não | Gestão pela revisão, se prevista | Gestão pela revisão, se prevista |
 | Abrir/baixar trabalho privado | Não | Apenas próprio | No âmbito de revisão | Gestão | Gestão |
@@ -94,10 +97,10 @@ Os handlers usam `student_context` ou `student_context_with_conn`. Ações princ
 
 Leitura administrativa e revisão usam `admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})`.
 Para `REVIEWER`, `courseplatform.reviewer_scopes` limita estudantes, submissões,
-ficheiros, cursos, certificados, pedidos e inquéritos aos cursos, edições/turmas
-ou grupos ativos atribuídos. Um âmbito de grupo não concede acesso aos restantes
-grupos da mesma turma. As mutações de configuração continuam reservadas a
-`ADMIN` e `OWNER`.
+ficheiros, cursos, certificados, pedidos, inquéritos, pauta e calendário aos
+cursos, edições/turmas ou grupos ativos atribuídos. Um âmbito de grupo não
+concede acesso aos restantes grupos da mesma turma. As mutações de configuração,
+incluindo o calendário académico, continuam reservadas a `ADMIN` e `OWNER`.
 
 Cada revisor usa um único nível efetivo: global, curso, turma ou grupo. Pode
 receber vários itens dentro desse nível, mas não pode combinar níveis. Registos
@@ -113,7 +116,8 @@ comportamento anterior. O proprietário deve substituir essa atribuição pelos
 
 Usam `admin_context(payload, {"OWNER", "ADMIN"})` para gerir estudantes,
 cursos, versões, edições, matrículas, módulos, grupos, acessos/progresso, media,
-certificados, pedidos, inquéritos e notificações/configurações. Versões publicadas
+rubricas, pauta, calendário, certificados, pedidos, inquéritos e
+notificações/configurações. Versões publicadas
 e a versão de uma edição com matrículas também são protegidas por constraints e
 triggers no Postgres.
 

@@ -15759,3 +15759,122 @@ professional-certificate {
   border: 1px solid var(--border-color, #d5dde5);
   border-radius: var(--radius-md, 8px);
 }
+
+.academic-calendar-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.8fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.student-calendar-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.student-calendar-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+}
+
+.student-calendar-event {
+  display: grid;
+  grid-template-columns: minmax(108px, auto) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border-color, #d5dde5);
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface, #fff);
+}
+
+.student-calendar-event time {
+  color: var(--muted, #617286);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.student-calendar-event div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.student-calendar-event strong,
+.student-calendar-event span {
+  overflow-wrap: anywhere;
+}
+
+.student-calendar-event span {
+  color: var(--muted, #617286);
+  font-size: 0.875rem;
+}
+
+.review-rubric {
+  display: grid;
+  gap: 12px;
+}
+
+.rubric-score-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.38fr) minmax(160px, 0.7fr);
+  gap: 10px;
+  align-items: end;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color, #d5dde5);
+}
+
+.rubric-score-row > div,
+.rubric-score-row label {
+  min-width: 0;
+}
+
+.rubric-score-row strong,
+.rubric-score-row small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.rubric-score-row small {
+  margin-top: 4px;
+  color: var(--muted, #617286);
+}
+
+.grade-history {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-color, #d5dde5);
+  padding-top: 12px;
+}
+
+.grade-history summary {
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.grade-history article {
+  display: grid;
+  gap: 4px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-color, #d5dde5);
+  font-size: 0.875rem;
+}
+
+.grade-history article span,
+.grade-history article small {
+  color: var(--muted, #617286);
+}
+
+@media (max-width: 980px) {
+  .academic-calendar-layout,
+  .rubric-score-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .student-calendar-event {
+    grid-template-columns: 1fr;
+  }
+}

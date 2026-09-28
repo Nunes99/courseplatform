@@ -104,6 +104,11 @@ const state = {
     limit: 50,
     history: []
   },
+  gradebook: [],
+  gradebookFilters: { query: '', status: 'ALL', courseId: '', offeringId: '', groupId: '' },
+  gradebookPagination: { cursor: '', nextCursor: '', hasMore: false, returned: 0, limit: 50, history: [] },
+  academicCalendar: { offerings: [], events: [] },
+  academicCalendarFilters: { courseId: '', offeringId: '' },
   students: [],
   studentSummary: {},
   studentPagination: {
@@ -583,6 +588,14 @@ function renderAdminShell() {
           <img src="${iconUrl('inbox', blueIcon)}" alt="">
           <span>Submissões</span>
         </button>
+        <button class="admin-nav" data-admin-view="gradebook" aria-label="Pauta" title="Pauta">
+          <img src="${iconUrl('table-properties', blueIcon)}" alt="">
+          <span>Pauta</span>
+        </button>
+        <button class="admin-nav" data-admin-view="calendar" aria-label="Calendário académico" title="Calendário académico">
+          <img src="${iconUrl('calendar-days', blueIcon)}" alt="">
+          <span>Calendário</span>
+        </button>
         <button class="admin-nav" data-admin-view="notifications" aria-label="Notificações" title="Notificações">
           <img src="${iconUrl('bell', blueIcon)}" alt="">
           <span>Notificações</span>
@@ -665,6 +678,10 @@ function renderAdminShell() {
         loadNotificationManagement();
       } else if (button.dataset.adminView === 'chat') {
         renderAdminChat();
+      } else if (button.dataset.adminView === 'gradebook') {
+        loadGradebook();
+      } else if (button.dataset.adminView === 'calendar') {
+        loadAcademicCalendar();
       } else if (button.dataset.adminView === 'courses') {
         state.courseMode = 'list';
         loadCourses();
@@ -3993,6 +4010,164 @@ function scheduleCertificateRefresh(delay = 400) {
   }, delay);
 }
 
+async function loadGradebook(options = {}) {
+  const main = document.querySelector('#adminMain');
+  if (!options.silent) main.innerHTML = loadingTemplate('A carregar a pauta...');
+  try {
+    const result = await api.adminGradebook({
+      ...state.gradebookFilters,
+      limit: state.gradebookPagination.limit,
+      cursor: state.gradebookPagination.cursor
+    }, options);
+    state.gradebook = result.entries || [];
+    Object.assign(state.gradebookPagination, result.pagination || {});
+    renderGradebook();
+    return true;
+  } catch (error) {
+    handleAdminError(error);
+    return false;
+  }
+}
+
+function renderGradebook() {
+  const main = document.querySelector('#adminMain');
+  const entries = state.gradebook || [];
+  const completed = entries.filter((item) => item.status === 'COMPLETED').length;
+  const average = entries.filter((item) => item.finalScore !== null && item.finalScore !== undefined);
+  const averageScore = average.length
+    ? (average.reduce((sum, item) => sum + Number(item.finalScore || 0), 0) / average.length).toFixed(1)
+    : '-';
+  main.innerHTML = `
+    <div class="admin-page-heading">
+      <div><p class="eyebrow">Avaliação consolidada</p><h1>Pauta</h1><p>Resultados por matrícula, versão publicada, turma e grupo.</p></div>
+      <div class="admin-page-actions"><button class="button button-secondary" id="exportGradebook">Exportar CSV</button><button class="button button-primary" id="refreshGradebook">Atualizar</button></div>
+    </div>
+    <section class="admin-summary-grid" aria-label="Resumo da pauta">
+      <article class="insight-card"><img src="${iconUrl('users', goldIcon)}" alt=""><div><span>Matrículas visíveis</span><strong>${entries.length}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('circle-check', goldIcon)}" alt=""><div><span>Concluídas</span><strong>${completed}</strong></div></article>
+      <article class="insight-card"><img src="${iconUrl('chart-no-axes-combined', goldIcon)}" alt=""><div><span>Média</span><strong>${escapeHtml(averageScore)}</strong></div></article>
+    </section>
+    <form class="admin-filter-bar" id="gradebookFilters" aria-label="Filtros da pauta">
+      <label class="admin-filter-search"><span>Pesquisar</span><input name="query" value="${escapeHtml(state.gradebookFilters.query)}" placeholder="Nome, email, ID, turma ou grupo"></label>
+      <label><span>Estado</span><select name="status">
+        ${studentFilterOption('ALL', 'Todos', state.gradebookFilters.status)}
+        ${studentFilterOption('ACTIVE', 'Ativo', state.gradebookFilters.status)}
+        ${studentFilterOption('COMPLETED', 'Concluído', state.gradebookFilters.status)}
+        ${studentFilterOption('BLOCKED', 'Bloqueado', state.gradebookFilters.status)}
+        ${studentFilterOption('INACTIVE', 'Inativo', state.gradebookFilters.status)}
+      </select></label>
+      <button class="button button-secondary" type="submit">Aplicar filtros</button>
+    </form>
+    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Estudante</th><th>Curso e versão</th><th>Turma / grupo</th><th>Progresso</th><th>Nota final</th><th>Estado</th></tr></thead><tbody>
+      ${entries.length ? entries.map((item) => `<tr>
+        <td><strong>${escapeHtml(item.student.fullName || '-')}</strong><small>${escapeHtml(item.student.publicStudentId || item.student.email || '')}</small></td>
+        <td><strong>${escapeHtml(item.course.title || '-')}</strong><small>${escapeHtml(item.course.courseCode || '')} · versão ${escapeHtml(item.course.versionNumber || '')}</small></td>
+        <td>${escapeHtml(item.offering.offeringCode || item.offering.name || '-')}<small>${escapeHtml(item.group?.groupCode || item.group?.name || 'Sem grupo')}</small></td>
+        <td><strong>${escapeHtml(item.progressPercent)}%</strong><small>${escapeHtml(item.approvedCount)} de ${escapeHtml(item.lessonCount)} módulos</small></td>
+        <td>${item.finalScore === null || item.finalScore === undefined ? '-' : escapeHtml(item.finalScore)}</td>
+        <td><span class="status-pill ${statusClass(item.status)}">${escapeHtml(statusLabel(item.status))}</span></td>
+      </tr>`).join('') : '<tr><td colspan="6" class="empty-table">Nenhuma matrícula encontrada para estes filtros.</td></tr>'}
+    </tbody></table></div>
+    ${cursorPaginationTemplate('gradebook', state.gradebookPagination)}
+  `;
+  document.querySelector('#refreshGradebook')?.addEventListener('click', () => loadGradebook({ force: true }));
+  document.querySelector('#gradebookFilters')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(event.currentTarget));
+    state.gradebookFilters.query = values.query || '';
+    state.gradebookFilters.status = values.status || 'ALL';
+    resetCursorPagination(state.gradebookPagination);
+    loadGradebook({ force: true });
+  });
+  document.querySelector('#exportGradebook')?.addEventListener('click', exportGradebookCsv);
+  root.querySelector('[data-cursor-pagination="gradebook"][data-direction="previous"]')?.addEventListener('click', () => moveCursorPage(state.gradebookPagination, 'previous', () => loadGradebook({ force: true })));
+  root.querySelector('[data-cursor-pagination="gradebook"][data-direction="next"]')?.addEventListener('click', () => moveCursorPage(state.gradebookPagination, 'next', () => loadGradebook({ force: true })));
+  reportHeight();
+}
+
+function exportGradebookCsv() {
+  const columns = ['ID público', 'Nome', 'Email', 'Curso', 'Versão', 'Turma', 'Grupo', 'Progresso', 'Nota final', 'Estado'];
+  const values = (state.gradebook || []).map((item) => [
+    item.student.publicStudentId, item.student.fullName, item.student.email, item.course.title,
+    item.course.versionNumber, item.offering.offeringCode || item.offering.name,
+    item.group?.groupCode || item.group?.name || '', item.progressPercent,
+    item.finalScore ?? '', item.status
+  ]);
+  const csv = [columns, ...values].map((row) => row.map((value) => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\n');
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' }));
+  link.download = `pauta-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+async function loadAcademicCalendar(options = {}) {
+  const main = document.querySelector('#adminMain');
+  if (!options.silent) main.innerHTML = loadingTemplate('A carregar o calendário académico...');
+  try {
+    state.academicCalendar = await api.adminAcademicCalendar(state.academicCalendarFilters, options);
+    renderAcademicCalendar();
+  } catch (error) {
+    handleAdminError(error);
+  }
+}
+
+function renderAcademicCalendar() {
+  const main = document.querySelector('#adminMain');
+  const offerings = state.academicCalendar.offerings || [];
+  const selectedOfferingId = state.academicCalendarFilters.offeringId || offerings[0]?.offeringId || '';
+  state.academicCalendarFilters.offeringId = selectedOfferingId;
+  const events = (state.academicCalendar.events || []).filter((item) => !selectedOfferingId || item.offeringId === selectedOfferingId);
+  main.innerHTML = `
+    <div class="admin-page-heading"><div><p class="eyebrow">Planeamento</p><h1>Calendário académico</h1><p>Prazos, avaliações e sessões ligados à edição utilizada pelos estudantes.</p></div><button class="button button-secondary" id="refreshCalendar">Atualizar</button></div>
+    <section class="admin-filter-bar"><label class="admin-filter-search"><span>Edição / turma</span><select id="calendarOffering">${offerings.map((item) => `<option value="${escapeHtml(item.offeringId)}" ${item.offeringId === selectedOfferingId ? 'selected' : ''}>${escapeHtml(item.offeringCode || item.name)}</option>`).join('')}</select></label></section>
+    <div class="academic-calendar-layout">
+      <section class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Data</th><th>Evento</th><th>Tipo</th><th></th></tr></thead><tbody>
+        ${events.length ? events.map((item) => `<tr><td><strong>${escapeHtml(formatDate(item.startAt))}</strong><small>${item.endAt ? `até ${escapeHtml(formatDate(item.endAt))}` : ''}</small></td><td><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.description || '')}</small></td><td>${escapeHtml(calendarEventTypeLabel(item.eventType))}</td><td>${canManagePlatform() ? `<button class="button button-small button-secondary" data-edit-calendar-event="${escapeHtml(item.eventId)}">Editar</button> <button class="button button-small button-danger" data-delete-calendar-event="${escapeHtml(item.eventId)}">Remover</button>` : ''}</td></tr>`).join('') : '<tr><td colspan="4" class="empty-table">Nenhum evento configurado para esta edição.</td></tr>'}
+      </tbody></table></section>
+      ${canManagePlatform() && selectedOfferingId ? `<aside class="review-form-card"><h2>Evento</h2><form id="calendarEventForm" class="form-stack"><input type="hidden" name="eventId"><label><span>Título</span><input name="title" required maxlength="240"></label><div class="course-form-grid"><label><span>Tipo</span><select name="eventType"><option value="CLASS">Aula</option><option value="ASSESSMENT">Avaliação</option><option value="DEADLINE">Prazo</option><option value="SESSION">Sessão</option><option value="OTHER">Outro</option></select></label><label><span>Aviso prévio (min)</span><input name="notifyBeforeMinutes" type="number" min="0" max="43200" value="0"></label><label><span>Início</span><input name="startAt" type="datetime-local" required></label><label><span>Fim</span><input name="endAt" type="datetime-local"></label></div><label><span>Descrição</span><textarea name="description" rows="4" maxlength="2000"></textarea></label><button class="button button-primary button-block" type="submit">Guardar evento</button><button class="button button-secondary button-block" type="reset">Cancelar edição</button></form></aside>` : ''}
+    </div>
+  `;
+  document.querySelector('#refreshCalendar')?.addEventListener('click', () => loadAcademicCalendar({ force: true }));
+  document.querySelector('#calendarOffering')?.addEventListener('change', (event) => { state.academicCalendarFilters.offeringId = event.target.value; renderAcademicCalendar(); });
+  document.querySelector('#calendarEventForm')?.addEventListener('submit', submitAcademicCalendarEvent);
+  root.querySelectorAll('[data-edit-calendar-event]').forEach((button) => button.addEventListener('click', () => populateAcademicCalendarForm(button.dataset.editCalendarEvent)));
+  root.querySelectorAll('[data-delete-calendar-event]').forEach((button) => button.addEventListener('click', () => deleteAcademicCalendarEvent(button.dataset.deleteCalendarEvent)));
+  reportHeight();
+}
+
+function calendarEventTypeLabel(value) {
+  return ({ CLASS: 'Aula', ASSESSMENT: 'Avaliação', DEADLINE: 'Prazo', SESSION: 'Sessão', OTHER: 'Outro' })[value] || 'Outro';
+}
+
+function populateAcademicCalendarForm(eventId) {
+  const item = (state.academicCalendar.events || []).find((event) => event.eventId === eventId);
+  const form = document.querySelector('#calendarEventForm');
+  if (!item || !form) return;
+  Object.entries({ ...item, startAt: toDatetimeLocalValue(item.startAt), endAt: toDatetimeLocalValue(item.endAt) }).forEach(([key, value]) => { if (form.elements[key]) form.elements[key].value = value ?? ''; });
+}
+
+async function submitAcademicCalendarEvent(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = Object.fromEntries(new FormData(form));
+  const eventId = values.eventId || `CAL-${crypto.randomUUID().replaceAll('-', '').slice(0, 20).toUpperCase()}`;
+  const next = (state.academicCalendar.events || []).filter((item) => item.offeringId === state.academicCalendarFilters.offeringId && item.eventId !== eventId).map(({ courseId, courseCode, courseTitle, courseVersionId, versionNumber, offeringId, offeringCode, offeringName, ...item }) => item);
+  next.push({ ...values, eventId, startAt: new Date(values.startAt).toISOString(), endAt: values.endAt ? new Date(values.endAt).toISOString() : null, notifyBeforeMinutes: Number(values.notifyBeforeMinutes || 0) });
+  if (!confirmAdminAction('Guardar o calendário desta edição?')) return;
+  await api.adminSaveAcademicCalendar(state.academicCalendarFilters.offeringId, next);
+  showToast('Calendário académico atualizado.', 'success');
+  await loadAcademicCalendar({ force: true });
+}
+
+async function deleteAcademicCalendarEvent(eventId) {
+  if (!confirmAdminAction('Remover este evento do calendário?')) return;
+  const next = (state.academicCalendar.events || []).filter((item) => item.offeringId === state.academicCalendarFilters.offeringId && item.eventId !== eventId).map(({ courseId, courseCode, courseTitle, courseVersionId, versionNumber, offeringId, offeringCode, offeringName, ...item }) => item);
+  await api.adminSaveAcademicCalendar(state.academicCalendarFilters.offeringId, next);
+  showToast('Evento removido.', 'success');
+  await loadAcademicCalendar({ force: true });
+}
+
 async function loadPending(options = {}) {
   const main = document.querySelector('#adminMain');
   const requestVersion = ++submissionRequestVersion;
@@ -4589,6 +4764,9 @@ function renderSubmission() {
     || (data.progress?.status === 'LOCKED' ? 'LOCKED' : 'AVAILABLE');
   const assessmentPolicy = data.assessmentPolicy || {};
   const assessmentException = data.assessmentException || null;
+  const rubricCriteria = Array.isArray(data.rubric?.criteria) ? data.rubric.criteria : [];
+  const latestRubricScores = new Map((latestReview?.rubricScores || []).map((item) => [item.criterionId, item]));
+  const gradeHistory = data.gradeHistory || [];
 
   const answers = data.answers.map(({ question, answer }) => `
     <article class="admin-answer">
@@ -4647,13 +4825,20 @@ function renderSubmission() {
 
             <label>
               <span>Classificação</span>
-              <input type="number" name="score" min="0" max="100" required>
+              <input type="number" name="score" min="0" max="100" step="0.01" required ${rubricCriteria.length ? 'readonly' : ''}>
             </label>
+
+            ${rubricCriteria.length ? `<fieldset class="form-section review-rubric"><legend>Rubrica da versão submetida</legend>${rubricCriteria.map((criterion) => {
+              const existing = latestRubricScores.get(criterion.criterionId) || {};
+              return `<div class="rubric-score-row"><div><strong>${escapeHtml(criterion.title)}</strong><small>${escapeHtml(criterion.description || '')}</small></div><label><span>Pontos (máx. ${escapeHtml(criterion.maxPoints)})</span><input type="number" min="0" max="${escapeHtml(criterion.maxPoints)}" step="0.01" required data-rubric-score="${escapeHtml(criterion.criterionId)}" value="${escapeHtml(existing.awardedPoints ?? '')}"></label><label><span>Observação</span><input maxlength="2000" data-rubric-comment="${escapeHtml(criterion.criterionId)}" value="${escapeHtml(existing.comments || '')}"></label></div>`;
+            }).join('')}<p class="field-hint">A classificação final é calculada automaticamente a partir dos critérios.</p></fieldset>` : ''}
 
             <label>
               <span>Comentários</span>
               <textarea name="comments" rows="7" required></textarea>
             </label>
+
+            ${latestReview ? `<label><span>Motivo da alteração</span><textarea name="gradeReason" rows="3" minlength="3" placeholder="Obrigatório quando a decisão ou a nota forem alteradas."></textarea></label>` : ''}
 
             <label class="checkbox-line" id="reviewRetryOption" hidden>
               <input type="checkbox" name="authorizeRetry">
@@ -4669,6 +4854,7 @@ function renderSubmission() {
               Guardar avaliação
             </button>
           </form>
+          ${gradeHistory.length ? `<details class="grade-history"><summary>Histórico de alterações (${gradeHistory.length})</summary>${gradeHistory.map((item) => `<article><strong>${escapeHtml(item.newScore ?? '-')} · ${escapeHtml(statusLabel(item.newDecision))}</strong><span>${escapeHtml(formatDate(item.createdAt))}</span><p>${escapeHtml(item.reason || '')}</p>${item.previousScore !== null && item.previousScore !== undefined ? `<small>Nota anterior: ${escapeHtml(item.previousScore)}</small>` : ''}</article>`).join('')}</details>` : ''}
         </div>
 
         <div class="review-files">
@@ -4756,6 +4942,14 @@ function renderSubmission() {
   reviewForm.elements.comments.value = currentComments;
   reviewForm.elements.correctionDeadline.value = currentDeadline;
   reviewForm.elements.authorizeRetry.checked = Boolean(data.attempt.retryAuthorized) || currentDecision === 'CORRECTION_REQUIRED';
+  const updateRubricTotal = () => {
+    if (!rubricCriteria.length) return;
+    const awarded = rubricCriteria.reduce((sum, criterion) => sum + Number(reviewForm.querySelector(`[data-rubric-score="${CSS.escape(criterion.criterionId)}"]`)?.value || 0), 0);
+    const maximum = rubricCriteria.reduce((sum, criterion) => sum + Number(criterion.maxPoints || 0), 0);
+    reviewForm.elements.score.value = maximum ? ((awarded / maximum) * 100).toFixed(2) : '';
+  };
+  reviewForm.querySelectorAll('[data-rubric-score]').forEach((input) => input.addEventListener('input', updateRubricTotal));
+  updateRubricTotal();
   const syncReviewRetry = () => {
     const decision = reviewForm.elements.decision.value;
     const eligible = ['CORRECTION_REQUIRED', 'FAILED'].includes(decision);
@@ -5027,6 +5221,11 @@ async function submitReview(event) {
   const form = event.currentTarget;
   const button = form.querySelector('button');
   const values = new FormData(form);
+  const rubricScores = [...form.querySelectorAll('[data-rubric-score]')].map((input) => ({
+    criterionId: input.dataset.rubricScore,
+    awardedPoints: Number(input.value),
+    comments: form.querySelector(`[data-rubric-comment="${CSS.escape(input.dataset.rubricScore)}"]`)?.value || ''
+  }));
 
   setBusy(button, true, 'A guardar…');
 
@@ -5036,6 +5235,8 @@ async function submitReview(event) {
       decision: values.get('decision'),
       score: values.get('score') === '' ? null : Number(values.get('score')),
       comments: values.get('comments'),
+      gradeReason: values.get('gradeReason') || '',
+      rubricScores,
       authorizeRetry: ['CORRECTION_REQUIRED', 'FAILED'].includes(values.get('decision')) && values.get('authorizeRetry') === 'on',
       correctionDeadline: values.get('correctionDeadline') ? new Date(values.get('correctionDeadline')).toISOString() : ''
     });
@@ -7352,8 +7553,10 @@ function renderCourseVersionDraftEditor(overlay, result) {
           <label><span>Título</span><input name="title" required maxlength="240" value="${escapeHtml(course.title || '')}"></label>
           <label><span>Carga horária</span><input name="totalHours" type="number" min="0" step="0.5" required value="${escapeHtml(course.totalHours || 0)}"></label>
           <label><span>Nota mínima</span><input name="passingScore" type="number" min="0" max="100" step="0.1" required value="${escapeHtml(course.passingScore ?? 60)}"></label>
+          <label><span>Nota mínima de conclusão</span><input name="completionMinimumScore" type="number" min="0" max="100" step="0.1" required value="${escapeHtml(course.completionMinimumScore ?? course.passingScore ?? 60)}"></label>
         </div>
         <label><span>Descrição</span><textarea name="description" rows="3" maxlength="5000">${escapeHtml(course.description || '')}</textarea></label>
+        <label class="checkbox-field"><input name="completionRequireAllLessons" type="checkbox" ${course.completionRequireAllLessons !== false ? 'checked' : ''}><span>Exigir aprovação em todos os módulos obrigatórios</span></label>
         <div class="dialog-actions"><button class="button button-primary" type="submit">Guardar dados do curso</button></div>
       </form>
       <section class="course-version-editor-outline" aria-label="Módulos e conteúdos do rascunho">
@@ -7410,7 +7613,9 @@ function renderCourseVersionDraftEditor(overlay, result) {
                   <div class="course-version-editor-inline-fields">
                     <label class="checkbox-field"><input name="showCorrectAnswers" type="checkbox" ${lesson.showCorrectAnswers ? 'checked' : ''}><span>Mostrar respostas corretas</span></label>
                     <label class="checkbox-field"><input name="showExplanations" type="checkbox" ${lesson.showExplanations ? 'checked' : ''}><span>Mostrar explicações</span></label>
+                    <label class="checkbox-field"><input name="completionRequired" type="checkbox" ${lesson.completionRequired !== false ? 'checked' : ''}><span>Módulo obrigatório para concluir o curso</span></label>
                   </div>
+                  <label><span>Rubrica, uma linha por critério: título | pontos | descrição</span><textarea name="rubricCriteria" rows="4" placeholder="Qualidade técnica | 40 | Correção e profundidade da análise">${escapeHtml(formatRubricCriteria(lesson.rubric))}</textarea></label>
                 </fieldset>
                 <div class="dialog-actions"><button class="button button-secondary button-small" type="submit">Guardar módulo</button></div>
               </form>` : '<p class="empty-note">Restaure o módulo para voltar a editá-lo.</p>'}
@@ -7528,6 +7733,7 @@ function renderCourseVersionDraftEditor(overlay, result) {
   overlay.querySelector('[data-draft-course-form]').addEventListener('submit', (event) => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
+    values.completionRequireAllLessons = event.currentTarget.elements.completionRequireAllLessons.checked;
     mutate('UPDATE_COURSE', values, event.currentTarget.querySelector('button[type="submit"]'));
   });
   overlay.querySelector('[data-create-draft-lesson]').addEventListener('submit', (event) => {
@@ -7540,6 +7746,9 @@ function renderCourseVersionDraftEditor(overlay, result) {
       const values = Object.fromEntries(new FormData(form));
       values.showCorrectAnswers = form.elements.showCorrectAnswers.checked;
       values.showExplanations = form.elements.showExplanations.checked;
+      values.completionRequired = form.elements.completionRequired.checked;
+      values.rubric = { criteria: parseRubricCriteria(values.rubricCriteria) };
+      delete values.rubricCriteria;
       values.availableFrom = values.availableFrom ? new Date(values.availableFrom).toISOString() : '';
       values.availableUntil = values.availableUntil ? new Date(values.availableUntil).toISOString() : '';
       mutate('UPDATE_LESSON', values, form.querySelector('button[type="submit"]'));
@@ -7601,6 +7810,17 @@ function renderCourseVersionDraftEditor(overlay, result) {
       const lessonId = button.closest('[data-draft-lesson]').dataset.draftLesson;
       showQuestionBankPicker(version.courseVersionId, lessonId, overlay);
     });
+  });
+}
+
+function formatRubricCriteria(rubric = {}) {
+  return (rubric.criteria || []).map((item) => [item.title, item.maxPoints, item.description || ''].join(' | ')).join('\n');
+}
+
+function parseRubricCriteria(value) {
+  return String(value || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line, index) => {
+    const [title, points, ...description] = line.split('|').map((part) => part.trim());
+    return { criterionId: `criterion-${index + 1}`, title, maxPoints: Number(points), description: description.join(' | ') };
   });
 }
 
@@ -8086,6 +8306,7 @@ function activeStudentIdsForGroup(groupId) {
 }
 
 function dateInputValue(value) {
+  if (value === null || value === undefined || value === '') return '';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 }

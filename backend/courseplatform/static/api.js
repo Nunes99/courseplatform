@@ -825,6 +825,18 @@ export class CoursePlatformApi {
     return this.cachedAdminRequest('adminListSubmissions', filters, options);
   }
 
+  adminGradebook(filters = {}, options = {}) {
+    return this.cachedAdminRequest('adminListGradebook', filters, options);
+  }
+
+  adminAcademicCalendar(filters = {}, options = {}) {
+    return this.cachedAdminRequest('adminListAcademicCalendar', filters, options);
+  }
+
+  adminSaveAcademicCalendar(offeringId, events) {
+    return this.mutateAdmin('adminSaveAcademicCalendar', { offeringId, events });
+  }
+
   adminSubmission(attemptId, options = {}) {
     return this.cachedAdminRequest('adminGetSubmission', { attemptId }, options);
   }
