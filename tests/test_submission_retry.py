@@ -56,6 +56,7 @@ class SubmissionDatabase:
                                    deadline_at=NOW - timedelta(days=1), score=None,
                                    assessment_snapshot_json=snapshot)}
         self.reviews = []
+        self.grade_changes = []
         self.answers = {"A1": [dict(question_id="Q1", answer_text="Resposta anterior", selected_option_id="")]}
         self.files = {"F1": dict(file_id="F1", attempt_id="A1", student_id="S1", status="ACTIVE", file_name="errado.pdf")}
         self.queries = []
@@ -111,9 +112,27 @@ class SubmissionDatabase:
                             "correction_deadline", "unlock_next_lesson", "reviewed_at",
                             "rubric_snapshot_json", "rubric_scores_json", "previous_score",
                             "revision_number", "grade_reason"), params))
+            row["rubric_snapshot_json"] = actions.parse_assessment_snapshot(row["rubric_snapshot_json"])
+            row["rubric_scores_json"] = actions.parse_assessment_snapshot(row["rubric_scores_json"])
             self.reviews.append(row)
             return Result(row)
         if q.startswith("insert into courseplatform.grade_change_log"):
+            row = {
+                "grade_change_id": params[0],
+                "attempt_id": params[1],
+                "progress_id": params[2],
+                "review_id": params[4],
+                "actor_admin_id": params[5],
+                "previous_score": params[6],
+                "new_score": params[7],
+                "previous_decision": params[8],
+                "new_decision": params[9],
+                "reason": params[10],
+                "rubric_snapshot_json": actions.parse_assessment_snapshot(params[11]),
+                "rubric_scores_json": actions.parse_assessment_snapshot(params[12]),
+                "created_at": params[13],
+            }
+            self.grade_changes.append(row)
             return Result()
         if q.startswith("insert into courseplatform.attempts"):
             row = dict(zip(("attempt_id", "progress_id", "student_id", "lesson_id", "attempt_number", "started_at",
@@ -302,6 +321,39 @@ class SubmissionRetryTests(unittest.TestCase):
         self.db.progress.update(status="NOT_STARTED", evaluation_status="NOT_STARTED", attempt_count=0)
         result = actions.start_attempt({"lessonId": "L1"})["data"]["attempt"]
         self.assertEqual(result["attemptNumber"], 1)
+
+    def test_controlled_rubric_review_calculates_score_and_freezes_history(self):
+        frozen_rubric = {"criteria": [
+            {"criterionId": "analysis", "title": "Análise", "maxPoints": 40},
+            {"criterionId": "evidence", "title": "Evidências", "maxPoints": 60},
+        ]}
+        self.db.attempts["A1"]["assessment_snapshot_json"] = {
+            **copy.deepcopy(self.db.snapshot),
+            "rubric": copy.deepcopy(frozen_rubric),
+        }
+        result = actions.admin_review_submission({
+            "attemptId": "A1",
+            "decision": "APPROVED",
+            "score": 80,
+            "comments": "Revisão controlada da rubrica versionada.",
+            "rubricScores": [
+                {"criterionId": "analysis", "awardedPoints": 30, "comments": "Boa análise."},
+                {"criterionId": "evidence", "awardedPoints": 50, "comments": "Evidências adequadas."},
+            ],
+        })["data"]
+
+        self.assertEqual(80, result["attempt"]["score"])
+        self.assertEqual(80, self.db.grade_changes[0]["new_score"])
+        review_rubric = self.db.reviews[0]["rubric_snapshot_json"]
+        self.assertEqual(100, review_rubric["totalPoints"])
+        self.assertEqual(["analysis", "evidence"], [item["criterionId"] for item in review_rubric["criteria"]])
+        self.assertEqual(review_rubric, self.db.grade_changes[0]["rubric_snapshot_json"])
+
+        self.db.snapshot["rubric"] = {
+            "criteria": [{"criterionId": "new", "title": "Rubrica futura", "maxPoints": 100}],
+        }
+        self.assertEqual("Análise", review_rubric["criteria"][0]["title"])
+        self.assertEqual("Análise", self.db.grade_changes[0]["rubric_snapshot_json"]["criteria"][0]["title"])
 
 
 if __name__ == "__main__":

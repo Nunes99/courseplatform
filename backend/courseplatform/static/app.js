@@ -67,6 +67,22 @@ const lucideIconAliases = Object.freeze({
 const blueIcon = '00365b';
 const goldIcon = 'c9a55b';
 
+function deadlineTimestamp(value) {
+  if (!value) return Number.NaN;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(String(value))
+    ? `${value}T23:59:59.999`
+    : value;
+  return new Date(normalized).getTime();
+}
+
+function firstFutureDate(...values) {
+  const now = Date.now();
+  return values.find((value) => {
+    const timestamp = deadlineTimestamp(value);
+    return Number.isFinite(timestamp) && timestamp >= now;
+  }) || '';
+}
+
 let api;
 const state = {
   dashboard: null,
@@ -1511,12 +1527,13 @@ async function renderDashboard(view = 'overview') {
     .filter((item) => item && item.startAt && new Date(item.startAt).getTime() >= Date.now())
     .sort((left, right) => new Date(left.startAt).getTime() - new Date(right.startAt).getTime());
   const nextCalendarDeadline = upcomingCalendarEvents.find((item) => ['ASSESSMENT', 'DEADLINE'].includes(item.eventType));
-  const nextDeadlineValue = nextLessonItem?.activeAttempt?.deadlineAt
-    || nextCalendarDeadline?.startAt
-    || selectedCourseEntry?.group?.endDate
-    || dashboard.offering.endDate
-    || '';
-  const nextDeadlineLabel = nextDeadlineValue ? formatDate(nextDeadlineValue) : 'Sem prazo definido';
+  const nextDeadlineValue = firstFutureDate(
+    nextLessonItem?.activeAttempt?.deadlineAt,
+    nextCalendarDeadline?.startAt,
+    selectedCourseEntry?.group?.endDate,
+    dashboard.offering.endDate
+  );
+  const nextDeadlineLabel = nextDeadlineValue ? formatDate(nextDeadlineValue) : 'Sem prazo futuro';
 
   const certificateButton = dashboard.enrollment.status === 'COMPLETED'
     ? '<a class="button button-secondary" href="#/certifications">Minhas certificações</a>'

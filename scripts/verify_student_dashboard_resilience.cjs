@@ -48,12 +48,25 @@ function studentHome() {
     status: 'ACTIVE',
     progressPercent: 0,
   };
+  const offering = {
+    offeringId: 'OFF-QA',
+    offeringCode: 'QA-2026',
+    name: 'Edição encerrada',
+    endDate: '2020-01-31',
+    calendar: [],
+  };
+  const group = {
+    groupId: 'GRP-QA',
+    groupCode: 'QA-GROUP',
+    name: 'Grupo encerrado',
+    endDate: '2020-01-31',
+  };
   return {
     student,
-    courses: [{ course, enrollment, lessons: [] }],
+    courses: [{ course, enrollment, offering, group, lessons: [] }],
     selectedCourseId: course.courseId,
     selectedEnrollmentId: enrollment.enrollmentId,
-    dashboard: { student, course, enrollment, lessons: [] },
+    dashboard: { student, course, enrollment, offering, group, lessons: [] },
     mediaConfig: { logoUrl: '', videos: [] },
   };
 }
@@ -122,35 +135,45 @@ async function configurePage(page) {
   return failures;
 }
 
+async function validateViewport(browser, viewport) {
+  const context = await browser.newContext({ viewport, serviceWorkers: 'block' });
+  const page = await context.newPage();
+  const failures = await configurePage(page);
+  await page.goto(`${base}/index.html`, { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Email').fill('synthetic@example.test');
+  await page.getByLabel('Palavra-passe de acesso').fill('synthetic-password');
+  await page.getByRole('button', { name: 'Entrar na plataforma' }).click();
+  try {
+    await page.getByRole('heading', { name: /Synthetic Student/ }).waitFor({ timeout: 10000 });
+  } catch (error) {
+    const bodyText = await page.locator('body').innerText();
+    throw new Error(`${error.message}\nEstado da página:\n${bodyText}\nErros:\n${failures.join('\n')}`);
+  }
+  await page.getByText('Programa: Curso de validação', { exact: true }).waitFor();
+  await page.getByText('Sem prazo futuro', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), true);
+  if (viewport.width <= 1024) {
+    const menuButton = page.getByRole('button', { name: 'Abrir menu' });
+    await menuButton.focus();
+    await menuButton.press('Enter');
+    assert.equal(await menuButton.getAttribute('aria-expanded'), 'true');
+  }
+  assert.equal(failures.length, 0, failures.join('\n'));
+  await context.close();
+}
+
 async function main() {
   const browser = await chromium.launch({
     headless: true,
     executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   });
   try {
-    const context = await browser.newContext({
-      viewport: { width: 1440, height: 900 },
-      serviceWorkers: 'block',
-    });
-    const page = await context.newPage();
-    const failures = await configurePage(page);
-    await page.goto(`${base}/index.html`, { waitUntil: 'domcontentloaded' });
-    await page.getByLabel('Email').fill('synthetic@example.test');
-    await page.getByLabel('Palavra-passe de acesso').fill('synthetic-password');
-    await page.getByRole('button', { name: 'Entrar na plataforma' }).click();
-    try {
-      await page.getByRole('heading', { name: /Synthetic Student/ }).waitFor({ timeout: 10000 });
-    } catch (error) {
-      const bodyText = await page.locator('body').innerText();
-      throw new Error(`${error.message}\nEstado da página:\n${bodyText}\nErros:\n${failures.join('\n')}`);
-    }
-    await page.getByText('Programa: Curso de validação', { exact: true }).waitFor();
-    assert.equal(failures.length, 0, failures.join('\n'));
-    await context.close();
+    await validateViewport(browser, { width: 1440, height: 900 });
+    await validateViewport(browser, { width: 390, height: 844 });
   } finally {
     await browser.close();
   }
-  process.stdout.write('Dashboard carregou sem depender do service worker ou das rotas auxiliares.\n');
+  process.stdout.write('Dashboard validado em desktop/mobile, sem prazo expirado, overflow ou erros de consola.\n');
 }
 
 main().catch((error) => {

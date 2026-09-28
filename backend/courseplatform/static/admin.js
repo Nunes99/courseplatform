@@ -3361,7 +3361,7 @@ function normalizeAdminSurveyQuestions(questions = []) {
     'As atividades práticas ajudaram a consolidar o conhecimento?',
     'Como classifica o nível de dificuldade do curso?',
     'Como avalia o apoio recebido durante o curso?',
-    'Como foi a experiencia de uso da plataforma?',
+    'Como foi a experiência de uso da plataforma?',
     'Pretende aplicar os conhecimentos aprendidos?',
     'Recomendaria este curso a outra pessoa?'
   ];

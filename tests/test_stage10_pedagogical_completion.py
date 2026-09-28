@@ -167,6 +167,26 @@ class Stage10PedagogicalCompletionTests(unittest.TestCase):
         student_source = (ROOT / "public" / "app.js").read_text(encoding="utf-8")
         self.assertIn("student-calendar-panel", student_source)
         self.assertIn("dashboard.offering.calendar", student_source)
+        self.assertIn("firstFutureDate(", student_source)
+        self.assertIn("Sem prazo futuro", student_source)
+
+    def test_legacy_survey_spelling_is_corrected_without_changing_ids(self):
+        questions = actions.normalize_survey_questions([
+            {
+                "id": "platform_experience",
+                "prompt": "Como foi a experiencia de uso da plataforma?",
+                "options": ["Aceitavel", "Nao"],
+            },
+            {
+                "id": "custom",
+                "prompt": "Pergunta personalizada",
+                "options": ["Resposta personalizada"],
+            },
+        ])
+        self.assertEqual("platform_experience", questions[0]["id"])
+        self.assertEqual("Como foi a experiência de uso da plataforma?", questions[0]["prompt"])
+        self.assertEqual(["Aceitável", "Não"], questions[0]["options"])
+        self.assertEqual("Pergunta personalizada", questions[1]["prompt"])
 
 
 if __name__ == "__main__":

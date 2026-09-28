@@ -1196,7 +1196,7 @@ def default_certificate_settings(course: dict[str, Any] | None = None):
     course_title = (course or {}).get("title") or "o curso"
     return {
         "congratulationsMessage": (
-            f"Parabens pela conclusão de {course_title}. "
+            f"Parabéns pela conclusão de {course_title}. "
             "A sua participação foi registada com sucesso."
         ),
         "surveyQuestions": [
@@ -1207,7 +1207,7 @@ def default_certificate_settings(course: dict[str, Any] | None = None):
             {"id": "practical_activities", "prompt": "As atividades práticas ajudaram a consolidar o conhecimento?", "options": ["Ajudaram muito", "Ajudaram", "Ajudaram pouco", "Não ajudaram"], "required": True},
             {"id": "difficulty", "prompt": "Como classifica o nível de dificuldade do curso?", "options": ["Adequado", "Fácil", "Exigente, mas positivo", "Muito difícil"], "required": True},
             {"id": "support", "prompt": "Como avalia o apoio recebido durante o curso?", "options": ["Excelente", "Bom", "Regular", "Insuficiente"], "required": True},
-            {"id": "platform_experience", "prompt": "Como foi a experiencia de uso da plataforma?", "options": ["Muito intuitiva", "Intuitiva", "Aceitavel", "Confusa"], "required": True},
+            {"id": "platform_experience", "prompt": "Como foi a experiência de uso da plataforma?", "options": ["Muito intuitiva", "Intuitiva", "Aceitável", "Confusa"], "required": True},
             {"id": "application", "prompt": "Pretende aplicar os conhecimentos aprendidos?", "options": ["Sim, imediatamente", "Sim, futuramente", "Talvez", "Não"], "required": True},
             {"id": "recommendation", "prompt": "Recomendaria este curso a outra pessoa?", "options": ["Sim, com certeza", "Sim", "Talvez", "Não"], "required": True},
         ],
@@ -1378,18 +1378,34 @@ def normalize_certificate_profile(value: Any, course: dict[str, Any] | None = No
 
 
 def normalize_survey_questions(value: Any) -> list[dict[str, Any]]:
+    legacy_spelling = {
+        "Como foi a experiencia de uso da plataforma?": "Como foi a experiência de uso da plataforma?",
+        "Os conteudos foram relevantes para os seus objetivos?": "Os conteúdos foram relevantes para os seus objetivos?",
+        "As atividades praticas ajudaram a consolidar o conhecimento?": "As atividades práticas ajudaram a consolidar o conhecimento?",
+        "Como classifica o nivel de dificuldade do curso?": "Como classifica o nível de dificuldade do curso?",
+        "Aceitavel": "Aceitável",
+        "Facil": "Fácil",
+        "Muito dificil": "Muito difícil",
+        "Nao": "Não",
+        "Nao relevantes": "Não relevantes",
+        "Nao ajudaram": "Não ajudaram",
+    }
+
+    def corrected_spelling(text: str) -> str:
+        return legacy_spelling.get(text, text)
+
     source = value if isinstance(value, list) else []
     normalized: list[dict[str, Any]] = []
     fallback_options = ["Excelente", "Bom", "Regular", "Precisa melhorar"]
     for index, item in enumerate(source[:10], start=1):
         if isinstance(item, dict):
-            prompt = str_value(item.get("prompt") or item.get("question") or item.get("text"))
+            prompt = corrected_spelling(str_value(item.get("prompt") or item.get("question") or item.get("text")))
             options = item.get("options") if isinstance(item.get("options"), list) else []
-            clean_options = [str_value(option) for option in options if str_value(option)]
+            clean_options = [corrected_spelling(str_value(option)) for option in options if str_value(option)]
             question_id = str_value(item.get("id")) or f"q{index}"
             required = True if item.get("required") is None else as_bool(item.get("required"))
         else:
-            prompt = str_value(item)
+            prompt = corrected_spelling(str_value(item))
             clean_options = fallback_options
             question_id = f"q{index}"
             required = True
