@@ -162,6 +162,8 @@ class Stage10PedagogicalCompletionTests(unittest.TestCase):
         source = (ROOT / "public" / "admin.js").read_text(encoding="utf-8")
         for contract in ("data-admin-view=\"gradebook\"", "data-admin-view=\"calendar\"", "data-rubric-score", "gradeHistory"):
             self.assertIn(contract, source)
+        self.assertIn("formatGradebookScore(item.finalScore)", source)
+        self.assertIn("maximumFractionDigits: 2", source)
         student_source = (ROOT / "public" / "app.js").read_text(encoding="utf-8")
         self.assertIn("student-calendar-panel", student_source)
         self.assertIn("dashboard.offering.calendar", student_source)

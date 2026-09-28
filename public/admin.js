@@ -4064,7 +4064,7 @@ function renderGradebook() {
         <td><strong>${escapeHtml(item.course.title || '-')}</strong><small>${escapeHtml(item.course.courseCode || '')} · versão ${escapeHtml(item.course.versionNumber || '')}</small></td>
         <td>${escapeHtml(item.offering.offeringCode || item.offering.name || '-')}<small>${escapeHtml(item.group?.groupCode || item.group?.name || 'Sem grupo')}</small></td>
         <td><strong>${escapeHtml(item.progressPercent)}%</strong><small>${escapeHtml(item.approvedCount)} de ${escapeHtml(item.lessonCount)} módulos</small></td>
-        <td>${item.finalScore === null || item.finalScore === undefined ? '-' : escapeHtml(item.finalScore)}</td>
+        <td>${escapeHtml(formatGradebookScore(item.finalScore))}</td>
         <td><span class="status-pill ${statusClass(item.status)}">${escapeHtml(statusLabel(item.status))}</span></td>
       </tr>`).join('') : '<tr><td colspan="6" class="empty-table">Nenhuma matrícula encontrada para estes filtros.</td></tr>'}
     </tbody></table></div>
@@ -4083,6 +4083,13 @@ function renderGradebook() {
   root.querySelector('[data-cursor-pagination="gradebook"][data-direction="previous"]')?.addEventListener('click', () => moveCursorPage(state.gradebookPagination, 'previous', () => loadGradebook({ force: true })));
   root.querySelector('[data-cursor-pagination="gradebook"][data-direction="next"]')?.addEventListener('click', () => moveCursorPage(state.gradebookPagination, 'next', () => loadGradebook({ force: true })));
   reportHeight();
+}
+
+function formatGradebookScore(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '-';
+  return numeric.toLocaleString('pt-PT', { maximumFractionDigits: 2 });
 }
 
 function exportGradebookCsv() {

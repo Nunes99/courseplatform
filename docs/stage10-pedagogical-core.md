@@ -235,11 +235,22 @@ efémeros em funções Vercel e duplicação de notificações.
 
 ## Validação de release ainda necessária
 
-- fazer o deploy da aplicação compatível com o marcador `20260928190000`;
-- validar pauta, calendário e revisão por rubrica com contas reais de cada papel;
+- validar no painel do estudante o calendário e a conclusão com uma conta real;
+- validar uma revisão por rubrica quando existir uma tentativa criada com o novo
+  snapshot; tentativas históricas sem rubrica continuam compatíveis;
 - confirmar desktop/mobile, consola, teclado e estados vazio/erro/carregamento;
 - confirmar o backup e o plano de reversão operacional antes dos testes que
   alterem notas ou estados de conclusão.
+
+Após o deploy de 28 de setembro de 2026, uma sessão administrativa real
+confirmou a Pauta paginada, o Calendário académico por edição, a lista e o
+detalhe das submissões, as respostas comparadas com o gabarito, os ficheiros
+privados, o reenvio, as exceções individuais e os controlos administrativos.
+Nenhuma nota, conclusão, exceção ou evento foi alterado. A tentativa histórica
+inspecionada não possuía rubrica congelada, pelo que o formulário manteve o modo
+legado esperado. A validação encontrou apenas precisão decimal excessiva numa
+nota da Pauta; a interface passou a apresentar no máximo duas casas decimais,
+sem arredondar ou reescrever o valor persistido ou exportado.
 
 A produção de conteúdos de outros cursos, a aprovação institucional e a
 associação de versões a novas ofertas continuam decisões académicas do produto;
