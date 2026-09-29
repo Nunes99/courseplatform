@@ -252,10 +252,13 @@ confirmou a abertura do menu mobile por teclado. As grafias antigas exatas dos
 inquéritos são normalizadas na leitura sem alterar IDs, respostas históricas ou
 textos personalizados.
 
-Após o próximo deploy ainda é necessário confirmar em produção o novo rótulo de
-prazo e a ortografia do inquérito. Uma revisão com rubrica numa conta real é uma
-mutação académica e só deve ser executada numa tentativa deliberadamente criada
-para QA, depois de confirmar backup e reversão operacional.
+Após o deploy de 29 de setembro de 2026, uma sessão real confirmou em produção
+o rótulo `Sem prazo futuro` no lugar da data expirada e abriu o inquérito sem o
+submeter. As dez perguntas e respetivas opções apresentaram as grafias corrigidas,
+incluindo conteúdos, práticas, nível, fácil, difícil, experiência, aceitável e
+não. Uma revisão com rubrica numa conta real é uma mutação académica e só deve
+ser executada numa tentativa deliberadamente criada para QA, depois de confirmar
+backup e reversão operacional.
 
 Após o deploy de 28 de setembro de 2026, uma sessão administrativa real
 confirmou a Pauta paginada, o Calendário académico por edição, a lista e o

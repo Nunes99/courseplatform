@@ -1115,6 +1115,13 @@ def ensure_certificate_feature_schema(conn) -> None:
 def public_certificate(row: dict[str, Any] | None):
     if not row:
         return None
+    snapshot = row.get("template_snapshot_json") or {}
+    document = snapshot.get("document") if isinstance(snapshot, dict) else {}
+    document = document if isinstance(document, dict) else {}
+    recipient = document.get("recipient") if isinstance(document.get("recipient"), dict) else {}
+    course = document.get("course") if isinstance(document.get("course"), dict) else {}
+    credential = document.get("credential") if isinstance(document.get("credential"), dict) else {}
+    final_score = credential.get("finalScore", row.get("final_score"))
     return {
         "certificateId": row["certificate_id"],
         "studentId": row.get("student_id"),
@@ -1122,10 +1129,10 @@ def public_certificate(row: dict[str, Any] | None):
         "enrollmentId": row.get("enrollment_id"),
         "offeringId": row.get("offering_id"),
         "courseVersionId": row.get("course_version_id"),
-        "certificateNumber": row.get("certificate_number"),
-        "verificationCode": row.get("verification_code"),
-        "issueDate": iso(row.get("issue_date")),
-        "finalScore": None if row.get("final_score") is None else float(row["final_score"]),
+        "certificateNumber": credential.get("certificateNumber") or row.get("certificate_number"),
+        "verificationCode": credential.get("verificationCode") or row.get("verification_code"),
+        "issueDate": credential.get("issueDate") or iso(row.get("issue_date")),
+        "finalScore": None if final_score is None else float(final_score),
         "driveUrl": row.get("drive_url"),
         "status": row.get("status"),
         "certificateType": row.get("certificate_type") or "SIMPLE",
@@ -1137,13 +1144,18 @@ def public_certificate(row: dict[str, Any] | None):
         "statusNote": row.get("status_note"),
         "statusUpdatedAt": iso(row.get("status_updated_at")),
         "approvedAt": iso(row.get("approved_at")),
-        "templateSnapshot": row.get("template_snapshot_json") or {},
-        "courseTitle": row.get("course_title") or row.get("title"),
-        "studentName": row.get("student_name") or row.get("full_name"),
+        "templateSnapshot": snapshot,
+        "documentSnapshotVersion": int(row.get("document_snapshot_version") or snapshot.get("version") or 1),
+        "documentSnapshotHash": row.get("document_snapshot_hash") or "",
+        "generationRevision": int(row.get("generation_revision") or 1),
+        "supersedesCertificateId": row.get("supersedes_certificate_id"),
+        "reissuedAt": iso(row.get("reissued_at")),
+        "courseTitle": course.get("title") or row.get("course_title") or row.get("title"),
+        "studentName": recipient.get("fullName") or row.get("student_name") or row.get("full_name"),
     }
 
 
-def public_certificate_request(row: dict[str, Any] | None):
+def public_certificate_request(row: dict[str, Any] | None, *, include_survey_answers: bool = False):
     if not row:
         return None
     receipt_available = bool(
@@ -1154,7 +1166,7 @@ def public_certificate_request(row: dict[str, Any] | None):
         )
         or str_value(row.get("payment_receipt_url"))
     )
-    return {
+    result = {
         "requestId": row["request_id"],
         "studentId": row.get("student_id"),
         "courseId": row.get("course_id"),
@@ -1164,7 +1176,6 @@ def public_certificate_request(row: dict[str, Any] | None):
         "certificateId": row.get("certificate_id"),
         "requestType": row.get("request_type"),
         "status": row.get("status"),
-        "surveyAnswers": row.get("survey_answers_json") or {},
         "paymentReceiptName": row.get("payment_receipt_name"),
         "paymentReceiptUrl": (
             f"/api/certificate-requests/{row['request_id']}/receipt" if receipt_available else ""
@@ -1190,6 +1201,11 @@ def public_certificate_request(row: dict[str, Any] | None):
         "certificateType": row.get("certificate_type"),
         "contentSummary": row.get("content_summary"),
     }
+    if include_survey_answers:
+        result["surveyAnswers"] = row.get("survey_answers_json") or {}
+        result["surveyQuestionsSnapshot"] = row.get("survey_questions_snapshot_json") or []
+        result["surveySubmittedAt"] = iso(row.get("survey_submitted_at"))
+    return result
 
 
 def default_certificate_settings(course: dict[str, Any] | None = None):
@@ -1444,6 +1460,10 @@ def certificate_template_snapshot(
     course_id: str,
     certificate_type: str = "SIMPLE",
     course_version: dict[str, Any] | None = None,
+    *,
+    certificate_data: dict[str, Any] | None = None,
+    student: dict[str, Any] | None = None,
+    content_summary: str | None = None,
 ) -> dict[str, Any]:
     course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
     version = course_version or {}
@@ -1459,8 +1479,11 @@ def certificate_template_snapshot(
     profile = normalize_certificate_profile(settings.get("certificateProfile"), document_course)
     if not profile.get("certifiedContents"):
         profile["certifiedContents"] = certificate_content_summary(conn, course_id, version)
+    certificate_data = certificate_data or {}
+    content_summary = content_summary or certificate_content_summary(conn, course_id, version)
+    participation = normalize_participation_policy(profile.get("participation"))
     return {
-        "version": 1,
+        "version": 2,
         "certificateType": certificate_type,
         "capturedAt": iso(utc_now()),
         "courseId": course_id,
@@ -1468,7 +1491,53 @@ def certificate_template_snapshot(
         "courseTitle": document_course.get("title"),
         "courseHours": float(document_course.get("total_hours") or 0),
         "profile": profile,
+        "document": {
+            "recipient": {
+                "studentId": (student or {}).get("student_id") or certificate_data.get("studentId"),
+                "fullName": (student or {}).get("full_name") or certificate_data.get("studentName"),
+            },
+            "course": {
+                "courseId": course_id,
+                "courseVersionId": version.get("course_version_id"),
+                "title": document_course.get("title"),
+                "description": document_course.get("description"),
+                "hours": float(document_course.get("total_hours") or 0),
+                "passingScore": document_course.get("passing_score"),
+                "contentSummary": content_summary,
+            },
+            "credential": {
+                "certificateType": certificate_type,
+                "recognitionLevel": certificate_data.get("recognitionLevel") or (
+                    "CONTENT_DETAILED" if certificate_type == "PROFESSIONAL" else "PARTICIPATION"
+                ),
+                "certificateNumber": certificate_data.get("certificateNumber"),
+                "verificationCode": certificate_data.get("verificationCode"),
+                "issueDate": certificate_data.get("issueDate"),
+                "finalScore": certificate_data.get("finalScore"),
+            },
+            "policies": {
+                "participation": participation,
+                "professional": {
+                    "printAccess": profile.get("printAccess"),
+                    "price": settings.get("professionalPrice") or profile.get("printFee") or "",
+                    "currency": profile.get("printCurrency") or "MZN",
+                    "maxDownloads": certificate_data.get("maxDownloads"),
+                    "paymentStatus": certificate_data.get("paymentStatus"),
+                },
+            },
+            "survey": {
+                "congratulationsMessage": settings.get("congratulationsMessage"),
+                "questions": settings.get("surveyQuestions") or [],
+            },
+        },
     }
+
+
+def certificate_snapshot_hash(snapshot: dict[str, Any] | None) -> str:
+    if not isinstance(snapshot, dict) or not snapshot:
+        return ""
+    canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def certificate_token(length: int = 10) -> str:
@@ -2078,6 +2147,7 @@ def _certificate_runtime() -> certificate_domain.CertificateRuntime:
         certificate_document_payload=certificate_document_payload,
         certificate_download_access=certificate_download_access,
         certificate_number=certificate_number,
+        certificate_snapshot_hash=certificate_snapshot_hash,
         certificate_settings_payload=certificate_settings_payload,
         certificate_template_snapshot=certificate_template_snapshot,
         certificate_token=certificate_token,
@@ -2113,6 +2183,7 @@ def _certificate_runtime() -> certificate_domain.CertificateRuntime:
         success=success,
         sync_enrollment_completion=sync_enrollment_completion,
         upload_raster_asset_to_storage=upload_raster_asset_to_storage,
+        utc_now=utc_now,
     )
 
 
@@ -2125,6 +2196,7 @@ def _financial_runtime() -> financial_domain.FinancialRuntime:
         audit=audit,
         certificate_content_summary=certificate_content_summary,
         certificate_number=certificate_number,
+        certificate_snapshot_hash=certificate_snapshot_hash,
         certificate_template_snapshot=certificate_template_snapshot,
         certificate_verification_code=certificate_verification_code,
         connection=connection,
@@ -2148,6 +2220,7 @@ def _financial_runtime() -> financial_domain.FinancialRuntime:
         success=success,
         upload_private_object=upload_private_object,
         validate_upload=validate_upload,
+        utc_now=utc_now,
     )
 
 
@@ -2926,10 +2999,21 @@ def certificate_document_payload(
     snapshot: dict[str, Any] | None,
     verification_base_url: str,
 ) -> dict[str, Any]:
-    final_score = row.get("final_score")
+    snapshot = snapshot or {}
+    stored_hash = str_value(row.get("document_snapshot_hash"))
+    if stored_hash and stored_hash != certificate_snapshot_hash(snapshot):
+        raise ApiError(
+            "CERTIFICATE_INTEGRITY_FAILED",
+            "A integridade do certificado não pôde ser confirmada. Contacte a administração.",
+        )
+    document = snapshot.get("document") if isinstance(snapshot.get("document"), dict) else {}
+    credential = document.get("credential") if isinstance(document.get("credential"), dict) else {}
+    course_document = document.get("course") if isinstance(document.get("course"), dict) else {}
+    recipient = document.get("recipient") if isinstance(document.get("recipient"), dict) else {}
+    final_score = credential.get("finalScore", row.get("final_score"))
     if final_score is None:
         final_score = row.get("enrollment_score")
-    certificate = public_certificate({**row, "final_score": final_score})
+    certificate = public_certificate({**row, "final_score": final_score, "template_snapshot_json": snapshot})
     model = "professional" if certificate.get("certificateType") == "PROFESSIONAL" else "participation"
     verification_code = certificate.get("verificationCode") or certificate.get("certificateNumber") or ""
     separator = "&" if "?" in verification_base_url else "?"
@@ -2948,14 +3032,14 @@ def certificate_document_payload(
         "model": model,
         "pdfData": {
             "issuer_name": profile.get("issuerName") or "LMTWEBNAIRS Summer School",
-            "student_name": certificate.get("studentName"),
-            "course_title": certificate.get("courseTitle"),
+            "student_name": recipient.get("fullName") or certificate.get("studentName"),
+            "course_title": course_document.get("title") or certificate.get("courseTitle"),
             "certificate_number": certificate.get("certificateNumber"),
             "verification_code": verification_code,
             "verification_url": verification_url,
             "issue_date": certificate.get("issueDate"),
             "final_score": certificate.get("finalScore"),
-            "content_summary": profile.get("certifiedContents") or certificate.get("contentSummary"),
+            "content_summary": profile.get("certifiedContents") or course_document.get("contentSummary") or certificate.get("contentSummary"),
             "workload": certificate_workload_label(snapshot, row.get("course_hours")),
             "certificate_profile": profile,
         },

@@ -3850,8 +3850,8 @@ async function renderCertificate() {
   root.innerHTML = `
     <section class="certificate-card">
       <p class="eyebrow">${escapeHtml(config.organizationName)}</p>
-      <h1>Certificado de conclusão</h1>
-      <p class="certificate-lead">Este registo confirma a conclusão do curso</p>
+      <h1>Certificado de participação</h1>
+      <p class="certificate-lead">Este registo confirma a participação e o aproveitamento no curso</p>
       <h2>${escapeHtml(config.appName)}</h2>
 
       <div class="certificate-data">
@@ -4341,7 +4341,7 @@ function showCertificatePreview(certificateId) {
 
 function certificatePreviewTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
-  const title = isProfessional ? 'CERTIFICADO PROFISSIONAL DE CONCLUSÃO' : 'CERTIFICADO DE PARTICIPAÇÃO';
+  const title = isProfessional ? 'CERTIFICADO DE QUALIFICAÇÃO' : 'CERTIFICADO DE PARTICIPAÇÃO';
   const snapshot = certificate.templateSnapshot || {};
   const profile = snapshot.profile || {};
   const assets = profile.assets || {};

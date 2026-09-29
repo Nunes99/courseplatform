@@ -25,6 +25,7 @@ class FinancialRuntime:
     audit: Callable[..., Any]
     certificate_content_summary: Callable[..., Any]
     certificate_number: Callable[..., Any]
+    certificate_snapshot_hash: Callable[..., Any]
     certificate_template_snapshot: Callable[..., Any]
     certificate_verification_code: Callable[..., Any]
     connection: Callable[..., Any]
@@ -48,6 +49,7 @@ class FinancialRuntime:
     success: Callable[..., Any]
     upload_private_object: Callable[..., Any]
     validate_upload: Callable[..., Any]
+    utc_now: Callable[..., Any]
 
 
 def submit_professional_certificate_payment_action(payload: dict[str, Any], runtime: FinancialRuntime):
@@ -186,6 +188,9 @@ def admin_list_certificate_requests_action(payload: dict[str, Any], runtime: Fin
         rows = conn.execute(
             f"""
             select cr.*, s.full_name, s.email, c.title,
+                   csr.answers_json as survey_answers_json,
+                   csr.questions_snapshot_json as survey_questions_snapshot_json,
+                   csr.submitted_at as survey_submitted_at,
                    cert.certificate_number, cert.verification_code, cert.issue_date,
                    cert.final_score, cert.certificate_type, cert.content_summary,
                    coalesce(cr.submitted_at, cr.updated_at, cr.created_at) as pagination_sort_at
@@ -193,9 +198,10 @@ def admin_list_certificate_requests_action(payload: dict[str, Any], runtime: Fin
             join courseplatform.students s on s.student_id = cr.student_id
             join courseplatform.courses c on c.course_id = cr.course_id
             left join courseplatform.certificates cert on cert.certificate_id = cr.certificate_id
+            left join courseplatform.certificate_survey_responses csr on csr.request_id = cr.request_id
             left join courseplatform.enrollments e on e.enrollment_id = cr.enrollment_id
             where (%s = 'ALL' or cr.status = %s)
-              and (%s = false or coalesce(cr.survey_answers_json, '{{}}'::jsonb) <> '{{}}'::jsonb)
+              and (%s = false or csr.response_id is not null)
               and (
                 %s = ''
                 or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
@@ -219,7 +225,14 @@ def admin_list_certificate_requests_action(payload: dict[str, Any], runtime: Fin
         "request_id",
     )
     return success({
-        "requests": [public_certificate_request(row) for row in rows],
+        "requests": [
+            (
+                public_certificate_request(row, include_survey_answers=True)
+                if survey_only
+                else public_certificate_request(row)
+            )
+            for row in rows
+        ],
         "pagination": page_info,
     })
 
@@ -230,6 +243,7 @@ def admin_review_certificate_request_action(payload: dict[str, Any], runtime: Fi
     audit = runtime.audit
     certificate_content_summary = runtime.certificate_content_summary
     certificate_number = runtime.certificate_number
+    certificate_snapshot_hash = runtime.certificate_snapshot_hash
     certificate_template_snapshot = runtime.certificate_template_snapshot
     certificate_verification_code = runtime.certificate_verification_code
     connection = runtime.connection
@@ -241,6 +255,7 @@ def admin_review_certificate_request_action(payload: dict[str, Any], runtime: Fi
     resolve_student_enrollment_with_conn = runtime.resolve_student_enrollment_with_conn
     str_value = runtime.str_value
     success = runtime.success
+    utc_now = runtime.utc_now
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["requestId", "decision"])
     decision = str_value(payload.get("decision")).upper()
@@ -283,6 +298,30 @@ def admin_review_certificate_request_action(payload: dict[str, Any], runtime: Fi
                 "select * from courseplatform.course_versions where course_version_id = %s",
                 (enrollment["course_version_id"],),
             ).fetchone()
+            cert_id = generate_id("CERT")
+            number = certificate_number()
+            verification_code = certificate_verification_code()
+            issue_date = utc_now()
+            summary = certificate_content_summary(conn, request["course_id"], version)
+            snapshot = certificate_template_snapshot(
+                conn,
+                request["course_id"],
+                "PROFESSIONAL",
+                version,
+                certificate_data={
+                    "studentId": request["student_id"],
+                    "studentName": (student or {}).get("full_name"),
+                    "certificateNumber": number,
+                    "verificationCode": verification_code,
+                    "issueDate": issue_date.isoformat(),
+                    "finalScore": enrollment.get("final_score"),
+                    "recognitionLevel": "CONTENT_DETAILED",
+                    "maxDownloads": 5,
+                    "paymentStatus": "CONFIRMED",
+                },
+                student=student,
+                content_summary=summary,
+            )
             certificate = conn.execute(
                 """
                 insert into courseplatform.certificates
@@ -290,26 +329,29 @@ def admin_review_certificate_request_action(payload: dict[str, Any], runtime: Fi
                    course_version_id, certificate_number, verification_code,
                    issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
                    recognition_level, content_summary, template_snapshot_json, professional_request_id,
-                   download_count, max_downloads, payment_status, approved_by, approved_at)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, now(), %s,
+                   download_count, max_downloads, payment_status, approved_by, approved_at,
+                   document_snapshot_version, document_snapshot_hash, generation_revision)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                   '', '', 'ISSUED', 'PROFESSIONAL', 'CONTENT_DETAILED', %s, %s, %s, 0, 5,
-                  'CONFIRMED', %s, now())
+                  'CONFIRMED', %s, now(), 2, %s, 1)
                 returning *
                 """,
                 (
-                    generate_id("CERT"),
+                    cert_id,
                     request["student_id"],
                     request["course_id"],
                     enrollment["enrollment_id"],
                     enrollment["offering_id"],
                     enrollment["course_version_id"],
-                    certificate_number(),
-                    certificate_verification_code(),
+                    number,
+                    verification_code,
+                    issue_date,
                     enrollment.get("final_score"),
-                    certificate_content_summary(conn, request["course_id"], version),
-                    json.dumps(certificate_template_snapshot(conn, request["course_id"], "PROFESSIONAL", version)),
+                    summary,
+                    json.dumps(snapshot),
                     request["request_id"],
                     admin["admin_id"],
+                    certificate_snapshot_hash(snapshot),
                 ),
             ).fetchone()
             request = conn.execute(
@@ -364,6 +406,15 @@ def admin_delete_certificate_request_action(payload: dict[str, Any], runtime: Fi
         ).fetchone()
         if not request:
             raise ApiError("CERTIFICATE_REQUEST_NOT_FOUND", "Pedido de certificado não encontrado.")
+        survey_response = conn.execute(
+            "select response_id from courseplatform.certificate_survey_responses where request_id = %s",
+            (request["request_id"],),
+        ).fetchone()
+        if survey_response:
+            raise ApiError(
+                "CERTIFICATE_REQUEST_PROTECTED",
+                "Pedidos com resposta de inquérito devem ser preservados para auditoria.",
+            )
         if request.get("certificate_id"):
             raise ApiError(
                 "CERTIFICATE_REQUEST_PROTECTED",

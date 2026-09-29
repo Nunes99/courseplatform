@@ -594,6 +594,12 @@ alter table courseplatform.certificates add column if not exists status_note tex
 alter table courseplatform.certificates add column if not exists status_updated_by text;
 alter table courseplatform.certificates add column if not exists status_updated_at timestamptz;
 alter table courseplatform.certificates add column if not exists template_snapshot_json jsonb not null default '{}'::jsonb;
+alter table courseplatform.certificates add column if not exists document_snapshot_version integer not null default 1;
+alter table courseplatform.certificates add column if not exists document_snapshot_hash text;
+alter table courseplatform.certificates add column if not exists generation_revision integer not null default 1;
+alter table courseplatform.certificates add column if not exists supersedes_certificate_id text;
+alter table courseplatform.certificates add column if not exists reissued_by text;
+alter table courseplatform.certificates add column if not exists reissued_at timestamptz;
 
 create table if not exists courseplatform.certificate_settings (
   course_id text primary key references courseplatform.courses(course_id) on delete cascade,
@@ -724,7 +730,7 @@ create table if not exists courseplatform.schema_versions (
 );
 
 insert into courseplatform.schema_versions (component, version, applied_at)
-values ('application', 20260928190000, now())
+values ('application', 20260929120000, now())
 on conflict (component) do update
 set version = excluded.version,
     applied_at = excluded.applied_at

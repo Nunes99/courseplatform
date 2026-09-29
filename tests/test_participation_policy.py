@@ -72,7 +72,9 @@ class CertificateDB:
         if sql.startswith('insert into courseplatform.certificates'):
             self.cert = {'certificate_id': params[0], 'student_id': params[1], 'course_id': params[2],
                          'certificate_type': 'SIMPLE', 'status': 'ISSUED', 'download_count': 0,
-                         'max_downloads': None, 'template_snapshot_json': json.loads(params[-1])}
+                         'max_downloads': None, 'template_snapshot_json': json.loads(params[-2]),
+                         'document_snapshot_hash': params[-1], 'document_snapshot_version': 2,
+                         'generation_revision': 1}
             return Result([self.cert])
         if sql.startswith('select * from courseplatform.certificate_requests'):
             if 'request_id = %s' in sql:

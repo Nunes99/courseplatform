@@ -6,7 +6,7 @@
 executa `supabase/schema.sql`, `supabase/chat_realtime.sql` ou
 `backend/courseplatform/schema.sql` durante pedidos.
 
-A versão exigida pelo backend é `20260928190000`. A última migração estrutural grava esse
+A versão exigida pelo backend é `20260929120000`. A última migração estrutural grava esse
 valor em `courseplatform.schema_versions`. Uma ausência ou diferença produz
 `DATABASE_MIGRATION_REQUIRED`; a aplicação não tenta corrigir a base.
 
@@ -47,6 +47,7 @@ emite um certificado numa transação e não altera o esquema.
 14. `20260928120000_repair_epg_course_metadata.sql`: reparação de dados do curso EPG importado sem títulos ou ordem; preserva IDs, matrículas, progressos e a versão publicada, guardando o estado anterior para rollback operacional.
 15. `20260928133000_seed_epg_v2_draft_content.sql`: cria a versão 2 em rascunho do curso EPG e dez versões imutáveis de questões, sem publicar o curso nem alterar registos académicos históricos.
 16. `20260928190000_complete_stage10_pedagogical_core.sql`: adiciona rubricas, histórico imutável de notas e snapshots de conclusão por matrícula.
+17. `20260929120000_complete_stage11_certification_contract.sql`: congela o contrato documental dos certificados, introduz reemissões encadeadas e separa as respostas dos inquéritos das solicitações financeiras.
 
 A migração `20260926120000` foi aplicada ao projeto Supabase principal em 27 de
 setembro de 2026 e registada no histórico remoto. A validação posterior confirmou
@@ -85,6 +86,13 @@ somente `SELECT` e `INSERT`. Foi aplicada ao projeto Supabase principal em 28 de
 setembro de 2026 e registada em `supabase_migrations.schema_migrations`. A
 validação posterior confirmou o marcador `20260928190000`, as colunas novas,
 RLS ativo e a ausência de privilégios para `anon` e `authenticated`.
+
+A migração `20260929120000` foi aplicada ao projeto Supabase principal em 30 de
+setembro de 2026 e registada em `supabase_migrations.schema_migrations`. A
+validação posterior confirmou o marcador `20260929120000`, seis colunas novas,
+quatro constraints, quatro índices, RLS ativo e ausência de leitura para `anon`
+e `authenticated`. As quatro respostas históricas de inquéritos foram copiadas
+para a tabela dedicada, sem remover nem alterar os dados legados.
 
 As migrações da Etapa 4 são aditivas e repetíveis. A migração histórica da role
 runtime é a exceção deliberada: uma segunda execução falha antes de alterar

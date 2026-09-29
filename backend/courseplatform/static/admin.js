@@ -2765,7 +2765,6 @@ function renderCertifications() {
             placeholder="Nome, email, ID, curso ou certificado">
         </label>
         <button class="button button-secondary" id="refreshCertificateData" type="button">Atualizar dados</button>
-        ${canManagePlatform() ? '<button class="button button-primary" id="refreshCertificateFormat" type="button">Atualizar formato</button>' : ''}
       </div>
     </div>
 
@@ -2791,7 +2790,7 @@ function renderCertifications() {
     <section class="admin-content-panel certificate-register-panel">
       <div class="course-section-heading">
         <div>
-          <p class="eyebrow">Conquistas verificaveis</p>
+          <p class="eyebrow">Conquistas verificáveis</p>
           <h2>Certificados</h2>
         </div>
         <span>${certificates.length} registos</span>
@@ -2803,6 +2802,7 @@ function renderCertifications() {
             ${studentFilterOption('ACTIVE', 'Ativos', state.certificateFilters.certificateStatus)}
             ${studentFilterOption('ISSUED', 'Emitidos', state.certificateFilters.certificateStatus)}
             ${studentFilterOption('BLOCKED', 'Bloqueados', state.certificateFilters.certificateStatus)}
+            ${studentFilterOption('SUPERSEDED', 'Substituídos', state.certificateFilters.certificateStatus)}
             ${studentFilterOption('DELETED', 'Apagados', state.certificateFilters.certificateStatus)}
             ${studentFilterOption('ALL', 'Todos', state.certificateFilters.certificateStatus)}
           </select>
@@ -2905,7 +2905,7 @@ function renderCertifications() {
             finalScore: 100
           })}
         </div>
-        <p class="empty-note">A pré-visualização acompanha o modelo atual. Use “Atualizar formato” para reprocessar certificados emitidos quando alterar a identidade ou os conteúdos.</p>
+        <p class="empty-note">A pré-visualização acompanha o modelo atual. Certificados emitidos preservam o modelo original; qualquer reemissão é individual e auditada.</p>
       </article>
     </section>
   `;
@@ -2944,7 +2944,6 @@ function renderCertifications() {
     scheduleCertificateRefresh();
   });
   document.querySelector('#refreshCertificateData').addEventListener('click', () => loadCertifications({ force: true }));
-  document.querySelector('#refreshCertificateFormat')?.addEventListener('click', refreshCertificateFormatAll);
   root.querySelectorAll('[data-cursor-pagination]').forEach((button) => {
     button.addEventListener('click', () => changeCertificatePage(
       button.dataset.cursorPagination,
@@ -3165,6 +3164,7 @@ function adminCertificateThumbnailTemplate(certificate) {
 function adminCertificateRowTemplate(certificate) {
   const deleted = certificate.status === 'DELETED';
   const blocked = certificate.status === 'BLOCKED';
+  const superseded = certificate.status === 'SUPERSEDED';
   const awaitingApproval = ['CERTIFICATE_APPROVAL_REQUIRED', 'DOWNLOAD_LIMIT_REACHED'].includes(certificate.downloadAccess?.code);
   const accessLabel = deleted ? 'Atribuir novamente' : (blocked || awaitingApproval ? 'Liberar acesso' : 'Remover acesso');
   const nextStatus = blocked || deleted || awaitingApproval ? 'ISSUED' : 'BLOCKED';
@@ -3191,13 +3191,13 @@ function adminCertificateRowTemplate(certificate) {
         ${deleted ? '' : `
           <button class="button button-small button-secondary" type="button" data-open-admin-certificate ${dataset}>Visualizar</button>
           <button class="button button-small button-secondary" type="button" data-download-admin-certificate ${dataset}>Baixar</button>
-          ${canManagePlatform() ? `<button class="button button-small button-secondary" type="button" data-refresh-certificate-format ${dataset}>Atualizar</button>` : ''}
+          ${canManagePlatform() && !superseded ? `<button class="button button-small button-secondary" type="button" data-refresh-certificate-format ${dataset}>Reemitir</button>` : ''}
         `}
-        ${canManagePlatform() ? `<button class="button button-small ${blocked || deleted ? 'button-primary' : 'button-secondary'}" type="button"
+        ${canManagePlatform() && !superseded ? `<button class="button button-small ${blocked || deleted ? 'button-primary' : 'button-secondary'}" type="button"
           data-set-certificate-status="${escapeHtml(nextStatus)}" ${dataset}>
           ${accessLabel}
         </button>` : ''}
-        ${!canManagePlatform() || deleted ? '' : `
+        ${!canManagePlatform() || deleted || superseded ? '' : `
           <button class="button button-small button-danger" type="button" data-delete-certificate ${dataset}>Apagar</button>
         `}
       </div>
@@ -3860,7 +3860,7 @@ function openAdminCertificatePreview(certificate) {
 
 function adminCertificatePreviewTemplate(certificate) {
   const isProfessional = certificate.certificateType === 'PROFESSIONAL';
-  const title = isProfessional ? 'CERTIFICADO PROFISSIONAL DE CONCLUSÃO' : 'CERTIFICADO DE PARTICIPAÇÃO';
+  const title = isProfessional ? 'CERTIFICADO DE QUALIFICAÇÃO' : 'CERTIFICADO DE PARTICIPAÇÃO';
   const snapshot = certificate.templateSnapshot || {};
   const profile = snapshot.profile || {};
   const assets = profile.assets || {};
@@ -3949,26 +3949,17 @@ async function setCertificateStatusFromButton(button) {
 async function refreshCertificateFormatFromButton(button) {
   const certificate = certificateFromDataset(button.dataset);
   if (!certificate.certificateId) return;
-  if (!confirmAdminAction('Deseja atualizar o formato e os conteúdos deste certificado?')) return;
-  setBusy(button, true, 'A atualizar...');
-  try {
-    await api.adminRefreshCertificateFormat({ certificateId: certificate.certificateId });
-    showToast('Formato do certificado atualizado.', 'success');
-    await loadCertifications({ force: true });
-  } catch (error) {
-    handleAdminError(error);
-  } finally {
-    setBusy(button, false);
+  if (!confirmAdminAction('Deseja reemitir este certificado? O documento atual será preservado como substituído.')) return;
+  const reason = window.prompt('Indique o motivo da reemissão:', 'Atualização do formato institucional.');
+  if (reason === null) return;
+  if (reason.trim().length < 3) {
+    showToast('Indique um motivo válido para a reemissão.', 'error');
+    return;
   }
-}
-
-async function refreshCertificateFormatAll(event) {
-  const button = event?.currentTarget || document.querySelector('#refreshCertificateFormat');
-  if (!confirmAdminAction('Deseja atualizar o formato dos certificados ativos deste curso?')) return;
-  setBusy(button, true, 'A atualizar...');
+  setBusy(button, true, 'A reemitir...');
   try {
-    const result = await api.adminRefreshCertificateFormat({ courseId: state.selectedCourseId });
-    showToast(`${result.updated || 0} certificado(s) atualizados.`, 'success');
+    await api.adminRefreshCertificateFormat({ certificateId: certificate.certificateId, reason: reason.trim() });
+    showToast('Certificado reemitido. O documento anterior foi preservado.', 'success');
     await loadCertifications({ force: true });
   } catch (error) {
     handleAdminError(error);

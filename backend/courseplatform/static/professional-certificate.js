@@ -31,26 +31,34 @@ function dateLabel(value) {
 }
 
 export function certificateWorkloadLabel(certificate) {
-  const hours = Number(certificate?.templateSnapshot?.courseHours);
+  const hours = Number(
+    certificate?.templateSnapshot?.document?.course?.hours
+    ?? certificate?.templateSnapshot?.courseHours
+  );
   if (!Number.isFinite(hours) || hours <= 0) return 'Não definida';
   return `${new Intl.NumberFormat('pt-PT', { maximumFractionDigits: 2 }).format(hours)} horas`;
 }
 
 function fieldsFor(certificate) {
   const profile = certificate.templateSnapshot?.profile || {};
+  const document = certificate.templateSnapshot?.document || {};
+  const recipient = document.recipient || {};
+  const course = document.course || {};
+  const credential = document.credential || {};
   const issuer = profile.issuerName || certificate.issuerName || 'LMTWEBNAIRS Summer School';
-  const code = certificate.verificationCode || certificate.certificateNumber || '';
-  const summary = profile.certifiedContents || certificate.contentSummary || '';
-  const score = certificate.finalScore == null || certificate.finalScore === '' ? '--' : `${Math.round(Number(certificate.finalScore))}%`;
+  const code = credential.verificationCode || certificate.verificationCode || credential.certificateNumber || certificate.certificateNumber || '';
+  const summary = profile.certifiedContents || course.contentSummary || certificate.contentSummary || '';
+  const scoreValue = credential.finalScore ?? certificate.finalScore;
+  const score = scoreValue == null || scoreValue === '' ? '--' : `${Math.round(Number(scoreValue))}%`;
   return {
     issuer, title: (profile.certificateTitle || 'Certificado de Qualificação').toUpperCase(),
     qualification: profile.qualificationType || 'sobre o aumento da qualificação profissional',
-    number: certificate.certificateNumber || certificate.certificateId || '',
+    number: credential.certificateNumber || certificate.certificateNumber || certificate.certificateId || '',
     documentLabel: 'Documento de qualificação', registerLabel: 'Número de registo', code,
-    location: profile.issueLocation || 'Cidade de Maputo, Moçambique', date: dateLabel(certificate.issueDate),
-    lead: 'O presente documento certifica que', student: certificate.studentName || 'Nome do participante',
+    location: profile.issueLocation || 'Cidade de Maputo, Moçambique', date: dateLabel(credential.issueDate || certificate.issueDate),
+    lead: 'O presente documento certifica que', student: recipient.fullName || certificate.studentName || 'Nome do participante',
     statement: `concluiu com sucesso o programa de qualificação profissional na ${issuer}.`,
-    courseLabel: 'CURSO / PROGRAMA', course: certificate.courseTitle || 'Curso',
+    courseLabel: 'CURSO / PROGRAMA', course: course.title || certificate.courseTitle || 'Curso',
     description: 'demonstrando aproveitamento satisfatório em atividades académicas, estudos de caso, discussões técnicas e avaliação final.',
     topicsLabel: clean(summary) ? 'O programa abordou:' : '',
     workload: `Carga horária: ${certificateWorkloadLabel(certificate)}`,
@@ -100,7 +108,8 @@ function safeImageUrl(value) {
 function verificationUrl(certificate) {
   const config = window.COURSE_PLATFORM_CONFIG || {};
   const url = new URL('/verify.html', config.apiUrl || window.location.origin);
-  url.searchParams.set('code', certificate.verificationCode || certificate.certificateNumber || '');
+  const credential = certificate.templateSnapshot?.document?.credential || {};
+  url.searchParams.set('code', credential.verificationCode || certificate.verificationCode || credential.certificateNumber || certificate.certificateNumber || '');
   return url.href;
 }
 

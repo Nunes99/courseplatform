@@ -42,6 +42,7 @@ class CertificateRuntime:
     certificate_document_payload: Callable[..., Any]
     certificate_download_access: Callable[..., Any]
     certificate_number: Callable[..., Any]
+    certificate_snapshot_hash: Callable[..., Any]
     certificate_settings_payload: Callable[..., Any]
     certificate_template_snapshot: Callable[..., Any]
     certificate_token: Callable[..., Any]
@@ -77,6 +78,7 @@ class CertificateRuntime:
     success: Callable[..., Any]
     sync_enrollment_completion: Callable[..., Any]
     upload_raster_asset_to_storage: Callable[..., Any]
+    utc_now: Callable[..., Any]
 
 
 def my_certificate_action(payload: dict[str, Any], runtime: CertificateRuntime):
@@ -130,7 +132,7 @@ def my_certifications_action(payload: dict[str, Any], runtime: CertificateRuntim
             join courseplatform.courses c on c.course_id = cert.course_id
             join courseplatform.students s on s.student_id = cert.student_id
             where cert.student_id = %s and cert.course_id = %s and cert.enrollment_id = %s
-              and coalesce(cert.status, 'ISSUED') <> 'DELETED'
+              and coalesce(cert.status, 'ISSUED') not in ('DELETED', 'SUPERSEDED')
             order by cert.issue_date desc nulls last
             """,
             (student["student_id"], course_id, enrollment["enrollment_id"]),
@@ -161,6 +163,7 @@ def my_certifications_action(payload: dict[str, Any], runtime: CertificateRuntim
 
 
 def request_professional_certificate_action(payload: dict[str, Any], runtime: CertificateRuntime):
+    audit = runtime.audit
     certificate_settings_payload = runtime.certificate_settings_payload
     connection = runtime.connection
     ensure_simple_certificate = runtime.ensure_simple_certificate
@@ -185,9 +188,21 @@ def request_professional_certificate_action(payload: dict[str, Any], runtime: Ce
             "select * from courseplatform.certificate_settings where course_id = %s",
             (course_id,),
         ).fetchone()
-        profile = certificate_settings_payload(settings_row, course).get("certificateProfile") or {}
+        settings_payload = certificate_settings_payload(settings_row, course)
+        profile = settings_payload.get("certificateProfile") or {}
         if profile.get("printAccess") == "blocked":
             raise ApiError("CERTIFICATE_PRINT_BLOCKED", "A emissão deste certificado profissional ainda não está disponível.")
+        required_questions = [
+            item.get("prompt")
+            for item in settings_payload.get("surveyQuestions") or []
+            if item.get("required") and item.get("prompt")
+        ]
+        missing_answers = [prompt for prompt in required_questions if not str_value(survey_answers.get(prompt))]
+        if missing_answers:
+            raise ApiError(
+                "CERTIFICATE_SURVEY_INCOMPLETE",
+                "Responda a todas as perguntas obrigatórias do inquérito antes de continuar.",
+            )
         initial_status = "REQUESTED" if profile.get("printAccess") == "paid" else "PAYMENT_SUBMITTED"
         existing = conn.execute(
             """
@@ -207,8 +222,7 @@ def request_professional_certificate_action(payload: dict[str, Any], runtime: Ce
             request = conn.execute(
                 """
                 update courseplatform.certificate_requests
-                set survey_answers_json = %s,
-                    status = case
+                set status = case
                       when %s = 'PAYMENT_SUBMITTED' and status = 'REQUESTED' then 'PAYMENT_SUBMITTED'
                       else status
                     end,
@@ -216,25 +230,51 @@ def request_professional_certificate_action(payload: dict[str, Any], runtime: Ce
                 where request_id = %s
                 returning *
                 """,
-                (json.dumps(survey_answers), initial_status, existing["request_id"]),
+                (initial_status, existing["request_id"]),
             ).fetchone()
         else:
             request = conn.execute(
                 """
                 insert into courseplatform.certificate_requests
                   (request_id, student_id, course_id, enrollment_id, offering_id,
-                   course_version_id, request_type, status,
-                   survey_answers_json, created_at, updated_at)
-                values (%s, %s, %s, %s, %s, %s, 'PROFESSIONAL', %s, %s, now(), now())
+                   course_version_id, request_type, status, created_at, updated_at)
+                values (%s, %s, %s, %s, %s, %s, 'PROFESSIONAL', %s, now(), now())
                 returning *
                 """,
                 (
                     generate_id("CREQ"), student["student_id"], course_id,
                     enrollment["enrollment_id"], enrollment["offering_id"],
                     enrollment["course_version_id"], initial_status,
-                    json.dumps(survey_answers),
                 ),
             ).fetchone()
+        survey_response = conn.execute(
+            """
+            insert into courseplatform.certificate_survey_responses
+              (response_id, request_id, student_id, course_id, enrollment_id, offering_id,
+               course_version_id, questions_snapshot_json, answers_json, submitted_at, updated_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+            on conflict (request_id) do update
+            set questions_snapshot_json = excluded.questions_snapshot_json,
+                answers_json = excluded.answers_json,
+                submitted_at = now(),
+                updated_at = now()
+            returning response_id
+            """,
+            (
+                generate_id("CSUR"), request["request_id"], student["student_id"], course_id,
+                enrollment["enrollment_id"], enrollment["offering_id"], enrollment["course_version_id"],
+                json.dumps(settings_payload.get("surveyQuestions") or []), json.dumps(survey_answers),
+            ),
+        ).fetchone()
+        audit(
+            conn,
+            "STUDENT",
+            student["student_id"],
+            "CERTIFICATE_SURVEY_SUBMITTED",
+            "CERTIFICATE_SURVEY_RESPONSE",
+            survey_response["response_id"],
+            {"requestId": request["request_id"], "courseId": course_id},
+        )
         conn.commit()
     return success({"request": public_certificate_request(request)})
 
@@ -295,7 +335,6 @@ def request_participation_certificate_action(payload: dict[str, Any], runtime: C
 
 
 def record_certificate_download_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    certificate_template_snapshot = runtime.certificate_template_snapshot
     connection = runtime.connection
     ensure_certificate_feature_schema = runtime.ensure_certificate_feature_schema
     public_certificate = runtime.public_certificate
@@ -323,9 +362,6 @@ def record_certificate_download_action(payload: dict[str, Any], runtime: Certifi
             """,
             (payload["certificateId"],),
         ).fetchone()
-        snapshot = cert.get("template_snapshot_json") if cert else None
-        if cert and not snapshot:
-            snapshot = certificate_template_snapshot(conn, cert.get("course_id"), cert.get("certificate_type"))
         conn.commit()
     return success({"certificate": public_certificate(cert)})
 
@@ -388,7 +424,7 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
             left join courseplatform.enrollments e on e.enrollment_id = cert.enrollment_id
             where (
                 %s = 'ALL'
-                or (%s = 'ACTIVE' and coalesce(cert.status, 'ISSUED') <> 'DELETED')
+                or (%s = 'ACTIVE' and coalesce(cert.status, 'ISSUED') not in ('DELETED', 'SUPERSEDED'))
                 or cert.status = %s
               )
               and (
@@ -444,6 +480,11 @@ def admin_set_certificate_status_action(payload: dict[str, Any], runtime: Certif
         ).fetchone()
         if not current:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
+        if current.get("status") == "SUPERSEDED":
+            raise ApiError(
+                "CERTIFICATE_SUPERSEDED",
+                "Este certificado foi substituído e o seu estado histórico não pode ser alterado.",
+            )
         if status == "ISSUED" and (current.get("certificate_type") or "SIMPLE") == "SIMPLE":
             if not participation_policy(conn, current["course_id"])["enabled"]:
                 raise ApiError("PARTICIPATION_DISABLED", "Ative o certificado de participação na configuração do curso antes de o disponibilizar.")
@@ -476,69 +517,141 @@ def admin_refresh_certificate_format_action(payload: dict[str, Any], runtime: Ce
     admin_context = runtime.admin_context
     audit = runtime.audit
     certificate_content_summary = runtime.certificate_content_summary
+    certificate_number = runtime.certificate_number
+    certificate_snapshot_hash = runtime.certificate_snapshot_hash
     certificate_template_snapshot = runtime.certificate_template_snapshot
+    certificate_verification_code = runtime.certificate_verification_code
     connection = runtime.connection
     ensure_certificate_feature_schema = runtime.ensure_certificate_feature_schema
+    generate_id = runtime.generate_id
+    participation_policy = runtime.participation_policy
     public_certificate = runtime.public_certificate
+    require_fields = runtime.require_fields
     str_value = runtime.str_value
     success = runtime.success
+    utc_now = runtime.utc_now
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    require_fields(payload, ["certificateId", "reason"])
     certificate_id = str_value(payload.get("certificateId"))
-    course_id = str_value(payload.get("courseId"))
+    reason = str_value(payload.get("reason"))
+    if len(reason) < 3:
+        raise ApiError("CERTIFICATE_REISSUE_REASON_REQUIRED", "Indique o motivo da reemissão.")
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
-        if certificate_id:
-            rows = conn.execute(
-                """
-                select certificate_id, course_id, certificate_type
-                from courseplatform.certificates
-                where certificate_id = %s
-                """,
-                (certificate_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                select certificate_id, course_id, certificate_type
-                from courseplatform.certificates
-                where coalesce(status, 'ISSUED') <> 'DELETED'
-                  and (%s = '' or course_id = %s)
-                order by issue_date desc nulls last
-                limit 500
-                """,
-                (course_id, course_id),
-            ).fetchall()
-        if not rows:
+        current = conn.execute(
+            """
+            select cert.*, s.full_name as student_name, c.title as course_title
+            from courseplatform.certificates cert
+            join courseplatform.students s on s.student_id = cert.student_id
+            join courseplatform.courses c on c.course_id = cert.course_id
+            where cert.certificate_id = %s
+            for update of cert
+            """,
+            (certificate_id,),
+        ).fetchone()
+        if not current:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
-
-        refreshed = []
-        for row in rows:
-            summary = certificate_content_summary(conn, row["course_id"])
-            snapshot = certificate_template_snapshot(conn, row["course_id"], row.get("certificate_type") or "SIMPLE")
-            certificate = conn.execute(
-                """
-                update courseplatform.certificates
-                set content_summary = %s,
-                    template_snapshot_json = %s,
-                    status_note = %s,
-                    status_updated_by = %s,
-                    status_updated_at = now()
-                where certificate_id = %s
-                returning *
-                """,
-                (
-                    summary,
-                    json.dumps(snapshot),
-                    "Formato e conteúdo do certificado atualizados pelo administrador.",
-                    admin["admin_id"],
-                    row["certificate_id"],
-                ),
-            ).fetchone()
-            if certificate:
-                refreshed.append(certificate)
-                audit(conn, "ADMIN", admin["admin_id"], "CERTIFICATE_FORMAT_REFRESHED", "CERTIFICATE", certificate["certificate_id"], {})
+        if current.get("status") in {"DELETED", "SUPERSEDED"}:
+            raise ApiError("CERTIFICATE_REISSUE_NOT_ALLOWED", "Este certificado não pode ser reemitido no estado atual.")
+        if current.get("status") not in {"ISSUED", "BLOCKED"}:
+            raise ApiError("CERTIFICATE_REISSUE_NOT_ALLOWED", "Este certificado não pode ser reemitido no estado atual.")
+        if (current.get("certificate_type") or "SIMPLE") == "SIMPLE":
+            if not participation_policy(conn, current["course_id"])["enabled"]:
+                raise ApiError(
+                    "PARTICIPATION_DISABLED",
+                    "Ative o certificado de participação antes de solicitar uma reemissão.",
+                )
+        already_reissued = conn.execute(
+            "select certificate_id from courseplatform.certificates where supersedes_certificate_id = %s",
+            (certificate_id,),
+        ).fetchone()
+        if already_reissued:
+            raise ApiError("CERTIFICATE_ALREADY_REISSUED", "Este certificado já possui uma reemissão.")
+        version = conn.execute(
+            "select * from courseplatform.course_versions where course_version_id = %s",
+            (current.get("course_version_id"),),
+        ).fetchone() if current.get("course_version_id") else None
+        student = {"student_id": current["student_id"], "full_name": current.get("student_name")}
+        issue_date = utc_now()
+        new_id = generate_id("CERT")
+        number = certificate_number()
+        verification_code = certificate_verification_code()
+        summary = certificate_content_summary(conn, current["course_id"], version)
+        revision = int(current.get("generation_revision") or 1) + 1
+        snapshot = certificate_template_snapshot(
+            conn,
+            current["course_id"],
+            current.get("certificate_type") or "SIMPLE",
+            version,
+            certificate_data={
+                "studentId": current["student_id"],
+                "studentName": current.get("student_name"),
+                "certificateNumber": number,
+                "verificationCode": verification_code,
+                "issueDate": runtime.iso(issue_date),
+                "finalScore": current.get("final_score"),
+                "recognitionLevel": current.get("recognition_level"),
+                "maxDownloads": current.get("max_downloads"),
+                "paymentStatus": current.get("payment_status"),
+            },
+            student=student,
+            content_summary=summary,
+        )
+        certificate = conn.execute(
+            """
+            insert into courseplatform.certificates
+              (certificate_id, student_id, course_id, enrollment_id, offering_id, course_version_id,
+               certificate_number, verification_code, issue_date, final_score, drive_file_id, drive_url,
+               status, certificate_type, recognition_level, content_summary, professional_request_id,
+               download_count, max_downloads, payment_status, approved_by, approved_at,
+               status_note, status_updated_by, status_updated_at, template_snapshot_json,
+               document_snapshot_version, document_snapshot_hash, generation_revision,
+               supersedes_certificate_id, reissued_by, reissued_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '', '', %s, %s, %s, %s, %s,
+                    0, %s, %s, %s, now(), %s, %s, now(), %s, 2, %s, %s, %s, %s, now())
+            returning *
+            """,
+            (
+                new_id, current["student_id"], current["course_id"], current.get("enrollment_id"),
+                current.get("offering_id"), current.get("course_version_id"), number, verification_code,
+                issue_date, current.get("final_score"), current.get("status"),
+                current.get("certificate_type") or "SIMPLE",
+                current.get("recognition_level") or "PARTICIPATION", summary,
+                current.get("professional_request_id"), current.get("max_downloads"),
+                current.get("payment_status") or "NOT_REQUIRED", admin["admin_id"],
+                f"Reemissão: {reason}", admin["admin_id"], json.dumps(snapshot),
+                certificate_snapshot_hash(snapshot), revision, certificate_id, admin["admin_id"],
+            ),
+        ).fetchone()
+        superseded = conn.execute(
+            """
+            update courseplatform.certificates
+            set status = 'SUPERSEDED', status_note = %s, status_updated_by = %s, status_updated_at = now()
+            where certificate_id = %s
+            returning *
+            """,
+            (f"Substituído pelo certificado {number}. Motivo: {reason}", admin["admin_id"], certificate_id),
+        ).fetchone()
+        conn.execute(
+            "update courseplatform.certificate_requests set certificate_id = %s, updated_at = now() where certificate_id = %s",
+            (new_id, certificate_id),
+        )
+        audit(
+            conn,
+            "ADMIN",
+            admin["admin_id"],
+            "CERTIFICATE_REISSUED",
+            "CERTIFICATE",
+            new_id,
+            {"supersedesCertificateId": certificate_id, "reason": reason, "generationRevision": revision},
+        )
         conn.commit()
-    return success({"updated": len(refreshed), "certificates": [public_certificate(row) for row in refreshed]})
+    return success({
+        "updated": 1,
+        "certificate": public_certificate(certificate),
+        "certificates": [public_certificate(certificate)],
+        "supersededCertificate": public_certificate(superseded),
+    })
 
 
 def admin_delete_certificate_action(payload: dict[str, Any], runtime: CertificateRuntime):
@@ -803,8 +916,9 @@ def admin_upload_certificate_asset_action(payload: dict[str, Any], runtime: Cert
 
 
 def verify_certificate_action(payload: dict[str, Any], runtime: CertificateRuntime):
+    certificate_snapshot_hash = runtime.certificate_snapshot_hash
     fetch_one = runtime.fetch_one
-    iso = runtime.iso
+    public_certificate = runtime.public_certificate
     success = runtime.success
     code = payload.get("code") or payload.get("verificationCode") or ""
     certificate = fetch_one(
@@ -819,12 +933,41 @@ def verify_certificate_action(payload: dict[str, Any], runtime: CertificateRunti
     )
     if not certificate:
         return success({"valid": False})
-    return success({"valid": certificate.get("status") == "ISSUED", "certificate": {"certificateNumber": certificate.get("certificate_number"), "verificationCode": certificate.get("verification_code"), "issueDate": iso(certificate.get("issue_date")), "finalScore": float(certificate.get("final_score") or 0), "status": certificate.get("status")}, "student": {"fullName": certificate.get("full_name")}, "course": {"title": certificate.get("title")}})
+    snapshot = certificate.get("template_snapshot_json") or {}
+    stored_hash = certificate.get("document_snapshot_hash") or ""
+    calculated_hash = certificate_snapshot_hash(snapshot)
+    integrity_valid = not stored_hash or stored_hash == calculated_hash
+    item = public_certificate({
+        **certificate,
+        "student_name": certificate.get("full_name"),
+        "course_title": certificate.get("title"),
+    })
+    public_item = {
+        "certificateNumber": item.get("certificateNumber"),
+        "verificationCode": item.get("verificationCode"),
+        "issueDate": item.get("issueDate"),
+        "finalScore": item.get("finalScore"),
+        "status": item.get("status"),
+        "certificateType": item.get("certificateType"),
+        "studentName": item.get("studentName"),
+        "courseTitle": item.get("courseTitle"),
+        "generationRevision": item.get("generationRevision"),
+        "integrityStatus": (
+            "VERIFIED" if stored_hash and integrity_valid
+            else "INVALID" if stored_hash
+            else "LEGACY_UNVERIFIED"
+        ),
+    }
+    return success({
+        "valid": certificate.get("status") == "ISSUED" and integrity_valid,
+        "certificate": public_item,
+        "student": {"fullName": public_item["studentName"]},
+        "course": {"title": public_item["courseTitle"]},
+    })
 
 
 def certificate_pdf_payload_action(payload: dict[str, Any], runtime: CertificateRuntime):
     certificate_document_payload = runtime.certificate_document_payload
-    certificate_template_snapshot = runtime.certificate_template_snapshot
     connection = runtime.connection
     ensure_certificate_feature_schema = runtime.ensure_certificate_feature_schema
     require_certificate_download_access = runtime.require_certificate_download_access
@@ -853,13 +996,12 @@ def certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certificate
         if not cert:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
         require_certificate_download_access(conn, cert)
-        version = conn.execute(
-            "select * from courseplatform.course_versions where course_version_id = %s",
-            (cert.get("course_version_id"),),
-        ).fetchone() if cert.get("course_version_id") else None
-        snapshot = cert.get("template_snapshot_json") or certificate_template_snapshot(
-            conn, cert.get("course_id"), cert.get("certificate_type"), version
-        )
+        snapshot = cert.get("template_snapshot_json") or {}
+        if not snapshot:
+            raise ApiError(
+                "CERTIFICATE_SNAPSHOT_MISSING",
+                "O documento histórico não possui um snapshot de emissão. Solicite uma reemissão administrativa.",
+            )
         conn.commit()
     return certificate_document_payload(cert, snapshot, verification_base_url)
 
@@ -867,7 +1009,6 @@ def certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certificate
 def admin_certificate_pdf_payload_action(payload: dict[str, Any], runtime: CertificateRuntime):
     admin_context = runtime.admin_context
     certificate_document_payload = runtime.certificate_document_payload
-    certificate_template_snapshot = runtime.certificate_template_snapshot
     connection = runtime.connection
     ensure_certificate_feature_schema = runtime.ensure_certificate_feature_schema
     require_fields = runtime.require_fields
@@ -894,19 +1035,16 @@ def admin_certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certi
         if cert:
             require_certificate_scope(conn, admin, cert["certificate_id"])
         snapshot = cert.get("template_snapshot_json") if cert else None
-        if cert and not snapshot:
-            version = conn.execute(
-                "select * from courseplatform.course_versions where course_version_id = %s",
-                (cert.get("course_version_id"),),
-            ).fetchone() if cert.get("course_version_id") else None
-            snapshot = certificate_template_snapshot(
-                conn, cert.get("course_id"), cert.get("certificate_type"), version
-            )
         conn.commit()
     if not cert:
         raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
     if cert.get("status") == "DELETED":
         raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
+    if not snapshot:
+        raise ApiError(
+            "CERTIFICATE_SNAPSHOT_MISSING",
+            "O documento histórico não possui um snapshot de emissão. Efetue uma reemissão explícita.",
+        )
     return certificate_document_payload(cert, snapshot, verification_base_url)
 
 
@@ -920,6 +1058,7 @@ def ensure_simple_certificate_action(
 ):
     certificate_content_summary = runtime.certificate_content_summary
     certificate_number = runtime.certificate_number
+    certificate_snapshot_hash = runtime.certificate_snapshot_hash
     certificate_template_snapshot = runtime.certificate_template_snapshot
     certificate_verification_code = runtime.certificate_verification_code
     course_completion_snapshot = runtime.course_completion_snapshot
@@ -927,6 +1066,7 @@ def ensure_simple_certificate_action(
     generate_id = runtime.generate_id
     participation_policy = runtime.participation_policy
     sync_enrollment_completion = runtime.sync_enrollment_completion
+    utc_now = runtime.utc_now
     ensure_certificate_feature_schema(conn)
     # Serialize issuance and participation requests for this enrollment.
     conn.execute(
@@ -961,29 +1101,55 @@ def ensure_simple_certificate_action(
     ).fetchone()
     if existing:
         return existing, enrollment, course, True
+    cert_id = generate_id("CERT")
+    number = certificate_number()
+    verification_code = certificate_verification_code()
+    issue_date = utc_now()
+    summary = certificate_content_summary(conn, course_id, version)
+    snapshot = certificate_template_snapshot(
+        conn,
+        course_id,
+        "SIMPLE",
+        version,
+        certificate_data={
+            "studentId": student["student_id"],
+            "studentName": student.get("full_name"),
+            "certificateNumber": number,
+            "verificationCode": verification_code,
+            "issueDate": runtime.iso(issue_date),
+            "finalScore": (enrollment or {}).get("final_score"),
+            "recognitionLevel": "PARTICIPATION",
+            "paymentStatus": "NOT_REQUIRED",
+        },
+        student=student,
+        content_summary=summary,
+    )
     cert = conn.execute(
         """
         insert into courseplatform.certificates
           (certificate_id, student_id, course_id, enrollment_id, offering_id, course_version_id,
            certificate_number, verification_code,
            issue_date, final_score, drive_file_id, drive_url, status, certificate_type,
-           recognition_level, content_summary, template_snapshot_json, max_downloads, payment_status)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, now(), %s, '', '', 'ISSUED', 'SIMPLE',
-                'PARTICIPATION', %s, %s, null, 'NOT_REQUIRED')
+           recognition_level, content_summary, template_snapshot_json, max_downloads, payment_status,
+           document_snapshot_version, document_snapshot_hash, generation_revision)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '', '', 'ISSUED', 'SIMPLE',
+                'PARTICIPATION', %s, %s, null, 'NOT_REQUIRED', 2, %s, 1)
         returning *
         """,
         (
-            generate_id("CERT"),
+            cert_id,
             student["student_id"],
             course_id,
             enrollment["enrollment_id"],
             enrollment["offering_id"],
             enrollment["course_version_id"],
-            certificate_number(),
-            certificate_verification_code(),
+            number,
+            verification_code,
+            issue_date,
             (enrollment or {}).get("final_score"),
-            certificate_content_summary(conn, course_id, version),
-            json.dumps(certificate_template_snapshot(conn, course_id, "SIMPLE", version)),
+            summary,
+            json.dumps(snapshot),
+            certificate_snapshot_hash(snapshot),
         ),
     ).fetchone()
     return {**cert, "course_title": (course or {}).get("title"), "student_name": student.get("full_name")}, enrollment, course, True
