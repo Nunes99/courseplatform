@@ -2,6 +2,7 @@ import { CoursePlatformApi, ApiError } from './api.js';
 import { ChatWorkspace } from './chat.js';
 import { certificateWorkloadLabel, professionalCertificateTemplate } from './professional-certificate.js';
 import { isDashboardRoute, parseStudentRoute } from './student/routes.js';
+import { focusPageHeading, installAccessibility } from './accessibility.js';
 import {
   applyBrandFavicon,
   debounce,
@@ -32,6 +33,7 @@ const mobileNotificationButton = document.querySelector('#mobileNotificationButt
 const mobileChatButton = document.querySelector('#mobileChatButton');
 const platformName = config.appName || 'LMTWEBNAIRS Summer School 2026';
 const platformYear = 'Summer School 2026';
+installAccessibility();
 const lucideIconsBase = 'https://api.iconify.design/lucide';
 const lucideIconAliases = Object.freeze({
   'admin-settings-male': 'settings',
@@ -738,35 +740,42 @@ async function route() {
   try {
     if (routeName === 'lesson' && routeValue) {
       await openLesson(routeValue);
+      focusPageHeading(root);
       return;
     }
 
     if (routeName === 'certificate' || routeName === 'certifications') {
       await renderCertifications();
+      focusPageHeading(root);
       return;
     }
 
     if (routeName === 'profile') {
       await renderProfile();
+      focusPageHeading(root);
       return;
     }
 
     if (routeName === 'notifications') {
       await renderNotifications();
+      focusPageHeading(root);
       return;
     }
 
     if (routeName === 'chat') {
       await renderChat(routeValue ? decodeURIComponent(routeValue) : '');
+      focusPageHeading(root);
       return;
     }
 
     if (isDashboardRoute(routeName)) {
       await renderDashboard(routeName);
+      focusPageHeading(root);
       return;
     }
 
     await renderDashboard('overview');
+    focusPageHeading(root);
   } catch (error) {
     handleError(error);
   }
@@ -1306,6 +1315,7 @@ function studentAppShell(activeView, content, page = {}) {
           ${navItems.map((item) => `
             <a class="${item.id === activeView ? 'is-active' : ''}" href="${escapeHtml(item.href)}"
               aria-label="${escapeHtml(item.label)}" title="${escapeHtml(item.label)}"
+              ${item.id === activeView ? 'aria-current="page"' : ''}
               ${item.id === 'support' && config.institutionalUrl ? 'target="_blank" rel="noopener"' : ''}>
               <img src="${iconUrl(item.icon, goldIcon)}" alt="">
               <span>${escapeHtml(item.label)}</span>
@@ -4539,8 +4549,8 @@ function showReviewDialog(attemptData) {
 
 function loadingTemplate(message) {
   return `
-    <div class="loading-state">
-      <div class="spinner"></div>
+    <div class="loading-state" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
       <p>${escapeHtml(message)}</p>
     </div>
   `;

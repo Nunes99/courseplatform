@@ -151,6 +151,8 @@ async function validateViewport(browser, viewport) {
   }
   await page.getByText('Programa: Curso de validação', { exact: true }).waitFor();
   await page.getByText('Sem prazo futuro', { exact: true }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.matches('.student-topbar h1'));
+  assert.equal(await page.locator('.student-nav a[href="#/"]').getAttribute('aria-current'), 'page');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), true);
   if (viewport.width <= 1024) {
     const menuButton = page.getByRole('button', { name: 'Abrir menu' });

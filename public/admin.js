@@ -2,6 +2,7 @@ import { CoursePlatformApi, ApiError } from './api.js';
 import { ChatWorkspace } from './chat.js';
 import { certificateWorkloadLabel, professionalCertificateTemplate } from './professional-certificate.js';
 import { cursorPaginationTemplate, moveCursorPage, resetCursorPagination } from './admin/pagination.js';
+import { focusPageHeading, installAccessibility } from './accessibility.js';
 import {
   applyBrandFavicon,
   escapeHtml,
@@ -24,6 +25,8 @@ const adminMobileMenuButton = document.querySelector('#adminMobileMenuButton');
 const adminMobileNotificationButton = document.querySelector('#adminMobileNotificationButton');
 const adminMobileChatButton = document.querySelector('#adminMobileChatButton');
 const lucideIconsBase = 'https://api.iconify.design/lucide';
+let adminRouteRevision = 0;
+installAccessibility();
 const lucideIconAliases = Object.freeze({
   'admin-settings-male': 'settings',
   'bar-chart': 'chart-no-axes-combined',
@@ -232,10 +235,10 @@ async function initialize() {
     adminMobileMenuButton.setAttribute('aria-label', isOpen ? 'Fechar menu' : 'Abrir menu');
   });
   adminMobileNotificationButton?.addEventListener('click', () => {
-    root.querySelector('[data-admin-view="notifications"]')?.click();
+    navigateAdminView('notifications');
   });
   adminMobileChatButton?.addEventListener('click', () => {
-    root.querySelector('[data-admin-view="chat"]')?.click();
+    navigateAdminView('chat');
   });
   document.addEventListener('click', (event) => {
     if (
@@ -264,8 +267,10 @@ async function initialize() {
   });
   adminIdentity.addEventListener('click', () => {
     if (!api?.hasAdminSession()) return;
-    setActiveAdminView('profile');
-    renderAdminProfile();
+    navigateAdminView('profile');
+  });
+  window.addEventListener('hashchange', () => {
+    if (api?.hasAdminSession()) routeAdminView();
   });
   new ResizeObserver(reportHeight).observe(document.body);
 
@@ -275,8 +280,7 @@ async function initialize() {
       state.admin = result.admin;
       renderAdminShell();
       warmAdminCache();
-      if (canManagePlatform()) loadPlatformStatistics();
-      else loadPending();
+      await routeAdminView({ replaceInvalid: true, focus: false });
     } catch (error) {
       handleAdminError(error);
     }
@@ -361,8 +365,7 @@ async function login(event) {
     adminIdentity.textContent = `${result.admin.fullName} · ${result.admin.role}`;
     renderAdminShell();
     warmAdminCache();
-    if (canManagePlatform()) await loadPlatformStatistics();
-    else await loadPending();
+    await routeAdminView({ replaceInvalid: true, focus: false });
   } catch (error) {
     if (error instanceof ApiError && error.code === 'INVALID_ADMIN_CREDENTIALS') {
       errorBox.innerHTML = `
@@ -545,6 +548,7 @@ async function logout() {
   state.admin = null;
   state.statistics = null;
   state.staff = [];
+  history.replaceState(null, '', `${location.pathname}${location.search}`);
   renderAdminLogin();
 }
 
@@ -575,78 +579,78 @@ function renderAdminShell() {
 
   root.innerHTML = `
     <div class="admin-layout">
-      <aside class="admin-sidebar">
+      <aside class="admin-sidebar" aria-label="Navegação administrativa">
         <div class="admin-sidebar-heading">
           ${brandSymbolTemplate('admin-sidebar-symbol')}
           <h2>Gestão da Summer School</h2>
         </div>
-        ${canManagePlatform() ? `<button class="admin-nav is-active" data-admin-view="overview" aria-label="Visão geral" title="Visão geral">
+        ${canManagePlatform() ? `<a class="admin-nav" href="#/overview" data-admin-view="overview" aria-label="Visão geral" title="Visão geral">
           <img src="${iconUrl('classroom', blueIcon)}" alt="">
           <span>Visão geral</span>
-        </button>` : ''}
-        <button class="admin-nav ${canManagePlatform() ? '' : 'is-active'}" data-admin-view="pending" aria-label="Submissões" title="Submissões">
+        </a>` : ''}
+        <a class="admin-nav" href="#/pending" data-admin-view="pending" aria-label="Submissões" title="Submissões">
           <img src="${iconUrl('inbox', blueIcon)}" alt="">
           <span>Submissões</span>
-        </button>
-        <button class="admin-nav" data-admin-view="gradebook" aria-label="Pauta" title="Pauta">
+        </a>
+        <a class="admin-nav" href="#/gradebook" data-admin-view="gradebook" aria-label="Pauta" title="Pauta">
           <img src="${iconUrl('table-properties', blueIcon)}" alt="">
           <span>Pauta</span>
-        </button>
-        <button class="admin-nav" data-admin-view="calendar" aria-label="Calendário académico" title="Calendário académico">
+        </a>
+        <a class="admin-nav" href="#/calendar" data-admin-view="calendar" aria-label="Calendário académico" title="Calendário académico">
           <img src="${iconUrl('calendar-days', blueIcon)}" alt="">
           <span>Calendário</span>
-        </button>
-        <button class="admin-nav" data-admin-view="notifications" aria-label="Notificações" title="Notificações">
+        </a>
+        <a class="admin-nav" href="#/notifications" data-admin-view="notifications" aria-label="Notificações" title="Notificações">
           <img src="${iconUrl('bell', blueIcon)}" alt="">
           <span>Notificações</span>
-        </button>
-        <button class="admin-nav" data-admin-view="chat" aria-label="Mensagens" title="Mensagens">
+        </a>
+        <a class="admin-nav" href="#/chat" data-admin-view="chat" aria-label="Mensagens" title="Mensagens">
           <img src="${iconUrl('message-square', blueIcon)}" alt="">
           <span>Mensagens</span>
           <b class="nav-unread-badge" data-admin-chat-badge hidden>0</b>
-        </button>
-        <button class="admin-nav" data-admin-view="students" aria-label="Estudantes" title="Estudantes">
+        </a>
+        <a class="admin-nav" href="#/students" data-admin-view="students" aria-label="Estudantes" title="Estudantes">
           <img src="${iconUrl('student-male', blueIcon)}" alt="">
           <span>Estudantes</span>
-        </button>
-        <button class="admin-nav" data-admin-view="courses" aria-label="Cursos" title="Cursos">
+        </a>
+        <a class="admin-nav" href="#/courses" data-admin-view="courses" aria-label="Cursos" title="Cursos">
           <img src="${iconUrl('book-shelf', blueIcon)}" alt="">
           <span>Cursos</span>
-        </button>
+        </a>
         ${canManagePlatform() ? `
-          <button class="admin-nav" data-admin-view="videos" aria-label="Vídeos" title="Vídeos">
+          <a class="admin-nav" href="#/videos" data-admin-view="videos" aria-label="Vídeos" title="Vídeos">
             <img src="${iconUrl('video-playlist', blueIcon)}" alt="">
             <span>Vídeos</span>
-          </button>
-          <button class="admin-nav" data-admin-view="brand" aria-label="Marca" title="Marca">
+          </a>
+          <a class="admin-nav" href="#/brand" data-admin-view="brand" aria-label="Marca" title="Marca">
             <img src="${iconUrl('picture', blueIcon)}" alt="">
             <span>Marca</span>
-          </button>
+          </a>
         ` : ''}
-        <button class="admin-nav" data-admin-view="certifications" aria-label="Certificações" title="Certificações">
+        <a class="admin-nav" href="#/certifications" data-admin-view="certifications" aria-label="Certificações" title="Certificações">
           <img src="${iconUrl('diploma', blueIcon)}" alt="">
           <span>Certificações</span>
-        </button>
-        <button class="admin-nav" data-admin-view="surveys" aria-label="Inquéritos" title="Inquéritos">
+        </a>
+        <a class="admin-nav" href="#/surveys" data-admin-view="surveys" aria-label="Inquéritos" title="Inquéritos">
           <img src="${iconUrl('survey', blueIcon)}" alt="">
           <span>Inquéritos</span>
-        </button>
+        </a>
         ${canManageStaff() ? `
-          <button class="admin-nav" data-admin-view="staff" aria-label="Staff" title="Staff">
+          <a class="admin-nav" href="#/staff" data-admin-view="staff" aria-label="Staff" title="Staff">
             <img src="${iconUrl('conference-call', blueIcon)}" alt="">
             <span>Staff</span>
-          </button>
+          </a>
         ` : ''}
         ${canManageCredentials() ? `
-          <button class="admin-nav" data-admin-view="credentials" aria-label="Credenciais" title="Credenciais">
+          <a class="admin-nav" href="#/credentials" data-admin-view="credentials" aria-label="Credenciais" title="Credenciais">
             <img src="${iconUrl('key', blueIcon)}" alt="">
             <span>Credenciais</span>
-          </button>
+          </a>
         ` : ''}
-        <button class="admin-nav" data-admin-view="profile" aria-label="Perfil" title="Perfil">
+        <a class="admin-nav" href="#/profile" data-admin-view="profile" aria-label="Perfil" title="Perfil">
           <img src="${iconUrl('user-male-circle', blueIcon)}" alt="">
           <span>Perfil</span>
-        </button>
+        </a>
         <button class="admin-nav sidebar-mobile-logout" type="button" data-admin-logout aria-label="Sair" title="Sair">
           <img src="${iconUrl('log-out', goldIcon)}" alt="">
           <span>Sair</span>
@@ -664,43 +668,13 @@ function renderAdminShell() {
     </div>
   `;
 
-  root.querySelectorAll('[data-admin-view]').forEach((button) => {
-    button.addEventListener('click', () => {
+  root.querySelectorAll('[data-admin-view]').forEach((link) => {
+    link.addEventListener('click', (event) => {
       document.body.classList.remove('admin-menu-open');
       adminMobileMenuButton?.setAttribute('aria-expanded', 'false');
-      setActiveAdminView(button.dataset.adminView);
-
-      if (button.dataset.adminView === 'overview') {
-        loadPlatformStatistics();
-      } else if (button.dataset.adminView === 'students') {
-        loadStudents();
-      } else if (button.dataset.adminView === 'notifications') {
-        loadNotificationManagement();
-      } else if (button.dataset.adminView === 'chat') {
-        renderAdminChat();
-      } else if (button.dataset.adminView === 'gradebook') {
-        loadGradebook();
-      } else if (button.dataset.adminView === 'calendar') {
-        loadAcademicCalendar();
-      } else if (button.dataset.adminView === 'courses') {
-        state.courseMode = 'list';
-        loadCourses();
-      } else if (button.dataset.adminView === 'videos') {
-        renderVideos();
-      } else if (button.dataset.adminView === 'brand') {
-        renderBrandSettings();
-      } else if (button.dataset.adminView === 'certifications') {
-        loadCertifications();
-      } else if (button.dataset.adminView === 'surveys') {
-        loadCertificateSurveys();
-      } else if (button.dataset.adminView === 'staff') {
-        loadStaff();
-      } else if (button.dataset.adminView === 'credentials') {
-        renderCredentialsManagement();
-      } else if (button.dataset.adminView === 'profile') {
-        renderAdminProfile();
-      } else {
-        loadPending();
+      if (location.hash === link.hash) {
+        event.preventDefault();
+        routeAdminView();
       }
     });
   });
@@ -725,8 +699,68 @@ function setActiveAdminView(view) {
     activeAdminChatWorkspace = null;
   }
   root.querySelectorAll('[data-admin-view]').forEach((item) => {
-    item.classList.toggle('is-active', item.dataset.adminView === view);
+    const active = item.dataset.adminView === view;
+    item.classList.toggle('is-active', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
   });
+}
+
+function requestedAdminView() {
+  return String(location.hash || '').replace(/^#\/?/, '').split('/')[0];
+}
+
+function navigateAdminView(view) {
+  const nextHash = `#/${view}`;
+  if (location.hash === nextHash) {
+    routeAdminView();
+    return;
+  }
+  location.hash = nextHash;
+}
+
+async function routeAdminView(options = {}) {
+  if (!api?.hasAdminSession() || !document.querySelector('#adminMain')) return;
+
+  const fallback = canManagePlatform() ? 'overview' : 'pending';
+  let view = requestedAdminView() || fallback;
+  const availableViews = Array.from(root.querySelectorAll('[data-admin-view]'))
+    .map((item) => item.dataset.adminView);
+  if (!availableViews.includes(view)) view = fallback;
+
+  const canonicalHash = `#/${view}`;
+  if (location.hash !== canonicalHash && options.replaceInvalid !== false) {
+    history.replaceState(null, '', `${location.pathname}${location.search}${canonicalHash}`);
+  }
+
+  const revision = ++adminRouteRevision;
+  setActiveAdminView(view);
+
+  const loaders = {
+    overview: () => loadPlatformStatistics(),
+    pending: () => loadPending(),
+    gradebook: () => loadGradebook(),
+    calendar: () => loadAcademicCalendar(),
+    notifications: () => loadNotificationManagement(),
+    chat: () => renderAdminChat(),
+    students: () => loadStudents(),
+    courses: () => {
+      state.courseMode = 'list';
+      return loadCourses();
+    },
+    videos: () => renderVideos(),
+    brand: () => renderBrandSettings(),
+    certifications: () => loadCertifications(),
+    surveys: () => loadCertificateSurveys(),
+    staff: () => loadStaff(),
+    credentials: () => renderCredentialsManagement(),
+    profile: () => renderAdminProfile()
+  };
+
+  await Promise.resolve(loaders[view]?.());
+  if (revision === adminRouteRevision && options.focus !== false) {
+    focusPageHeading(document.querySelector('#adminMain'));
+  }
 }
 
 function updateAdminChatUnread(unreadCount) {
@@ -8998,8 +9032,8 @@ async function toggleStudent(studentId, currentStatus) {
 
 function loadingTemplate(message) {
   return `
-    <div class="loading-state">
-      <div class="spinner"></div>
+    <div class="loading-state" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
       <p>${escapeHtml(message)}</p>
     </div>
   `;

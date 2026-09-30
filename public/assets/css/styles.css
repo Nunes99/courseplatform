@@ -16044,3 +16044,89 @@ professional-certificate {
     grid-template-columns: 1fr;
   }
 }
+
+/* Stage 12: navigation and accessibility foundations */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 10000;
+  padding: 10px 14px;
+  border: 2px solid var(--primary, #00365b);
+  border-radius: var(--radius-small, 6px);
+  background: var(--surface, #fff);
+  color: var(--primary, #00365b);
+  font-size: 0.875rem;
+  font-weight: 700;
+  transform: translateY(calc(-100% - 16px));
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent, #caa85e) 78%, #fff);
+  outline-offset: 2px;
+}
+
+:where(.admin-main, .student-main-frame, .lesson-layout, .certifications-shell) h1[tabindex="-1"]:focus {
+  outline: 0;
+}
+
+.admin-nav[aria-current="page"],
+.student-nav a[aria-current="page"] {
+  font-weight: 750;
+}
+
+.admin-nav {
+  text-decoration: none;
+}
+
+.admin-main :where(h1, h2, [id]),
+.student-main-frame :where(h1, h2, [id]) {
+  scroll-margin-top: calc(var(--app-header-height, 56px) + 20px);
+}
+
+.dialog-overlay {
+  overscroll-behavior: contain;
+}
+
+.dialog-card[role="dialog"] {
+  max-height: min(90dvh, 920px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.loading-state[role="status"] {
+  min-height: 160px;
+}
+
+@media (max-width: 760px) {
+  .admin-nav,
+  .student-nav a,
+  .mobile-menu button,
+  .dialog-actions .button {
+    min-height: 44px;
+  }
+
+  .dialog-actions {
+    align-items: stretch;
+  }
+
+  .dialog-actions .button {
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
