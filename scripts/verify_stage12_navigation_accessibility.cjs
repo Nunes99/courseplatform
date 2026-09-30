@@ -25,6 +25,7 @@ async function serveFrontend(page) {
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
     const locationUrl = message.location().url || '';
+    if (!locationUrl && message.text() === 'An unknown error occurred when fetching the script.') return;
     if (locationUrl && new URL(locationUrl).origin !== origin) return;
     if (locationUrl && new URL(locationUrl).pathname === '/favicon.ico') return;
     failures.push(`console: ${message.text()}${locationUrl ? ` (${locationUrl})` : ''}`);
@@ -35,7 +36,15 @@ async function serveFrontend(page) {
   await page.route('**/*', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.origin !== origin) return route.abort('blockedbyclient');
+    if (url.origin !== origin) {
+      if (request.resourceType() === 'script') {
+        return route.fulfill({ contentType: 'application/javascript', body: '' });
+      }
+      if (request.resourceType() === 'stylesheet') {
+        return route.fulfill({ contentType: 'text/css', body: '' });
+      }
+      return route.abort('blockedbyclient');
+    }
     if (url.pathname.startsWith('/api/')) {
       return route.fulfill({
         contentType: 'application/json',
@@ -71,10 +80,12 @@ async function serveFrontend(page) {
           window.clearInterval(adminPresencePollId);
         };
         window.__stage12OpenDialog = () => {
-          const trigger = document.createElement('button');
-          trigger.id = 'stage12DialogTrigger';
-          trigger.textContent = 'Abrir diálogo de teste';
-          document.body.appendChild(trigger);
+          const trigger = document.querySelector('#stage12DialogTrigger') || document.createElement('button');
+          if (!trigger.isConnected) {
+            trigger.id = 'stage12DialogTrigger';
+            trigger.textContent = 'Abrir diálogo de teste';
+            document.body.appendChild(trigger);
+          }
           trigger.focus();
           showAdminRecoveryDialog('qa@example.test');
         };
@@ -133,6 +144,14 @@ async function serveFrontend(page) {
       `;
       return route.fulfill({ contentType: 'application/javascript', body: source + hook });
     }
+    if (url.pathname === '/app.js') {
+      const source = await fs.readFile(path.join(publicRoot, 'app.js'), 'utf8');
+      const hook = `
+        window.__stage12OpenStudentLogin = () => renderLogin();
+        window.__stage12OpenStudentRegistration = () => showStudentRegistrationDialog();
+      `;
+      return route.fulfill({ contentType: 'application/javascript', body: source + hook });
+    }
 
     const pathname = decodeURIComponent(url.pathname === '/' ? '/admin.html' : url.pathname);
     const localPath = path.resolve(publicRoot, `.${pathname}`);
@@ -150,6 +169,180 @@ async function serveFrontend(page) {
     }
   });
   return failures;
+}
+
+async function auditAccessibility(page, label) {
+  const domAudit = await page.evaluate(() => {
+    const visibleDialogs = Array.from(document.querySelectorAll('[role="dialog"]'))
+      .filter((dialog) => dialog.getClientRects().length > 0);
+    const scope = visibleDialogs.at(-1) || document;
+    const visible = (element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number(style.opacity) > 0
+        && rect.width > 0
+        && rect.height > 0
+        && element.getAttribute('aria-hidden') !== 'true';
+    };
+    const nameOf = (element) => {
+      const labelledBy = String(element.getAttribute('aria-labelledby') || '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => document.getElementById(id)?.textContent?.trim() || '')
+        .filter(Boolean)
+        .join(' ');
+      const explicitLabel = element.id
+        ? Array.from(document.querySelectorAll('label[for]'))
+          .find((label) => label.htmlFor === element.id)?.textContent?.trim()
+        : '';
+      const wrappingLabel = element.closest('label')?.textContent?.trim() || '';
+      return element.getAttribute('aria-label')?.trim()
+        || labelledBy
+        || explicitLabel
+        || wrappingLabel
+        || element.getAttribute('alt')?.trim()
+        || element.textContent?.trim()
+        || element.getAttribute('title')?.trim()
+        || '';
+    };
+    const selectorOf = (element) => {
+      if (element.id) return `#${element.id}`;
+      const classes = Array.from(element.classList).slice(0, 2).join('.');
+      return `${element.tagName.toLowerCase()}${classes ? `.${classes}` : ''}`;
+    };
+    const parseColor = (value) => {
+      const match = String(value).match(/rgba?\(([^)]+)\)/i);
+      if (!match) return null;
+      const parts = match[1].split(/[\s,\/]+/).filter(Boolean).map(Number);
+      if (parts.length < 3 || parts.slice(0, 3).some((part) => !Number.isFinite(part))) return null;
+      return [parts[0], parts[1], parts[2], Number.isFinite(parts[3]) ? parts[3] : 1];
+    };
+    const composite = (top, bottom) => {
+      const alpha = top[3] + (bottom[3] * (1 - top[3]));
+      if (alpha === 0) return [0, 0, 0, 0];
+      return [0, 1, 2].map((index) => (
+        ((top[index] * top[3]) + (bottom[index] * bottom[3] * (1 - top[3]))) / alpha
+      )).concat(alpha);
+    };
+    const backgroundOf = (element) => {
+      const chain = [];
+      for (let node = element; node instanceof Element; node = node.parentElement) chain.unshift(node);
+      let background = [255, 255, 255, 1];
+      for (const node of chain) {
+        const style = getComputedStyle(node);
+        if (style.backgroundImage !== 'none') return null;
+        const color = parseColor(style.backgroundColor);
+        if (color && color[3] > 0) background = composite(color, background);
+      }
+      return background;
+    };
+    const luminance = (rgb) => {
+      const channels = rgb.map((value) => {
+        const normalized = value / 255;
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2]);
+    };
+    const ratioOf = (foreground, background) => {
+      const lighter = Math.max(luminance(foreground), luminance(background));
+      const darker = Math.min(luminance(foreground), luminance(background));
+      return (lighter + 0.05) / (darker + 0.05);
+    };
+    const issues = [];
+    const ids = new Map();
+    document.querySelectorAll('[id]').forEach((element) => {
+      ids.set(element.id, (ids.get(element.id) || 0) + 1);
+    });
+    ids.forEach((count, id) => {
+      if (count > 1) issues.push(`ID duplicado: ${id} (${count})`);
+    });
+
+    const interactive = Array.from(scope.querySelectorAll(
+      'a[href], button, input:not([type="hidden"]), select, textarea, summary, [role="button"], [tabindex]:not([tabindex="-1"])'
+    )).filter((element) => visible(element) && !element.disabled);
+    interactive.forEach((element) => {
+      if (!nameOf(element)) issues.push(`Controlo sem nome acessível: ${selectorOf(element)}`);
+    });
+
+    const headings = Array.from(scope.querySelectorAll('h1, h2, h3, h4, h5, h6')).filter(visible);
+    let previousLevel = 0;
+    headings.forEach((heading) => {
+      const level = Number(heading.tagName.slice(1));
+      if (previousLevel && level > previousLevel + 1) {
+        issues.push(`Hierarquia de títulos salta de h${previousLevel} para h${level}: ${heading.textContent.trim()}`);
+      }
+      previousLevel = level;
+    });
+
+    const contrastFailures = [];
+    const candidates = Array.from(scope.querySelectorAll('*')).filter((element) => {
+      if (!visible(element) || element.disabled) return false;
+      if (['SCRIPT', 'STYLE', 'OPTION', 'SVG', 'PATH'].includes(element.tagName)) return false;
+      return Array.from(element.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+    });
+    candidates.forEach((element) => {
+      const style = getComputedStyle(element);
+      const foreground = parseColor(style.color);
+      const background = backgroundOf(element);
+      if (!foreground || foreground[3] === 0 || !background) return;
+      const renderedForeground = composite(foreground, background).slice(0, 3);
+      const renderedBackground = background.slice(0, 3);
+      const ratio = ratioOf(renderedForeground, renderedBackground);
+      const fontSize = Number.parseFloat(style.fontSize);
+      const fontWeight = Number.parseInt(style.fontWeight, 10) || 400;
+      const isLarge = fontSize >= 24 || (fontSize >= 18.66 && fontWeight >= 700);
+      const minimum = isLarge ? 3 : 4.5;
+      if (ratio + 0.01 < minimum) {
+        contrastFailures.push({
+          selector: selectorOf(element),
+          text: element.textContent.trim().replace(/\s+/g, ' ').slice(0, 70),
+          ratio: Number(ratio.toFixed(2)),
+          minimum,
+          foreground: style.color,
+          background: `rgb(${renderedBackground.map((value) => Math.round(value)).join(', ')})`,
+        });
+      }
+    });
+
+    return {
+      issues,
+      contrastFailures,
+      interactiveCount: interactive.length,
+      headingCount: headings.length,
+      mainCount: document.querySelectorAll('main').length,
+      horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    };
+  });
+
+  assert.equal(domAudit.mainCount, 1, `${label}: deve existir exatamente um landmark main.`);
+  assert.ok(domAudit.headingCount > 0, `${label}: deve existir pelo menos um título.`);
+  assert.ok(domAudit.interactiveCount > 0, `${label}: deve existir pelo menos um controlo interativo.`);
+  assert.deepEqual(domAudit.issues, [], `${label}: problemas semânticos: ${JSON.stringify(domAudit.issues, null, 2)}`);
+  assert.deepEqual(
+    domAudit.contrastFailures,
+    [],
+    `${label}: falhas WCAG de contraste: ${JSON.stringify(domAudit.contrastFailures.slice(0, 20), null, 2)}`
+  );
+  assert.ok(domAudit.horizontalOverflow <= 1, `${label}: overflow horizontal de ${domAudit.horizontalOverflow}px.`);
+
+  const client = await page.context().newCDPSession(page);
+  await client.send('Accessibility.enable');
+  const tree = await client.send('Accessibility.getFullAXTree');
+  const focusableRoles = new Set(['button', 'link', 'textbox', 'combobox', 'checkbox', 'radio', 'searchbox', 'spinbutton']);
+  const unnamed = tree.nodes.filter((node) => {
+    if (node.ignored || !focusableRoles.has(node.role?.value)) return false;
+    const focusable = node.properties?.some((property) => property.name === 'focusable' && property.value?.value === true);
+    return focusable && !String(node.name?.value || '').trim();
+  });
+  assert.deepEqual(
+    unnamed.map((node) => node.role?.value),
+    [],
+    `${label}: a árvore acessível contém controlos focáveis sem nome.`
+  );
 }
 
 async function main() {
@@ -214,6 +407,11 @@ async function main() {
     await page.evaluate(() => window.__stage12RenderEmptyView('gradebook'));
     await page.getByRole('heading', { name: 'Nenhuma matrícula encontrada' }).waitFor();
     assert.equal(await page.locator('#exportGradebook').isDisabled(), true);
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((selectedTheme) => { document.documentElement.dataset.theme = selectedTheme; }, theme);
+      await page.waitForTimeout(300);
+      await auditAccessibility(page, `admin/pauta vazia/${theme}`);
+    }
     await page.getByRole('button', { name: 'Limpar filtros' }).click();
     await page.waitForFunction(() => window.__stage12State().gradebookFilters.query === '');
 
@@ -230,11 +428,22 @@ async function main() {
     await page.locator('#clearSurveyDefinitionSearch').click();
     await page.waitForFunction(() => window.__stage12State().surveyFilters.query === '');
 
+    await page.evaluate(() => window.__stage12OpenDialog());
+    await page.getByRole('dialog', { name: 'Recuperar palavra-passe' }).waitFor();
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((selectedTheme) => { document.documentElement.dataset.theme = selectedTheme; }, theme);
+      await page.waitForTimeout(300);
+      await auditAccessibility(page, `admin/diálogo de recuperação/${theme}`);
+    }
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(120);
+
     const skipLink = page.locator('.skip-link');
     await skipLink.focus();
-    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('skip-link')), true);
     await page.waitForTimeout(180);
-    assert.ok((await skipLink.boundingBox())?.y >= 0, 'A ligação para saltar conteúdo deve ficar visível ao receber foco.');
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('skip-link')), true);
+    const skipLinkBox = await skipLink.boundingBox();
+    assert.ok(skipLinkBox?.y >= 0, `A ligação para saltar conteúdo deve ficar visível ao receber foco: ${JSON.stringify(skipLinkBox)}`);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(400);
@@ -264,11 +473,48 @@ async function main() {
     const closedAgain = await page.locator('.admin-sidebar').boundingBox();
     assert.ok(closedAgain && closedAgain.x + closedAgain.width <= 1, 'O menu administrativo deve sair do ecrã ao fechar.');
 
+    await page.setViewportSize({ width: 640, height: 900 });
+    await page.evaluate(() => window.__stage12RenderEmptyView('gradebook'));
+    await page.waitForTimeout(300);
+    await auditAccessibility(page, 'admin/pauta/zoom 200% equivalente');
+
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = 'dark';
+      window.__stage12RenderEmptyView('gradebook');
+    });
+    await page.waitForTimeout(300);
+    await auditAccessibility(page, 'admin/pauta/reflow 320px');
+
+    const studentPage = await browser.newPage({ viewport: { width: 1280, height: 800 }, locale: 'pt-PT' });
+    const studentFailures = await serveFrontend(studentPage);
+    await studentPage.goto(`${base}/index.html`, { waitUntil: 'domcontentloaded' });
+    await studentPage.waitForFunction(() => Boolean(window.__stage12OpenStudentLogin));
+    await studentPage.evaluate(() => window.__stage12OpenStudentLogin());
+    await studentPage.getByRole('heading', { name: 'Área do estudante' }).waitFor();
+    for (const theme of ['light', 'dark']) {
+      await studentPage.evaluate((selectedTheme) => { document.documentElement.dataset.theme = selectedTheme; }, theme);
+      await studentPage.waitForTimeout(300);
+      await auditAccessibility(studentPage, `estudante/login/${theme}`);
+    }
+    await studentPage.getByRole('button', { name: 'Criar uma conta' }).click();
+    await studentPage.getByRole('dialog', { name: 'Criar conta' }).waitFor();
+    await auditAccessibility(studentPage, 'estudante/criar conta/dark');
+    await studentPage.keyboard.press('Escape');
+    await studentPage.setViewportSize({ width: 640, height: 900 });
+    await studentPage.waitForTimeout(300);
+    await auditAccessibility(studentPage, 'estudante/login/zoom 200% equivalente');
+    await studentPage.setViewportSize({ width: 320, height: 800 });
+    await studentPage.waitForTimeout(300);
+    await auditAccessibility(studentPage, 'estudante/login/reflow 320px');
+    assert.deepEqual(studentFailures, []);
+    await studentPage.close();
+
     assert.deepEqual(failures, []);
   } finally {
     await browser.close();
   }
-  process.stdout.write('Etapa 12: navegação, foco, modal e viewport móvel validados.\n');
+  process.stdout.write('Etapa 12: navegação, contraste claro/escuro, árvore acessível, diálogos e reflow validados.\n');
 }
 
 main().catch((error) => {

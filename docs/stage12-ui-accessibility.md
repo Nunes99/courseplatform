@@ -44,6 +44,7 @@ Uma URL indisponível para o papel autenticado é substituída pela página inic
 
 ```powershell
 npm run qa:stage12-ui
+npm run qa:stage12-accessibility
 npm run qa:stage12-admin
 npm run check:frontend
 .\.venv\Scripts\python.exe -m unittest discover -s tests -q
@@ -55,13 +56,41 @@ regiões de tabela, validação de formulários, estados vazios e de erro, menu 
 visibilidade de todos os campos de submissões, pauta, calendário, certificados,
 pagamentos e inquéritos, overflow horizontal e erros de consola.
 
+O comando `qa:stage12-accessibility` acrescenta uma passagem automatizada sobre
+os temas claro e escuro. Mede contraste de texto segundo os limiares WCAG AA,
+verifica nomes acessíveis, hierarquia de títulos, IDs, landmarks, árvore de
+acessibilidade do Chromium, o equivalente ao zoom de 200% numa janela física de
+1280 px e reflow adicional a 320 CSS pixels.
+
+## Validação manual com NVDA
+
+Esta validação deve ser feita no Edge ou Chrome com NVDA, primeiro no modo de
+navegação e depois no modo de foco:
+
+1. Abrir o login do estudante e confirmar que título, campos, erros, recuperação
+   e criação de conta são anunciados com nome, papel e estado corretos.
+2. Entrar como estudante e percorrer visão geral, curso, aula, submissão,
+   certificados e pagamento apenas com `Tab`, `Shift+Tab`, `Enter` e setas.
+3. Confirmar que mudanças de página anunciam o título e que mensagens de erro,
+   carregamento, sucesso e estados vazios são anunciadas uma única vez.
+4. Abrir os diálogos de submissão, pagamento e certificado; confirmar nome do
+   diálogo, contenção do foco, fecho por `Escape` e retorno ao controlo de origem.
+5. Entrar como revisor e percorrer submissões, pauta, calendário, certificados,
+   pagamentos e inquéritos, confirmando cabeçalhos e relações das tabelas.
+6. Repetir os fluxos principais nos temas claro e escuro, a 200% de zoom e com
+   largura de 320 px, registando página, passo, anúncio recebido e resultado.
+
+A execução desta checklist requer escuta e julgamento humano. A passagem
+automatizada não deve ser apresentada como validação concluída com NVDA.
+
 ## Trabalho ainda pendente na Etapa 12
 
 - concluir a revisão individual dos editores internos e diálogos de detalhe que
   ainda não possuem cenários visuais dedicados;
 - concluir uma passagem de texto e consistência editorial em toda a plataforma;
-- validar os fluxos completos com leitor de ecrã real;
-- medir contraste e reflow em todas as variantes de tema;
+- validar os fluxos completos com leitor de ecrã real usando a checklist acima;
+- confirmar visualmente em dispositivos reais os resultados automatizados de
+  contraste e reflow nos dois temas;
 - recolher evidência visual em Preview com dados representativos.
 
 Esses pontos não são declarados como concluídos por esta entrega.

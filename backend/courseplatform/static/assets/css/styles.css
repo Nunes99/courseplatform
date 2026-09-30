@@ -3287,9 +3287,9 @@ input[type="search"] {
 }
 
 .toast.is-visible { transform: translateY(0); opacity: 1; }
-.toast-success { background: var(--success); }
-.toast-warning { background: var(--warning); }
-.toast-error { background: var(--danger); }
+.toast-success { background: #226d4f; }
+.toast-warning { background: #765000; }
+.toast-error { background: #963b3b; }
 
 .dialog-overlay {
   position: fixed;
@@ -4654,6 +4654,10 @@ input[type="search"] {
 
 :root[data-theme="dark"] .student-avatar {
   color: #082033;
+}
+
+:root[data-theme="dark"] .brand-mark:not(.has-brand-logo) {
+  color: #06233f;
 }
 
 .student-avatar-large {
@@ -16282,6 +16286,10 @@ professional-certificate {
 }
 
 /* Stage 12: navigation and accessibility foundations */
+.eyebrow {
+  color: var(--accent-text, #76570f);
+}
+
 .skip-link {
   position: fixed;
   top: 8px;

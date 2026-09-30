@@ -290,6 +290,7 @@ async function initialize() {
 }
 
 function renderAdminLogin() {
+  root.setAttribute('role', 'main');
   logoutButton.hidden = true;
   if (adminMobileMenuButton) adminMobileMenuButton.hidden = true;
   if (adminMobileNotificationButton) adminMobileNotificationButton.hidden = true;
@@ -567,6 +568,7 @@ function warmAdminCache() {
 }
 
 function renderAdminShell() {
+  root.removeAttribute('role');
   logoutButton.hidden = false;
   if (adminMobileMenuButton) adminMobileMenuButton.hidden = false;
   if (adminMobileNotificationButton) adminMobileNotificationButton.hidden = false;

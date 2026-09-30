@@ -20,6 +20,7 @@
     "qa:staff-assignment": "node scripts/verify_staff_assignment_browser.cjs",
     "qa:student-dashboard": "node scripts/verify_student_dashboard_resilience.cjs",
     "qa:stage12-ui": "node scripts/verify_stage12_navigation_accessibility.cjs",
+    "qa:stage12-accessibility": "node scripts/verify_stage12_navigation_accessibility.cjs",
     "qa:stage12-admin": "node scripts/verify_stage7_admin_lists.cjs",
     "qa:api-config": "node scripts/verify_api_configuration.cjs",
     "qa:typed-api-client": "node scripts/verify_versioned_api_client.cjs"
