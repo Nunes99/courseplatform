@@ -3880,8 +3880,16 @@ async function renderCertifications() {
   const certificates = result.certificates || [];
   const requests = result.requests || [];
   const simpleCertificate = result.simpleCertificate;
-  const professionalCertificate = certificates.find((item) => item.certificateType === 'PROFESSIONAL' && item.status === 'ISSUED');
-  const blockedProfessionalCertificate = certificates.find((item) => item.certificateType === 'PROFESSIONAL' && item.status === 'BLOCKED');
+  const professionalCertificate = certificates.find((item) => (
+    item.certificateType === 'PROFESSIONAL'
+    && item.status === 'ISSUED'
+    && item.downloadAccess?.allowed !== false
+  ));
+  const approvedProfessionalRequest = requests.find((item) => item.requestType !== 'PARTICIPATION' && item.status === 'APPROVED');
+  const renewableProfessionalCertificate = certificates.find((item) => (
+    item.certificateType === 'PROFESSIONAL'
+    && ['CERTIFICATE_ACCESS_BLOCKED', 'DOWNLOAD_LIMIT_REACHED'].includes(item.downloadAccess?.code)
+  )) || (!professionalCertificate && approvedProfessionalRequest ? { downloadAccess: { code: 'CERTIFICATE_DELETED' } } : null);
   const activeRequest = requests.find((item) => item.requestType !== 'PARTICIPATION' && ['REQUESTED', 'PAYMENT_SUBMITTED'].includes(item.status));
   state.certifications = { ...result, settings, certificates, requests, activeRequest };
 
@@ -3928,7 +3936,7 @@ async function renderCertifications() {
       <section class="certificate-upgrade-panel">
         ${professionalCertificate
           ? professionalReadyTemplate(professionalCertificate)
-          : professionalRequestFlowTemplate(settings, activeRequest, blockedProfessionalCertificate)}
+          : professionalRequestFlowTemplate(settings, activeRequest, renewableProfessionalCertificate)}
       </section>
     </section>
   `, {
@@ -4025,7 +4033,7 @@ function certificateDisplayNumber(certificate = {}) {
     .replace(/PARTICIPATION/gi, 'PART');
 }
 
-function professionalRequestFlowTemplate(settings, request, blockedCertificate = null) {
+function professionalRequestFlowTemplate(settings, request, renewalCertificate = null) {
   const payment = certificatePaymentPolicy(settings);
   if (payment.blocked) {
     return `
@@ -4074,9 +4082,13 @@ function professionalRequestFlowTemplate(settings, request, blockedCertificate =
     <article class="certificate-upgrade-card">
       <div>
         <p class="eyebrow">Opcional</p>
-        <h2>${blockedCertificate ? 'Solicitar nova libertação' : 'Certificado profissional personalizado'}</h2>
-        <p>${blockedCertificate
-          ? 'O acesso ao certificado profissional anterior foi removido. Pode iniciar um novo pedido para revisão administrativa.'
+        <h2>${renewalCertificate ? 'Solicitar nova emissão' : 'Certificado profissional personalizado'}</h2>
+        <p>${renewalCertificate
+          ? `${renewalCertificate.downloadAccess?.code === 'DOWNLOAD_LIMIT_REACHED'
+            ? 'O limite de downloads do certificado anterior foi atingido.'
+            : 'O certificado profissional anterior já não está disponível.'} ${payment.requiresPayment
+              ? 'A nova emissão exige um novo pagamento e um novo comprovativo.'
+              : 'Pode iniciar um novo pedido para revisão administrativa.'}`
           : 'Um modelo institucional com descrição dos conteúdos aprendidos, verificação oficial, campos de assinatura e acabamento profissional.'}</p>
       </div>
       <div class="professional-certificate-mock">
@@ -4086,7 +4098,7 @@ function professionalRequestFlowTemplate(settings, request, blockedCertificate =
       </div>
       ${paymentConditionsTemplate(payment)}
       <button class="button button-primary" type="button" data-open-professional-survey>
-        Quero certificado profissional
+        ${renewalCertificate ? 'Solicitar nova emissão profissional' : 'Quero certificado profissional'}
       </button>
     </article>
   `;

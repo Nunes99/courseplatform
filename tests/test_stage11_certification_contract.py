@@ -116,8 +116,11 @@ class ReissueDB:
 
 
 class SurveyRequestDB:
-    def __init__(self):
+    def __init__(self, existing_request=None, existing_certificate=None):
         self.response = None
+        self.existing_request = copy.deepcopy(existing_request)
+        self.existing_certificate = copy.deepcopy(existing_certificate)
+        self.created_requests = []
 
     def __enter__(self):
         return self
@@ -136,13 +139,24 @@ class SurveyRequestDB:
         if normalized.startswith("select * from courseplatform.certificate_settings"):
             return Result([{"course_id": "C1"}])
         if normalized.startswith("select cr.*"):
-            return Result()
+            return Result([self.existing_request] if self.existing_request else [])
+        if normalized.startswith("select * from courseplatform.certificates"):
+            return Result([self.existing_certificate] if self.existing_certificate else [])
+        if normalized.startswith("update courseplatform.certificate_requests"):
+            self.existing_request["status"] = (
+                "PAYMENT_SUBMITTED"
+                if params[0] == "PAYMENT_SUBMITTED" and self.existing_request["status"] == "REQUESTED"
+                else self.existing_request["status"]
+            )
+            return Result([self.existing_request])
         if normalized.startswith("insert into courseplatform.certificate_requests"):
-            return Result([{
+            request = {
                 "request_id": params[0], "student_id": params[1], "course_id": params[2],
                 "enrollment_id": params[3], "offering_id": params[4], "course_version_id": params[5],
                 "request_type": "PROFESSIONAL", "status": params[6],
-            }])
+            }
+            self.created_requests.append(request)
+            return Result([request])
         if normalized.startswith("insert into courseplatform.certificate_survey_responses"):
             self.response = {
                 "response_id": params[0], "request_id": params[1],
@@ -236,6 +250,82 @@ class Stage11CertificationContractTests(unittest.TestCase):
         self.assertNotIn("surveyAnswers", result["request"])
         self.assertEqual(db.response["request_id"], "GENERATED")
         self.assertEqual(db.response["answers"], {"Qualidade?": "Boa"})
+
+    def test_professional_renewal_creates_new_paid_request_after_delete_or_limit(self):
+        enrollment = {
+            "enrollment_id": "E1", "offering_id": "O1", "course_version_id": "V1",
+            "student_id": "S1", "course_id": "C1",
+        }
+        previous_request = {
+            "request_id": "CREQ-OLD", "student_id": "S1", "course_id": "C1",
+            "enrollment_id": "E1", "offering_id": "O1", "course_version_id": "V1",
+            "request_type": "PROFESSIONAL", "status": "APPROVED", "certificate_id": "CERT-OLD",
+        }
+        scenarios = (
+            {"status": "DELETED", "download_count": 1, "max_downloads": 5},
+            {"status": "ISSUED", "download_count": 5, "max_downloads": 5},
+        )
+        for certificate_state in scenarios:
+            with self.subTest(certificate_state=certificate_state):
+                db = SurveyRequestDB(
+                    previous_request,
+                    {"certificate_id": "CERT-OLD", **certificate_state},
+                )
+                with ExitStack() as stack:
+                    for name, value in {
+                        "connection": db,
+                        "student_context": ({}, {"student_id": "S1", "full_name": "Estudante"}),
+                        "ensure_simple_certificate": (None, enrollment, {"course_id": "C1"}, True),
+                        "certificate_settings_payload": {
+                            "certificateProfile": {"printAccess": "paid"},
+                            "surveyQuestions": [{"id": "q1", "prompt": "Qualidade?", "options": ["Boa"], "required": True}],
+                        },
+                        "audit": None,
+                    }.items():
+                        stack.enter_context(patch.object(actions, name, return_value=value))
+                    stack.enter_context(patch.object(actions, "generate_id", side_effect=["CREQ-NEW", "CSUR-NEW"]))
+
+                    result = actions.request_professional_certificate({
+                        "courseId": "C1", "enrollmentId": "E1", "surveyAnswers": {"Qualidade?": "Boa"},
+                    })["data"]
+
+                self.assertEqual(result["request"]["requestId"], "CREQ-NEW")
+                self.assertEqual(result["request"]["status"], "REQUESTED")
+                self.assertEqual(len(db.created_requests), 1)
+                self.assertEqual(db.response["request_id"], "CREQ-NEW")
+
+    def test_professional_renewal_does_not_charge_while_certificate_is_available(self):
+        enrollment = {
+            "enrollment_id": "E1", "offering_id": "O1", "course_version_id": "V1",
+            "student_id": "S1", "course_id": "C1",
+        }
+        db = SurveyRequestDB(
+            {
+                "request_id": "CREQ-OLD", "student_id": "S1", "course_id": "C1",
+                "enrollment_id": "E1", "request_type": "PROFESSIONAL", "status": "APPROVED",
+                "certificate_id": "CERT-OLD",
+            },
+            {"certificate_id": "CERT-OLD", "status": "ISSUED", "download_count": 1, "max_downloads": 5},
+        )
+        with ExitStack() as stack:
+            for name, value in {
+                "connection": db,
+                "student_context": ({}, {"student_id": "S1", "full_name": "Estudante"}),
+                "ensure_simple_certificate": (None, enrollment, {"course_id": "C1"}, True),
+                "certificate_settings_payload": {
+                    "certificateProfile": {"printAccess": "paid"},
+                    "surveyQuestions": [{"id": "q1", "prompt": "Qualidade?", "options": ["Boa"], "required": True}],
+                },
+            }.items():
+                stack.enter_context(patch.object(actions, name, return_value=value))
+
+            with self.assertRaises(actions.ApiError) as error:
+                actions.request_professional_certificate({
+                    "courseId": "C1", "enrollmentId": "E1", "surveyAnswers": {"Qualidade?": "Boa"},
+                })
+
+        self.assertEqual(error.exception.code, "CERTIFICATE_ALREADY_AVAILABLE")
+        self.assertEqual(db.created_requests, [])
 
     def test_public_verification_rejects_tampered_snapshot(self):
         snapshot = {"version": 2, "document": {"recipient": {"fullName": "Nome"}}}

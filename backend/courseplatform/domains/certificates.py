@@ -208,16 +208,37 @@ def request_professional_certificate_action(payload: dict[str, Any], runtime: Ce
             """
             select cr.*
             from courseplatform.certificate_requests cr
-            left join courseplatform.certificates cert on cert.certificate_id = cr.certificate_id
             where cr.student_id = %s and cr.course_id = %s and cr.enrollment_id = %s
               and cr.request_type = 'PROFESSIONAL'
               and cr.status in ('REQUESTED', 'PAYMENT_SUBMITTED', 'APPROVED')
-              and not (cr.status = 'APPROVED' and coalesce(cert.status, 'ISSUED') in ('BLOCKED', 'DELETED'))
             order by created_at desc
             limit 1
+            for update
             """,
             (student["student_id"], course_id, enrollment["enrollment_id"]),
         ).fetchone()
+        renewal = None
+        if existing and existing.get("status") == "APPROVED":
+            previous_certificate = conn.execute(
+                "select * from courseplatform.certificates where certificate_id = %s for update",
+                (existing.get("certificate_id"),),
+            ).fetchone() if existing.get("certificate_id") else None
+            previous_status = (previous_certificate or {}).get("status") or "DELETED"
+            previous_limit = (previous_certificate or {}).get("max_downloads")
+            previous_count = int((previous_certificate or {}).get("download_count") or 0)
+            limit_reached = previous_limit is not None and previous_count >= int(previous_limit)
+            if previous_status in {"BLOCKED", "DELETED", "SUPERSEDED"} or limit_reached:
+                renewal = {
+                    "previousRequestId": existing["request_id"],
+                    "previousCertificateId": existing.get("certificate_id"),
+                    "reason": "DOWNLOAD_LIMIT_REACHED" if limit_reached else f"CERTIFICATE_{previous_status}",
+                }
+                existing = None
+            else:
+                raise ApiError(
+                    "CERTIFICATE_ALREADY_AVAILABLE",
+                    "O certificado profissional atual ainda está disponível.",
+                )
         if existing:
             request = conn.execute(
                 """
@@ -275,6 +296,16 @@ def request_professional_certificate_action(payload: dict[str, Any], runtime: Ce
             survey_response["response_id"],
             {"requestId": request["request_id"], "courseId": course_id},
         )
+        if renewal:
+            audit(
+                conn,
+                "STUDENT",
+                student["student_id"],
+                "CERTIFICATE_RENEWAL_REQUESTED",
+                "CERTIFICATE_REQUEST",
+                request["request_id"],
+                renewal,
+            )
         conn.commit()
     return success({"request": public_certificate_request(request)})
 

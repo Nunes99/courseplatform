@@ -19,7 +19,14 @@ async function main() {
     courseId: 'C1', courseTitle: course.title, studentName: student.fullName, status: 'ISSUED', downloadCount: 0,
     issueDate: new Date().toISOString(), downloadAccess: { allowed: false, code: 'CERTIFICATE_APPROVAL_REQUIRED',
       message: 'Solicite a aprovacao da administracao para baixar o certificado.', maxDownloads: 2, remainingDownloads: 2 } };
+  const exhaustedProfessionalCertificate = {
+    certificateId: 'CERT-PRO-OLD', certificateType: 'PROFESSIONAL', certificateNumber: 'LSS-2026-PRO123456',
+    courseId: 'C1', courseTitle: course.title, studentName: student.fullName, status: 'ISSUED', downloadCount: 5,
+    issueDate: new Date().toISOString(), downloadAccess: { allowed: false, code: 'DOWNLOAD_LIMIT_REACHED',
+      message: 'O limite de downloads deste certificado foi atingido.', maxDownloads: 5, remainingDownloads: 0 }
+  };
   const requests = [];
+  let renewalMode = false;
   try {
     for (const panel of ['admin', 'student']) {
       const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'Africa/Maputo', locale: 'pt-PT', serviceWorkers: 'block' });
@@ -42,9 +49,14 @@ async function main() {
           if (payload.action === 'adminListCertificateRequests') data = { requests };
           if (payload.action === 'adminSaveCertificateSettings') { settings = { ...settings, certificateProfile: payload.certificateProfile }; data = { settings, course }; }
           if (payload.action === 'getMyCertifications') data = { course, student, completed: true,
-            enrollment: { status: 'COMPLETED', progressPercent: 100 }, settings, requests,
-            simpleCertificate: settings.certificateProfile.participation.enabled ? certificate : null,
-            certificates: settings.certificateProfile.participation.enabled ? [certificate] : [] };
+            enrollment: { status: 'COMPLETED', progressPercent: 100 }, settings,
+            requests: renewalMode
+              ? [{ requestId: 'REQ-PRO-OLD', requestType: 'PROFESSIONAL', status: 'APPROVED', certificateId: 'CERT-PRO-OLD' }]
+              : requests,
+            simpleCertificate: renewalMode ? null : settings.certificateProfile.participation.enabled ? certificate : null,
+            certificates: renewalMode
+              ? [exhaustedProfessionalCertificate]
+              : settings.certificateProfile.participation.enabled ? [certificate] : [] };
           if (payload.action === 'requestParticipationCertificate') {
             requests.push({ requestId: 'REQ1', requestType: 'PARTICIPATION', status: 'PAYMENT_SUBMITTED', studentName: student.fullName, courseTitle: course.title });
             data = { request: requests[0] };
@@ -108,11 +120,26 @@ async function main() {
         assert.equal(await page.locator('[data-preview-certificate]').count(), 0);
         assert.equal(await page.locator('[data-request-participation]').count(), 0);
         assert.ok(await page.locator('[data-open-professional-survey]').isVisible());
+
+        renewalMode = true;
+        await page.evaluate(data => window.__qaOpen(data), { course, student });
+        assert.ok(await page.getByText('Solicitar nova emissão', { exact: true }).isVisible());
+        assert.ok(await page.getByText('O limite de downloads do certificado anterior foi atingido.', { exact: false }).isVisible());
+        assert.ok(await page.getByText('A nova emissão exige um novo pagamento e um novo comprovativo.', { exact: false }).isVisible());
+        assert.ok(await page.getByRole('button', { name: 'Solicitar nova emissão profissional' }).isVisible());
+        for (const [label, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
+          await page.setViewportSize({ width, height });
+          await page.locator('.certificate-upgrade-panel').scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(output, `professional-renewal-${label}.png`) });
+          const sizes = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+          assert.ok(sizes[0] <= sizes[1], `professional renewal ${label}: horizontal overflow ${sizes}`);
+        }
+        renewalMode = false;
       }
       await page.close();
     }
     assert.deepEqual(errors, []);
-    console.log('Participation policy save/reset, student conditions/request and professional-only course passed at desktop/mobile sizes (mock API).');
+    console.log('Participation policy and professional renewal passed at desktop/mobile sizes (mock API).');
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -26,6 +26,12 @@ O hash SHA-256 do JSON canónico é guardado separadamente. A verificação púb
 
 Não existe reemissão em massa. Um índice parcial impede duas reemissões diretas concorrentes do mesmo documento. Estado e autorização de download continuam separados: um certificado bloqueado é reemitido bloqueado.
 
+Quando um certificado profissional é apagado, bloqueado ou atinge o limite de
+downloads, o estudante pode iniciar uma nova emissão. O pedido aprovado anterior
+permanece histórico e nunca é reutilizado: o sistema cria uma nova solicitação,
+um novo inquérito e, quando a política do curso for paga, exige novo pagamento e
+novo comprovativo. Um certificado ainda disponível impede a cobrança duplicada.
+
 ## Separação funcional
 
 - A lista de solicitações em **Certificações** não recebe respostas do inquérito.
