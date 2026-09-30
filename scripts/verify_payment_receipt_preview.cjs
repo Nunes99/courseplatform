@@ -70,14 +70,11 @@ async function main() {
     await page.screenshot({ path: path.join(output, 'image-desktop.png'), fullPage: true });
 
     await dialog.getByRole('button', { name: 'Trocar ficheiro' }).click();
-    await input.setInputFiles({
-      name: 'recibo-teste.pdf',
-      mimeType: 'application/pdf',
-      buffer: Buffer.from('%PDF-1.4\n%%EOF')
-    });
+    await input.setInputFiles(path.join(root, 'output/pdf/certificado-participacao-validacao.pdf'));
     assert.equal(submissions.length, 0, 'changing a file must not submit it');
     assert.ok(await dialog.locator('iframe[title="Pré-visualização do comprovativo em PDF"]').isVisible());
     assert.ok(await dialog.getByText('PDF', { exact: true }).isVisible());
+    assert.ok(await dialog.getByRole('link', { name: 'Abrir em tamanho completo' }).isVisible());
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: path.join(output, 'pdf-mobile.png'), fullPage: true });
@@ -94,7 +91,7 @@ async function main() {
     await submit.click();
     await page.waitForFunction(() => document.querySelector('.dialog-overlay') === null);
     assert.equal(submissions.length, 1, 'confirmation must submit exactly once');
-    assert.equal(submissions[0].receiptFileName, 'recibo-teste.pdf');
+    assert.equal(submissions[0].receiptFileName, 'certificado-participacao-validacao.pdf');
     assert.equal(submissions[0].receiptMimeType, 'application/pdf');
     assert.deepEqual(errors, []);
     console.log('Payment receipt preview passed image/PDF, confirmation and mobile layout checks.');

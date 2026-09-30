@@ -4261,30 +4261,35 @@ function showPaymentDialog(requestId) {
   overlay.innerHTML = `
     <div class="dialog-card certificate-payment-dialog" role="dialog" aria-modal="true" aria-labelledby="professionalPaymentTitle">
       <button class="dialog-close" type="button" aria-label="Fechar">x</button>
-      <form id="professionalPaymentForm" class="form-stack">
-        <div class="profile-section-heading">
-          <div>
-            <p class="eyebrow">Pagamento</p>
-            <h2 id="professionalPaymentTitle">Enviar comprovativo</h2>
+      <form id="professionalPaymentForm" class="form-stack payment-receipt-form">
+        <div class="payment-receipt-step">
+          <div class="profile-section-heading">
+            <div>
+              <p class="eyebrow">Pagamento</p>
+              <h2 id="professionalPaymentTitle">Enviar comprovativo</h2>
+            </div>
           </div>
+          <div class="certificate-payment-box">
+            ${paymentConditionsTemplate(payment)}
+          </div>
+          <input type="hidden" name="requestId" value="${escapeHtml(requestId)}">
+          <label class="file-control payment-receipt-picker">
+            <input name="paymentReceipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" required>
+            <span class="button button-secondary profile-photo-button" data-receipt-picker-label>Selecionar comprovativo</span>
+          </label>
         </div>
-        <div class="certificate-payment-box">
-          ${paymentConditionsTemplate(payment)}
-        </div>
-        <input type="hidden" name="requestId" value="${escapeHtml(requestId)}">
-        <label class="file-control payment-receipt-picker">
-          <input name="paymentReceipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" required>
-          <span class="button button-secondary profile-photo-button" data-receipt-picker-label>Selecionar comprovativo</span>
-        </label>
         <section class="payment-receipt-preview" data-receipt-preview hidden aria-live="polite">
           <div class="payment-receipt-preview-header">
             <div>
               <p class="eyebrow">Pré-visualização</p>
               <h3>Confirme o comprovativo</h3>
             </div>
-            <button class="button button-secondary button-compact" type="button" data-change-receipt>Trocar ficheiro</button>
+            <div class="payment-receipt-preview-actions">
+              <a class="button button-secondary button-compact payment-receipt-open" data-receipt-open target="_blank" rel="noopener" hidden>Abrir em tamanho completo</a>
+              <button class="button button-secondary button-compact" type="button" data-change-receipt>Trocar ficheiro</button>
+            </div>
           </div>
-          <div class="payment-receipt-file" data-receipt-frame></div>
+          <div class="payment-receipt-file" data-receipt-frame aria-busy="false"></div>
           <dl class="payment-receipt-details">
             <div><dt>Ficheiro</dt><dd data-receipt-name></dd></div>
             <div><dt>Formato</dt><dd data-receipt-type></dd></div>
@@ -4332,19 +4337,26 @@ function showPaymentDialog(requestId) {
 function renderPaymentReceiptPreview(overlay, file, retainPreviewUrl) {
   const preview = overlay.querySelector('[data-receipt-preview]');
   const frame = overlay.querySelector('[data-receipt-frame]');
+  const dialog = overlay.querySelector('.certificate-payment-dialog');
+  const openPreview = overlay.querySelector('[data-receipt-open]');
   const submitButton = overlay.querySelector('#professionalPaymentForm button[type="submit"]');
   if (!file) {
+    dialog.classList.remove('has-receipt-preview');
     preview.hidden = true;
     frame.replaceChildren();
+    openPreview.hidden = true;
+    openPreview.removeAttribute('href');
     submitButton.disabled = true;
     return;
   }
 
-  const supportedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
-  if (!supportedTypes.has(file.type)) {
+  const mimeType = paymentReceiptMimeType(file);
+  if (!mimeType) {
     const input = overlay.querySelector('[name="paymentReceipt"]');
     input.value = '';
+    dialog.classList.remove('has-receipt-preview');
     preview.hidden = true;
+    openPreview.hidden = true;
     submitButton.disabled = true;
     showToast('Selecione uma imagem JPG, PNG, WebP ou um ficheiro PDF.', 'warning');
     return;
@@ -4352,22 +4364,34 @@ function renderPaymentReceiptPreview(overlay, file, retainPreviewUrl) {
 
   const previewUrl = URL.createObjectURL(file);
   retainPreviewUrl(previewUrl);
-  const media = document.createElement(file.type === 'application/pdf' ? 'iframe' : 'img');
+  const media = document.createElement(mimeType === 'application/pdf' ? 'iframe' : 'img');
   media.className = 'payment-receipt-media';
-  if (file.type === 'application/pdf') {
+  frame.setAttribute('aria-busy', 'true');
+  if (mimeType === 'application/pdf') {
     media.title = 'Pré-visualização do comprovativo em PDF';
+    media.src = `${previewUrl}#toolbar=0&navpanes=0&view=FitH`;
   } else {
     media.alt = 'Pré-visualização do comprovativo selecionado';
+    media.src = previewUrl;
   }
-  media.src = previewUrl;
+  media.addEventListener('load', () => frame.setAttribute('aria-busy', 'false'), { once: true });
   frame.replaceChildren(media);
   overlay.querySelector('[data-receipt-name]').textContent = file.name;
-  overlay.querySelector('[data-receipt-type]').textContent = file.type === 'application/pdf' ? 'PDF' : file.type.replace('image/', '').toUpperCase();
+  overlay.querySelector('[data-receipt-type]').textContent = mimeType === 'application/pdf' ? 'PDF' : mimeType.replace('image/', '').toUpperCase();
   overlay.querySelector('[data-receipt-size]').textContent = formatBytes(file.size);
   overlay.querySelector('[data-receipt-picker-label]').textContent = 'Comprovativo selecionado';
+  openPreview.href = previewUrl;
+  openPreview.hidden = false;
+  dialog.classList.add('has-receipt-preview');
   preview.hidden = false;
   submitButton.disabled = false;
-  preview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function paymentReceiptMimeType(file) {
+  const normalizedType = String(file?.type || '').toLowerCase();
+  if (['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(normalizedType)) return normalizedType;
+  const extension = String(file?.name || '').split('.').pop()?.toLowerCase();
+  return ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', pdf: 'application/pdf' })[extension] || '';
 }
 
 async function submitProfessionalCertificatePayment(event, closeDialog = null) {

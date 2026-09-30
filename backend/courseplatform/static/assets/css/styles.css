@@ -2640,6 +2640,26 @@ input[type="search"] {
   width: min(100%, 820px);
 }
 
+.certificate-payment-dialog.has-receipt-preview {
+  width: min(96vw, 1120px);
+}
+
+.payment-receipt-step {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.certificate-payment-dialog.has-receipt-preview .payment-receipt-form {
+  grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr);
+  align-items: start;
+}
+
+.certificate-payment-dialog.has-receipt-preview .dialog-actions {
+  grid-column: 1 / -1;
+}
+
 .payment-receipt-picker {
   justify-items: stretch;
 }
@@ -2673,7 +2693,15 @@ input[type="search"] {
   font-size: 18px;
 }
 
+.payment-receipt-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .payment-receipt-file {
+  position: relative;
   display: grid;
   place-items: center;
   min-height: 280px;
@@ -2684,7 +2712,18 @@ input[type="search"] {
   background: #fff;
 }
 
+.payment-receipt-file[aria-busy="true"]::before {
+  content: "A preparar pré-visualização...";
+  position: absolute;
+  z-index: 0;
+  color: #617286;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .payment-receipt-media {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   height: min(48vh, 520px);
@@ -2730,6 +2769,14 @@ input[type="search"] {
 }
 
 @media (max-width: 600px) {
+  .certificate-payment-dialog.has-receipt-preview .payment-receipt-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .certificate-payment-dialog.has-receipt-preview .dialog-actions {
+    grid-column: auto;
+  }
+
   .payment-receipt-preview-header {
     align-items: stretch;
     flex-direction: column;
@@ -2737,6 +2784,11 @@ input[type="search"] {
 
   .payment-receipt-preview-header .button {
     width: 100%;
+  }
+
+  .payment-receipt-preview-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .payment-receipt-file,
