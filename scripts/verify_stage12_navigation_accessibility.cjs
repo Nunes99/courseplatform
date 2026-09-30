@@ -12,6 +12,7 @@ const contentTypes = {
   '.css': 'text/css',
   '.html': 'text/html',
   '.js': 'application/javascript',
+  '.mjs': 'application/javascript',
   '.json': 'application/json',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
@@ -26,7 +27,7 @@ async function serveFrontend(page) {
     const locationUrl = message.location().url || '';
     if (locationUrl && new URL(locationUrl).origin !== origin) return;
     if (locationUrl && new URL(locationUrl).pathname === '/favicon.ico') return;
-    failures.push(`console: ${message.text()}`);
+    failures.push(`console: ${message.text()}${locationUrl ? ` (${locationUrl})` : ''}`);
   });
   await page.addInitScript((apiOrigin) => {
     window.COURSE_PLATFORM_API_URL = `${apiOrigin}/api/index`;
@@ -54,7 +55,14 @@ async function serveFrontend(page) {
               students: [],
               summary: { active: 0, blocked: 0, completed: 0, averageProgress: 0 },
               pagination: { total: 0, returned: 0, hasMore: false, nextCursor: '' }
-            })
+            }),
+            adminGradebook: async () => ({ entries: [], pagination: { returned: 0, hasMore: false } }),
+            adminAcademicCalendar: async () => ({ offerings: [], events: [] }),
+            adminCertificateRequests: async () => ({ requests: [], pagination: { returned: 0, hasMore: false } }),
+            adminCertificates: async () => ({ certificates: [], pagination: { returned: 0, hasMore: false } }),
+            adminCourses: async () => ({ courses: [{ course: { courseId: 'COURSE-QA', title: 'Curso QA', status: 'ACTIVE' } }] }),
+            adminCertificateSettings: async () => ({ settings: { certificateProfile: {} } }),
+            adminCertificateSurveys: async () => ({ surveys: [], pagination: { returned: 0, hasMore: false } })
           };
           state.admin = { adminId: 'ADMIN-QA', fullName: 'Administrador QA', role: 'OWNER' };
           renderAdminShell();
@@ -93,6 +101,35 @@ async function serveFrontend(page) {
           renderAdminLoadError(new Error('synthetic failure'), () => { window.__stage12Retried = true; });
           console.error = originalConsoleError;
         };
+        window.__stage12RenderEmptyView = (view) => {
+          if (view === 'gradebook') {
+            state.gradebook = [];
+            state.gradebookFilters = { query: 'sem resultado', status: 'BLOCKED', courseId: '', offeringId: '', groupId: '' };
+            renderGradebook();
+          } else if (view === 'calendar') {
+            state.academicCalendar = { offerings: [], events: [] };
+            state.academicCalendarFilters = { courseId: '', offeringId: '' };
+            renderAcademicCalendar();
+          } else if (view === 'certifications') {
+            state.courses = [{ course: { courseId: 'COURSE-QA', title: 'Curso QA', status: 'ACTIVE' } }];
+            state.selectedCourseId = 'COURSE-QA';
+            state.certificates = [];
+            state.certificateRequests = [];
+            state.certificateSettings = { certificateProfile: {} };
+            state.certificateFilters = { status: 'REJECTED', certificateStatus: 'BLOCKED', query: 'sem resultado' };
+            renderCertifications();
+          } else if (view === 'surveys') {
+            state.certificateSurveys = [];
+            state.certificateSurveyResponses = [];
+            state.surveyFilters = { query: 'sem resultado' };
+            renderCertificateSurveys();
+          }
+        };
+        window.__stage12State = () => ({
+          gradebookFilters: { ...state.gradebookFilters },
+          certificateFilters: { ...state.certificateFilters },
+          surveyFilters: { ...state.surveyFilters }
+        });
       `;
       return route.fulfill({ contentType: 'application/javascript', body: source + hook });
     }
@@ -173,6 +210,25 @@ async function main() {
     await page.getByRole('heading', { name: 'Não foi possível carregar esta página' }).waitFor();
     await page.getByRole('button', { name: 'Tentar novamente' }).click();
     assert.equal(await page.evaluate(() => window.__stage12Retried), true);
+
+    await page.evaluate(() => window.__stage12RenderEmptyView('gradebook'));
+    await page.getByRole('heading', { name: 'Nenhuma matrícula encontrada' }).waitFor();
+    assert.equal(await page.locator('#exportGradebook').isDisabled(), true);
+    await page.getByRole('button', { name: 'Limpar filtros' }).click();
+    await page.waitForFunction(() => window.__stage12State().gradebookFilters.query === '');
+
+    await page.evaluate(() => window.__stage12RenderEmptyView('calendar'));
+    await page.getByRole('heading', { name: 'Nenhuma edição disponível' }).waitFor();
+
+    await page.evaluate(() => window.__stage12RenderEmptyView('certifications'));
+    await page.getByRole('heading', { name: 'Nenhum certificado encontrado' }).waitFor();
+    await page.locator('#clearCertificateFilters').click();
+    await page.waitForFunction(() => window.__stage12State().certificateFilters.query === '');
+
+    await page.evaluate(() => window.__stage12RenderEmptyView('surveys'));
+    await page.getByRole('heading', { name: 'Nenhum inquérito encontrado' }).waitFor();
+    await page.locator('#clearSurveyDefinitionSearch').click();
+    await page.waitForFunction(() => window.__stage12State().surveyFilters.query === '');
 
     const skipLink = page.locator('.skip-link');
     await skipLink.focus();

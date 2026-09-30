@@ -2896,7 +2896,12 @@ function renderCertifications() {
           <span>Ações</span>
         </div>
         ${certificates.length ? certificates.map(adminCertificateRowTemplate).join('') : `
-          <div class="student-empty-state">Sem certificados para os filtros atuais.</div>
+          ${adminEmptyStateTemplate(
+            'Nenhum certificado encontrado',
+            'Não existem certificados correspondentes à pesquisa ou ao estado selecionado.',
+            'clearCertificateFilters',
+            'Limpar filtros'
+          )}
         `}
       </div>
       ${cursorPaginationTemplate('certificates', state.certificatePagination.certificates)}
@@ -2924,7 +2929,12 @@ function renderCertifications() {
       </section>
       <div class="certificate-request-list">
         ${requests.length ? requests.map(certificateRequestCardTemplate).join('') : `
-          <div class="student-empty-state">Sem pedidos para os filtros atuais.</div>
+          ${adminEmptyStateTemplate(
+            'Nenhum pedido encontrado',
+            'Não existem pedidos correspondentes à pesquisa ou ao estado selecionado.',
+            'clearCertificateRequestFilters',
+            'Limpar filtros'
+          )}
         `}
       </div>
       ${cursorPaginationTemplate('certificate-requests', state.certificatePagination.requests)}
@@ -3021,6 +3031,20 @@ function renderCertifications() {
     scheduleCertificateRefresh();
   });
   document.querySelector('#refreshCertificateData').addEventListener('click', () => loadCertifications({ force: true }));
+  document.querySelector('#clearCertificateFilters')?.addEventListener('click', () => {
+    state.certificateFilters.query = '';
+    state.certificateFilters.certificateStatus = 'ALL';
+    resetCursorPagination(state.certificatePagination.certificates);
+    resetCursorPagination(state.certificatePagination.requests);
+    loadCertifications({ force: true });
+  });
+  document.querySelector('#clearCertificateRequestFilters')?.addEventListener('click', () => {
+    state.certificateFilters.query = '';
+    state.certificateFilters.status = 'ALL';
+    resetCursorPagination(state.certificatePagination.certificates);
+    resetCursorPagination(state.certificatePagination.requests);
+    loadCertifications({ force: true });
+  });
   root.querySelectorAll('[data-cursor-pagination]').forEach((button) => {
     button.addEventListener('click', () => changeCertificatePage(
       button.dataset.cursorPagination,
@@ -3251,20 +3275,20 @@ function adminCertificateRowTemplate(certificate) {
   const maxDownloads = certificate.downloadAccess?.maxDownloads ?? certificate.maxDownloads ?? 'Livre';
   return `
     <div class="certificate-record-row ${deleted ? 'is-deleted' : ''} ${blocked ? 'is-blocked' : ''}">
-      <div>
+      <div data-label="Código">
         <code>${escapeHtml(adminCertificateDisplayNumber(certificate) || certificate.certificateId)}</code>
         <span class="status-pill ${statusClass(certificate.status)}">${statusLabel(certificate.status)}</span>
         <small>${escapeHtml(certificateType)}</small>
       </div>
-      <div>
+      <div data-label="Formando">
         <strong>${escapeHtml(certificate.studentName || 'Estudante')}</strong>
       </div>
-      <div>${escapeHtml(certificate.courseTitle || certificate.courseId || 'Curso')}</div>
-      <div>${certificate.finalScore == null || certificate.finalScore === '' ? '-' : `${escapeHtml(certificate.finalScore)}%`}</div>
-      <div>${escapeHtml(formatDate(certificate.issueDate))}</div>
-      <div><span class="certificate-generation-pill">${escapeHtml(downloads)} / ${escapeHtml(maxDownloads)}</span>
+      <div data-label="Curso">${escapeHtml(certificate.courseTitle || certificate.courseId || 'Curso')}</div>
+      <div data-label="Resultado">${certificate.finalScore == null || certificate.finalScore === '' ? '-' : `${escapeHtml(certificate.finalScore)}%`}</div>
+      <div data-label="Emissão">${escapeHtml(formatDate(certificate.issueDate))}</div>
+      <div data-label="Gerações PDF"><span class="certificate-generation-pill">${escapeHtml(downloads)} / ${escapeHtml(maxDownloads)}</span>
         ${certificate.downloadAccess?.message ? `<small>${escapeHtml(certificate.downloadAccess.message)}</small>` : ''}</div>
-      <div class="certificate-record-actions">
+      <div class="certificate-record-actions" data-label="Ações">
         ${deleted ? '' : `
           <button class="button button-small button-secondary" type="button" data-open-admin-certificate ${dataset}>Visualizar</button>
           <button class="button button-small button-secondary" type="button" data-download-admin-certificate ${dataset}>Baixar</button>
@@ -3558,7 +3582,14 @@ function renderCertificateSurveys() {
       </div>
       <div class="survey-admin-list">
         ${surveys.length ? surveys.map(certificateSurveyRowTemplate).join('') : `
-          <div class="student-empty-state">Ainda não existem cursos para configurar inquéritos.</div>
+          ${adminEmptyStateTemplate(
+            state.surveyFilters.query ? 'Nenhum inquérito encontrado' : 'Ainda não existem inquéritos',
+            state.surveyFilters.query
+              ? 'Não existem cursos correspondentes à pesquisa atual.'
+              : 'Quando houver cursos disponíveis, poderá configurar aqui os respetivos inquéritos.',
+            state.surveyFilters.query ? 'clearSurveyDefinitionSearch' : '',
+            state.surveyFilters.query ? 'Limpar pesquisa' : ''
+          )}
         `}
       </div>
       ${cursorPaginationTemplate('survey-definitions', state.surveyPagination.definitions)}
@@ -3574,7 +3605,14 @@ function renderCertificateSurveys() {
       </div>
       <div class="survey-response-list">
         ${responses.length ? responses.map(certificateSurveyResponseTemplate).join('') : `
-          <div class="student-empty-state">Ainda não existem respostas de inquéritos.</div>
+          ${adminEmptyStateTemplate(
+            state.surveyFilters.query ? 'Nenhuma resposta encontrada' : 'Ainda não existem respostas',
+            state.surveyFilters.query
+              ? 'Não existem respostas correspondentes à pesquisa atual.'
+              : 'As respostas submetidas pelos estudantes serão apresentadas nesta área.',
+            state.surveyFilters.query ? 'clearSurveyResponseSearch' : '',
+            state.surveyFilters.query ? 'Limpar pesquisa' : ''
+          )}
         `}
       </div>
       ${cursorPaginationTemplate('survey-responses', state.surveyPagination.responses)}
@@ -3586,6 +3624,14 @@ function renderCertificateSurveys() {
     resetCursorPagination(state.surveyPagination.definitions);
     resetCursorPagination(state.surveyPagination.responses);
     scheduleSurveyRefresh();
+  });
+  root.querySelectorAll('#clearSurveyDefinitionSearch, #clearSurveyResponseSearch').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.surveyFilters.query = '';
+      resetCursorPagination(state.surveyPagination.definitions);
+      resetCursorPagination(state.surveyPagination.responses);
+      loadCertificateSurveys({ force: true });
+    });
   });
   root.querySelectorAll('[data-edit-certificate-survey]').forEach((button) => {
     button.addEventListener('click', () => openCertificateSurveyDialog(button.dataset.editCertificateSurvey));
@@ -3675,7 +3721,7 @@ function openCertificateSurveyDialog(courseId) {
       <form id="certificateSurveyForm" class="form-stack">
         <input type="hidden" name="courseId" value="${escapeHtml(item.course?.courseId || '')}">
         <label>
-          <span>Mensagem de parabens</span>
+          <span>Mensagem de parabéns</span>
           <textarea name="congratulationsMessage" rows="3">${escapeHtml(item.congratulationsMessage || '')}</textarea>
         </label>
         <div class="certificate-survey-builder">
@@ -4108,7 +4154,7 @@ function renderGradebook() {
   main.innerHTML = `
     <div class="admin-page-heading">
       <div><p class="eyebrow">Avaliação consolidada</p><h1>Pauta</h1><p>Resultados por matrícula, versão publicada, turma e grupo.</p></div>
-      <div class="admin-page-actions"><button class="button button-secondary" id="exportGradebook">Exportar CSV</button><button class="button button-primary" id="refreshGradebook">Atualizar</button></div>
+      <div class="admin-page-actions"><button class="button button-secondary" id="exportGradebook" ${entries.length ? '' : 'disabled'}>Exportar CSV</button><button class="button button-primary" id="refreshGradebook">Atualizar</button></div>
     </div>
     <section class="admin-summary-grid" aria-label="Resumo da pauta">
       <article class="insight-card"><img src="${iconUrl('users', goldIcon)}" alt=""><div><span>Matrículas visíveis</span><strong>${entries.length}</strong></div></article>
@@ -4126,15 +4172,20 @@ function renderGradebook() {
       </select></label>
       <button class="button button-secondary" type="submit">Aplicar filtros</button>
     </form>
-    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Estudante</th><th>Curso e versão</th><th>Turma / grupo</th><th>Progresso</th><th>Nota final</th><th>Estado</th></tr></thead><tbody>
+    <div class="admin-table-wrap"><table class="admin-table responsive-admin-table"><thead><tr><th>Estudante</th><th>Curso e versão</th><th>Turma / grupo</th><th>Progresso</th><th>Nota final</th><th>Estado</th></tr></thead><tbody>
       ${entries.length ? entries.map((item) => `<tr>
-        <td><strong>${escapeHtml(item.student.fullName || '-')}</strong><small>${escapeHtml(item.student.publicStudentId || item.student.email || '')}</small></td>
-        <td><strong>${escapeHtml(item.course.title || '-')}</strong><small>${escapeHtml(item.course.courseCode || '')} · versão ${escapeHtml(item.course.versionNumber || '')}</small></td>
-        <td>${escapeHtml(item.offering.offeringCode || item.offering.name || '-')}<small>${escapeHtml(item.group?.groupCode || item.group?.name || 'Sem grupo')}</small></td>
-        <td><strong>${escapeHtml(item.progressPercent)}%</strong><small>${escapeHtml(item.approvedCount)} de ${escapeHtml(item.lessonCount)} módulos</small></td>
-        <td>${escapeHtml(formatGradebookScore(item.finalScore))}</td>
-        <td><span class="status-pill ${statusClass(item.status)}">${escapeHtml(statusLabel(item.status))}</span></td>
-      </tr>`).join('') : '<tr><td colspan="6" class="empty-table">Nenhuma matrícula encontrada para estes filtros.</td></tr>'}
+        <td data-label="Estudante"><strong>${escapeHtml(item.student.fullName || '-')}</strong><small>${escapeHtml(item.student.publicStudentId || item.student.email || '')}</small></td>
+        <td data-label="Curso e versão"><strong>${escapeHtml(item.course.title || '-')}</strong><small>${escapeHtml(item.course.courseCode || '')} · versão ${escapeHtml(item.course.versionNumber || '')}</small></td>
+        <td data-label="Turma / grupo">${escapeHtml(item.offering.offeringCode || item.offering.name || '-')}<small>${escapeHtml(item.group?.groupCode || item.group?.name || 'Sem grupo')}</small></td>
+        <td data-label="Progresso"><strong>${escapeHtml(item.progressPercent)}%</strong><small>${escapeHtml(item.approvedCount)} de ${escapeHtml(item.lessonCount)} módulos</small></td>
+        <td data-label="Nota final">${escapeHtml(formatGradebookScore(item.finalScore))}</td>
+        <td data-label="Estado"><span class="status-pill ${statusClass(item.status)}">${escapeHtml(statusLabel(item.status))}</span></td>
+      </tr>`).join('') : `<tr><td colspan="6" class="empty-table">${adminEmptyStateTemplate(
+        'Nenhuma matrícula encontrada',
+        'Não existem matrículas correspondentes à pesquisa ou ao estado selecionado.',
+        'clearGradebookFilters',
+        'Limpar filtros'
+      )}</td></tr>`}
     </tbody></table></div>
     ${cursorPaginationTemplate('gradebook', state.gradebookPagination)}
   `;
@@ -4148,6 +4199,11 @@ function renderGradebook() {
     loadGradebook({ force: true });
   });
   document.querySelector('#exportGradebook')?.addEventListener('click', exportGradebookCsv);
+  document.querySelector('#clearGradebookFilters')?.addEventListener('click', () => {
+    state.gradebookFilters = { query: '', status: 'ALL', courseId: '', offeringId: '', groupId: '' };
+    resetCursorPagination(state.gradebookPagination);
+    loadGradebook({ force: true });
+  });
   root.querySelector('[data-cursor-pagination="gradebook"][data-direction="previous"]')?.addEventListener('click', () => moveCursorPage(state.gradebookPagination, 'previous', () => loadGradebook({ force: true })));
   root.querySelector('[data-cursor-pagination="gradebook"][data-direction="next"]')?.addEventListener('click', () => moveCursorPage(state.gradebookPagination, 'next', () => loadGradebook({ force: true })));
   reportHeight();
@@ -4193,12 +4249,34 @@ function renderAcademicCalendar() {
   const selectedOfferingId = state.academicCalendarFilters.offeringId || offerings[0]?.offeringId || '';
   state.academicCalendarFilters.offeringId = selectedOfferingId;
   const events = (state.academicCalendar.events || []).filter((item) => !selectedOfferingId || item.offeringId === selectedOfferingId);
+  if (!offerings.length) {
+    main.innerHTML = `
+      <div class="admin-page-heading">
+        <div>
+          <p class="eyebrow">Planeamento</p>
+          <h1>Calendário académico</h1>
+          <p>Prazos, avaliações e sessões ligados à edição utilizada pelos estudantes.</p>
+        </div>
+        <button class="button button-secondary" id="refreshCalendar" type="button">Atualizar</button>
+      </div>
+      ${adminEmptyStateTemplate(
+        'Nenhuma edição disponível',
+        'Crie ou ative uma oferta ou turma antes de configurar o calendário académico.'
+      )}
+    `;
+    document.querySelector('#refreshCalendar')?.addEventListener('click', () => loadAcademicCalendar({ force: true }));
+    reportHeight();
+    return;
+  }
   main.innerHTML = `
     <div class="admin-page-heading"><div><p class="eyebrow">Planeamento</p><h1>Calendário académico</h1><p>Prazos, avaliações e sessões ligados à edição utilizada pelos estudantes.</p></div><button class="button button-secondary" id="refreshCalendar">Atualizar</button></div>
     <section class="admin-filter-bar"><label class="admin-filter-search"><span>Edição / turma</span><select id="calendarOffering">${offerings.map((item) => `<option value="${escapeHtml(item.offeringId)}" ${item.offeringId === selectedOfferingId ? 'selected' : ''}>${escapeHtml(item.offeringCode || item.name)}</option>`).join('')}</select></label></section>
     <div class="academic-calendar-layout">
-      <section class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Data</th><th>Evento</th><th>Tipo</th><th></th></tr></thead><tbody>
-        ${events.length ? events.map((item) => `<tr><td><strong>${escapeHtml(formatDate(item.startAt))}</strong><small>${item.endAt ? `até ${escapeHtml(formatDate(item.endAt))}` : ''}</small></td><td><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.description || '')}</small></td><td>${escapeHtml(calendarEventTypeLabel(item.eventType))}</td><td>${canManagePlatform() ? `<button class="button button-small button-secondary" data-edit-calendar-event="${escapeHtml(item.eventId)}">Editar</button> <button class="button button-small button-danger" data-delete-calendar-event="${escapeHtml(item.eventId)}">Remover</button>` : ''}</td></tr>`).join('') : '<tr><td colspan="4" class="empty-table">Nenhum evento configurado para esta edição.</td></tr>'}
+      <section class="admin-table-wrap"><table class="admin-table responsive-admin-table"><thead><tr><th>Data</th><th>Evento</th><th>Tipo</th><th>Ações</th></tr></thead><tbody>
+        ${events.length ? events.map((item) => `<tr><td data-label="Data"><strong>${escapeHtml(formatDate(item.startAt))}</strong><small>${item.endAt ? `até ${escapeHtml(formatDate(item.endAt))}` : ''}</small></td><td data-label="Evento"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.description || '')}</small></td><td data-label="Tipo">${escapeHtml(calendarEventTypeLabel(item.eventType))}</td><td data-label="Ações">${canManagePlatform() ? `<button class="button button-small button-secondary" type="button" data-edit-calendar-event="${escapeHtml(item.eventId)}" aria-label="Editar ${escapeHtml(item.title)}">Editar</button> <button class="button button-small button-danger" type="button" data-delete-calendar-event="${escapeHtml(item.eventId)}" aria-label="Remover ${escapeHtml(item.title)}">Remover</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="4" class="empty-table">${adminEmptyStateTemplate(
+          'Nenhum evento configurado',
+          'Utilize o formulário ao lado para adicionar o primeiro evento desta edição.'
+        )}</td></tr>`}
       </tbody></table></section>
       ${canManagePlatform() && selectedOfferingId ? `<aside class="review-form-card"><h2>Evento</h2><form id="calendarEventForm" class="form-stack"><input type="hidden" name="eventId"><label><span>Título</span><input name="title" required maxlength="240"></label><div class="course-form-grid"><label><span>Tipo</span><select name="eventType"><option value="CLASS">Aula</option><option value="ASSESSMENT">Avaliação</option><option value="DEADLINE">Prazo</option><option value="SESSION">Sessão</option><option value="OTHER">Outro</option></select></label><label><span>Aviso prévio (min)</span><input name="notifyBeforeMinutes" type="number" min="0" max="43200" value="0"></label><label><span>Início</span><input name="startAt" type="datetime-local" required></label><label><span>Fim</span><input name="endAt" type="datetime-local"></label></div><label><span>Descrição</span><textarea name="description" rows="4" maxlength="2000"></textarea></label><button class="button button-primary button-block" type="submit">Guardar evento</button><button class="button button-secondary button-block" type="reset">Cancelar edição</button></form></aside>` : ''}
     </div>
@@ -4523,7 +4601,7 @@ function renderSubmissionsV2() {
     </section>
 
     <div class="admin-table-wrap">
-      <table class="admin-table">
+      <table class="admin-table responsive-admin-table">
         <thead>
           <tr>
             <th>Estudante</th>
@@ -4637,25 +4715,25 @@ function submissionRowTemplate(item) {
 
   return `
     <tr>
-      <td>
+      <td data-label="Estudante">
         <strong>${escapeHtml(item.student?.fullName || 'Estudante')}</strong>
         <small>${escapeHtml(item.student?.email || '')}</small>
       </td>
-      <td>
+      <td data-label="Aula">
         Aula ${escapeHtml(item.lesson?.lessonNumber || '')}
         <small>${escapeHtml(item.lesson?.title || item.attempt.lessonId)}</small>
         <small>Prazo: ${escapeHtml(formatDate(item.attempt?.deadlineAt))}</small>
       </td>
-      <td>
+      <td data-label="Estados">
         ${adminModuleStatusPairTemplate(item.progress || {}, item.attempt)}
       </td>
-      <td>${score === '' || score == null ? '-' : `${escapeHtml(score)}%`}</td>
-      <td>
+      <td data-label="Nota">${score === '' || score == null ? '-' : `${escapeHtml(score)}%`}</td>
+      <td data-label="Última decisão">
         ${review ? escapeHtml(statusLabel(review.decision)) : '-'}
         <small>${escapeHtml(formatDate(item.attempt.reviewedAt || review?.reviewedAt))}</small>
       </td>
-      <td>${item.fileCount || 0}</td>
-      <td>
+      <td data-label="Ficheiros">${item.fileCount || 0}</td>
+      <td data-label="Ações">
         <button class="button button-small button-primary submission-action-button"
           data-open-submission="${escapeHtml(item.attempt.attemptId)}">
           ${actionLabel}

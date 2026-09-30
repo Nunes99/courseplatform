@@ -12196,6 +12196,134 @@ body:has(.admin-layout) .button-small {
   }
 }
 
+/* Stage 12: complete mobile records without hidden table columns. */
+@media (max-width: 760px) {
+  .admin-table-wrap:has(.responsive-admin-table) {
+    max-height: none;
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .responsive-admin-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .responsive-admin-table thead {
+    display: none;
+  }
+
+  .responsive-admin-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .responsive-admin-table tbody tr {
+    display: block;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-card);
+    background: var(--surface);
+  }
+
+  .responsive-admin-table tbody td {
+    display: block;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    padding: 12px 14px;
+    border: 0;
+    border-bottom: 1px solid var(--border-soft);
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .responsive-admin-table tbody td:last-child {
+    border-bottom: 0;
+  }
+
+  .responsive-admin-table tbody td[data-label]::before,
+  .certificate-record-row > [data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.35;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  .responsive-admin-table tbody td.empty-table {
+    display: block;
+    padding: 0;
+  }
+
+  .responsive-admin-table tbody td[data-label="Ações"] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .responsive-admin-table tbody td[data-label="Ações"]::before {
+    flex: 0 0 100%;
+  }
+
+  .responsive-admin-table tbody td[data-label="Ações"] .button {
+    flex: 1 1 130px;
+  }
+
+  .certificate-record-table {
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .certificate-record-head {
+    display: none;
+  }
+
+  .certificate-record-row:not(.certificate-record-head) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+    margin-bottom: 12px;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-card);
+    background: var(--surface);
+  }
+
+  .certificate-record-row:not(.certificate-record-head) > [data-label] {
+    display: block;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-soft);
+    overflow-wrap: anywhere;
+  }
+
+  .certificate-record-row:not(.certificate-record-head) > .certificate-record-actions {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .certificate-record-row:not(.certificate-record-head) > .certificate-record-actions::before {
+    flex: 0 0 100%;
+  }
+
+  .certificate-record-actions .button {
+    flex: 1 1 130px;
+  }
+
+  .certificate-record-row .certificate-policy-note {
+    margin: 0;
+    padding: 12px 14px;
+  }
+}
+
 /* Keep the complete participation certificate visible inside narrow dialogs. */
 @media (max-width: 760px) {
   .certificate-preview-sheet:not(.is-professional) {

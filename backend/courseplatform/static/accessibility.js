@@ -92,10 +92,10 @@ function restoreDialogFocus(overlay) {
 function prepareScrollableRegion(region) {
   if (!(region instanceof HTMLElement) || managedScrollRegions.has(region)) return;
   const table = region.matches('table') ? region : region.querySelector('table');
-  if (!table) return;
+  if (!table && !region.matches('.certificate-record-table')) return;
   managedScrollRegions.add(region);
 
-  table.querySelectorAll('thead th:not([scope])').forEach((heading) => {
+  table?.querySelectorAll('thead th:not([scope])').forEach((heading) => {
     heading.setAttribute('scope', 'col');
   });
 

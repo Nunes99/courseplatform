@@ -65,6 +65,10 @@ async function main() {
           if (payload.action === 'submitAttempt') { attemptData.attempt.status = 'UNDER_REVIEW'; data = { attempt: attemptData.attempt }; }
           return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data }) });
         }
+        if (url.pathname.startsWith('/assets/css/') && url.pathname.endsWith('.css')) {
+          const cssPath = path.join(root, 'public', url.pathname.replace(/^\/+/, ''));
+          return route.fulfill({ contentType: 'text/css', body: await fs.readFile(cssPath, 'utf8') });
+        }
         const module = panel === 'admin' ? 'admin' : 'app';
         if (url.pathname === `/${module}.js`) {
           const source = await fs.readFile(path.join(root, `public/${module}.js`), 'utf8');

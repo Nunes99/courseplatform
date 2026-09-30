@@ -77,6 +77,61 @@ const fixtures = {
     whatsapp: { status: 'NOT_REQUESTED' },
     telegram: { status: 'NOT_REQUESTED' },
     push: { status: 'NOT_REQUESTED' }
+  })),
+  submissions: Array.from({ length: 18 }, (_, index) => ({
+    student: student(index + 1).student,
+    lesson: { lessonId: `LESSON-${index + 1}`, lessonNumber: index + 1, title: `Módulo aplicado ${index + 1}` },
+    attempt: {
+      attemptId: `ATTEMPT-${index + 1}`,
+      lessonId: `LESSON-${index + 1}`,
+      status: index % 3 === 0 ? 'UNDER_REVIEW' : 'APPROVED',
+      score: index % 3 === 0 ? null : 80 + (index % 20),
+      deadlineAt: '2026-10-20T18:00:00Z',
+      reviewedAt: index % 3 === 0 ? null : '2026-09-15T10:00:00Z'
+    },
+    progress: { contentAccessStatus: 'AVAILABLE', evaluationStatus: index % 3 === 0 ? 'UNDER_REVIEW' : 'APPROVED' },
+    latestReview: index % 3 === 0 ? null : { decision: 'APPROVED', score: 85, reviewedAt: '2026-09-15T10:00:00Z' },
+    fileCount: 2
+  })),
+  gradebook: Array.from({ length: 24 }, (_, index) => ({
+    student: student(index + 1).student,
+    course: { title: `Curso profissional ${index % 4 + 1}`, courseCode: `CRS-${index % 4 + 1}`, versionNumber: 2 },
+    offering: { offeringCode: `TURMA-${index % 3 + 1}`, name: `Turma ${index % 3 + 1}` },
+    group: { groupCode: `GRUPO-${index % 5 + 1}`, name: `Grupo ${index % 5 + 1}` },
+    progressPercent: 55 + (index % 46), approvedCount: 6, lessonCount: 8,
+    finalScore: 70 + (index % 30), status: index % 4 === 0 ? 'COMPLETED' : 'ACTIVE'
+  })),
+  calendar: {
+    offerings: [{ offeringId: 'OFFERING-QA', offeringCode: 'EPG26-12H-002', name: 'Turma de validação' }],
+    events: Array.from({ length: 12 }, (_, index) => ({
+      eventId: `CAL-${index + 1}`, offeringId: 'OFFERING-QA',
+      title: `Sessão académica ${index + 1}`,
+      description: 'Atividade planeada para validação visual do calendário.',
+      eventType: index % 3 === 0 ? 'ASSESSMENT' : 'CLASS',
+      startAt: `2026-10-${String(index + 1).padStart(2, '0')}T10:00:00Z`,
+      endAt: `2026-10-${String(index + 1).padStart(2, '0')}T12:00:00Z`
+    }))
+  },
+  certificates: Array.from({ length: 16 }, (_, index) => ({
+    certificateId: `CERT-${index + 1}`,
+    certificateNumber: `LSS-2026-${String(index + 1).padStart(10, '0')}`,
+    verificationCode: `LSS2026${String(index + 1).padStart(10, '0')}`,
+    certificateType: index % 2 === 0 ? 'PROFESSIONAL' : 'PARTICIPATION',
+    studentName: `Estudante ${index + 1}`,
+    courseTitle: `Curso profissional ${index % 4 + 1}`,
+    finalScore: 80 + (index % 20), issueDate: '2026-09-15T10:00:00Z', status: 'ISSUED',
+    downloadCount: index % 3, downloadAccess: { maxDownloads: 5 }
+  })),
+  certificateRequests: Array.from({ length: 10 }, (_, index) => ({
+    requestId: `CERT-REQUEST-${index + 1}`,
+    requestType: 'PROFESSIONAL',
+    studentName: `Estudante ${index + 1}`,
+    courseTitle: `Curso profissional ${index % 4 + 1}`,
+    status: index % 2 === 0 ? 'PAYMENT_SUBMITTED' : 'REQUESTED',
+    paymentReceiptUrl: index % 2 === 0 ? `/protected/receipt-${index + 1}` : '',
+    paymentReceiptName: `comprovativo-${index + 1}.pdf`,
+    paymentReceiptMimeType: 'application/pdf', paymentReceiptSizeBytes: 120000,
+    submittedAt: index % 2 === 0 ? '2026-09-15T10:00:00Z' : null
   }))
 };
 
@@ -155,6 +210,31 @@ async function main() {
               };
               Object.assign(state.notificationPagination, { returned: 20, hasMore: true, nextCursor: 'next' });
               renderNotificationManagement();
+            } else if (view === 'submissions') {
+              state.pending = data.submissions;
+              state.courses = data.courses.slice(0, 2);
+              state.courseStructure = { course: data.courses[0].course, lessons: data.submissions.slice(0, 6).map((item) => ({ lesson: item.lesson })) };
+              state.groups = [];
+              state.students = data.students.slice(0, 20);
+              Object.assign(state.submissionPagination, { returned: 18, hasMore: true, nextCursor: 'next' });
+              renderSubmissionsV2();
+            } else if (view === 'gradebook') {
+              state.gradebook = data.gradebook;
+              Object.assign(state.gradebookPagination, { returned: 24, hasMore: true, nextCursor: 'next' });
+              renderGradebook();
+            } else if (view === 'calendar') {
+              state.academicCalendar = data.calendar;
+              state.academicCalendarFilters = { courseId: '', offeringId: 'OFFERING-QA' };
+              renderAcademicCalendar();
+            } else if (view === 'certifications') {
+              state.courses = data.courses.slice(0, 4);
+              state.selectedCourseId = data.courses[0].course.courseId;
+              state.certificates = data.certificates;
+              state.certificateRequests = data.certificateRequests;
+              state.certificateSettings = { certificateProfile: {} };
+              Object.assign(state.certificatePagination.certificates, { returned: 16, hasMore: true, nextCursor: 'next' });
+              Object.assign(state.certificatePagination.requests, { returned: 10, hasMore: true, nextCursor: 'next' });
+              renderCertifications();
             }
             clearInterval(adminPresencePollId);
           };
@@ -174,7 +254,7 @@ async function main() {
     }));
     await page.waitForFunction(() => Boolean(window.__qaStage7));
 
-    for (const view of ['students', 'courses', 'staff', 'surveys', 'notifications']) {
+    for (const view of ['students', 'courses', 'staff', 'surveys', 'notifications', 'submissions', 'gradebook', 'calendar', 'certifications']) {
       await page.evaluate(({ selectedView, data }) => window.__qaStage7(selectedView, data), {
         selectedView: view,
         data: fixtures
@@ -226,14 +306,14 @@ async function main() {
           console.error(`${view}/${label} overflow`, geometry);
         }
         assert.ok(geometry.pageWidth <= geometry.viewportWidth, `${view}/${label}: horizontal overflow`);
-        assert.ok(geometry.paginations >= 1, `${view}/${label}: pagination missing`);
+        if (view !== 'calendar') assert.ok(geometry.paginations >= 1, `${view}/${label}: pagination missing`);
         assert.equal(geometry.paginationContained, true, `${view}/${label}: pagination outside viewport`);
         assert.equal(geometry.buttonOverflow, false, `${view}/${label}: button text overflow`);
       }
     }
 
     assert.deepEqual(errors, []);
-    console.log('Stage 7 admin lists passed desktop/mobile layout and pagination checks.');
+    console.log('Stage 12 admin pages passed desktop/mobile layout, visibility and pagination checks.');
   } finally {
     await browser.close();
   }
