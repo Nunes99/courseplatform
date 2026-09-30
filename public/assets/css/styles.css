@@ -2636,6 +2636,120 @@ input[type="search"] {
   width: min(100%, 760px);
 }
 
+.certificate-payment-dialog {
+  width: min(100%, 820px);
+}
+
+.payment-receipt-picker {
+  justify-items: stretch;
+}
+
+.payment-receipt-picker .button {
+  width: 100%;
+}
+
+.payment-receipt-preview {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.payment-receipt-preview[hidden] {
+  display: none;
+}
+
+.payment-receipt-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.payment-receipt-preview-header h3 {
+  margin: 3px 0 0;
+  font-size: 18px;
+}
+
+.payment-receipt-file {
+  display: grid;
+  place-items: center;
+  min-height: 280px;
+  max-height: min(48vh, 520px);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: #fff;
+}
+
+.payment-receipt-media {
+  display: block;
+  width: 100%;
+  height: min(48vh, 520px);
+  border: 0;
+  object-fit: contain;
+}
+
+.payment-receipt-details {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(110px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.payment-receipt-details > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+}
+
+.payment-receipt-details dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.payment-receipt-details dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.payment-receipt-confirmation {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 600px) {
+  .payment-receipt-preview-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .payment-receipt-preview-header .button {
+    width: 100%;
+  }
+
+  .payment-receipt-file,
+  .payment-receipt-media {
+    min-height: 220px;
+    height: 38vh;
+  }
+
+  .payment-receipt-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .certificate-preview-dialog {
   width: min(96vw, 1180px);
   max-height: 92vh;

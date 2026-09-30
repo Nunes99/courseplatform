@@ -14,6 +14,7 @@
     "qa:assessment-feedback": "node scripts/verify_assessment_feedback.cjs",
     "qa:submission-retry": "node scripts/verify_submission_retry.cjs",
     "qa:participation-policy": "node scripts/verify_participation_policy.cjs",
+    "qa:payment-receipt-preview": "node scripts/verify_payment_receipt_preview.cjs",
     "qa:course-editions": "node scripts/verify_course_editions_browser.cjs",
     "qa:stage7-lists": "node scripts/verify_stage7_admin_lists.cjs",
     "qa:staff-assignment": "node scripts/verify_staff_assignment_browser.cjs",
