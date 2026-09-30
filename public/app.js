@@ -777,7 +777,7 @@ async function route() {
     await renderDashboard('overview');
     focusPageHeading(root);
   } catch (error) {
-    handleError(error);
+    if (!handleError(error)) renderStudentRouteError();
   }
 }
 
@@ -4556,6 +4556,25 @@ function loadingTemplate(message) {
   `;
 }
 
+function renderStudentRouteError() {
+  root.innerHTML = `
+    <section class="view-state view-state-error" role="alert">
+      <span class="view-state-icon" aria-hidden="true">
+        <img src="${iconUrl('circle-alert', goldIcon)}" alt="">
+      </span>
+      <div>
+        <p class="eyebrow">Ligação interrompida</p>
+        <h1>Não foi possível carregar esta página</h1>
+        <p>O seu progresso está preservado. Verifique a ligação e tente novamente.</p>
+      </div>
+      <button class="button button-primary" id="retryStudentView" type="button">Tentar novamente</button>
+    </section>
+  `;
+  root.querySelector('#retryStudentView')?.addEventListener('click', () => route());
+  focusPageHeading(root);
+  reportHeight();
+}
+
 function initializeThemeToggle() {
   if (!themeToggle) return;
 
@@ -4719,10 +4738,12 @@ function handleError(error, toast = true) {
     localStorage.removeItem('courseSessionToken');
     resetStudentAccountState({ clearSelection: true });
     renderLogin();
+    return true;
   }
 
   if (toast) {
     showToast(error.message || 'Ocorreu um erro.', 'error');
   }
+  return false;
 }
 

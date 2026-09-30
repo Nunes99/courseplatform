@@ -9,9 +9,19 @@ const FOCUSABLE_SELECTOR = [
 ].join(',');
 
 const managedDialogs = new WeakMap();
+const managedScrollRegions = new WeakSet();
 let dialogLabelSequence = 0;
+let validationMessageSequence = 0;
 let accessibilityInstalled = false;
 let lastExternalFocus = null;
+
+const SCROLL_REGION_SELECTOR = [
+  '.admin-table-wrap',
+  '.credential-table-wrap',
+  '.certificate-record-table',
+  '.student-admin-list',
+  '.rich-content'
+].join(',');
 
 function visibleFocusableElements(container) {
   return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter((element) => {
@@ -79,10 +89,75 @@ function restoreDialogFocus(overlay) {
   }
 }
 
+function prepareScrollableRegion(region) {
+  if (!(region instanceof HTMLElement) || managedScrollRegions.has(region)) return;
+  const table = region.matches('table') ? region : region.querySelector('table');
+  if (!table) return;
+  managedScrollRegions.add(region);
+
+  table.querySelectorAll('thead th:not([scope])').forEach((heading) => {
+    heading.setAttribute('scope', 'col');
+  });
+
+  const pageTitle = region.closest('main, section')?.querySelector('h1, h2')?.textContent?.trim()
+    || document.querySelector('main h1')?.textContent?.trim()
+    || 'dados';
+  if (!region.hasAttribute('aria-label') && !region.hasAttribute('aria-labelledby')) {
+    region.setAttribute('aria-label', `Tabela de ${pageTitle}`);
+  }
+  region.setAttribute('role', 'region');
+  region.tabIndex = 0;
+  region.dataset.scrollRegion = 'true';
+}
+
+function prepareScrollRegions(container = document) {
+  if (container instanceof HTMLElement && container.matches(SCROLL_REGION_SELECTOR)) {
+    prepareScrollableRegion(container);
+  }
+  container.querySelectorAll?.(SCROLL_REGION_SELECTOR).forEach(prepareScrollableRegion);
+}
+
+function showFieldValidation(control) {
+  if (!(control instanceof HTMLInputElement || control instanceof HTMLSelectElement || control instanceof HTMLTextAreaElement)) return;
+  if (control.matches('[type="checkbox"], [type="radio"], [type="hidden"]')) return;
+
+  control.setAttribute('aria-invalid', 'true');
+  let message = control.parentElement?.querySelector('.field-validation-message');
+  if (!message) {
+    message = document.createElement('span');
+    validationMessageSequence += 1;
+    message.id = `field-validation-${validationMessageSequence}`;
+    message.className = 'field-validation-message';
+    message.dataset.for = control.name || control.id || String(validationMessageSequence);
+    message.setAttribute('role', 'alert');
+    control.insertAdjacentElement('afterend', message);
+  }
+  message.textContent = control.validationMessage || 'Verifique este campo.';
+  control.setAttribute('aria-describedby', [
+    control.getAttribute('aria-describedby'),
+    message.id
+  ].filter(Boolean).join(' '));
+}
+
+function clearFieldValidation(control) {
+  if (!(control instanceof HTMLElement) || control.getAttribute('aria-invalid') !== 'true') return;
+  if (!control.matches(':valid')) return;
+  control.removeAttribute('aria-invalid');
+  const message = control.parentElement?.querySelector('.field-validation-message');
+  if (!message) return;
+  const describedBy = String(control.getAttribute('aria-describedby') || '')
+    .split(/\s+/)
+    .filter((id) => id && id !== message.id);
+  if (describedBy.length) control.setAttribute('aria-describedby', describedBy.join(' '));
+  else control.removeAttribute('aria-describedby');
+  message.remove();
+}
+
 function inspectAddedNode(node) {
   if (!(node instanceof HTMLElement)) return;
   if (node.matches('.dialog-overlay')) prepareDialog(node);
   node.querySelectorAll?.('.dialog-overlay').forEach(prepareDialog);
+  prepareScrollRegions(node);
 }
 
 function inspectRemovedNode(node) {
@@ -130,6 +205,7 @@ export function installAccessibility() {
   accessibilityInstalled = true;
 
   document.querySelectorAll('.dialog-overlay').forEach(prepareDialog);
+  prepareScrollRegions();
   document.addEventListener('focusin', (event) => {
     if (event.target instanceof HTMLElement && !event.target.closest('.dialog-overlay')) {
       lastExternalFocus = event.target;
@@ -143,6 +219,9 @@ export function installAccessibility() {
   }).observe(document.body, { childList: true, subtree: true });
 
   document.addEventListener('keydown', handleDialogKeyboard, true);
+  document.addEventListener('invalid', (event) => showFieldValidation(event.target), true);
+  document.addEventListener('input', (event) => clearFieldValidation(event.target), true);
+  document.addEventListener('change', (event) => clearFieldValidation(event.target), true);
 }
 
 export function focusPageHeading(container, options = {}) {

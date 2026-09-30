@@ -780,7 +780,7 @@ async function loadPlatformStatistics(options = {}) {
     state.statistics = await api.adminPlatformStatistics(options);
     renderPlatformStatistics();
   } catch (error) {
-    handleAdminError(error);
+    renderAdminLoadError(error, () => loadPlatformStatistics({ force: true }));
   }
 }
 
@@ -1094,7 +1094,8 @@ async function loadNotificationManagement(options = {}) {
     return true;
   } catch (error) {
     if (isCancelledRequest(error)) return false;
-    handleAdminError(error);
+    if (options.silent) return false;
+    return renderAdminLoadError(error, () => loadNotificationManagement({ force: true }));
   }
 }
 
@@ -1835,6 +1836,49 @@ function renderPreservingFocus(renderFn) {
   }
 }
 
+function adminEmptyStateTemplate(title, description, actionId = '', actionLabel = '') {
+  return `
+    <div class="view-empty-state" role="status">
+      <span class="view-state-icon" aria-hidden="true">
+        <img src="${iconUrl('search-x', goldIcon)}" alt="">
+      </span>
+      <div>
+        <h2>${escapeHtml(title)}</h2>
+        <p>${escapeHtml(description)}</p>
+      </div>
+      ${actionId && actionLabel ? `
+        <button class="button button-secondary" id="${escapeHtml(actionId)}" type="button">
+          ${escapeHtml(actionLabel)}
+        </button>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderAdminLoadError(error, retry) {
+  if (handleAdminError(error)) return false;
+  const main = document.querySelector('#adminMain');
+  if (!main) return false;
+
+  main.innerHTML = `
+    <section class="view-state view-state-error" role="alert">
+      <span class="view-state-icon" aria-hidden="true">
+        <img src="${iconUrl('circle-alert', goldIcon)}" alt="">
+      </span>
+      <div>
+        <p class="eyebrow">Ligação interrompida</p>
+        <h1>Não foi possível carregar esta página</h1>
+        <p>Os dados não foram alterados. Verifique a ligação e tente novamente.</p>
+      </div>
+      <button class="button button-primary" id="retryAdminView" type="button">Tentar novamente</button>
+    </section>
+  `;
+  main.querySelector('#retryAdminView')?.addEventListener('click', () => retry?.());
+  focusPageHeading(main);
+  reportHeight();
+  return false;
+}
+
 function canManageStaff() {
   return ['OWNER', 'ADMIN'].includes(state.admin?.role);
 }
@@ -1940,7 +1984,7 @@ async function loadStaff(options = {}) {
       console.warn('Falha ao atualizar staff em segundo plano:', error);
       return;
     }
-    handleAdminError(error);
+    return renderAdminLoadError(error, () => loadStaff({ force: true }));
   }
 }
 
@@ -2770,8 +2814,7 @@ async function loadCertifications(options = {}) {
       console.warn('Falha ao atualizar certificações em segundo plano:', error);
       return false;
     }
-    handleAdminError(error);
-    return false;
+    return renderAdminLoadError(error, () => loadCertifications({ force: true }));
   }
 }
 
@@ -3478,7 +3521,8 @@ async function loadCertificateSurveys(options = {}) {
     return true;
   } catch (error) {
     if (isCancelledRequest(error)) return false;
-    handleAdminError(error);
+    if (options.silent) return false;
+    return renderAdminLoadError(error, () => loadCertificateSurveys({ force: true }));
   }
 }
 
@@ -4049,8 +4093,7 @@ async function loadGradebook(options = {}) {
     renderGradebook();
     return true;
   } catch (error) {
-    handleAdminError(error);
-    return false;
+    return renderAdminLoadError(error, () => loadGradebook({ force: true }));
   }
 }
 
@@ -4140,7 +4183,7 @@ async function loadAcademicCalendar(options = {}) {
     state.academicCalendar = await api.adminAcademicCalendar(state.academicCalendarFilters, options);
     renderAcademicCalendar();
   } catch (error) {
-    handleAdminError(error);
+    renderAdminLoadError(error, () => loadAcademicCalendar({ force: true }));
   }
 }
 
@@ -4240,8 +4283,7 @@ async function loadPending(options = {}) {
       console.warn('Falha ao atualizar submissões em segundo plano:', error);
       return false;
     }
-    handleAdminError(error);
-    return false;
+    return renderAdminLoadError(error, () => loadPending({ force: true }));
   }
 }
 
@@ -4470,7 +4512,7 @@ function renderSubmissionsV2() {
           </div>
         </fieldset>
         <fieldset>
-          <legend>Estudantes especificos</legend>
+          <legend>Estudantes específicos</legend>
           ${selectAllToolbar('studentIds')}
           <div class="access-checkbox-list">
             ${accessStudentCheckboxes()}
@@ -4496,7 +4538,12 @@ function renderSubmissionsV2() {
         <tbody>
           ${visibleSubmissions.length
             ? visibleSubmissions.map(submissionRowTemplate).join('')
-            : '<tr><td colspan="7" class="empty-table">Não existem submissões para os filtros atuais.</td></tr>'}
+            : `<tr><td colspan="7" class="empty-table">${adminEmptyStateTemplate(
+                'Nenhuma submissão encontrada',
+                'Não existem submissões correspondentes aos filtros atuais.',
+                'clearSubmissionFilters',
+                'Limpar filtros'
+              )}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -4514,6 +4561,12 @@ function renderSubmissionsV2() {
     resetCursorPagination(state.submissionPagination);
     renderPreservingFocus(renderSubmissionsV2);
     scheduleSubmissionRefresh();
+  });
+  document.querySelector('#clearSubmissionFilters')?.addEventListener('click', () => {
+    state.submissionFilters.status = 'ALL';
+    state.submissionFilters.query = '';
+    resetCursorPagination(state.submissionPagination);
+    loadPending({ force: true });
   });
   document.querySelector('#accessCourse').addEventListener('change', async (event) => {
     state.selectedCourseId = event.currentTarget.value;
@@ -5403,7 +5456,7 @@ async function loadStudents(options = {}) {
       console.warn('Falha ao atualizar estudantes em segundo plano:', error);
       return;
     }
-    handleAdminError(error);
+    return renderAdminLoadError(error, () => loadStudents({ force: true }));
   }
 }
 
@@ -5445,7 +5498,7 @@ function renderStudents() {
       <article class="insight-card">
         <img src="${iconUrl('combo-chart', goldIcon)}" alt="">
         <div>
-          <span>Progresso medio</span>
+          <span>Progresso médio</span>
           <strong>${avgProgress}%</strong>
         </div>
       </article>
@@ -5541,14 +5594,14 @@ function renderStudentsV2() {
       <article class="insight-card">
         <img src="${iconUrl('combo-chart', goldIcon)}" alt="">
         <div>
-          <span>Progresso medio</span>
+          <span>Progresso médio</span>
           <strong>${avgProgress}%</strong>
         </div>
       </article>
       <article class="insight-card">
         <img src="${iconUrl('diploma', goldIcon)}" alt="">
         <div>
-          <span>Concluidos</span>
+          <span>Concluídos</span>
           <strong>${completedStudents}</strong>
         </div>
       </article>
@@ -5624,9 +5677,12 @@ function renderStudentsV2() {
           </tbody>
         </table>
       ` : `
-        <div class="student-empty-state">
-          Nenhum estudante corresponde aos filtros atuais.
-        </div>
+        ${adminEmptyStateTemplate(
+          'Nenhum estudante encontrado',
+          'A pesquisa ou os filtros atuais não correspondem a nenhum estudante.',
+          'clearStudentFilters',
+          'Limpar filtros'
+        )}
       `}
     </div>
     ${cursorPaginationTemplate('students', state.studentPagination)}
@@ -5657,6 +5713,11 @@ function renderStudentsV2() {
   });
   document.querySelector('#exportStudents').addEventListener('click', () => {
     exportStudentsCsv(visibleStudents);
+  });
+  document.querySelector('#clearStudentFilters')?.addEventListener('click', () => {
+    state.studentFilters = { query: '', status: 'ALL', progress: 'ALL', sort: 'name' };
+    resetCursorPagination(state.studentPagination);
+    loadStudents({ force: true });
   });
 
   root.querySelectorAll('[data-view-student]').forEach((button) => {
@@ -6452,7 +6513,7 @@ async function loadCourses(options = {}) {
       console.warn('Falha ao atualizar cursos em segundo plano:', error);
       return;
     }
-    handleAdminError(error);
+    return renderAdminLoadError(error, () => loadCourses({ force: true }));
   }
 }
 
@@ -6530,7 +6591,12 @@ function renderCourseList() {
     <section class="admin-course-list" aria-label="Lista de cursos">
       ${visibleCourses.length
         ? visibleCourses.map(courseListCardTemplate).join('')
-        : '<div class="student-empty-state">Nenhum curso encontrado para os filtros atuais.</div>'}
+        : adminEmptyStateTemplate(
+            'Nenhum curso encontrado',
+            'A pesquisa ou os filtros atuais não correspondem a nenhum curso.',
+            'clearCourseFilters',
+            'Limpar filtros'
+          )}
     </section>
     ${cursorPaginationTemplate('courses', state.coursePagination)}
   `;
@@ -6565,6 +6631,13 @@ function renderCourseList() {
     resetCursorPagination(state.coursePagination);
     renderPreservingFocus(renderCourseList);
     scheduleCourseRefresh(0);
+  });
+  document.querySelector('#clearCourseFilters')?.addEventListener('click', () => {
+    state.courseFilters.query = '';
+    state.courseFilters.status = 'ALL';
+    state.courseFilters.content = 'ALL';
+    resetCursorPagination(state.coursePagination);
+    loadCourses({ force: true });
   });
   root.querySelectorAll('[data-open-course-detail]').forEach((button) => {
     button.addEventListener('click', () => openCourseDetail(button.dataset.openCourseDetail));
@@ -8561,7 +8634,7 @@ async function renderVideos(options = {}) {
             ${studentVideoCheckboxes()}
           </div>
         </fieldset>
-        <button class="button button-primary" type="submit">Publicar video</button>
+        <button class="button button-primary" type="submit">Publicar vídeo</button>
       </form>
     </section>
 
@@ -8578,7 +8651,7 @@ async function renderVideos(options = {}) {
             <button type="button" data-delete-video="${escapeHtml(video.id)}">Remover</button>
           </article>
         `).join('')
-        : '<div class="video-empty">Nenhum video publicado.</div>'}
+        : '<div class="video-empty">Nenhum vídeo publicado.</div>'}
     </section>
   `;
 
@@ -9209,13 +9282,17 @@ function imageDisplayUrl(rawUrl) {
 function handleAdminError(error) {
   console.error(error);
 
-  if (
+  const sessionEnded = (
     error instanceof ApiError &&
     ['INVALID_SESSION', 'SESSION_EXPIRED', 'ADMIN_SESSION_REQUIRED'].includes(error.code)
-  ) {
+  );
+  if (sessionEnded) {
     sessionStorage.removeItem('courseAdminToken');
     renderAdminLogin();
+    showToast('A sessão administrativa terminou. Inicie sessão novamente.', 'error');
+    return true;
   }
 
   showToast(error.message || 'Ocorreu um erro.', 'error');
+  return false;
 }

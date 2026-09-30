@@ -49,7 +49,12 @@ async function serveFrontend(page) {
           api = {
             hasAdminSession: () => true,
             adminUpdatePresence: async () => ({}),
-            adminChatRooms: async () => ({ unreadCount: 0 })
+            adminChatRooms: async () => ({ unreadCount: 0 }),
+            adminStudents: async () => ({
+              students: [],
+              summary: { active: 0, blocked: 0, completed: 0, averageProgress: 0 },
+              pagination: { total: 0, returned: 0, hasMore: false, nextCursor: '' }
+            })
           };
           state.admin = { adminId: 'ADMIN-QA', fullName: 'Administrador QA', role: 'OWNER' };
           renderAdminShell();
@@ -64,6 +69,29 @@ async function serveFrontend(page) {
           document.body.appendChild(trigger);
           trigger.focus();
           showAdminRecoveryDialog('qa@example.test');
+        };
+        window.__stage12RenderStudentList = (empty = false) => {
+          state.studentFilters = {
+            query: empty ? 'sem resultado' : '', status: 'ALL', progress: 'ALL', sort: 'name'
+          };
+          state.students = empty ? [] : [{
+            student: {
+              studentId: 'STUDENT-QA', publicStudentId: 'STU-12345',
+              fullName: 'Estudante QA', email: 'student@example.test', status: 'ACTIVE'
+            },
+            enrollments: []
+          }];
+          state.studentSummary = { active: empty ? 0 : 1, blocked: 0, completed: 0, averageProgress: 0 };
+          Object.assign(state.studentPagination, { total: empty ? 0 : 1, returned: empty ? 0 : 1, hasMore: false });
+          renderStudentsV2();
+        };
+        window.__stage12StudentFilters = () => ({ ...state.studentFilters });
+        window.__stage12RenderError = () => {
+          window.__stage12Retried = false;
+          const originalConsoleError = console.error;
+          console.error = () => {};
+          renderAdminLoadError(new Error('synthetic failure'), () => { window.__stage12Retried = true; });
+          console.error = originalConsoleError;
         };
       `;
       return route.fulfill({ contentType: 'application/javascript', body: source + hook });
@@ -110,16 +138,41 @@ async function main() {
     await page.waitForFunction(() => document.activeElement?.matches('#adminMain h1'));
     assert.equal(await page.locator('#adminMain h1').innerText(), 'Credenciais');
 
+    await page.evaluate(() => window.__stage12RenderStudentList(false));
+    const studentTableRegion = page.locator('.student-admin-list');
+    assert.equal(await studentTableRegion.getAttribute('role'), 'region');
+    assert.equal(await studentTableRegion.getAttribute('tabindex'), '0');
+    assert.equal(await studentTableRegion.locator('thead th').first().getAttribute('scope'), 'col');
+    await studentTableRegion.focus();
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('student-admin-list')), true);
+
+    await page.evaluate(() => window.__stage12RenderStudentList(true));
+    await page.getByRole('heading', { name: 'Nenhum estudante encontrado' }).waitFor();
+    await page.getByRole('button', { name: 'Limpar filtros' }).click();
+    await page.waitForFunction(() => window.__stage12StudentFilters().query === '');
+
     await page.evaluate(() => window.__stage12OpenDialog());
     const dialog = page.getByRole('dialog', { name: 'Recuperar palavra-passe' });
     await dialog.waitFor();
     assert.equal(await dialog.getAttribute('aria-modal'), 'true');
+    const emailField = dialog.getByLabel('Email da conta');
+    await emailField.fill('');
+    await dialog.getByRole('button', { name: 'Enviar instruções' }).click();
+    assert.equal(await emailField.getAttribute('aria-invalid'), 'true');
+    await dialog.locator('.field-validation-message').waitFor();
+    await emailField.fill('qa@example.test');
+    assert.equal(await emailField.getAttribute('aria-invalid'), null);
     await dialog.locator('.dialog-close').focus();
     await page.keyboard.press('Shift+Tab');
     assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-legacy-admin-recovery]')), true);
     await page.keyboard.press('Escape');
     await dialog.waitFor({ state: 'detached' });
     await page.waitForFunction(() => document.activeElement?.id === 'stage12DialogTrigger');
+
+    await page.evaluate(() => window.__stage12RenderError());
+    await page.getByRole('heading', { name: 'Não foi possível carregar esta página' }).waitFor();
+    await page.getByRole('button', { name: 'Tentar novamente' }).click();
+    assert.equal(await page.evaluate(() => window.__stage12Retried), true);
 
     const skipLink = page.locator('.skip-link');
     await skipLink.focus();
@@ -128,13 +181,32 @@ async function main() {
     assert.ok((await skipLink.boundingBox())?.y >= 0, 'A ligação para saltar conteúdo deve ficar visível ao receber foco.');
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(400);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), true);
     assert.equal(await page.locator('.site-header').evaluate((element) => getComputedStyle(element).position), 'fixed');
+    const closedSidebar = await page.locator('.admin-sidebar').evaluate((element) => ({
+      rect: element.getBoundingClientRect().toJSON(),
+      transform: getComputedStyle(element).transform,
+      position: getComputedStyle(element).position,
+      bodyClass: document.body.className,
+      innerWidth: window.innerWidth,
+      mobileMedia: matchMedia('(max-width: 1024px)').matches
+    }));
+    assert.ok(
+      closedSidebar.rect.x + closedSidebar.rect.width <= 1,
+      `O menu administrativo deve iniciar fora do ecrã móvel: ${JSON.stringify(closedSidebar)}`
+    );
     const menuButton = page.locator('#adminMobileMenuButton');
     await menuButton.click();
     assert.equal(await menuButton.getAttribute('aria-expanded'), 'true');
+    await page.waitForTimeout(300);
+    const openSidebar = await page.locator('.admin-sidebar').boundingBox();
+    assert.ok(openSidebar && openSidebar.x >= -1, 'O menu administrativo deve entrar no ecrã quando aberto.');
     await page.keyboard.press('Escape');
     assert.equal(await menuButton.getAttribute('aria-expanded'), 'false');
+    await page.waitForTimeout(300);
+    const closedAgain = await page.locator('.admin-sidebar').boundingBox();
+    assert.ok(closedAgain && closedAgain.x + closedAgain.width <= 1, 'O menu administrativo deve sair do ecrã ao fechar.');
 
     assert.deepEqual(failures, []);
   } finally {

@@ -181,7 +181,7 @@ async function main() {
       });
       for (const [label, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
         await page.setViewportSize({ width, height });
-        await page.waitForTimeout(100);
+        await page.waitForTimeout(400);
         const geometry = await page.evaluate(() => {
           const pagination = [...document.querySelectorAll('.cursor-pagination')];
           const buttons = [...document.querySelectorAll('button')];

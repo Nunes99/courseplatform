@@ -2,7 +2,8 @@
 
 ## Âmbito desta entrega
 
-Esta primeira fatia estabelece a fundação transversal da Etapa 12 sem alterar regras de negócio:
+Esta entrega estabelece a fundação transversal e conclui a segunda fatia da
+Etapa 12, sem alterar regras de negócio:
 
 - cada secção principal do painel administrativo possui URL própria por hash;
 - a navegação restaura a secção pedida após recarregar a página;
@@ -12,6 +13,21 @@ Esta primeira fatia estabelece a fundação transversal da Etapa 12 sem alterar 
 - os diálogos comuns recebem nome acessível, foco contido, fecho por `Escape` e reposição do foco;
 - carregamentos e notificações passam a expor semântica de estado;
 - foco visível, alvos móveis e preferência por movimento reduzido são tratados globalmente.
+
+## Listas, formulários e estados
+
+- tabelas extensas são regiões identificadas e alcançáveis por teclado;
+- os cabeçalhos de coluna recebem `scope="col"` e permanecem visíveis durante
+  a deslocação vertical dentro da tabela;
+- estudantes, cursos e notificações usam apresentação responsiva sem manter a
+  navegação lateral sobre o conteúdo em ecrãs móveis;
+- campos inválidos recebem `aria-invalid`, mensagem associada e anúncio de erro;
+- falhas ao carregar páginas administrativas ou do estudante deixam de manter
+  apenas o indicador de carregamento e passam a oferecer uma tentativa segura;
+- listas vazias de submissões, estudantes e cursos explicam o estado e permitem
+  limpar os filtros aplicados;
+- textos administrativos revistos nesta fatia usam grafia consistente para
+  estudantes, progresso, conclusão e publicação de vídeos.
 
 ## URLs administrativas
 
@@ -27,11 +43,15 @@ npm run check:frontend
 .\.venv\Scripts\python.exe -m unittest discover -s tests -q
 ```
 
-O teste de browser usa dados sintéticos e não comunica com produção. Valida desktop e mobile, URLs, estado ativo, foco, teclado, diálogo, cabeçalho fixo, overflow horizontal e erros de consola.
+Os testes de browser usam dados sintéticos e não comunicam com produção. Validam
+desktop e mobile, URLs, estado ativo, foco, teclado, diálogo, cabeçalho fixo,
+regiões de tabela, validação de formulários, estados vazios e de erro, menu móvel,
+overflow horizontal e erros de consola.
 
 ## Trabalho ainda pendente na Etapa 12
 
-- rever visualmente cada página de dados extensos e cada estado vazio/erro;
+- concluir a revisão individual das páginas ainda não cobertas pelas listas de
+  estudantes, cursos e notificações;
 - concluir uma passagem de texto e consistência editorial em toda a plataforma;
 - validar os fluxos completos com leitor de ecrã real;
 - medir contraste e reflow em todas as variantes de tema;

@@ -5795,6 +5795,114 @@ input[type="search"] {
   }
 }
 
+/* Stage 12: data-heavy pages, forms and recoverable states */
+[data-scroll-region="true"]:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent, #caa85e) 78%, #fff);
+  outline-offset: 3px;
+}
+
+.admin-table-wrap .admin-table thead th,
+.credential-table-wrap thead th,
+.certificate-record-table thead th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+}
+
+.view-state,
+.view-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  width: min(100%, 680px);
+  min-height: 240px;
+  margin: clamp(24px, 6vh, 72px) auto;
+  padding: clamp(24px, 5vw, 48px);
+  border: 1px solid var(--line, #d8dee6);
+  border-radius: var(--radius, 8px);
+  background: var(--surface, #fff);
+  color: var(--text, #15324a);
+  text-align: center;
+}
+
+.view-empty-state {
+  width: 100%;
+  min-height: 180px;
+  margin: 0;
+  border-style: dashed;
+  background: var(--surface-soft, #f6f8fa);
+}
+
+.view-state h1,
+.view-empty-state h2 {
+  margin: 0;
+  font-size: clamp(1.125rem, 2vw, 1.5rem);
+  line-height: 1.25;
+}
+
+.view-state p,
+.view-empty-state p {
+  max-width: 56ch;
+  margin: 6px auto 0;
+  color: var(--muted, #617286);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.view-state-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent, #caa85e) 55%, var(--line, #d8dee6));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent, #caa85e) 10%, var(--surface, #fff));
+}
+
+.view-state-icon img {
+  width: 21px;
+  height: 21px;
+}
+
+.view-state-error {
+  border-color: color-mix(in srgb, var(--danger, #b42318) 35%, var(--line, #d8dee6));
+}
+
+.empty-table:has(.view-empty-state) {
+  height: auto;
+  padding: 12px;
+}
+
+.empty-table .view-empty-state {
+  min-width: min(640px, calc(100vw - 80px));
+}
+
+.field-validation-message {
+  display: block;
+  margin-top: 5px;
+  color: var(--danger, #b42318);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+:where(input, select, textarea)[aria-invalid="true"] {
+  border-color: var(--danger, #b42318) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger, #b42318) 14%, transparent);
+}
+
+@media (max-width: 760px) {
+  .view-state,
+  .view-empty-state {
+    min-height: 180px;
+    padding: 24px 16px;
+  }
+
+  .empty-table .view-empty-state {
+    min-width: min(620px, calc(100vw - 48px));
+  }
+}
+
 /* Content visibility and overflow corrections */
 html,
 body {
