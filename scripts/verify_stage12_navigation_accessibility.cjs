@@ -89,6 +89,29 @@ async function serveFrontend(page) {
           trigger.focus();
           showAdminRecoveryDialog('qa@example.test');
         };
+        window.__stage12OpenDialogFixture = (kind) => {
+          document.querySelector('[data-stage12-dialog-fixture]')?.remove();
+          const trigger = document.querySelector('#stage12FixtureTrigger') || document.createElement('button');
+          if (!trigger.isConnected) {
+            trigger.id = 'stage12FixtureTrigger';
+            trigger.textContent = 'Abrir diálogo interno';
+            document.body.appendChild(trigger);
+          }
+          trigger.focus();
+          const fixtures = {
+            loading: '<div class="dialog-card student-detail-dialog"><button class="dialog-close" type="button">x</button><div class="loading-state" role="status">A carregar detalhes...</div></div>',
+            preview: '<div class="dialog-card certificate-preview-dialog"><button class="dialog-close" type="button">x</button><div class="certificate-preview-sheet"><p>Certificado de participação</p></div><div class="dialog-actions"><button class="button button-secondary" type="button" data-close-dialog>Fechar</button></div></div>',
+            nested: '<div class="dialog-card question-bank-picker"><button class="dialog-close" type="button">x</button><h2>Adicionar questão publicada</h2><button class="question-bank-list-item" type="button">Questão de exemplo</button></div>'
+          };
+          const overlay = document.createElement('div');
+          overlay.className = kind === 'nested' ? 'dialog-overlay dialog-overlay-nested' : 'dialog-overlay';
+          overlay.dataset.stage12DialogFixture = kind;
+          overlay.innerHTML = fixtures[kind];
+          document.body.appendChild(overlay);
+          overlay.querySelectorAll('.dialog-close, [data-close-dialog]').forEach((button) => {
+            button.addEventListener('click', () => overlay.remove());
+          });
+        };
         window.__stage12RenderStudentList = (empty = false) => {
           state.studentFilters = {
             query: empty ? 'sem resultado' : '', status: 'ALL', progress: 'ALL', sort: 'name'
@@ -149,6 +172,23 @@ async function serveFrontend(page) {
       const hook = `
         window.__stage12OpenStudentLogin = () => renderLogin();
         window.__stage12OpenStudentRegistration = () => showStudentRegistrationDialog();
+        window.__stage12OpenStudentRecovery = () => showStudentRecoveryDialog('qa@example.test');
+        window.__stage12OpenStudentSurvey = () => {
+          state.certifications = { settings: { surveyQuestions: [
+            { id: 'q1', prompt: 'Como avalia a metodologia do curso?', options: ['Excelente', 'Boa', 'Regular'], required: true }
+          ] } };
+          showProfessionalSurveyDialog();
+        };
+        window.__stage12OpenStudentPayment = () => {
+          state.certifications = { settings: {
+            professionalPrice: 1000,
+            professionalCurrency: 'MZN',
+            paymentAccountName: 'Conta institucional',
+            paymentAccountNumber: '000000',
+            paymentInstructions: 'Confirme os dados antes de enviar o comprovativo.'
+          } };
+          showPaymentDialog('REQUEST-QA');
+        };
       `;
       return route.fulfill({ contentType: 'application/javascript', body: source + hook });
     }
@@ -313,13 +353,14 @@ async function auditAccessibility(page, label) {
       contrastFailures,
       interactiveCount: interactive.length,
       headingCount: headings.length,
+      scopeIsDialog: scope !== document,
       mainCount: document.querySelectorAll('main').length,
       horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     };
   });
 
   assert.equal(domAudit.mainCount, 1, `${label}: deve existir exatamente um landmark main.`);
-  assert.ok(domAudit.headingCount > 0, `${label}: deve existir pelo menos um título.`);
+  assert.ok(domAudit.scopeIsDialog || domAudit.headingCount > 0, `${label}: deve existir pelo menos um título.`);
   assert.ok(domAudit.interactiveCount > 0, `${label}: deve existir pelo menos um controlo interativo.`);
   assert.deepEqual(domAudit.issues, [], `${label}: problemas semânticos: ${JSON.stringify(domAudit.issues, null, 2)}`);
   assert.deepEqual(
@@ -438,6 +479,31 @@ async function main() {
     await page.keyboard.press('Escape');
     await page.waitForTimeout(120);
 
+    const dialogFixtures = [
+      ['loading', 'Detalhes do estudante'],
+      ['preview', 'Pré-visualização do certificado'],
+      ['nested', 'Adicionar questão publicada']
+    ];
+    for (const [kind, accessibleName] of dialogFixtures) {
+      await page.evaluate((fixtureKind) => window.__stage12OpenDialogFixture(fixtureKind), kind);
+      const fixtureDialog = page.getByRole('dialog', { name: accessibleName });
+      await fixtureDialog.waitFor();
+      assert.equal(await fixtureDialog.getAttribute('aria-modal'), 'true');
+      assert.equal(await fixtureDialog.locator('.dialog-close').getAttribute('aria-label'), 'Fechar');
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate((selectedTheme) => { document.documentElement.dataset.theme = selectedTheme; }, theme);
+        await page.waitForTimeout(300);
+        await auditAccessibility(page, `admin/diálogo ${kind}/${theme}`);
+      }
+      await page.setViewportSize({ width: 320, height: 800 });
+      await page.waitForTimeout(300);
+      await auditAccessibility(page, `admin/diálogo ${kind}/reflow 320px`);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.keyboard.press('Escape');
+      await fixtureDialog.waitFor({ state: 'detached' });
+      await page.waitForFunction(() => document.activeElement?.id === 'stage12FixtureTrigger');
+    }
+
     const skipLink = page.locator('.skip-link');
     await skipLink.focus();
     await page.waitForTimeout(180);
@@ -501,6 +567,25 @@ async function main() {
     await studentPage.getByRole('dialog', { name: 'Criar conta' }).waitFor();
     await auditAccessibility(studentPage, 'estudante/criar conta/dark');
     await studentPage.keyboard.press('Escape');
+    const studentDialogs = [
+      ['__stage12OpenStudentRecovery', 'Recuperar palavra-passe de acesso', 'recuperação'],
+      ['__stage12OpenStudentSurvey', 'Antes do certificado profissional', 'inquérito'],
+      ['__stage12OpenStudentPayment', 'Enviar comprovativo', 'pagamento']
+    ];
+    for (const [hookName, accessibleName, label] of studentDialogs) {
+      await studentPage.evaluate((name) => window[name](), hookName);
+      const studentDialog = studentPage.getByRole('dialog', { name: accessibleName });
+      await studentDialog.waitFor();
+      assert.equal(await studentDialog.getAttribute('aria-modal'), 'true');
+      assert.equal(await studentPage.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"]'))), true);
+      await auditAccessibility(studentPage, `estudante/diálogo de ${label}/dark`);
+      await studentPage.setViewportSize({ width: 320, height: 800 });
+      await studentPage.waitForTimeout(300);
+      await auditAccessibility(studentPage, `estudante/diálogo de ${label}/reflow 320px`);
+      await studentPage.setViewportSize({ width: 1280, height: 800 });
+      await studentPage.keyboard.press('Escape');
+      await studentDialog.waitFor({ state: 'detached' });
+    }
     await studentPage.setViewportSize({ width: 640, height: 900 });
     await studentPage.waitForTimeout(300);
     await auditAccessibility(studentPage, 'estudante/login/zoom 200% equivalente');

@@ -40,6 +40,26 @@ function closeControl(overlay) {
   return overlay.querySelector('.dialog-close, [data-close-dialog], [data-cancel-recovery]');
 }
 
+function inferredDialogLabel(dialog) {
+  const labels = [
+    ['certificate-preview-dialog', 'Pré-visualização do certificado'],
+    ['student-detail-dialog', 'Detalhes do estudante'],
+    ['certificate-payment-dialog', 'Pagamento do certificado'],
+    ['certificate-survey-dialog', 'Inquérito do curso'],
+    ['survey-editor-dialog', 'Editor de inquérito'],
+    ['credential-dialog', 'Gestão de credenciais'],
+    ['question-bank-dialog', 'Banco de questões'],
+    ['question-bank-picker', 'Selecionar questão'],
+    ['course-version-editor-dialog', 'Editor da versão do curso'],
+    ['course-version-preview-dialog', 'Pré-visualização da versão do curso'],
+    ['course-lesson-dialog', 'Gestão académica'],
+    ['email-change-dialog', 'Alterar email'],
+    ['recovery-dialog', 'Recuperar acesso']
+  ];
+  return labels.find(([className]) => dialog.classList.contains(className))?.[1]
+    || 'Janela de diálogo';
+}
+
 function prepareDialog(overlay) {
   if (!(overlay instanceof HTMLElement) || managedDialogs.has(overlay)) return;
   if (overlay.matches('.install-app-dialog-overlay, .push-activation-dialog-overlay')) return;
@@ -57,6 +77,10 @@ function prepareDialog(overlay) {
 
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
+  const closer = closeControl(overlay);
+  if (closer?.classList.contains('dialog-close') && !closer.hasAttribute('aria-label')) {
+    closer.setAttribute('aria-label', 'Fechar');
+  }
 
   if (!dialog.hasAttribute('aria-label') && !dialog.hasAttribute('aria-labelledby')) {
     const heading = dialog.querySelector('h1, h2, h3');
@@ -66,6 +90,8 @@ function prepareDialog(overlay) {
         heading.id = `dialog-title-${dialogLabelSequence}`;
       }
       dialog.setAttribute('aria-labelledby', heading.id);
+    } else {
+      dialog.setAttribute('aria-label', inferredDialogLabel(dialog));
     }
   }
 

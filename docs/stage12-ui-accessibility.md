@@ -62,6 +62,12 @@ verifica nomes acessíveis, hierarquia de títulos, IDs, landmarks, árvore de
 acessibilidade do Chromium, o equivalente ao zoom de 200% numa janela física de
 1280 px e reflow adicional a 320 CSS pixels.
 
+Os cenários dedicados de diálogo cobrem formulários de recuperação e cadastro,
+inquérito, pagamento, detalhes em carregamento, pré-visualização de certificado
+e seleção aninhada do banco de questões. O suporte transversal garante papel,
+nome acessível, botão de fecho identificado, foco contido e retorno do foco para
+os restantes diálogos construídos com a infraestrutura comum.
+
 ## Validação manual com NVDA
 
 Esta validação deve ser feita no Edge ou Chrome com NVDA, primeiro no modo de
@@ -85,8 +91,8 @@ automatizada não deve ser apresentada como validação concluída com NVDA.
 
 ## Trabalho ainda pendente na Etapa 12
 
-- concluir a revisão individual dos editores internos e diálogos de detalhe que
-  ainda não possuem cenários visuais dedicados;
+- validar com dados reais os editores de versões de curso, módulos e banco de
+  questões, cuja infraestrutura comum já possui cobertura automatizada;
 - concluir uma passagem de texto e consistência editorial em toda a plataforma;
 - validar os fluxos completos com leitor de ecrã real usando a checklist acima;
 - confirmar visualmente em dispositivos reais os resultados automatizados de
