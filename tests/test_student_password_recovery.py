@@ -308,7 +308,7 @@ class StudentPasswordRecoveryTests(unittest.TestCase):
 
         with (
             patch("backend.courseplatform.app.dispatch", side_effect=fake_dispatch),
-            patch("backend.courseplatform.app.dispatch_student_password_reset") as deliver,
+            patch("backend.courseplatform.app.enqueue_identity_delivery", return_value="JOB-1") as enqueue,
         ):
             response = TestClient(app).post("/api", json={
                 "action": "recoverStudentAccess",
@@ -319,7 +319,7 @@ class StudentPasswordRecoveryTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("server-secret-token", response.text)
         self.assertNotEqual(captured["_requestSource"], "attacker-controlled")
-        deliver.assert_called_once()
+        enqueue.assert_called_once()
 
     def test_delivery_uses_fragment_link_and_never_queries_with_plain_token(self):
         token = "one-time-token"

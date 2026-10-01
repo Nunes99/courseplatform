@@ -209,9 +209,9 @@ class AccountRegistrationTests(unittest.TestCase):
         with (
             patch("backend.courseplatform.app.dispatch", side_effect=fake_dispatch),
             patch(
-                "backend.courseplatform.app.dispatch_student_account_verification",
-                return_value=True,
-            ) as deliver,
+                "backend.courseplatform.app.enqueue_identity_delivery",
+                return_value="JOB-1",
+            ) as enqueue,
         ):
             response = TestClient(app).post("/api", json={
                 "action": "registerStudentAccount",
@@ -225,7 +225,7 @@ class AccountRegistrationTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertNotIn("server-secret-token", response.text)
         self.assertNotEqual("attacker-controlled", captured["_requestSource"])
-        deliver.assert_called_once()
+        enqueue.assert_called_once()
 
     def test_typed_registration_reports_verification_delivery_failure(self):
         def fake_dispatch(action, payload):
@@ -241,9 +241,9 @@ class AccountRegistrationTests(unittest.TestCase):
         with (
             patch("backend.courseplatform.actions.dispatch", side_effect=fake_dispatch),
             patch(
-                "backend.courseplatform.api.identity.dispatch_student_account_verification",
-                return_value=False,
-            ) as deliver,
+                "backend.courseplatform.api.identity.enqueue_identity_delivery",
+                side_effect=RuntimeError("queue unavailable"),
+            ) as enqueue,
         ):
             response = TestClient(app).post("/api/v1/auth/registrations", json={
                 "fullName": "Student One",
@@ -258,7 +258,7 @@ class AccountRegistrationTests(unittest.TestCase):
             response.json()["error"]["code"],
         )
         self.assertNotIn("server-secret-token", response.text)
-        deliver.assert_called_once()
+        enqueue.assert_called_once()
 
     def test_delivery_uses_one_time_fragment_link(self):
         row = {

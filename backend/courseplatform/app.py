@@ -1,7 +1,9 @@
+import logging
 import os
+import time
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
@@ -13,25 +15,73 @@ from .actions import (
     certificate_pdf_payload,
     certificate_receipt_download_payload,
     dispatch,
-    dispatch_notification_deliveries,
-    dispatch_student_account_verification,
-    dispatch_student_password_reset,
     public_error,
     record_certificate_download,
     submission_file_download_payload,
 )
 from .certificate_pdf import CertificateLayoutError, build_course_certificate_pdf
 from .config import get_settings
+from .jobs import (
+    ACCOUNT_VERIFICATION_JOB,
+    PASSWORD_RESET_JOB,
+    enqueue_identity_delivery,
+    operational_metrics,
+    run_operational_cycle,
+    runner_authorized,
+)
+from .observability import (
+    configure_logging,
+    monotonic_milliseconds,
+    normalized_request_id,
+    request_id_context,
+)
 from .api.router import router as typed_api_router
 from .storage import safe_download_name
 
 settings = get_settings()
+configure_logging(settings.log_level)
+logger = logging.getLogger(__name__)
 STATIC_DIRS = [
     Path(__file__).resolve().parents[2] / "public",
     Path(__file__).resolve().parent / "static",
 ]
 
 app = FastAPI(title="CoursePlatform Python API", version=settings.app_version)
+
+
+@app.middleware("http")
+async def structured_request_logging(request: Request, call_next):
+    request_id = normalized_request_id(request.headers.get("x-request-id"))
+    token = request_id_context.set(request_id)
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        logger.info(
+            "HTTP request completed.",
+            extra={
+                "event": "http_request_completed",
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": monotonic_milliseconds(started_at),
+            },
+        )
+        return response
+    except Exception as error:
+        logger.exception(
+            "HTTP request failed.",
+            extra={
+                "event": "http_request_failed",
+                "method": request.method,
+                "path": request.url.path,
+                "duration_ms": monotonic_milliseconds(started_at),
+                "error_type": error.__class__.__name__,
+            },
+        )
+        raise
+    finally:
+        request_id_context.reset(token)
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,7 +117,7 @@ async def handle_get_action(request: Request):
         return JSONResponse(public_error(error), status_code=400 if isinstance(error, ApiError) else 500)
 
 
-async def handle_post_action(request: Request, background_tasks: BackgroundTasks):
+async def handle_post_action(request: Request):
     try:
         payload = await request.json()
     except Exception:
@@ -87,26 +137,33 @@ async def handle_post_action(request: Request, background_tasks: BackgroundTasks
         }:
             payload["_requestSource"] = request_source(request)
         result = await run_in_threadpool(dispatch, action, payload)
-        notification_ids = result.pop("_backgroundNotificationIds", []) if isinstance(result, dict) else []
+        if isinstance(result, dict):
+            result.pop("_backgroundNotificationIds", None)
         reset_delivery = result.pop("_passwordResetDelivery", None) if isinstance(result, dict) else None
         verification_delivery = result.pop("_accountVerificationDelivery", None) if isinstance(result, dict) else None
-        if notification_ids:
-            background_tasks.add_task(dispatch_notification_deliveries, notification_ids)
         if reset_delivery:
-            background_tasks.add_task(
-                dispatch_student_password_reset,
-                reset_delivery.get("resetId", ""),
-                reset_delivery.get("token", ""),
-                str(request.base_url).rstrip("/"),
-            )
+            try:
+                await run_in_threadpool(
+                    enqueue_identity_delivery, PASSWORD_RESET_JOB, reset_delivery
+                )
+            except Exception as error:
+                logger.error(
+                    "Password reset delivery could not be queued.",
+                    extra={"event": "identity_job_enqueue_failed", "job_type": PASSWORD_RESET_JOB,
+                           "error_type": error.__class__.__name__},
+                )
         if verification_delivery:
-            delivered = await run_in_threadpool(
-                dispatch_student_account_verification,
-                verification_delivery.get("verificationId", ""),
-                verification_delivery.get("token", ""),
-                str(request.base_url).rstrip("/"),
-            )
-            if not delivered:
+            try:
+                await run_in_threadpool(
+                    enqueue_identity_delivery, ACCOUNT_VERIFICATION_JOB, verification_delivery
+                )
+            except Exception as error:
+                logger.error(
+                    "Account verification delivery could not be queued.",
+                    extra={"event": "identity_job_enqueue_failed",
+                           "job_type": ACCOUNT_VERIFICATION_JOB,
+                           "error_type": error.__class__.__name__},
+                )
                 return JSONResponse(
                     public_error(ApiError(
                         "ACCOUNT_VERIFICATION_DELIVERY_FAILED",
@@ -152,6 +209,30 @@ async def handle_health_diagnostics(request: Request):
 app.add_api_route("/health/live", handle_liveness, methods=["GET"])
 app.add_api_route("/health/ready", handle_readiness, methods=["GET"])
 app.add_api_route("/health/diagnostics", handle_health_diagnostics, methods=["GET"])
+
+
+def _runner_is_authorized(request: Request) -> bool:
+    return runner_authorized(
+        request.headers.get("authorization") or "",
+        request.headers.get("x-job-runner-secret") or "",
+    )
+
+
+async def handle_operational_jobs(request: Request):
+    if not _runner_is_authorized(request):
+        return JSONResponse({"detail": "Not authorized."}, status_code=401)
+    result = await run_in_threadpool(run_operational_cycle)
+    return JSONResponse({"status": "processed", "result": result})
+
+
+async def handle_operational_metrics(request: Request):
+    if not _runner_is_authorized(request):
+        return JSONResponse({"detail": "Not authorized."}, status_code=401)
+    return JSONResponse({"status": "ok", "metrics": await run_in_threadpool(operational_metrics)})
+
+
+app.add_api_route("/api/internal/jobs/run", handle_operational_jobs, methods=["POST"])
+app.add_api_route("/health/metrics", handle_operational_metrics, methods=["GET"])
 
 
 async def handle_certificate_pdf(certificate_id: str, request: Request):

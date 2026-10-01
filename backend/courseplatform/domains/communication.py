@@ -1209,7 +1209,7 @@ def send_email_notification_action(delivery: dict[str, Any], configuration: dict
     return message_id.strip("<>")
 
 
-def dispatch_student_password_reset_action(reset_id: str, token: str, request_base_url: str = "", *, runtime: CommunicationRuntime) -> None:
+def dispatch_student_password_reset_action(reset_id: str, token: str, request_base_url: str = "", *, runtime: CommunicationRuntime) -> bool:
     connection = runtime.connection
     email_runtime_configuration = runtime.email_runtime_configuration
     fetch_one = runtime.fetch_one
@@ -1218,7 +1218,7 @@ def dispatch_student_password_reset_action(reset_id: str, token: str, request_ba
     str_value = runtime.str_value
     """Deliver one reset link without persisting or returning its plaintext token."""
     if not reset_id or not token:
-        return
+        return False
     token_hash = hash_secret(token)
     try:
         row = fetch_one(
@@ -1235,10 +1235,10 @@ def dispatch_student_password_reset_action(reset_id: str, token: str, request_ba
         )
         if (
             not row
-            or row.get("status") not in {"PENDING", "DELIVERED"}
+            or row.get("status") not in {"PENDING", "DELIVERED", "DELIVERY_FAILED"}
             or row.get("student_status") not in {"ACTIVE", "PENDING_VERIFICATION"}
         ):
-            return
+            return False
         configuration = email_runtime_configuration(prepare_schema=False)
         base_url = str_value(configuration.get("platformUrl")).rstrip("/")
         if not base_url.startswith(("https://", "http://")):
@@ -1270,6 +1270,7 @@ def dispatch_student_password_reset_action(reset_id: str, token: str, request_ba
                 (reset_id, token_hash),
             )
             conn.commit()
+        return True
     except Exception as error:
         logger.error(
             "Student password reset delivery failed.",
@@ -1282,7 +1283,6 @@ def dispatch_student_password_reset_action(reset_id: str, token: str, request_ba
                     """
                     update courseplatform.student_password_resets
                     set status = 'DELIVERY_FAILED', delivery_attempted_at = now(),
-                        invalidated_at = coalesce(invalidated_at, now()),
                         delivery_error_code = %s
                     where reset_id = %s and token_hash = %s and consumed_at is null
                     """,
@@ -1291,6 +1291,7 @@ def dispatch_student_password_reset_action(reset_id: str, token: str, request_ba
                 conn.commit()
         except Exception:
             pass
+        return False
 
 
 def dispatch_student_account_verification_action(
@@ -1319,7 +1320,7 @@ def dispatch_student_account_verification_action(
         )
         if (
             not row
-            or row.get("status") not in {"PENDING", "DELIVERED"}
+            or row.get("status") not in {"PENDING", "DELIVERED", "DELIVERY_FAILED"}
             or row.get("student_status") != "PENDING_VERIFICATION"
         ):
             return False
@@ -1367,7 +1368,6 @@ def dispatch_student_account_verification_action(
                     """
                     update courseplatform.student_account_verifications
                     set status = 'DELIVERY_FAILED', delivery_attempted_at = now(),
-                        invalidated_at = coalesce(invalidated_at, now()),
                         delivery_error_code = %s
                     where verification_id = %s and token_hash = %s and consumed_at is null
                     """,
@@ -1770,24 +1770,25 @@ def claim_notification_deliveries_action(
     if normalized_channel not in {"WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"}:
         raise ValueError("Canal de notificação inválido.")
     notification_filter = ""
+    claim_token = secrets.token_urlsafe(24)
     params: list[Any] = [normalized_channel]
     if notification_ids:
         notification_filter = " and d.notification_id = any(%s)"
         params.append(notification_ids)
-    params.append(max(1, min(int(limit), 200)))
+    params.extend([max(1, min(int(limit), 200)), claim_token])
     query = f"""
         with candidates as (
           select d.delivery_id
           from courseplatform.notification_deliveries d
           where d.channel = %s
             and (
-              d.status in ('PENDING', 'FAILED')
+              (d.status in ('PENDING', 'FAILED') and d.available_at <= now())
               or (
                 d.status = 'PROCESSING'
-                and coalesce(d.updated_at, d.created_at) < now() - interval '5 minutes'
+                and coalesce(d.lease_expires_at, d.updated_at, d.created_at) < now()
               )
             )
-            and d.attempt_count < 3
+            and d.attempt_count < d.max_attempts
             {notification_filter}
           order by d.created_at
           limit %s
@@ -1796,6 +1797,8 @@ def claim_notification_deliveries_action(
           update courseplatform.notification_deliveries d
           set status = 'PROCESSING',
               attempt_count = d.attempt_count + 1,
+              claim_token = %s,
+              lease_expires_at = now() + interval '2 minutes',
               last_error = null,
               updated_at = now()
           from candidates c
@@ -1886,20 +1889,28 @@ def deliver_pending_channel_action(
                     """
                     update courseplatform.notification_deliveries
                     set status = 'SENT', provider_message_id = %s,
-                        last_error = null, sent_at = now(), updated_at = now()
+                        last_error = null, sent_at = now(), updated_at = now(),
+                        claim_token = null, lease_expires_at = null
                     where delivery_id = %s and status = 'PROCESSING'
+                      and claim_token = %s
                     """,
-                    (result_value or None, delivery["delivery_id"]),
+                    (result_value or None, delivery["delivery_id"], delivery["claim_token"]),
                 )
                 sent += 1
             else:
                 conn.execute(
                     """
                     update courseplatform.notification_deliveries
-                    set status = 'FAILED', last_error = %s, updated_at = now()
+                    set status = case when attempt_count >= max_attempts then 'DEAD' else 'FAILED' end,
+                        last_error = %s,
+                        available_at = case when attempt_count < max_attempts
+                          then now() + make_interval(secs => least(3600, 60 * power(2, attempt_count - 1)::integer))
+                          else available_at end,
+                        updated_at = now(), claim_token = null, lease_expires_at = null
                     where delivery_id = %s and status = 'PROCESSING'
+                      and claim_token = %s
                     """,
-                    (result_value, delivery["delivery_id"]),
+                    (result_value, delivery["delivery_id"], delivery["claim_token"]),
                 )
                 failed += 1
         conn.commit()
@@ -3133,6 +3144,17 @@ def admin_retry_notification_deliveries_action(payload: dict[str, Any], *, runti
     channels = [channel for channel in dict.fromkeys(channels) if channel in {"WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"}]
     if not channels:
         channels = ["WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"]
+    with connection() as conn:
+        conn.execute(
+            """
+            update courseplatform.notification_deliveries
+            set status = 'FAILED', attempt_count = 0, available_at = now(),
+                claim_token = null, lease_expires_at = null, updated_at = now()
+            where status = 'DEAD' and channel = any(%s)
+            """,
+            (channels,),
+        )
+        conn.commit()
     delivery_functions = {
         "WHATSAPP": deliver_pending_whatsapp,
         "EMAIL": deliver_pending_email,

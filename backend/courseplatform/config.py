@@ -262,6 +262,9 @@ class Settings:
         self.vapid_subject = os.getenv("VAPID_SUBJECT", "").strip()
         self.web_push_ttl_seconds = _int_env("WEB_PUSH_TTL_SECONDS", 86400)
         self.web_push_timeout_seconds = _int_env("WEB_PUSH_TIMEOUT_SECONDS", 12)
+        self.job_runner_secret = os.getenv("JOB_RUNNER_SECRET", os.getenv("CRON_SECRET", "")).strip()
+        self.job_batch_size = max(1, min(_int_env("JOB_BATCH_SIZE", 20), 50))
+        self.log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
         self.cors_origins = [
             item.strip()
             for item in os.getenv("CORS_ORIGINS", "*").split(",")

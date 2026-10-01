@@ -267,7 +267,7 @@ Recuperação de estudantes:
 - `PASSWORD_RESET_TTL_MINUTES`, `PASSWORD_RESET_ACCOUNT_LIMIT`, `PASSWORD_RESET_ACCOUNT_WINDOW_MINUTES`;
 - `PASSWORD_RESET_SOURCE_LIMIT`, `PASSWORD_RESET_SOURCE_WINDOW_MINUTES`, `PASSWORD_RESET_COMPLETION_LIMIT`, `PASSWORD_RESET_COMPLETION_WINDOW_MINUTES`.
 - `ACCOUNT_VERIFICATION_TTL_MINUTES`, `REGISTRATION_ACCOUNT_LIMIT`, `REGISTRATION_ACCOUNT_WINDOW_MINUTES`, `REGISTRATION_SOURCE_LIMIT`, `REGISTRATION_SOURCE_WINDOW_MINUTES`.
-- Requer também SMTP ativo e uma origem pública confiável. Defina `PLATFORM_URL` fora da Vercel; na Vercel, a aplicação usa `VERCEL_PROJECT_PRODUCTION_URL` como fallback quando as variáveis de sistema estão expostas. O link de utilização única é enviado apenas para o email guardado na conta. O cadastro aguarda a confirmação do SMTP: se o provedor recusar a mensagem, mantém a conta pendente e devolve `ACCOUNT_VERIFICATION_DELIVERY_FAILED`, permitindo repetir o pedido sem anunciar um envio inexistente.
+- Requer também SMTP ativo, uma origem pública confiável e o executor durável da Etapa 13. Defina `PLATFORM_URL` fora da Vercel; na Vercel, a aplicação usa `VERCEL_PROJECT_PRODUCTION_URL` como fallback quando as variáveis de sistema estão expostas. O link de utilização única é enviado apenas para o email guardado na conta. O cadastro confirma primeiro que o email foi enfileirado de forma durável; indisponibilidade da fila mantém a conta pendente e devolve `ACCOUNT_VERIFICATION_DELIVERY_FAILED`. Falhas posteriores do SMTP são repetidas com backoff e tornam-se visíveis nas métricas operacionais.
 
 Supabase Storage e Realtime:
 
@@ -289,6 +289,7 @@ Notificações:
 - `EMAIL_ENABLED`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`, `SMTP_USE_TLS`, `SMTP_TIMEOUT_SECONDS`;
 - `TELEGRAM_ENABLED`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_PARSE_MODE`, `TELEGRAM_TIMEOUT_SECONDS`;
 - `WEB_PUSH_ENABLED`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, `WEB_PUSH_TTL_SECONDS`, `WEB_PUSH_TIMEOUT_SECONDS`, `PLATFORM_URL`.
+- `JOB_RUNNER_SECRET` (ou `CRON_SECRET`), `JOB_BATCH_SIZE` e `LOG_LEVEL` para o executor durável e observabilidade da Etapa 13.
 
 Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLATFORM_API_URL`, override local ou origem Vercel. Não coloque chaves secretas no frontend.
 
@@ -320,6 +321,7 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 - [Reenvio de trabalhos](docs/submission-retry.md)
 - [Notificações multicanal](docs/multichannel-notifications.md)
 - [Checklist de produção existente](docs/production-health-checklist.md)
+- [Etapa 13: operação confiável](docs/stage13-reliable-operations.md)
 
 ## Deploy
 

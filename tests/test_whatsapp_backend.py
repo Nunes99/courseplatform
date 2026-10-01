@@ -154,8 +154,11 @@ class WhatsAppBackendTests(unittest.TestCase):
         self.assertIn("for update of d skip locked", normalized_query)
         self.assertIn("set status = 'processing'", normalized_query)
         self.assertIn("d.status = 'processing'", normalized_query)
-        self.assertIn("interval '5 minutes'", normalized_query)
-        self.assertEqual(database.params, ("WHATSAPP", ["NTF-1"], 7))
+        self.assertIn("lease_expires_at = now() + interval '2 minutes'", normalized_query)
+        self.assertIn("d.available_at <= now()", normalized_query)
+        self.assertIn("claim_token = %s", normalized_query)
+        self.assertEqual(database.params[:3], ("WHATSAPP", ["NTF-1"], 7))
+        self.assertTrue(database.params[3])
         self.assertTrue(database.committed)
 
     def test_admin_token_requires_a_strong_server_encryption_key(self):

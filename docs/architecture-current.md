@@ -340,6 +340,7 @@ Os nomes e valores-modelo estão em `.env.example`. Categorias:
 - Supabase: URL, chave de serviço, bucket, chave publicável e segredo Realtime/JWT.
 - Recuperação administrativa.
 - WhatsApp, SMTP, Telegram e Web Push.
+- O executor operacional protegido processa emails de identidade e varre as filas multicanal fora do ciclo de vida dos pedidos. Os payloads sensiveis de identidade ficam cifrados em `courseplatform.operational_jobs` e nunca sao expostos ao navegador.
 - Variáveis exclusivas de QA: `SMOKE_*`, `PREVIEW_URL`, `PLAYWRIGHT_MODULE`, `CHROME_PATH`.
 
 Valores não foram lidos nem registados nesta linha de base.

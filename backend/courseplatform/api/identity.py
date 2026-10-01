@@ -1,13 +1,16 @@
-from fastapi import APIRouter, BackgroundTasks, Header, Request
+import logging
+
+from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from ..actions import (
-    ACCOUNT_VERIFICATION_DELIVERY_FAILED_MESSAGE,
-    dispatch_student_account_verification,
-    dispatch_student_password_reset,
-)
+from ..actions import ACCOUNT_VERIFICATION_DELIVERY_FAILED_MESSAGE
 from ..contracts import ApiError, public_error
+from ..jobs import (
+    ACCOUNT_VERIFICATION_JOB,
+    PASSWORD_RESET_JOB,
+    enqueue_identity_delivery,
+)
 
 from .contracts import (
     AdminLoginRequest,
@@ -29,6 +32,7 @@ from .executor import execute_action
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["identity"])
+logger = logging.getLogger(__name__)
 
 
 def _request_source(request: Request) -> str:
@@ -42,7 +46,6 @@ async def _execute_public_identity_action(
     action: str,
     payload: dict,
     request: Request,
-    background_tasks: BackgroundTasks,
 ):
     payload["_requestSource"] = _request_source(request)
     result = await execute_action(action, payload)
@@ -51,20 +54,28 @@ async def _execute_public_identity_action(
     reset_delivery = result.pop("_passwordResetDelivery", None)
     verification_delivery = result.pop("_accountVerificationDelivery", None)
     if reset_delivery:
-        background_tasks.add_task(
-            dispatch_student_password_reset,
-            reset_delivery.get("resetId", ""),
-            reset_delivery.get("token", ""),
-            str(request.base_url).rstrip("/"),
-        )
+        try:
+            await run_in_threadpool(
+                enqueue_identity_delivery, PASSWORD_RESET_JOB, reset_delivery
+            )
+        except Exception as error:
+            logger.error(
+                "Password reset delivery could not be queued.",
+                extra={"event": "identity_job_enqueue_failed", "job_type": PASSWORD_RESET_JOB,
+                       "error_type": error.__class__.__name__},
+            )
     if verification_delivery:
-        delivered = await run_in_threadpool(
-            dispatch_student_account_verification,
-            verification_delivery.get("verificationId", ""),
-            verification_delivery.get("token", ""),
-            str(request.base_url).rstrip("/"),
-        )
-        if not delivered:
+        try:
+            await run_in_threadpool(
+                enqueue_identity_delivery, ACCOUNT_VERIFICATION_JOB, verification_delivery
+            )
+        except Exception as error:
+            logger.error(
+                "Account verification delivery could not be queued.",
+                extra={"event": "identity_job_enqueue_failed",
+                       "job_type": ACCOUNT_VERIFICATION_JOB,
+                       "error_type": error.__class__.__name__},
+            )
             return JSONResponse(
                 public_error(ApiError(
                     "ACCOUNT_VERIFICATION_DELIVERY_FAILED",
@@ -83,13 +94,11 @@ async def _execute_public_identity_action(
 async def register_student_account(
     payload: StudentRegistrationRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
 ):
     return await _execute_public_identity_action(
         "registerStudentAccount",
         payload.action_payload(),
         request,
-        background_tasks,
     )
 
 
@@ -101,13 +110,11 @@ async def register_student_account(
 async def verify_student_account(
     payload: AccountVerificationRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
 ):
     return await _execute_public_identity_action(
         "completeStudentAccountVerification",
         payload.action_payload(),
         request,
-        background_tasks,
     )
 
 
@@ -119,13 +126,11 @@ async def verify_student_account(
 async def request_password_reset(
     payload: PasswordResetRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
 ):
     return await _execute_public_identity_action(
         "recoverStudentAccess",
         payload.action_payload(),
         request,
-        background_tasks,
     )
 
 
@@ -137,13 +142,11 @@ async def request_password_reset(
 async def complete_password_reset(
     payload: PasswordResetCompletionRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
 ):
     return await _execute_public_identity_action(
         "completeStudentPasswordReset",
         payload.action_payload(),
         request,
-        background_tasks,
     )
 
 

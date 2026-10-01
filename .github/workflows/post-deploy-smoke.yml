@@ -1,0 +1,26 @@
+name: Post-deploy smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Preview or production URL to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run non-destructive smoke checks
+        env:
+          COURSEPLATFORM_SMOKE_BASE_URL: ${{ inputs.base_url }}
+        run: python scripts/smoke_post_deploy.py

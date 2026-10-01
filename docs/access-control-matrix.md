@@ -138,6 +138,7 @@ Estas regras devem ser testadas no backend:
 6. Certificado bloqueado/revogado não pode ser baixado por URL antiga; a verificação pública deve mostrar apenas estado e dados mínimos.
 7. Pagamento aprovado não substitui conclusão académica; conclusão não substitui autorização de download quando a política exige aprovação.
 8. Segredos de SMTP, bots, VAPID e Supabase nunca entram em DTOs, logs ou auditoria.
+9. `/api/internal/jobs/run` e `/health/metrics` nao pertencem a nenhum papel de cliente. Exigem o segredo exclusivo do executor no servidor; anonimo, estudante, revisor, administrador e proprietario nao recebem esse segredo pelo frontend.
 9. `service_role` é exclusivo do servidor e não constitui um papel de utilizador.
 10. O ID público `STU-00000` identifica; não autentica.
 

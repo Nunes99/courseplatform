@@ -951,7 +951,7 @@ def send_email_notification(delivery: dict[str, Any], configuration: dict[str, A
     return communication_domain.send_email_notification_action(delivery, configuration, runtime=_communication_runtime())
 
 
-def dispatch_student_password_reset(reset_id: str, token: str, request_base_url: str='') -> None:
+def dispatch_student_password_reset(reset_id: str, token: str, request_base_url: str='') -> bool:
     return communication_domain.dispatch_student_password_reset_action(reset_id, token, request_base_url, runtime=_communication_runtime())
 
 
