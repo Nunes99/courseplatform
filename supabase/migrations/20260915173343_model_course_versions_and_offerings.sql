@@ -272,6 +272,8 @@ alter table courseplatform.groups
   add constraint groups_offering_course_fk
   foreign key (offering_id, course_id)
   references courseplatform.course_offerings(offering_id, course_id) on delete restrict;
+alter table courseplatform.enrollments
+  drop constraint if exists enrollments_group_offering_fk;
 alter table courseplatform.groups
   drop constraint if exists groups_group_offering_unique;
 alter table courseplatform.groups

@@ -4,7 +4,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from fastapi.testclient import TestClient
 
@@ -114,6 +114,60 @@ class DurableJobTests(unittest.TestCase):
             self.assertTrue(jobs.runner_authorized("", "runner-secret"))
             self.assertFalse(jobs.runner_authorized("Bearer wrong", ""))
 
+    def test_operational_alert_fingerprint_is_deterministic(self):
+        first = jobs._alert_fingerprint({
+            "deadJobs": 2, "overdueJobs": 1, "failedNotifications": 3,
+            "pendingJobs": 99,
+        })
+        second = jobs._alert_fingerprint({
+            "failedNotifications": 3, "overdueJobs": 1, "deadJobs": 2,
+        })
+        self.assertEqual(first, second)
+
+    def test_operational_alert_includes_database_saturation(self):
+        settings = SimpleNamespace(db_connection_alert_percent=80)
+        with patch.object(jobs, "get_settings", return_value=settings):
+            self.assertFalse(jobs._operational_alert_triggered({
+                "deadJobs": 0,
+                "overdueJobs": 0,
+                "failedNotifications": 0,
+                "dbConnectionUtilizationPercent": 79,
+            }))
+            self.assertTrue(jobs._operational_alert_triggered({
+                "deadJobs": 0,
+                "overdueJobs": 0,
+                "failedNotifications": 0,
+                "dbConnectionUtilizationPercent": 80,
+            }))
+
+    def test_operational_alert_targets_active_owner_via_configured_email(self):
+        conn = _Connection(_Result(rows=[{
+            "email": "owner@example.test",
+            "full_name": "Platform Owner",
+        }]))
+        configuration = {"configured": True}
+        send = Mock(return_value="message-id")
+        settings = SimpleNamespace(platform_url="https://example.test")
+        with (
+            patch.object(jobs, "_claim_operational_alert", return_value=True),
+            patch.object(jobs, "connection", _connection_for(conn)),
+            patch.object(jobs, "_finish_operational_alert") as finish,
+            patch.object(jobs, "get_settings", return_value=settings),
+            patch("backend.courseplatform.actions.email_runtime_configuration", return_value=configuration),
+            patch("backend.courseplatform.actions.send_email_notification", send),
+        ):
+            jobs._dispatch_operational_alert({
+                "deadJobs": 1,
+                "overdueJobs": 0,
+                "failedNotifications": 0,
+            })
+
+        delivery = send.call_args.args[0]
+        self.assertEqual("owner@example.test", delivery["recipient"])
+        self.assertEqual("https://example.test/admin.html#/operations", delivery["action_url"])
+        self.assertNotIn("owner@example.test", delivery["message"])
+        finish.assert_called_once_with()
+
 
 class ObservabilityTests(unittest.TestCase):
     client = TestClient(app)
@@ -155,6 +209,28 @@ class Stage13MigrationTests(unittest.TestCase):
         self.assertIn("from public, anon, authenticated", migration)
         self.assertIn("for update", (ROOT / "backend" / "courseplatform" / "jobs.py").read_text(encoding="utf-8").lower())
         self.assertIn("20261001120000", migration)
+
+    def test_scheduler_uses_vault_and_contains_no_secret_value(self):
+        migration = (
+            ROOT / "supabase" / "migrations" /
+            "20261003120000_schedule_operational_worker.sql"
+        ).read_text(encoding="utf-8").lower()
+        self.assertIn("create extension if not exists pg_cron", migration)
+        self.assertIn("create extension if not exists pg_net", migration)
+        self.assertIn("vault.decrypted_secrets", migration)
+        self.assertIn("authorization", migration)
+        self.assertIn("/api/internal/jobs/run", migration)
+        self.assertNotIn("job_runner_secret=", migration)
+
+    def test_operational_alert_state_is_private_and_versioned(self):
+        migration = (
+            ROOT / "supabase" / "migrations" /
+            "20261003060000_add_operational_alert_delivery.sql"
+        ).read_text(encoding="utf-8").lower()
+        self.assertIn("create table if not exists courseplatform.operational_alert_state", migration)
+        self.assertIn("enable row level security", migration)
+        self.assertIn("from public, anon, authenticated", migration)
+        self.assertIn("20261003060000", migration)
 
 
 if __name__ == "__main__":

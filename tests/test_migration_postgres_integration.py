@@ -5,20 +5,13 @@ from urllib.parse import urlsplit
 
 import psycopg
 
+from backend.courseplatform.db import EXPECTED_SCHEMA_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "supabase" / "migrations"
 TEST_DATABASE_URL = os.getenv("COURSEPLATFORM_TEST_DATABASE_URL", "")
-UPGRADE_PREFIXES = {
-    "20260913120000",
-    "20260913121000",
-    "20260913122000",
-    "20260913123000",
-    "20260913124000",
-    "20260913185739",
-    "20260914103215",
-    "20260915101047",
-}
+UPGRADE_START = "20260913120000"
 RUNTIME_ROLE_VERSION = "20260913131500"
 
 
@@ -67,7 +60,28 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
         self.conn.execute("drop schema if exists extensions cascade")
         self.conn.execute("drop schema if exists public cascade")
         self.conn.execute("create schema public")
+        self._drop_runtime_roles()
         self._bootstrap_supabase_contracts()
+
+    def _drop_runtime_roles(self):
+        self.conn.execute(
+            """
+            do $$
+            begin
+              if exists (select 1 from pg_roles where rolname = 'courseplatform_api') then
+                if exists (select 1 from pg_roles where rolname = 'courseplatform_runtime') then
+                  revoke courseplatform_runtime from courseplatform_api;
+                end if;
+                drop role courseplatform_api;
+              end if;
+              if exists (select 1 from pg_roles where rolname = 'courseplatform_runtime') then
+                revoke connect on database postgres from courseplatform_runtime;
+                drop role courseplatform_runtime;
+              end if;
+            end
+            $$;
+            """
+        )
 
     def tearDown(self):
         self.conn.close()
@@ -124,9 +138,15 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
         )
         with self.assertRaises(psycopg.errors.RaiseException):
             self._apply([runtime_role_migration])
-        self._apply(
-            [path for path in files if not path.name.startswith(RUNTIME_ROLE_VERSION)]
-        )
+        repeatable = [
+            path for path in files
+            if path.name.startswith((
+                "20261001120000",
+                "20261003060000",
+                "20261003120000",
+            ))
+        ]
+        self._apply(repeatable)
         count = self.conn.execute(
             "select count(*) from courseplatform.students where student_id = 'STU-TEST'"
         ).fetchone()[0]
@@ -134,14 +154,14 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             "select version from courseplatform.schema_versions where component = 'application'"
         ).fetchone()[0]
         self.assertEqual(1, count)
-        self.assertEqual(20260915101047, version)
+        self.assertEqual(EXPECTED_SCHEMA_VERSION, version)
 
     def test_previous_schema_upgrade_preserves_related_learning_records(self):
         files = migration_files()
-        previous = [path for path in files if path.name.split("_", 1)[0] not in UPGRADE_PREFIXES]
+        previous = [path for path in files if path.name.split("_", 1)[0] < UPGRADE_START]
         if self._runtime_roles_exist():
             previous = [path for path in previous if not path.name.startswith(RUNTIME_ROLE_VERSION)]
-        upgrade = [path for path in files if path.name.split("_", 1)[0] in UPGRADE_PREFIXES]
+        upgrade = [path for path in files if path.name.split("_", 1)[0] >= UPGRADE_START]
         self._apply(previous)
         self.conn.execute(
             """
@@ -199,19 +219,29 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
             """
             insert into courseplatform.course_offerings
               (offering_id, course_id, course_version_id, offering_code, name, status)
-            values ('COFF-EDITION-1', 'COURSE-EDITION', %s, 'EDITION-001', 'Primeira edição', 'ACTIVE');
+            values ('COFF-EDITION-1', 'COURSE-EDITION', %s, 'EDITION-001', 'Primeira edição', 'ACTIVE')
+            """,
+            (initial_version,),
+        )
+        self.conn.execute(
+            """
             insert into courseplatform.enrollments
               (enrollment_id, student_id, course_id, course_version_id, offering_id,
                status, progress_percent, final_score)
             values ('ENR-EDITION-1', 'STU-EDITION', 'COURSE-EDITION', %s,
-                    'COFF-EDITION-1', 'COMPLETED', 100, 88);
+                    'COFF-EDITION-1', 'COMPLETED', 100, 88)
+            """,
+            (initial_version,),
+        )
+        self.conn.execute(
+            """
             insert into courseplatform.certificates
               (certificate_id, student_id, course_id, enrollment_id, offering_id,
                course_version_id, certificate_number, verification_code, final_score)
             values ('CERT-EDITION-1', 'STU-EDITION', 'COURSE-EDITION', 'ENR-EDITION-1',
-                    'COFF-EDITION-1', %s, 'LSS-TEST-1', 'LSSVERIFY1', 88);
+                    'COFF-EDITION-1', %s, 'LSS-TEST-1', 'LSSVERIFY1', 88)
             """,
-            (initial_version, initial_version, initial_version),
+            (initial_version,),
         )
         self.conn.execute(
             """

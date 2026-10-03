@@ -8,15 +8,23 @@ import urllib.request
 
 
 def fetch(base_url: str, path: str) -> tuple[int, bytes, dict[str, str]]:
+    request_id = f"courseplatform-smoke-{path.strip('/').replace('/', '-') or 'root'}"
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}{path}",
-        headers={"User-Agent": "CoursePlatform-Smoke/1.0"},
+        headers={
+            "User-Agent": "CoursePlatform-Smoke/1.0",
+            "X-Request-ID": request_id,
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
-            return response.status, response.read(512_000), dict(response.headers)
+            return response.status, response.read(512_000), {
+                key.lower(): value for key, value in response.headers.items()
+            }
     except urllib.error.HTTPError as error:
-        return error.code, error.read(512_000), dict(error.headers)
+        return error.code, error.read(512_000), {
+            key.lower(): value for key, value in error.headers.items()
+        }
 
 
 def main() -> int:
@@ -32,11 +40,15 @@ def main() -> int:
     ):
         status, body, headers = fetch(base_url, path)
         parsed = json.loads(body.decode("utf-8"))
-        passed = status == expected_status and parsed == expected_json and bool(headers.get("X-Request-ID"))
+        passed = (
+            status == expected_status
+            and parsed == expected_json
+            and headers.get("x-request-id") == f"courseplatform-smoke-{path.strip('/').replace('/', '-')}"
+        )
         checks.append({"path": path, "status": status, "passed": passed})
 
     status, body, headers = fetch(base_url, "/")
-    content_type = headers.get("Content-Type", "").lower()
+    content_type = headers.get("content-type", "").lower()
     checks.append({
         "path": "/",
         "status": status,

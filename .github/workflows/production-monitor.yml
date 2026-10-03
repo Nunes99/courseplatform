@@ -1,0 +1,91 @@
+name: Production monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: courseplatform-production-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Probe production
+        id: probe
+        continue-on-error: true
+        env:
+          COURSEPLATFORM_MONITOR_BASE_URL: https://lmtwebnairs.vercel.app
+          COURSEPLATFORM_MONITOR_JOB_SECRET: ${{ secrets.COURSEPLATFORM_MONITOR_JOB_SECRET }}
+          COURSEPLATFORM_MONITOR_LATENCY_MS: "2500"
+          COURSEPLATFORM_MONITOR_DB_PERCENT: "80"
+        run: python scripts/monitor_production.py | tee monitor-result.json
+      - name: Open or update incident
+        if: steps.probe.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '[Monitor] CoursePlatform production requires attention';
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const current = issues.find(issue => issue.title === title && !issue.pull_request);
+            const body = [
+              'The external production monitor failed.',
+              '',
+              `Workflow: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              'The report contains status codes, latency and database connection utilization only. It does not contain credentials or personal data.',
+            ].join('\n');
+            if (!current) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }
+      - name: Close recovered incident
+        if: steps.probe.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '[Monitor] CoursePlatform production requires attention';
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const current = issues.find(issue => issue.title === title && !issue.pull_request);
+            if (current) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: current.number,
+                body: 'The production monitor recovered successfully.',
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: current.number,
+                state: 'closed',
+              });
+            }
+      - name: Fail workflow when probe failed
+        if: steps.probe.outcome == 'failure'
+        run: exit 1

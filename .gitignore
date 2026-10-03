@@ -14,3 +14,6 @@ tmp/ui/submission-retry/
 tmp/ui/participation-policy/
 tmp/ui/preview-server*.log
 tmp/pdfs/professional-layout.png
+
+.vercel/
+.env.local

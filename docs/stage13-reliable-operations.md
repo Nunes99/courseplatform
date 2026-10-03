@@ -2,7 +2,7 @@
 
 ## Estado desta entrega
 
-Implementado localmente e ainda nao aplicado externamente:
+Implementado e validado em producao em 3 de outubro de 2026:
 
 - fila `courseplatform.operational_jobs` com payload cifrado, idempotencia,
   claim com `FOR UPDATE SKIP LOCKED`, lease, retries exponenciais e estado `DEAD`;
@@ -12,10 +12,13 @@ Implementado localmente e ainda nao aplicado externamente:
 - metricas protegidas em `GET /health/metrics`;
 - logs JSON com `request_id`, metodo, caminho, estado e duracao;
 - CI e smoke checks nao destrutivos;
-- runbooks iniciais de backup, rollback e incidentes.
-
-A migracao, o agendador, os alertas externos e o ensaio real de restauracao
-continuam dependentes de autorizacao e de um ambiente externo seguro.
+- runbooks iniciais de backup, rollback e incidentes;
+- agendador Supabase Cron a cada minuto, com URL e bearer guardados no Vault;
+- alertas operacionais por SMTP para proprietarios ativos, com deduplicacao,
+  lease e intervalo minimo de 30 minutos;
+- monitor externo GitHub Actions a cada cinco minutos para disponibilidade,
+  respostas 5xx sinteticas, latencia e utilizacao das ligacoes Postgres;
+- ensaio local de migracao, dump e restauracao num PostgreSQL temporario isolado.
 
 ## Inventario operacional
 
@@ -35,12 +38,15 @@ no runtime do servidor.
 
 ## Aplicacao e agendamento
 
-1. Aplicar `20261001120000_add_durable_operational_jobs.sql` primeiro.
+1. Aplicar `20261001120000_add_durable_operational_jobs.sql` e
+   `20261003060000_add_operational_alert_delivery.sql`.
 2. Configurar `NOTIFICATION_CONFIG_ENCRYPTION_KEY` e `JOB_RUNNER_SECRET` com
    valores independentes de pelo menos 32 bytes.
 3. Fazer deploy e confirmar `GET /health/ready`.
-4. Configurar um agendador a cada minuto para `POST /api/internal/jobs/run`,
-   usando `Authorization: Bearer <JOB_RUNNER_SECRET>`.
+4. Guardar `courseplatform_platform_url` e
+   `courseplatform_job_runner_secret` no Supabase Vault e aplicar
+   `20261003120000_schedule_operational_worker.sql`. O job chama a cada minuto
+   `POST /api/internal/jobs/run` com o bearer protegido.
 5. Confirmar `GET /health/metrics` com o mesmo header.
 
 O endpoint devolve somente contagens. Nunca envie o segredo em query string. Um
@@ -59,10 +65,25 @@ Metricas minimas:
 - saturacao de ligacoes no painel Supabase;
 - latencia e erros de Storage, PDF e Realtime nos logs da plataforma.
 
-Alertar imediatamente quando `deadJobs > 0`, `overdueJobs > 0`, readiness falhar
-por dois ciclos ou a taxa de 5xx ultrapassar o limite operacional acordado. Esta
-entrega emite o evento `operational_alert`; a integracao com o destino de alerta
-da equipa ainda deve ser configurada no provedor de observabilidade.
+Quando `deadJobs > 0`, `overdueJobs > 0` ou `failedNotifications > 0`, o worker
+emite o evento estruturado `operational_alert` e envia um email aos utilizadores
+ativos com papel `OWNER`, `ADMIN` ou `ADMINISTRATOR`. O estado persistente evita
+duplicacao concorrente e repete o aviso no maximo uma vez a cada 30 minutos para
+o mesmo incidente. A taxa agregada de 5xx e a saturacao do Supavisor ainda
+poderao ser ligadas a um provedor dedicado quando houver um destino contratado.
+
+O workflow `production-monitor.yml` executa fora da Vercel, a cada cinco
+minutos. Ele valida liveness, readiness, pagina inicial e metricas protegidas,
+falha acima de 2500 ms ou 80% de utilizacao das ligacoes e abre um unico issue
+operacional no GitHub. Quando o servico recupera, o mesmo issue e encerrado. O
+workflow exige o secret de repositorio `COURSEPLATFORM_MONITOR_JOB_SECRET`, com
+o mesmo valor server-only de `JOB_RUNNER_SECRET`. O valor nunca aparece no YAML
+nem no relatorio.
+
+Esta taxa 5xx e sintetica: representa as rotas sondadas pelo monitor. A taxa
+agregada de todo o trafego continua a depender dos logs estruturados da Vercel
+ou de um futuro drain de observabilidade; nao deve ser inferida a partir destas
+quatro sondagens.
 
 ## SLO, RPO e RTO iniciais
 
@@ -94,8 +115,13 @@ Ensaio seguro trimestral:
 7. Medir tempo total e perda maxima de dados; comparar com RPO/RTO.
 8. Destruir o ambiente isolado depois de guardar evidencias sem dados pessoais.
 
-O ensaio desta entrega nao foi executado porque nao existe autorizacao para criar
-ou restaurar um ambiente externo isolado.
+Ensaio de 3 de outubro de 2026: a cadeia completa foi aplicada a uma base vazia
+em PostgreSQL 18 local/WSL; os quatro cenarios de integracao passaram. Um dump
+custom foi restaurado numa segunda base local: 56 tabelas, versao de esquema e
+contagens de linhas coincidiram. Uma amostra sintetica de tres objetos foi
+arquivada e restaurada com SHA-256 identico. Isto valida o procedimento local,
+mas nao substitui um ensaio futuro com um backup real e objetos reais do
+Supabase Storage num projeto isolado.
 
 ## Rollback
 

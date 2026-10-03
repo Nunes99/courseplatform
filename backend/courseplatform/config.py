@@ -264,6 +264,9 @@ class Settings:
         self.web_push_timeout_seconds = _int_env("WEB_PUSH_TIMEOUT_SECONDS", 12)
         self.job_runner_secret = os.getenv("JOB_RUNNER_SECRET", os.getenv("CRON_SECRET", "")).strip()
         self.job_batch_size = max(1, min(_int_env("JOB_BATCH_SIZE", 20), 50))
+        self.db_connection_alert_percent = max(
+            1, min(_int_env("DB_CONNECTION_ALERT_PERCENT", 80), 100)
+        )
         self.log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
         self.cors_origins = [
             item.strip()

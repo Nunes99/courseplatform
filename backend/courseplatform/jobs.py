@@ -1,4 +1,5 @@
 import hmac
+import hashlib
 import json
 import logging
 import secrets
@@ -13,6 +14,8 @@ logger = logging.getLogger(__name__)
 PASSWORD_RESET_JOB = "STUDENT_PASSWORD_RESET_EMAIL"
 ACCOUNT_VERIFICATION_JOB = "STUDENT_ACCOUNT_VERIFICATION_EMAIL"
 SUPPORTED_JOB_TYPES = {PASSWORD_RESET_JOB, ACCOUNT_VERIFICATION_JOB}
+OPERATIONAL_ALERT_KEY = "operational-queue-health"
+OPERATIONAL_ALERT_COOLDOWN_MINUTES = 30
 
 
 class JobConfigurationError(RuntimeError):
@@ -237,9 +240,166 @@ def run_operational_cycle(limit: int | None = None, worker_id: str = "") -> dict
             )
     result["notifications"] = notifications
     metrics = operational_metrics()
-    if metrics["deadJobs"] or metrics["overdueJobs"] or metrics["failedNotifications"]:
+    if _operational_alert_triggered(metrics):
         logger.error("Operational alert threshold reached.", extra={"event": "operational_alert", **metrics})
+        try:
+            _dispatch_operational_alert(metrics)
+        except Exception as error:
+            logger.error(
+                "Operational alert delivery failed.",
+                extra={
+                    "event": "operational_alert_delivery_failed",
+                    "error_type": error.__class__.__name__,
+                },
+            )
     return result
+
+
+def _alert_fingerprint(metrics: dict[str, int]) -> str:
+    normalized = {
+        key: int(metrics.get(key) or 0)
+        for key in (
+            "deadJobs", "overdueJobs", "failedNotifications",
+            "dbConnectionUtilizationPercent",
+        )
+    }
+    serialized = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _operational_alert_triggered(metrics: dict[str, int]) -> bool:
+    settings = get_settings()
+    database_threshold = int(
+        getattr(settings, "db_connection_alert_percent", 80) or 80
+    )
+    return bool(
+        int(metrics.get("deadJobs") or 0)
+        or int(metrics.get("overdueJobs") or 0)
+        or int(metrics.get("failedNotifications") or 0)
+        or int(metrics.get("dbConnectionUtilizationPercent") or 0)
+        >= database_threshold
+    )
+
+
+def _claim_operational_alert(metrics: dict[str, int]) -> bool:
+    fingerprint = _alert_fingerprint(metrics)
+    with connection() as conn:
+        conn.execute(
+            """
+            insert into courseplatform.operational_alert_state
+              (alert_key, status, fingerprint, metrics_json, created_at, updated_at)
+            values (%s, 'OPEN', %s, %s::jsonb, now(), now())
+            on conflict (alert_key) do nothing
+            """,
+            (OPERATIONAL_ALERT_KEY, fingerprint, json.dumps(metrics)),
+        )
+        row = conn.execute(
+            """
+            select status, fingerprint, last_notified_at, lease_expires_at
+            from courseplatform.operational_alert_state
+            where alert_key = %s
+            for update
+            """,
+            (OPERATIONAL_ALERT_KEY,),
+        ).fetchone() or {}
+        due = bool(
+            row.get("status") != "OPEN"
+            or row.get("fingerprint") != fingerprint
+            or row.get("last_notified_at") is None
+            or conn.execute(
+                "select %s < now() - make_interval(mins => %s) as due",
+                (row.get("last_notified_at"), OPERATIONAL_ALERT_COOLDOWN_MINUTES),
+            ).fetchone()["due"]
+        )
+        lease_available = row.get("lease_expires_at") is None or conn.execute(
+            "select %s < now() as available",
+            (row.get("lease_expires_at"),),
+        ).fetchone()["available"]
+        if due and lease_available:
+            conn.execute(
+                """
+                update courseplatform.operational_alert_state
+                set status = 'OPEN', fingerprint = %s, metrics_json = %s::jsonb,
+                    lease_expires_at = now() + interval '2 minutes',
+                    last_error_code = null, updated_at = now()
+                where alert_key = %s
+                """,
+                (fingerprint, json.dumps(metrics), OPERATIONAL_ALERT_KEY),
+            )
+        conn.commit()
+    return bool(due and lease_available)
+
+
+def _finish_operational_alert(error: Exception | None = None) -> None:
+    with connection() as conn:
+        conn.execute(
+            """
+            update courseplatform.operational_alert_state
+            set lease_expires_at = null,
+                last_notified_at = case when %s is null then now() else last_notified_at end,
+                notification_count = notification_count + case when %s is null then 1 else 0 end,
+                last_error_code = %s,
+                updated_at = now()
+            where alert_key = %s
+            """,
+            (
+                None if error is None else error.__class__.__name__[:80],
+                None if error is None else error.__class__.__name__[:80],
+                None if error is None else error.__class__.__name__[:80],
+                OPERATIONAL_ALERT_KEY,
+            ),
+        )
+        conn.commit()
+
+
+def _dispatch_operational_alert(metrics: dict[str, int]) -> None:
+    if not _claim_operational_alert(metrics):
+        return
+    try:
+        from .actions import email_runtime_configuration, send_email_notification
+
+        with connection() as conn:
+            recipients = conn.execute(
+                """
+                select distinct lower(email) as email, full_name
+                from courseplatform.admins
+                where status = 'ACTIVE'
+                  and role in ('OWNER', 'ADMIN', 'ADMINISTRATOR')
+                  and nullif(trim(email), '') is not null
+                order by lower(email)
+                """
+            ).fetchall()
+        if not recipients:
+            raise JobConfigurationError("No active operational alert recipient is configured.")
+        configuration = email_runtime_configuration()
+        if not configuration.get("configured"):
+            raise JobConfigurationError("The institutional SMTP channel is not configured.")
+        settings = get_settings()
+        action_url = f"{settings.platform_url.rstrip('/')}/admin.html#/operations"
+        summary = (
+            f"Tarefas bloqueadas: {int(metrics.get('deadJobs') or 0)}\n"
+            f"Tarefas atrasadas: {int(metrics.get('overdueJobs') or 0)}\n"
+            f"Notificacoes com falha: {int(metrics.get('failedNotifications') or 0)}\n"
+            f"Utilizacao de ligacoes Postgres: "
+            f"{int(metrics.get('dbConnectionUtilizationPercent') or 0)}%"
+        )
+        for recipient in recipients:
+            send_email_notification(
+                {
+                    "recipient": recipient["email"],
+                    "student_name": recipient.get("full_name") or "Administracao",
+                    "title": "Alerta operacional da plataforma",
+                    "email_subject": "CoursePlatform: intervencao operacional necessaria",
+                    "message": summary,
+                    "email_message": summary,
+                    "action_url": action_url,
+                },
+                configuration,
+            )
+    except Exception as error:
+        _finish_operational_alert(error)
+        raise
+    _finish_operational_alert()
 
 
 def operational_metrics() -> dict[str, int]:
@@ -258,12 +418,37 @@ def operational_metrics() -> dict[str, int]:
             from courseplatform.operational_jobs
             """
         ).fetchone() or {}
+        database_row = conn.execute(
+            """
+            select
+              count(*) filter (where datname = current_database()) as database_connections,
+              count(*) filter (
+                where datname = current_database() and state = 'active'
+              ) as active_database_connections,
+              count(*) filter (
+                where datname = current_database() and state = 'idle in transaction'
+              ) as idle_in_transaction_connections,
+              current_setting('max_connections')::integer as connection_limit
+            from pg_stat_activity
+            """
+        ).fetchone() or {}
+    database_connections = int(database_row.get("database_connections") or 0)
+    connection_limit = max(1, int(database_row.get("connection_limit") or 1))
     return {
         "pendingJobs": int(row.get("pending_jobs") or 0),
         "processingJobs": int(row.get("processing_jobs") or 0),
         "deadJobs": int(row.get("dead_jobs") or 0),
         "overdueJobs": int(row.get("overdue_jobs") or 0),
         "failedNotifications": int(row.get("failed_notifications") or 0),
+        "dbConnections": database_connections,
+        "dbActiveConnections": int(database_row.get("active_database_connections") or 0),
+        "dbIdleInTransactionConnections": int(
+            database_row.get("idle_in_transaction_connections") or 0
+        ),
+        "dbConnectionLimit": connection_limit,
+        "dbConnectionUtilizationPercent": round(
+            database_connections * 100 / connection_limit
+        ),
     }
 
 

@@ -289,7 +289,7 @@ Notificações:
 - `EMAIL_ENABLED`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`, `SMTP_USE_TLS`, `SMTP_TIMEOUT_SECONDS`;
 - `TELEGRAM_ENABLED`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_PARSE_MODE`, `TELEGRAM_TIMEOUT_SECONDS`;
 - `WEB_PUSH_ENABLED`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, `WEB_PUSH_TTL_SECONDS`, `WEB_PUSH_TIMEOUT_SECONDS`, `PLATFORM_URL`.
-- `JOB_RUNNER_SECRET` (ou `CRON_SECRET`), `JOB_BATCH_SIZE` e `LOG_LEVEL` para o executor durável e observabilidade da Etapa 13.
+- `JOB_RUNNER_SECRET` (ou `CRON_SECRET`), `JOB_BATCH_SIZE`, `DB_CONNECTION_ALERT_PERCENT` e `LOG_LEVEL` para o executor durável e observabilidade da Etapa 13.
 
 Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLATFORM_API_URL`, override local ou origem Vercel. Não coloque chaves secretas no frontend.
 
