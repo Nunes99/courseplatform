@@ -27,6 +27,6 @@
     "qa:typed-api-client": "node scripts/verify_versioned_api_client.cjs"
   },
   "devDependencies": {
-    "playwright": "1.62.1"
+    "playwright": "1.63.0"
   }
 }
