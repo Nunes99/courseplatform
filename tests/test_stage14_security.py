@@ -4,7 +4,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from scripts import check_bandit_baseline, check_recovery_readiness
+from scripts import check_bandit_baseline, check_recovery_readiness, check_secrets
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -107,6 +107,48 @@ class Stage14SecurityTests(unittest.TestCase):
         }
         findings = check_bandit_baseline.compare_reports(baseline, current)
         self.assertEqual(1, len(findings))
+
+    def test_secret_baseline_normalizes_paths_between_windows_and_linux(self):
+        baseline = {
+            "results": {
+                "backend\\courseplatform\\config.py": [
+                    {
+                        "type": "Secret Keyword",
+                        "hashed_secret": "reviewed-hash",  # pragma: allowlist secret
+                        "line_number": 4,
+                    }
+                ]
+            }
+        }
+        current = {
+            "results": {
+                "backend/courseplatform/config.py": [
+                    {
+                        "type": "Secret Keyword",
+                        "hashed_secret": "reviewed-hash",  # pragma: allowlist secret
+                        "line_number": 8,
+                    }
+                ]
+            }
+        }
+        self.assertEqual([], check_secrets.new_findings(baseline, [current]))
+
+    def test_secret_baseline_reports_metadata_for_new_finding(self):
+        current = {
+            "results": {
+                "backend/courseplatform/config.py": [
+                    {
+                        "type": "Secret Keyword",
+                        "hashed_secret": "new-hash",  # pragma: allowlist secret
+                        "line_number": 12,
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            [("backend/courseplatform/config.py", "Secret Keyword", 12)],
+            check_secrets.new_findings({"results": {}}, [current]),
+        )
 
 
 if __name__ == "__main__":
