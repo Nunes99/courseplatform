@@ -55,6 +55,15 @@ def new_findings(
     baseline: dict[str, Any], reports: list[dict[str, Any]]
 ) -> list[tuple[str, str, int]]:
     reviewed = finding_keys(baseline)
+    reviewed_locations = {
+        (
+            _normalized_path(filename),
+            str(finding.get("type") or ""),
+            int(finding.get("line_number") or 0),
+        )
+        for filename, entries in baseline.get("results", {}).items()
+        for finding in entries
+    }
     detected: dict[tuple[str, str, str], int] = {}
     for report in reports:
         for filename, entries in report.get("results", {}).items():
@@ -65,11 +74,13 @@ def new_findings(
                     str(finding.get("hashed_secret") or ""),
                 )
                 detected[key] = int(finding.get("line_number") or 0)
-    return sorted(
-        (filename, finding_type, detected[key])
-        for key in detected.keys() - reviewed
-        for filename, finding_type, _ in (key,)
-    )
+    unreviewed = []
+    for key in detected.keys() - reviewed:
+        filename, finding_type, _ = key
+        line_number = detected[key]
+        if (filename, finding_type, line_number) not in reviewed_locations:
+            unreviewed.append((filename, finding_type, line_number))
+    return sorted(unreviewed)
 
 
 def _scan(files: list[str]) -> dict[str, Any]:

@@ -133,6 +133,31 @@ class Stage14SecurityTests(unittest.TestCase):
         }
         self.assertEqual([], check_secrets.new_findings(baseline, [current]))
 
+    def test_secret_baseline_accepts_platform_hash_at_reviewed_location(self):
+        baseline = {
+            "results": {
+                "backend\\courseplatform\\config.py": [
+                    {
+                        "type": "Secret Keyword",
+                        "hashed_secret": "windows-hash",  # pragma: allowlist secret
+                        "line_number": 8,
+                    }
+                ]
+            }
+        }
+        current = {
+            "results": {
+                "backend/courseplatform/config.py": [
+                    {
+                        "type": "Secret Keyword",
+                        "hashed_secret": "linux-hash",  # pragma: allowlist secret
+                        "line_number": 8,
+                    }
+                ]
+            }
+        }
+        self.assertEqual([], check_secrets.new_findings(baseline, [current]))
+
     def test_secret_baseline_reports_metadata_for_new_finding(self):
         current = {
             "results": {
