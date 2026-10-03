@@ -46,6 +46,21 @@ def _request(base_url: str, path: str, secret: str = "") -> dict:
     }
 
 
+def _request_with_latency_confirmation(
+    base_url: str,
+    path: str,
+    latency_limit: int,
+    secret: str = "",
+) -> dict:
+    result = _request(base_url, path, secret)
+    samples = [result["durationMs"]]
+    if int(result["status"]) < 500 and result["durationMs"] > latency_limit:
+        result = _request(base_url, path, secret)
+        samples.append(result["durationMs"])
+    result["latencySamplesMs"] = samples
+    return result
+
+
 def main() -> int:
     base_url = os.getenv("COURSEPLATFORM_MONITOR_BASE_URL", "").strip().rstrip("/")
     secret = os.getenv("COURSEPLATFORM_MONITOR_JOB_SECRET", "").strip()
@@ -66,7 +81,9 @@ def main() -> int:
         ("/health/live", {"status": "ok"}),
         ("/health/ready", {"status": "ready"}),
     ):
-        result = _request(base_url, path)
+        result = _request_with_latency_confirmation(
+            base_url, path, latency_limit
+        )
         try:
             parsed = json.loads(result.pop("body").decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -78,7 +95,7 @@ def main() -> int:
         if result["durationMs"] > latency_limit:
             failures.append(f"{path} exceeded {latency_limit} ms")
 
-    root = _request(base_url, "/")
+    root = _request_with_latency_confirmation(base_url, "/", latency_limit)
     root_body = root.pop("body")
     root["bodyValid"] = "text/html" in root["contentType"] and b"<html" in root_body.lower()
     results.append(root)
@@ -87,7 +104,9 @@ def main() -> int:
     if root["durationMs"] > latency_limit:
         failures.append(f"/ exceeded {latency_limit} ms")
 
-    protected = _request(base_url, "/health/metrics", secret)
+    protected = _request_with_latency_confirmation(
+        base_url, "/health/metrics", latency_limit, secret
+    )
     try:
         metrics_payload = json.loads(protected.pop("body").decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):

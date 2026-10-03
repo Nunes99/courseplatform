@@ -78,6 +78,32 @@ class ProductionMonitorTests(unittest.TestCase):
         self.assertTrue(any("HTTP 503" in item for item in report["failures"]))
         self.assertTrue(any("85%" in item for item in report["failures"]))
 
+    def test_single_slow_sample_is_confirmed_before_alerting(self):
+        responses = [
+            _response("/health/live", duration=3100),
+            _response("/health/live", duration=400),
+            _response("/health/ready"),
+            _response("/"),
+            _response("/health/metrics"),
+        ]
+        result, report = self._run(responses)
+        self.assertEqual(0, result)
+        self.assertEqual([3100, 400], report["checks"][0]["latencySamplesMs"])
+
+    def test_consecutive_slow_samples_fail_monitor(self):
+        responses = [
+            _response("/health/live", duration=3100),
+            _response("/health/live", duration=2900),
+            _response("/health/ready"),
+            _response("/"),
+            _response("/health/metrics"),
+        ]
+        result, report = self._run(responses)
+        self.assertEqual(1, result)
+        self.assertTrue(
+            any("/health/live exceeded" in item for item in report["failures"])
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

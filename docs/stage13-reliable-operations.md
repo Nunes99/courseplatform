@@ -74,8 +74,10 @@ poderao ser ligadas a um provedor dedicado quando houver um destino contratado.
 
 O workflow `production-monitor.yml` executa fora da Vercel, a cada cinco
 minutos. Ele valida liveness, readiness, pagina inicial e metricas protegidas,
-falha acima de 2500 ms ou 80% de utilizacao das ligacoes e abre um unico issue
-operacional no GitHub. Quando o servico recupera, o mesmo issue e encerrado. O
+confirma a latencia acima de 2500 ms com uma segunda amostra, falha com duas
+amostras lentas ou 80% de utilizacao das ligacoes e abre um unico issue
+operacional no GitHub. HTTP 5xx e respostas invalidas falham imediatamente.
+Quando o servico recupera, o mesmo issue e encerrado. O
 workflow exige o secret de repositorio `COURSEPLATFORM_MONITOR_JOB_SECRET`, com
 o mesmo valor server-only de `JOB_RUNNER_SECRET`. O valor nunca aparece no YAML
 nem no relatorio.
