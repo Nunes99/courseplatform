@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.25.0",
   "description": "Local browser QA dependencies for CoursePlatform",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "scripts": {
     "sync:frontend": "node scripts/sync_frontend.cjs",
