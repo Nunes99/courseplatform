@@ -89,6 +89,16 @@ Suíte Python completa:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 ```
 
+Controlos locais de seguranca continua:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip_audit --requirement requirements.txt --strict
+.\.venv\Scripts\bandit.exe --recursive backend api scripts --severity-level medium --confidence-level medium --baseline .bandit-baseline.json
+.\.venv\Scripts\python.exe scripts/check_secrets.py
+.\.venv\Scripts\python.exe scripts/check_recovery_readiness.py --fail-if-overdue
+pnpm audit --audit-level=high
+```
+
 Contrato local de permissões Supabase da Etapa 3:
 
 ```powershell
@@ -322,6 +332,7 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 - [Notificações multicanal](docs/multichannel-notifications.md)
 - [Checklist de produção existente](docs/production-health-checklist.md)
 - [Etapa 13: operação confiável](docs/stage13-reliable-operations.md)
+- [Etapa 14: segurança contínua](docs/stage14-continuous-security.md)
 
 ## Deploy
 

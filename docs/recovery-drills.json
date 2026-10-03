@@ -1,0 +1,18 @@
+{
+  "policy": {
+    "frequencyDays": 90,
+    "rpoHours": 24,
+    "rtoHours": 4
+  },
+  "drills": [
+    {
+      "date": "2026-10-03",
+      "scope": "synthetic-local",
+      "result": "passed",
+      "databaseTables": 56,
+      "storageObjects": 3,
+      "productionDataUsed": false,
+      "evidence": "docs/stage13-reliable-operations.md"
+    }
+  ]
+}

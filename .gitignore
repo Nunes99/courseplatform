@@ -1,5 +1,6 @@
 .env
 .venv/
+.security-venv/
 node_modules/
 .pnpm-store/
 supabase/.temp/

@@ -1,0 +1,28 @@
+name: Recovery readiness
+
+on:
+  schedule:
+    - cron: "17 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-recovery-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Check recovery evidence and due date
+        run: python scripts/check_recovery_readiness.py --report recovery-readiness.json --fail-if-overdue
+      - name: Publish report in workflow summary
+        if: always()
+        run: |
+          echo '## CoursePlatform recovery readiness' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat recovery-readiness.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
