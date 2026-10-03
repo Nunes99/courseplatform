@@ -42,7 +42,7 @@ def main() -> int:
             "-m",
             "detect_secrets.pre_commit_hook",
             "--baseline",
-            str(BASELINE),
+            BASELINE.name,
             *files[offset : offset + BATCH_SIZE],
         ]
         result = subprocess.run(

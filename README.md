@@ -93,7 +93,7 @@ Controlos locais de seguranca continua:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip_audit --requirement requirements.txt --strict
-.\.venv\Scripts\bandit.exe --recursive backend api scripts --severity-level medium --confidence-level medium --baseline .bandit-baseline.json
+.\.venv\Scripts\bandit.exe --recursive backend api scripts --format json --output bandit-current.json; .\.venv\Scripts\python.exe scripts/check_bandit_baseline.py bandit-current.json
 .\.venv\Scripts\python.exe scripts/check_secrets.py
 .\.venv\Scripts\python.exe scripts/check_recovery_readiness.py --fail-if-overdue
 pnpm audit --audit-level=high

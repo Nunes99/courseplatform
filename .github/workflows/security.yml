@@ -36,10 +36,13 @@ jobs:
       - name: Audit Python dependencies
         run: pip-audit --requirement requirements.txt --strict
       - name: Run Python security linter
-        run: >-
-          bandit --recursive backend api scripts
-          --severity-level medium --confidence-level medium
-          --baseline .bandit-baseline.json
+        run: |
+          status=0
+          bandit --recursive backend api scripts --format json --output bandit-current.json || status=$?
+          if [ "$status" -gt 1 ]; then
+            exit "$status"
+          fi
+          python scripts/check_bandit_baseline.py bandit-current.json
       - name: Verify secret baseline
         run: python scripts/check_secrets.py
       - name: Install Node dependencies reproducibly
