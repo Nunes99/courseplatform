@@ -41,6 +41,14 @@ class Stage14SecurityTests(unittest.TestCase):
         for value in forbidden:
             self.assertNotIn(value, workflow_text)
 
+    def test_security_workflow_removes_bandit_report_before_secret_scan(self):
+        workflow_text = (
+            ROOT / ".github" / "workflows" / "security.yml"
+        ).read_text(encoding="utf-8")
+        cleanup = workflow_text.index("rm -f bandit-current.json")
+        secret_scan = workflow_text.index("python scripts/check_secrets.py")
+        self.assertLess(cleanup, secret_scan)
+
     def test_dependency_manifests_and_secret_baseline_are_versioned(self):
         self.assertTrue((ROOT / ".github" / "dependabot.yml").is_file())
         lockfile = (ROOT / "pnpm-lock.yaml").read_text(encoding="utf-8")

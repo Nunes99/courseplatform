@@ -43,6 +43,7 @@ jobs:
             exit "$status"
           fi
           python scripts/check_bandit_baseline.py bandit-current.json
+          rm -f bandit-current.json
       - name: Verify secret baseline
         run: python scripts/check_secrets.py
       - name: Install Node dependencies reproducibly
