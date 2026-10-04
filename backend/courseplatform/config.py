@@ -179,6 +179,9 @@ class Settings:
     def __init__(self):
         database_url, database_source, database_issues = resolve_database_url()
         self.database_url = database_url
+        self.default_organization_id = os.getenv(
+            "DEFAULT_ORGANIZATION_ID", "ORG-LMTWEBNAIRS"
+        ).strip() or "ORG-LMTWEBNAIRS"
         self.default_course_id = os.getenv("DEFAULT_COURSE_ID", "COURSE-EAPI-001")
         self.session_hours = _int_env("SESSION_HOURS", 12)
         self.password_reset_ttl_minutes = _int_env("PASSWORD_RESET_TTL_MINUTES", 30)

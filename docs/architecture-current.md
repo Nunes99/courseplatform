@@ -215,10 +215,13 @@ Pontos ainda desconhecidos: rate limiting/WAF externo, MFA, grants reais, polici
 
 `backend/courseplatform/db.py` abre ligações psycopg síncronas e desativa prepared statements automáticos para compatibilidade com transaction pooling do Supavisor. A API usa a URL Postgres diretamente.
 
-A cadeia em `supabase/migrations/` termina com **46 tabelas** no esquema
+A cadeia em `supabase/migrations/` termina com **48 tabelas** no esquema
 `courseplatform`, incluindo o marcador operacional `schema_versions`:
 
 - Identidade: `students`, `admins`, `sessions`, `student_password_resets`, `student_password_reset_attempts`, `new_credentials`.
+- Tenancy: `organizations` e `organization_memberships`; identidades continuam
+  globais e os dados atuais são associados a `ORG-LMTWEBNAIRS` durante a
+  transição.
 - Catálogo e publicação: `courses`, `course_versions`, `course_offerings`, `lessons`, `lesson_content`, `media_content`.
 - Avaliações: `questions`, `question_options`, `lesson_progress`, `attempts`, `answers`, `files`, `reviews`.
 - Turmas: `groups`, `enrollments`, `group_members`, `migration_reconciliation_issues`.
@@ -235,6 +238,12 @@ DDL nem privilégios administrativos.
 Até a troca controlada de `DATABASE_URL`, o ambiente publicado pode continuar a
 usar a ligação anterior; isso deve ser confirmado por ambiente.
 
+A fundação multi-instituição ainda não habilita uma segunda organização no
+produto. Cursos, sessões e âmbitos de revisão já recebem `organization_id`, mas
+consultas, Storage, jobs, cache, pesquisa, relatórios e auditoria ainda precisam
+de escopo institucional obrigatório. O plano está em
+[multi-tenant-foundation.md](multi-tenant-foundation.md).
+
 ### Views públicas
 
 `supabase/schema.sql` cria **32 views** no esquema `public`. Em geral espelham tabelas privadas com `select *`, incluindo estudantes, staff, sessões, questões, respostas, ficheiros e auditoria. `notification_channel_settings` expõe um subconjunto sem os segredos encriptados.
@@ -247,7 +256,7 @@ Os snapshots SQL não são iguais e nenhum deles é a fonte de migração:
 
 - `supabase/schema.sql`: snapshot com 43 tabelas e 32 views.
 - `backend/courseplatform/schema.sql`: snapshot legado com 42 tabelas e 34 views.
-- `supabase/migrations/`: cadeia canónica com as 42 tabelas funcionais e `schema_versions`.
+- `supabase/migrations/`: cadeia canónica do esquema e única fonte de verdade.
 
 O DDL legado de preparação foi removido de `actions.py` e convertido em
 migrações numeradas. As funções `prepare_*` e `ensure_*` fazem apenas consultas
@@ -402,4 +411,6 @@ Permanece por confirmar em staging/produção:
 
 ## Próxima etapa
 
-Depois de aprovada esta linha de base, executar separadamente a Etapa 1: recuperação segura de acesso. Não combinar essa correção com a proteção do gabarito ou com alterações de esquema não relacionadas.
+Propagar o contexto institucional para os restantes agregados e para a sessão
+autenticada, começando por consultas de catálogo e aprendizagem. Uma segunda
+organização só poderá ser ativada depois dos testes negativos de acesso cruzado.

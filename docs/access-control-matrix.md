@@ -14,6 +14,13 @@ Esta é a **política esperada**, derivada dos handlers e do produto atual. Não
 
 Papéis administrativos atuais: `REVIEWER`, `ADMIN` e `OWNER`. O `OWNER` é o único papel que gere contas de staff.
 
+A fundação multi-instituição separa identidade global de membership
+institucional. Estes papéis serão avaliados dentro de uma organização; `OWNER`
+da instituição não equivale automaticamente a operador global da plataforma.
+Enquanto o escopo institucional não tiver sido propagado para todas as
+consultas e ficheiros, a criação de uma segunda organização permanece
+desativada. Consulte [multi-tenant-foundation.md](multi-tenant-foundation.md).
+
 Uma identidade ligada pode ter simultaneamente acesso de estudante e um papel
 administrativo. O papel amplia permissões; não cria outra pessoa nem outra
 palavra-passe. A API continua a emitir sessões distintas para cada área, e toda
@@ -25,6 +32,8 @@ identidade.
 | Recurso/operação | Anónimo | Estudante | REVIEWER | ADMIN | OWNER |
 | --- | --- | --- | --- | --- | --- |
 | Health público mínimo | Público | Público | Público | Público | Público |
+| Agregador de instituições e cursos | Apenas projeções publicadas | Igual ao anónimo | Igual ao anónimo | Publicar/retirar na própria organização quando implementado | Igual a ADMIN |
+| Perfil público da instituição | Apenas campos editoriais publicados | Igual ao anónimo | Igual ao anónimo | Gerir rascunho da própria organização quando implementado | Aprovar/publicar na própria organização quando implementado |
 | Configuração pública de curso/media | Público | Público | Público | Público | Público |
 | Login | Público | Própria identidade | Mesma identidade + atribuição REVIEWER ativa | Mesma identidade + atribuição ADMIN ativa | Mesma identidade + atribuição OWNER ativa |
 | Cadastro | Criar identidade pendente e confirmar o próprio email | Não aplicável após ativação | Não cria papel administrativo | Não cria papel administrativo | Não cria papel administrativo |

@@ -144,6 +144,7 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
                 "20261001120000",
                 "20261003060000",
                 "20261003120000",
+                "20261004063506",
             ))
         ]
         self._apply(repeatable)
@@ -155,6 +156,48 @@ class PostgresMigrationIntegrationTests(unittest.TestCase):
         ).fetchone()[0]
         self.assertEqual(1, count)
         self.assertEqual(EXPECTED_SCHEMA_VERSION, version)
+
+    def test_multi_tenant_foundation_backfills_without_recreating_identities(self):
+        self._apply(migration_files())
+        self.conn.execute(
+            """
+            insert into courseplatform.students (student_id, full_name, email, organization)
+            values ('STU-TENANT', 'Tenant Student', 'tenant@example.test', 'Employer Profile');
+            insert into courseplatform.courses (course_id, course_code, title)
+            values ('COURSE-TENANT', 'TENANT', 'Tenant Course');
+            """
+        )
+
+        student = self.conn.execute(
+            "select student_id, organization from courseplatform.students where student_id = 'STU-TENANT'"
+        ).fetchone()
+        membership = self.conn.execute(
+            """
+            select organization_id, membership_role, status
+            from courseplatform.organization_memberships
+            where student_id = 'STU-TENANT'
+            """
+        ).fetchone()
+        course_organization = self.conn.execute(
+            "select organization_id from courseplatform.courses where course_id = 'COURSE-TENANT'"
+        ).fetchone()[0]
+
+        self.assertEqual(('STU-TENANT', 'Employer Profile'), student)
+        self.assertEqual(('ORG-LMTWEBNAIRS', 'STUDENT', 'ACTIVE'), membership)
+        self.assertEqual('ORG-LMTWEBNAIRS', course_organization)
+
+        migration = MIGRATIONS / "20261004063506_add_multi_tenant_foundation.sql"
+        self._apply([migration])
+        membership_count = self.conn.execute(
+            """
+            select count(*)
+            from courseplatform.organization_memberships
+            where student_id = 'STU-TENANT'
+              and organization_id = 'ORG-LMTWEBNAIRS'
+              and membership_role = 'STUDENT'
+            """
+        ).fetchone()[0]
+        self.assertEqual(1, membership_count)
 
     def test_previous_schema_upgrade_preserves_related_learning_records(self):
         files = migration_files()

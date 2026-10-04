@@ -421,6 +421,13 @@ Não declare disaster recovery pronto sem realizar e documentar o ensaio de rest
 
 ## Etapa 14: múltiplas instituições e integrações
 
+Decisão registada em 4 de outubro de 2026: a plataforma evoluirá como SaaS
+multi-instituição. A execução foi dividida nas fases M0–M9, incluindo o
+agregador público, em
+[saas-multi-institution-roadmap.md](saas-multi-institution-roadmap.md). O texto
+abaixo permanece como regra de segurança e aceitação; o roteiro detalhado não
+autoriza saltar os gates desta etapa.
+
 ```text
 Execute apenas a Etapa 14 quando as etapas anteriores estiverem concluídas e o modelo comercial estiver decidido.
 

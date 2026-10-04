@@ -269,7 +269,7 @@ devem ser fornecidas ao processo web.
 
 Aplicação e conexão:
 
-- `DEFAULT_COURSE_ID`, `SESSION_HOURS`, `DB_CONNECT_TIMEOUT`, `DB_CONNECT_RETRIES`, `CORS_ORIGINS`, `APP_VERSION`.
+- `DEFAULT_ORGANIZATION_ID`, `DEFAULT_COURSE_ID`, `SESSION_HOURS`, `DB_CONNECT_TIMEOUT`, `DB_CONNECT_RETRIES`, `CORS_ORIGINS`, `APP_VERSION`.
 
 Recuperação de estudantes:
 
@@ -333,6 +333,8 @@ Frontend: a URL da API é resolvida em `public/config.js` por `window.COURSE_PLA
 - [Checklist de produção existente](docs/production-health-checklist.md)
 - [Etapa 13: operação confiável](docs/stage13-reliable-operations.md)
 - [Etapa 14: segurança contínua](docs/stage14-continuous-security.md)
+- [Fundação SaaS multi-instituição](docs/multi-tenant-foundation.md)
+- [Plano SaaS multi-instituição e agregador público](docs/saas-multi-institution-roadmap.md)
 
 ## Deploy
 
