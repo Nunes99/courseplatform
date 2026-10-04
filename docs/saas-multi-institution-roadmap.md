@@ -205,8 +205,7 @@ de aula, gabaritos e materiais protegidos permanecem fora da página pública.
 
 ### M0 — Fundação e contrato de transição
 
-Estado: **migração aplicada; deployment compatível e validação de login
-pendentes**.
+Estado: **concluída**.
 
 Entregas:
 
@@ -435,7 +434,7 @@ Antes de M4–M7 precisam de decisão explícita:
 
 | Fase | Estado |
 | --- | --- |
-| M0 Fundação | Migração aplicada; deploy compatível e login pendentes |
+| M0 Fundação | Concluída |
 | M1 Contexto na autenticação | Não iniciada |
 | M2 Isolamento dos domínios | Não iniciada |
 | M3 Storage e operação | Não iniciada |

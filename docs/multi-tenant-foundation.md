@@ -96,10 +96,12 @@ organização, 57 memberships de estudante, 3 memberships de staff, todos os 2
 cursos, 399 sessões e 3 âmbitos de revisão associados a `ORG-LMTWEBNAIRS`, FKs
 validadas, RLS ativa e ausência de privilégios de cliente nas tabelas novas.
 
-O deployment ainda executava a versão anterior durante a validação: liveness
-respondeu `200`, mas readiness respondeu `503` até que o backend com
-`EXPECTED_SCHEMA_VERSION = 20261004063506` seja publicado. Login só deve ser
-validado depois desse deploy compatível.
+O backend compatível foi publicado depois da migração. Em 4 de outubro de 2026,
+`/health/live` e `/health/ready` responderam `200`, confirmando que o deployment
+reconhece `EXPECTED_SCHEMA_VERSION = 20261004063506`. Um login real de estudante
+carregou o painel e criou uma sessão recente, ativa e válida, ligada a
+`ORG-LMTWEBNAIRS` e a uma membership ativa correspondente. Nenhuma segunda
+organização foi ativada.
 
 Em caso de regressão, reverta primeiro a aplicação. As tabelas e colunas são
 aditivas e podem permanecer sem uso. Não remova memberships nem

@@ -114,8 +114,10 @@ A migração `20261004063506` foi aplicada ao projeto Supabase principal em 4 de
 outubro de 2026 e registada em `supabase_migrations.schema_migrations`. A
 validação posterior confirmou o marcador estrutural, 60 memberships, backfill
 completo dos cursos, sessões e âmbitos, constraints validadas, RLS ativa e
-ausência de privilégios para `anon` e `authenticated`. O deploy compatível é
-obrigatório antes de reabrir o readiness e validar login.
+ausência de privilégios para `anon` e `authenticated`. Depois do deploy
+compatível, `/health/live` e `/health/ready` responderam `200`. Um login real
+de estudante criou uma sessão ativa e válida com organização e membership
+correspondentes.
 As migrações das políticas e do fecho pedagógico são expansivas e repetíveis:
 mantêm tentativas e módulos existentes, usam padrões compatíveis e atualizam o
 marcador de versão quando alteram o contrato estrutural exigido pela aplicação.
