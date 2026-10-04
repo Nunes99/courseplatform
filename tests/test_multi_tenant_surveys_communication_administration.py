@@ -96,7 +96,7 @@ class MultiTenantCommunicationTests(unittest.TestCase):
             / "20261004180000_isolate_communication_by_organization.sql"
         ).read_text(encoding="utf-8").lower()
         self.assertIn("add column if not exists organization_id", migration)
-        self.assertIn("alter column organization_id drop default", migration)
+        self.assertIn("alter column organization_id set default 'org-lmtwebnairs'", migration)
         self.assertIn("on conflict (organization_id, room_key)", inspect.getsource(communication.sync_chat_rooms_action).lower())
         self.assertIn("jwt_claims ->> 'organization_id'", migration)
         self.assertIn("organization_id, endpoint_hash", migration)

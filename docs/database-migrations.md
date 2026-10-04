@@ -154,6 +154,12 @@ presença de chat. A migração troca unicidades globais por chaves compostas do
 tenant e atualiza a autorização dos tópicos Realtime. Não elimina conteúdos nem
 reescreve IDs históricos.
 
+Como proteção de compatibilidade durante esta janela, as colunas novas recebem
+temporariamente `ORG-LMTWEBNAIRS` por default. Isso é aceitável apenas enquanto
+essa for a única organização ativa. O backend novo grava sempre o tenant
+explicitamente; remova os defaults numa migração posterior, depois do deploy e
+antes de ativar outra organização.
+
 Ordem de rollout:
 
 1. Confirme backup e compare as contagens por tabela antes da alteração.

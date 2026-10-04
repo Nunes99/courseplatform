@@ -45,19 +45,19 @@ set organization_id = 'ORG-LMTWEBNAIRS'
 where organization_id is null;
 
 alter table courseplatform.notifications
-  alter column organization_id drop default,
+  alter column organization_id set default 'ORG-LMTWEBNAIRS',
   alter column organization_id set not null;
 alter table courseplatform.push_subscriptions
-  alter column organization_id drop default,
+  alter column organization_id set default 'ORG-LMTWEBNAIRS',
   alter column organization_id set not null;
 alter table courseplatform.telegram_link_tokens
-  alter column organization_id drop default,
+  alter column organization_id set default 'ORG-LMTWEBNAIRS',
   alter column organization_id set not null;
 alter table courseplatform.chat_rooms
-  alter column organization_id drop default,
+  alter column organization_id set default 'ORG-LMTWEBNAIRS',
   alter column organization_id set not null;
 alter table courseplatform.chat_presence
-  alter column organization_id drop default,
+  alter column organization_id set default 'ORG-LMTWEBNAIRS',
   alter column organization_id set not null;
 
 do $$
@@ -128,11 +128,11 @@ create index if not exists idx_chat_rooms_organization_context
 create index if not exists idx_chat_presence_organization_seen
   on courseplatform.chat_presence(organization_id, actor_type, last_seen_at desc);
 
-insert into courseplatform.schema_versions(component, version, updated_at)
+insert into courseplatform.schema_versions(component, version, applied_at)
 values ('application', 20261004180000, now())
 on conflict (component) do update
 set version = excluded.version,
-    updated_at = excluded.updated_at;
+    applied_at = excluded.applied_at;
 
 -- Realtime tokens and inbox topics are tenant-bound. Room topics remain keyed
 -- by globally unique room IDs, with the organization verified by the policy.

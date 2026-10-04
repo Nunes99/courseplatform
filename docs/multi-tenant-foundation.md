@@ -174,6 +174,12 @@ faz o backfill para a organização histórica e só depois instala `NOT NULL`, 
 índices e unicidade composta. Ela ainda não foi aplicada externamente nesta
 fatia.
 
+Durante o rollout, essas cinco colunas mantêm temporariamente o default da única
+instituição ativa para que o deployment anterior continue funcional enquanto o
+backend compatível é publicado. O código novo sempre envia `organization_id`
+explicitamente. Uma migração posterior deve remover os defaults antes de criar
+ou ativar a segunda instituição.
+
 M2 permanece aberta para o inventário final das operações em lote, projeções
 públicas e auditoria persistida. Configurações de transporte como SMTP, bot e
 VAPID continuam sendo infraestrutura global da plataforma; não devem ser
