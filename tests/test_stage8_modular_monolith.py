@@ -30,7 +30,7 @@ class BackendModuleBoundaryTests(unittest.TestCase):
             set(DOMAIN_ACTION_BINDINGS),
         )
         action_names = [name for bindings in DOMAIN_ACTION_BINDINGS.values() for name, _ in bindings]
-        self.assertEqual(131, len(action_names))
+        self.assertEqual(133, len(action_names))
         self.assertEqual(len(action_names), len(set(action_names)))
         self.assertEqual(set(action_names), set(actions.ACTIONS))
         self.assertTrue(all(callable(handler) for handler in actions.ACTIONS.values()))
@@ -54,11 +54,13 @@ class BackendModuleBoundaryTests(unittest.TestCase):
     def test_identity_handlers_are_sql_free_compatibility_adapters(self):
         adapters = {
             "login": "login_action",
+            "switch_student_organization": "switch_student_organization_action",
             "register_student_account": "register_student_account_action",
             "complete_student_account_verification": "complete_student_account_verification_action",
             "recover_student_access": "recover_student_access_action",
             "complete_student_password_reset": "complete_student_password_reset_action",
             "admin_login": "admin_login_action",
+            "switch_admin_organization": "switch_admin_organization_action",
             "recover_admin_access": "recover_admin_access_action",
             "logout": "logout_action",
             "admin_me": "admin_me_action",

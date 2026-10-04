@@ -22,7 +22,9 @@ ACTION_BINDINGS = (
     ("recoverStudentAccess", "recover_student_access"),
     ("completeStudentPasswordReset", "complete_student_password_reset"),
     ("logout", "logout"),
+    ("switchStudentOrganization", "switch_student_organization"),
     ("adminLogin", "admin_login"),
+    ("switchAdminOrganization", "switch_admin_organization"),
     ("recoverAdminAccess", "recover_admin_access"),
     ("adminLogout", "logout"),
     ("adminMe", "admin_me"),
@@ -85,6 +87,7 @@ class IdentityRuntime:
     student_notification_channel_info: Callable[..., Any]
     validated_email_change: Callable[..., Any]
     student_context_with_conn: Callable[..., Any]
+    admin_context_with_conn: Callable[..., Any]
     verify_password_with_conn: Callable[..., Any]
     secure_student_email_update: Callable[..., Any]
 
@@ -161,6 +164,85 @@ def serialize_admin(row: dict[str, Any] | None, *, as_iso: Callable[[Any], str |
         "reviewScopes": row.get("reviewer_scopes") or [],
         "createdAt": as_iso(row.get("created_at")),
         "updatedAt": as_iso(row.get("updated_at")),
+    }
+
+
+def serialize_organization(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "organizationId": row.get("organization_id") or "",
+        "slug": row.get("slug") or "",
+        "displayName": row.get("display_name") or "",
+        "membershipRole": row.get("membership_role") or "",
+    }
+
+
+def active_student_organizations(conn: Any, student_id: str) -> list[dict[str, Any]]:
+    return conn.execute(
+        """
+        select o.organization_id, o.slug, o.display_name, m.membership_role
+        from courseplatform.organization_memberships m
+        join courseplatform.organizations o
+          on o.organization_id = m.organization_id
+        where m.student_id = %s
+          and m.membership_role = 'STUDENT'
+          and m.status = 'ACTIVE'
+          and o.status = 'ACTIVE'
+        order by lower(o.display_name), o.organization_id
+        """,
+        (student_id,),
+    ).fetchall()
+
+
+def active_admin_organizations(
+    conn: Any,
+    admin_id: str,
+    admin_role: str,
+) -> list[dict[str, Any]]:
+    normalized_role = "ADMIN" if admin_role == "ADMINISTRATOR" else admin_role
+    return conn.execute(
+        """
+        select o.organization_id, o.slug, o.display_name, m.membership_role
+        from courseplatform.organization_memberships m
+        join courseplatform.organizations o
+          on o.organization_id = m.organization_id
+        where m.admin_id = %s
+          and m.membership_role = %s
+          and m.status = 'ACTIVE'
+          and o.status = 'ACTIVE'
+        order by lower(o.display_name), o.organization_id
+        """,
+        (admin_id, normalized_role),
+    ).fetchall()
+
+
+def select_login_organization(
+    payload: dict[str, Any],
+    organizations: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not organizations:
+        raise ApiError(
+            "ORGANIZATION_ACCESS_UNAVAILABLE",
+            "A conta não possui acesso ativo a uma instituição.",
+        )
+    requested_id = str_value(payload.get("organizationId"))
+    if not requested_id:
+        return organizations[0] if len(organizations) == 1 else None
+    selected = next(
+        (row for row in organizations if row.get("organization_id") == requested_id),
+        None,
+    )
+    if not selected:
+        raise ApiError(
+            "ORGANIZATION_ACCESS_DENIED",
+            "A conta não possui acesso ativo à instituição selecionada.",
+        )
+    return selected
+
+
+def organization_selection_data(organizations: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "organizationSelectionRequired": True,
+        "organizations": [serialize_organization(row) for row in organizations],
     }
 
 
@@ -527,12 +609,18 @@ def login_action(payload: dict[str, Any], runtime: IdentityRuntime):
         if not runtime.verify_password(payload["accessCode"], student.get("password_hash")):
             raise ApiError("INVALID_CREDENTIALS", "Email ou palavra-passe inválidos.")
         with runtime.connection() as conn:
-            runtime.revoke_sessions(conn, student["student_id"])
+            organizations = active_student_organizations(conn, student["student_id"])
+            organization = select_login_organization(payload, organizations)
+            if organization is None:
+                return runtime.success(organization_selection_data(organizations))
+            organization_id = organization["organization_id"]
+            runtime.revoke_sessions(conn, student["student_id"], organization_id)
             session = runtime.create_session(
                 conn,
                 student["student_id"],
                 payload.get("userAgent", ""),
                 payload.get("ipHash", ""),
+                organization_id,
             )
             conn.execute(
                 "update courseplatform.students set last_login_at = now(), updated_at = now() where student_id = %s",
@@ -544,9 +632,12 @@ def login_action(payload: dict[str, Any], runtime: IdentityRuntime):
     except Exception as error:
         raise runtime.database_api_error(error) from error
     return runtime.success({
+        "organizationSelectionRequired": False,
         "sessionToken": session["token"],
         "expiresAt": runtime.iso(session["expiresAt"]),
         "student": runtime.public_student(student),
+        "organization": serialize_organization(organization),
+        "organizations": [serialize_organization(row) for row in organizations],
     })
 
 
@@ -927,12 +1018,22 @@ def admin_login_action(payload: dict[str, Any], runtime: IdentityRuntime):
             raise ApiError("INVALID_ADMIN_CREDENTIALS", "Credenciais administrativas invalidas.")
         subject_id = f"ADMIN:{admin['admin_id']}"
         with runtime.connection() as conn:
-            runtime.revoke_sessions(conn, subject_id)
+            organizations = active_admin_organizations(
+                conn,
+                admin["admin_id"],
+                str_value(admin.get("role")),
+            )
+            organization = select_login_organization(payload, organizations)
+            if organization is None:
+                return runtime.success(organization_selection_data(organizations))
+            organization_id = organization["organization_id"]
+            runtime.revoke_sessions(conn, subject_id, organization_id)
             session = runtime.create_session(
                 conn,
                 subject_id,
                 payload.get("userAgent", ""),
                 payload.get("ipHash", ""),
+                organization_id,
             )
             conn.commit()
     except ApiError:
@@ -940,9 +1041,98 @@ def admin_login_action(payload: dict[str, Any], runtime: IdentityRuntime):
     except Exception as error:
         raise runtime.database_api_error(error) from error
     return runtime.success({
+        "organizationSelectionRequired": False,
         "adminToken": session["token"],
         "expiresAt": runtime.iso(session["expiresAt"]),
         "admin": runtime.public_admin(admin),
+        "organization": serialize_organization(organization),
+        "organizations": [serialize_organization(row) for row in organizations],
+    })
+
+
+def switch_student_organization_action(payload: dict[str, Any], runtime: IdentityRuntime):
+    runtime.require_fields(payload, ["sessionToken", "organizationId"])
+    try:
+        with runtime.connection() as conn:
+            _session, student = runtime.student_context_with_conn(conn, payload)
+            organizations = active_student_organizations(conn, student["student_id"])
+            organization = select_login_organization(payload, organizations)
+            token_hash = runtime.hash_secret(payload["sessionToken"])
+            revoked = conn.execute(
+                """
+                update courseplatform.sessions
+                set active = false, revoked_at = now()
+                where session_token = %s and active = true
+                returning subject_id
+                """,
+                (token_hash,),
+            ).fetchone()
+            if not revoked:
+                raise ApiError("INVALID_SESSION", "A sessão é inválida ou foi encerrada.")
+            session = runtime.create_session(
+                conn,
+                student["student_id"],
+                payload.get("userAgent", ""),
+                payload.get("ipHash", ""),
+                organization["organization_id"],
+            )
+            conn.commit()
+    except ApiError:
+        raise
+    except Exception as error:
+        raise runtime.database_api_error(error) from error
+    return runtime.success({
+        "organizationSelectionRequired": False,
+        "sessionToken": session["token"],
+        "expiresAt": runtime.iso(session["expiresAt"]),
+        "student": runtime.public_student(student),
+        "organization": serialize_organization(organization),
+        "organizations": [serialize_organization(row) for row in organizations],
+    })
+
+
+def switch_admin_organization_action(payload: dict[str, Any], runtime: IdentityRuntime):
+    runtime.require_fields(payload, ["adminToken", "organizationId"])
+    try:
+        with runtime.connection() as conn:
+            _session, admin = runtime.admin_context_with_conn(conn, payload)
+            organizations = active_admin_organizations(
+                conn,
+                admin["admin_id"],
+                str_value(admin.get("role")),
+            )
+            organization = select_login_organization(payload, organizations)
+            token_hash = runtime.hash_secret(payload["adminToken"])
+            revoked = conn.execute(
+                """
+                update courseplatform.sessions
+                set active = false, revoked_at = now()
+                where session_token = %s and active = true
+                returning subject_id
+                """,
+                (token_hash,),
+            ).fetchone()
+            if not revoked:
+                raise ApiError("INVALID_SESSION", "A sessão é inválida ou foi encerrada.")
+            session = runtime.create_session(
+                conn,
+                f"ADMIN:{admin['admin_id']}",
+                payload.get("userAgent", ""),
+                payload.get("ipHash", ""),
+                organization["organization_id"],
+            )
+            conn.commit()
+    except ApiError:
+        raise
+    except Exception as error:
+        raise runtime.database_api_error(error) from error
+    return runtime.success({
+        "organizationSelectionRequired": False,
+        "adminToken": session["token"],
+        "expiresAt": runtime.iso(session["expiresAt"]),
+        "admin": runtime.public_admin(admin),
+        "organization": serialize_organization(organization),
+        "organizations": [serialize_organization(row) for row in organizations],
     })
 
 

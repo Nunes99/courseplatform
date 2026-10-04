@@ -49,6 +49,19 @@ def _identity_runtime(admin, conn, verify_password):
             return {"total": 1}
         return admin
 
+    previous_handler = conn.handler
+
+    def handler(query, params):
+        if "from courseplatform.organization_memberships m" in query:
+            return _Result(rows=[{
+                "organization_id": "ORG-LMTWEBNAIRS",
+                "slug": "lmtwebnairs",
+                "display_name": "LMTWEBNAIRS",
+                "membership_role": admin.get("role") or "REVIEWER",
+            }])
+        return previous_handler(query, params)
+
+    conn.handler = handler
     return SimpleNamespace(
         require_fields=lambda *_args: None,
         fetch_one=fetch_one,
@@ -94,7 +107,9 @@ class UnifiedIdentityLoginTests(unittest.TestCase):
         self.assertEqual("STUDENT", result["data"]["admin"]["identitySource"])
         self.assertEqual("STU-1", result["data"]["admin"]["studentId"])
         self.assertEqual("reviewer@example.test", result["data"]["admin"]["email"])
-        runtime.revoke_sessions.assert_called_once_with(conn, "ADMIN:ADM-1")
+        runtime.revoke_sessions.assert_called_once_with(
+            conn, "ADMIN:ADM-1", "ORG-LMTWEBNAIRS"
+        )
         self.assertTrue(conn.committed)
 
     def test_linked_reviewer_cannot_use_dormant_legacy_hash(self):

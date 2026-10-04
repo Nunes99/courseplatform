@@ -15,7 +15,7 @@ class MultiTenantFoundationTests(unittest.TestCase):
         cls.sql = MIGRATION.read_text(encoding="utf-8").lower()
 
     def test_backend_and_migration_share_the_schema_contract(self):
-        self.assertEqual(20261004063506, EXPECTED_SCHEMA_VERSION)
+        self.assertGreaterEqual(EXPECTED_SCHEMA_VERSION, 20261004063506)
         self.assertIn("values ('application', 20261004063506, now())", self.sql)
 
     def test_global_identities_are_not_repurposed_as_tenants(self):

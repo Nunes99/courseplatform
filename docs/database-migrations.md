@@ -122,6 +122,30 @@ As migrações das políticas e do fecho pedagógico são expansivas e repetíve
 mantêm tentativas e módulos existentes, usam padrões compatíveis e atualizam o
 marcador de versão quando alteram o contrato estrutural exigido pela aplicação.
 
+### M1 multi-instituição
+
+`20261004103000_add_tenant_session_guards.sql` não cria organizações nem altera
+memberships existentes. Ela torna o tenant de cada sessão imutável e instala
+triggers de revogação para mudanças de membership ou suspensão institucional.
+O backend reconhece temporariamente M0 e M1 durante o rollout; M1 passa a ser a
+versão esperada assim que a migração for aplicada.
+
+Ordem de rollout:
+
+1. Faça backup e execute o diagnóstico somente leitura de sessões e memberships.
+2. Publique o backend transitório, que aceita M0 e M1 sem alterar o esquema.
+3. Confirme o readiness e aplique a migração M1.
+4. Confirme o marcador `application = 20261004103000` e o readiness.
+5. Valide login de estudante e staff da instituição atual.
+6. Valide a seleção múltipla apenas numa base descartável.
+
+O diagnóstico versionado está em
+`supabase/diagnostics/m1_tenant_session_preflight.sql` e não contém mutações.
+
+Rollback operacional: reverta primeiro o backend. Os triggers podem permanecer
+ativos porque não alteram dados históricos; removê-los requer uma migração
+compensatória explícita. Não rebaixe manualmente o marcador de versão.
+
 ## Teste local descartável
 
 Nunca use estas instruções com uma URL remota. O teste recusa qualquer host que

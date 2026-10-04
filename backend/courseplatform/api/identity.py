@@ -19,6 +19,7 @@ from .contracts import (
     AccountVerificationRequest,
     ERROR_RESPONSES,
     LogoutData,
+    OrganizationSwitchRequest,
     PasswordResetCompletionRequest,
     PasswordResetData,
     PasswordResetRequest,
@@ -153,6 +154,7 @@ async def complete_password_reset(
 @router.post(
     "/students/sessions",
     response_model=SuccessEnvelope[StudentSessionData],
+    response_model_exclude_none=True,
     responses=ERROR_RESPONSES,
 )
 async def create_student_session(payload: StudentLoginRequest, request: Request):
@@ -173,8 +175,26 @@ async def delete_student_session(
 
 
 @router.post(
+    "/students/sessions/current/organization",
+    response_model=SuccessEnvelope[StudentSessionData],
+    response_model_exclude_none=True,
+    responses=ERROR_RESPONSES,
+)
+async def switch_student_session_organization(
+    payload: OrganizationSwitchRequest,
+    request: Request,
+    session_token: str = Header(alias="X-Session-Token", min_length=1),
+):
+    action_payload = payload.action_payload()
+    action_payload["sessionToken"] = session_token
+    action_payload["userAgent"] = request.headers.get("user-agent", "")[:512]
+    return await execute_action("switchStudentOrganization", action_payload)
+
+
+@router.post(
     "/administrators/sessions",
     response_model=SuccessEnvelope[AdminSessionData],
+    response_model_exclude_none=True,
     responses=ERROR_RESPONSES,
 )
 async def create_admin_session(payload: AdminLoginRequest, request: Request):
@@ -192,3 +212,20 @@ async def delete_admin_session(
     admin_token: str = Header(alias="X-Admin-Token", min_length=1),
 ):
     return await execute_action("adminLogout", {"adminToken": admin_token})
+
+
+@router.post(
+    "/administrators/sessions/current/organization",
+    response_model=SuccessEnvelope[AdminSessionData],
+    response_model_exclude_none=True,
+    responses=ERROR_RESPONSES,
+)
+async def switch_admin_session_organization(
+    payload: OrganizationSwitchRequest,
+    request: Request,
+    admin_token: str = Header(alias="X-Admin-Token", min_length=1),
+):
+    action_payload = payload.action_payload()
+    action_payload["adminToken"] = admin_token
+    action_payload["userAgent"] = request.headers.get("user-agent", "")[:512]
+    return await execute_action("switchAdminOrganization", action_payload)

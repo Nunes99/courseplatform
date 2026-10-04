@@ -26,6 +26,12 @@ ASSESSMENT_POLICY_MIGRATION = (
     / "migrations"
     / "20260926120000_add_versioned_assessment_policies.sql"
 )
+MULTI_TENANT_FOUNDATION_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "20261004063506_add_multi_tenant_foundation.sql"
+)
 
 
 class _Rows:
@@ -110,7 +116,12 @@ class RuntimeDatabaseRoleTests(unittest.TestCase):
         source = APPLICATION_SOURCE.read_text(encoding="utf-8")
         sql = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in (MIGRATION, COURSE_MODEL_MIGRATION, ASSESSMENT_POLICY_MIGRATION)
+            for path in (
+                MIGRATION,
+                COURSE_MODEL_MIGRATION,
+                ASSESSMENT_POLICY_MIGRATION,
+                MULTI_TENANT_FOUNDATION_MIGRATION,
+            )
         )
         expected = {
             "select": set(

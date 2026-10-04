@@ -72,6 +72,26 @@ Até a conclusão das fases abaixo:
 7. Só então disponibilizar criação, suspensão, branding e seleção de
    organizações na interface.
 
+## M1 — Contexto institucional na autenticação
+
+A implementação M1 está preparada na migração
+`20261004103000_add_tenant_session_guards.sql` e no domínio de identidade. O
+rollout permanece pendente de aplicação da migração e deploy compatível.
+
+- Logins com uma única membership ativa continuam diretos e compatíveis.
+- Depois de validar as credenciais, contas com várias memberships recebem
+  apenas identificador, nome, slug e papel das instituições permitidas.
+- A instituição enviada pelo cliente é sempre revalidada no servidor.
+- A sessão grava o `organization_id`; payloads posteriores não podem substituí-lo.
+- `student_context` e `admin_context` exigem membership e organização ativas.
+- A troca de instituição invalida o token atual e emite uma sessão nova.
+- Suspender/remover uma membership revoga somente as sessões desse tenant.
+- Suspender uma organização revoga todas as suas sessões ativas.
+
+Não crie uma segunda organização para testar esta fase no projeto principal.
+Os testes cruzados com múltiplos tenants devem usar uma base descartável até a
+conclusão do isolamento dos domínios na M2.
+
 ## Decisões de negócio pendentes
 
 Antes de comercializar a capacidade multi-instituição, ainda devem ser

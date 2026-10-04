@@ -1657,22 +1657,48 @@ def ensure_simple_certificate(
     )
 
 
-def create_session(conn, subject_id: str, user_agent: str = "", ip_hash: str = ""):
+def create_session(
+    conn,
+    subject_id: str,
+    user_agent: str = "",
+    ip_hash: str = "",
+    organization_id: str = "",
+):
+    organization_id = str_value(organization_id) or get_settings().default_organization_id
     plain_token = generate_token()
     token_hash = hash_secret(plain_token)
     expires = session_expiry()
     conn.execute(
         """
         insert into courseplatform.sessions
-          (session_token, subject_id, created_at, expires_at, active, user_agent, ip_hash, revoked_at)
-        values (%s, %s, %s, %s, true, %s, %s, null)
+          (session_token, subject_id, created_at, expires_at, active, user_agent,
+           ip_hash, revoked_at, organization_id)
+        values (%s, %s, %s, %s, true, %s, %s, null, %s)
         """,
-        (token_hash, subject_id, utc_now(), expires, user_agent[:500], ip_hash[:128]),
+        (
+            token_hash,
+            subject_id,
+            utc_now(),
+            expires,
+            user_agent[:500],
+            ip_hash[:128],
+            organization_id,
+        ),
     )
     return {"token": plain_token, "expiresAt": expires}
 
 
-def revoke_sessions(conn, subject_id: str) -> None:
+def revoke_sessions(conn, subject_id: str, organization_id: str = "") -> None:
+    if organization_id:
+        conn.execute(
+            """
+            update courseplatform.sessions
+            set active = false, revoked_at = now()
+            where subject_id = %s and organization_id = %s and active = true
+            """,
+            (subject_id, organization_id),
+        )
+        return
     conn.execute(
         """
         update courseplatform.sessions
@@ -1743,12 +1769,51 @@ def require_session_token(payload: dict[str, Any], key: str = "sessionToken") ->
 
 def student_context_with_conn(conn, payload: dict[str, Any]):
     session = validate_session_with_conn(conn, require_session_token(payload), "STUDENT")
+    requested_organization_id = str_value(payload.get("organizationId"))
+    if requested_organization_id and requested_organization_id != session.get("organization_id"):
+        raise ApiError(
+            "SESSION_ORGANIZATION_MISMATCH",
+            "A instituição informada não corresponde à sessão ativa.",
+        )
     student = conn.execute(
-        "select * from courseplatform.students where student_id = %s",
-        (session["subject_id"],),
+        """
+        select s.*,
+               m.membership_role as active_membership_role,
+               m.status as active_membership_status,
+               o.organization_id as active_organization_id,
+               o.slug as active_organization_slug,
+               o.display_name as active_organization_name,
+               o.status as active_organization_status
+        from courseplatform.students s
+        left join courseplatform.organization_memberships m
+          on m.student_id = s.student_id
+         and m.organization_id = %s
+         and m.membership_role = 'STUDENT'
+        left join courseplatform.organizations o
+          on o.organization_id = m.organization_id
+        where s.student_id = %s
+        """,
+        (session["organization_id"], session["subject_id"]),
     ).fetchone()
     if not student or student.get("status") != "ACTIVE":
         raise ApiError("STUDENT_NOT_ACTIVE", "A conta do estudante não está ativa.")
+    if (
+        student.get("active_membership_status") != "ACTIVE"
+        or student.get("active_organization_status") != "ACTIVE"
+    ):
+        conn.execute(
+            """
+            update courseplatform.sessions
+            set active = false, revoked_at = now()
+            where session_token = %s and active = true
+            """,
+            (session["session_token"],),
+        )
+        conn.commit()
+        raise ApiError(
+            "ORGANIZATION_ACCESS_REVOKED",
+            "O acesso a esta instituição foi suspenso ou removido.",
+        )
     return session, student
 
 
@@ -1758,34 +1823,81 @@ def student_context(payload: dict[str, Any]):
         return student_context_with_conn(conn, payload)
 
 
-def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None):
+def admin_context_with_conn(
+    conn,
+    payload: dict[str, Any],
+    allowed_roles: set[str] | None = None,
+):
     token = payload.get("adminToken", "")
     if not token:
         raise ApiError("ADMIN_SESSION_REQUIRED", "É necessária uma sessão administrativa.")
-    session = validate_session(token, "ADMIN")
+    session = validate_session_with_conn(conn, token, "ADMIN")
+    requested_organization_id = str_value(payload.get("organizationId"))
+    if requested_organization_id and requested_organization_id != session.get("organization_id"):
+        raise ApiError(
+            "SESSION_ORGANIZATION_MISMATCH",
+            "A instituição informada não corresponde à sessão ativa.",
+        )
     admin_id = str(session["subject_id"]).replace("ADMIN:", "", 1)
-    admin = fetch_one(
+    admin = conn.execute(
         """
         select a.*,
                s.student_id as identity_student_id,
                s.email as identity_email,
                s.password_hash as identity_password_hash,
-               s.status as identity_status
+               s.status as identity_status,
+               m.membership_role as active_membership_role,
+               m.status as active_membership_status,
+               o.organization_id as active_organization_id,
+               o.slug as active_organization_slug,
+               o.display_name as active_organization_name,
+               o.status as active_organization_status
         from courseplatform.admins a
         left join courseplatform.students s on s.student_id = a.student_id
+        left join courseplatform.organization_memberships m
+          on m.admin_id = a.admin_id
+         and m.organization_id = %s
+         and m.membership_role = case upper(a.role)
+           when 'ADMINISTRATOR' then 'ADMIN'
+           else upper(a.role)
+         end
+        left join courseplatform.organizations o
+          on o.organization_id = m.organization_id
         where a.admin_id = %s
         """,
-        (admin_id,),
-    )
+        (session["organization_id"], admin_id),
+    ).fetchone()
     if (
         not admin
         or admin.get("status") != "ACTIVE"
         or (admin.get("student_id") and admin.get("identity_status") != "ACTIVE")
     ):
         raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
+    if (
+        admin.get("active_membership_status") != "ACTIVE"
+        or admin.get("active_organization_status") != "ACTIVE"
+    ):
+        conn.execute(
+            """
+            update courseplatform.sessions
+            set active = false, revoked_at = now()
+            where session_token = %s and active = true
+            """,
+            (session["session_token"],),
+        )
+        conn.commit()
+        raise ApiError(
+            "ORGANIZATION_ACCESS_REVOKED",
+            "O acesso administrativo a esta instituição foi suspenso ou removido.",
+        )
     if allowed_roles and admin.get("role") not in allowed_roles:
         raise ApiError("FORBIDDEN", "O seu perfil não possui permissão para esta operação.")
     return session, admin
+
+
+def admin_context(payload: dict[str, Any], allowed_roles: set[str] | None = None):
+    with connection() as conn:
+        return admin_context_with_conn(conn, payload, allowed_roles)
 
 
 def health(_: dict[str, Any]):
@@ -2261,6 +2373,7 @@ def _identity_runtime() -> identity_domain.IdentityRuntime:
         student_notification_channel_info=student_notification_channel_info,
         validated_email_change=validated_email_change,
         student_context_with_conn=student_context_with_conn,
+        admin_context_with_conn=admin_context_with_conn,
         verify_password_with_conn=verify_password_with_conn,
         secure_student_email_update=secure_student_email_update,
     )
@@ -2268,6 +2381,10 @@ def _identity_runtime() -> identity_domain.IdentityRuntime:
 
 def login(payload: dict[str, Any]):
     return identity_domain.login_action(payload, _identity_runtime())
+
+
+def switch_student_organization(payload: dict[str, Any]):
+    return identity_domain.switch_student_organization_action(payload, _identity_runtime())
 
 
 def mask_email(email: str) -> str:
@@ -2300,6 +2417,10 @@ def complete_student_password_reset(payload: dict[str, Any]):
 
 def admin_login(payload: dict[str, Any]):
     return identity_domain.admin_login_action(payload, _identity_runtime())
+
+
+def switch_admin_organization(payload: dict[str, Any]):
+    return identity_domain.switch_admin_organization_action(payload, _identity_runtime())
 
 
 def configured_admin_recovery_hashes() -> list[str]:

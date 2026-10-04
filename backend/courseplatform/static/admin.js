@@ -361,7 +361,12 @@ async function login(event) {
   errorBox.hidden = true;
 
   try {
-    const result = await api.adminLogin(data.get('email'), data.get('adminKey'));
+    let result = await api.adminLogin(data.get('email'), data.get('adminKey'));
+    if (result.organizationSelectionRequired) {
+      const organizationId = await selectAdminLoginOrganization(result.organizations || []);
+      if (!organizationId) return;
+      result = await api.adminLogin(data.get('email'), data.get('adminKey'), organizationId);
+    }
     state.admin = result.admin;
     adminIdentity.textContent = `${result.admin.fullName} · ${result.admin.role}`;
     renderAdminShell();
@@ -386,6 +391,41 @@ async function login(event) {
     setBusy(button, false);
     reportHeight();
   }
+}
+
+function selectAdminLoginOrganization(organizations) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'dialog-overlay';
+    overlay.innerHTML = `
+      <div class="dialog-card organization-selector-dialog" role="dialog" aria-modal="true"
+           aria-labelledby="adminOrganizationSelectorTitle">
+        <button class="dialog-close" type="button" aria-label="Fechar">x</button>
+        <p class="eyebrow">Âmbito administrativo</p>
+        <h2 id="adminOrganizationSelectorTitle">Escolha a instituição</h2>
+        <p>As permissões administrativas serão limitadas à instituição selecionada.</p>
+        <div class="organization-selector-list">
+          ${organizations.map((organization) => `
+            <button class="button-secondary organization-selector-option" type="button"
+                    data-organization-id="${escapeHtml(organization.organizationId)}">
+              <strong>${escapeHtml(organization.displayName)}</strong>
+              <span>${escapeHtml(organization.membershipRole)}</span>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    const finish = (organizationId = '') => {
+      overlay.remove();
+      resolve(organizationId);
+    };
+    overlay.querySelector('.dialog-close').addEventListener('click', () => finish());
+    overlay.querySelectorAll('[data-organization-id]').forEach((option) => {
+      option.addEventListener('click', () => finish(option.dataset.organizationId || ''));
+    });
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-organization-id]')?.focus();
+  });
 }
 
 function showAdminRecoveryDialog(prefilledEmail = '') {

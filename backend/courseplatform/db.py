@@ -9,7 +9,8 @@ from .config import get_settings
 
 
 APPLICATION_SCHEMA_COMPONENT = "application"
-EXPECTED_SCHEMA_VERSION = 20261004063506
+EXPECTED_SCHEMA_VERSION = 20261004103000
+TRANSITIONAL_SCHEMA_VERSIONS = frozenset({20261004063506})
 
 
 def _connect():
@@ -121,11 +122,18 @@ def schema_status_with_conn(conn) -> dict[str, Any]:
         (APPLICATION_SCHEMA_COMPONENT,),
     ).fetchone()
     installed_version = int(version_row["version"]) if version_row and version_row.get("version") is not None else None
+    compatible = installed_version in TRANSITIONAL_SCHEMA_VERSIONS or installed_version == EXPECTED_SCHEMA_VERSION
     return {
-        "compatible": installed_version == EXPECTED_SCHEMA_VERSION,
+        "compatible": compatible,
         "installedVersion": installed_version,
         "expectedVersion": EXPECTED_SCHEMA_VERSION,
-        "reason": "READY" if installed_version == EXPECTED_SCHEMA_VERSION else "VERSION_MISMATCH",
+        "reason": (
+            "READY"
+            if installed_version == EXPECTED_SCHEMA_VERSION
+            else "READY_TRANSITIONAL"
+            if compatible
+            else "VERSION_MISMATCH"
+        ),
     }
 
 

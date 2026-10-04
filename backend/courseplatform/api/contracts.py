@@ -43,11 +43,17 @@ class StudentLoginRequest(StrictRequest):
     email: str = Field(min_length=3, max_length=320)
     access_code: str = Field(alias="accessCode", min_length=1, max_length=256)
     course_id: str | None = Field(default=None, alias="courseId", max_length=128)
+    organization_id: str | None = Field(default=None, alias="organizationId", max_length=128)
 
 
 class AdminLoginRequest(StrictRequest):
     email: str = Field(min_length=3, max_length=320)
     admin_key: str = Field(alias="adminKey", min_length=1, max_length=256)
+    organization_id: str | None = Field(default=None, alias="organizationId", max_length=128)
+
+
+class OrganizationSwitchRequest(StrictRequest):
+    organization_id: str = Field(alias="organizationId", min_length=1, max_length=128)
 
 
 class StudentRegistrationRequest(StrictRequest):
@@ -87,16 +93,29 @@ class PasswordResetData(BaseModel):
     sessionsRevoked: bool
 
 
+class OrganizationSummary(BaseModel):
+    organizationId: str
+    slug: str
+    displayName: str
+    membershipRole: str
+
+
 class StudentSessionData(BaseModel):
-    sessionToken: str
+    organizationSelectionRequired: bool | None = None
+    sessionToken: str | None = None
     expiresAt: str | None = None
-    student: dict[str, Any]
+    student: dict[str, Any] | None = None
+    organization: OrganizationSummary | None = None
+    organizations: list[OrganizationSummary] | None = None
 
 
 class AdminSessionData(BaseModel):
-    adminToken: str
+    organizationSelectionRequired: bool | None = None
+    adminToken: str | None = None
     expiresAt: str | None = None
-    admin: dict[str, Any]
+    admin: dict[str, Any] | None = None
+    organization: OrganizationSummary | None = None
+    organizations: list[OrganizationSummary] | None = None
 
 
 class LogoutData(BaseModel):

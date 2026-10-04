@@ -296,14 +296,37 @@ export class CoursePlatformApi {
     return this.publicGet('verifyCertificate', { code });
   }
 
-  async login(email, accessCode) {
-    const data = await this.request('login', {
+  async login(email, accessCode, organizationId = '') {
+    const payload = {
       email,
       accessCode,
       courseId: this.courseId,
-      userAgent: navigator.userAgent
-    });
+      organizationId
+    };
+    const data = await this.versionedWrite(
+      '/api/v1/auth/students/sessions',
+      payload,
+      {},
+      () => this.request('login', { ...payload, userAgent: navigator.userAgent })
+    );
+    if (data.sessionToken) {
+      localStorage.setItem('courseSessionToken', data.sessionToken);
+      localStorage.setItem('courseOrganizationId', data.organization?.organizationId || '');
+    }
+    return data;
+  }
+
+  async switchStudentOrganization(organizationId) {
+    const sessionToken = this.studentToken();
+    const payload = { organizationId };
+    const data = await this.versionedWrite(
+      '/api/v1/auth/students/sessions/current/organization',
+      payload,
+      { 'x-session-token': sessionToken },
+      () => this.request('switchStudentOrganization', { sessionToken, ...payload })
+    );
     localStorage.setItem('courseSessionToken', data.sessionToken);
+    localStorage.setItem('courseOrganizationId', data.organization?.organizationId || '');
     return data;
   }
 
@@ -356,6 +379,7 @@ export class CoursePlatformApi {
       return await this.request('logout', { sessionToken });
     } finally {
       localStorage.removeItem('courseSessionToken');
+      localStorage.removeItem('courseOrganizationId');
     }
   }
 
@@ -753,13 +777,36 @@ export class CoursePlatformApi {
     return Boolean(localStorage.getItem('courseSessionToken'));
   }
 
-  async adminLogin(email, adminKey) {
-    const data = await this.request('adminLogin', {
+  async adminLogin(email, adminKey, organizationId = '') {
+    const payload = {
       email,
       adminKey,
-      userAgent: navigator.userAgent
-    });
+      organizationId
+    };
+    const data = await this.versionedWrite(
+      '/api/v1/auth/administrators/sessions',
+      payload,
+      {},
+      () => this.request('adminLogin', { ...payload, userAgent: navigator.userAgent })
+    );
+    if (data.adminToken) {
+      sessionStorage.setItem('courseAdminToken', data.adminToken);
+      sessionStorage.setItem('courseAdminOrganizationId', data.organization?.organizationId || '');
+    }
+    return data;
+  }
+
+  async switchAdminOrganization(organizationId) {
+    const adminToken = this.adminToken();
+    const payload = { organizationId };
+    const data = await this.versionedWrite(
+      '/api/v1/auth/administrators/sessions/current/organization',
+      payload,
+      { 'x-admin-token': adminToken },
+      () => this.request('switchAdminOrganization', { adminToken, ...payload })
+    );
     sessionStorage.setItem('courseAdminToken', data.adminToken);
+    sessionStorage.setItem('courseAdminOrganizationId', data.organization?.organizationId || '');
     return data;
   }
 
@@ -777,6 +824,7 @@ export class CoursePlatformApi {
     } finally {
       this.clearCache();
       sessionStorage.removeItem('courseAdminToken');
+      sessionStorage.removeItem('courseAdminOrganizationId');
     }
   }
 

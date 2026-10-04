@@ -224,6 +224,9 @@ Gate de saída:
 
 ### M1 — Contexto institucional na autenticação
 
+Estado: **implementada localmente; migração, deploy e validação externa
+pendentes**.
+
 Entregas:
 
 - resolver memberships ativas no login;
@@ -435,7 +438,7 @@ Antes de M4–M7 precisam de decisão explícita:
 | Fase | Estado |
 | --- | --- |
 | M0 Fundação | Concluída |
-| M1 Contexto na autenticação | Não iniciada |
+| M1 Contexto na autenticação | Implementada localmente; rollout pendente |
 | M2 Isolamento dos domínios | Não iniciada |
 | M3 Storage e operação | Não iniciada |
 | M4 Administração global | Não iniciada |

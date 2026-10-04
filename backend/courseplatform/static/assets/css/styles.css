@@ -5799,6 +5799,46 @@ input[type="search"] {
   }
 }
 
+/* M1: tenant selection after credential validation */
+.organization-selector-dialog {
+  width: min(100%, 520px);
+}
+
+.organization-selector-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.organization-selector-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 16px;
+  text-align: left;
+}
+
+.organization-selector-option strong,
+.organization-selector-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.organization-selector-option span {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+@media (max-width: 520px) {
+  .organization-selector-option {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
 /* Stage 12: data-heavy pages, forms and recoverable states */
 [data-scroll-region="true"]:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent, #caa85e) 78%, #fff);
