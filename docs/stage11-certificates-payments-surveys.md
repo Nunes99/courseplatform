@@ -1,5 +1,12 @@
 # Etapa 11: certificados, pagamentos e inquéritos
 
+## Estado
+
+Encerrada por aceitação do proprietário em 4 de outubro de 2026. A implementação,
+a migração e as verificações automáticas estão concluídas. As verificações
+manuais complementares foram dispensadas como critério de encerramento; esta
+decisão não deve ser apresentada como se esses cenários tivessem sido executados.
+
 ## Resultado
 
 A certificação passa a usar um snapshot documental imutável na emissão. O mesmo contrato alimenta a pré-visualização administrativa, a área do estudante e o PDF. O snapshot v2 preserva:
@@ -52,7 +59,7 @@ Aplicar `supabase/migrations/20260929120000_complete_stage11_certification_contr
 A migração foi aplicada ao projeto Supabase principal em 30 de setembro de 2026,
 antes do deploy do backend correspondente. A verificação pós-migração confirmou
 o histórico remoto, o marcador da aplicação, RLS, privilégios mínimos e o
-backfill completo das quatro respostas históricas. Ainda é necessário validar
-em Preview ou produção controlada a emissão de participação e profissional,
-pagamento, inquérito, PDF, QR, verificação pública, bloqueio, limite de download
-e reemissão depois do deploy.
+backfill completo das quatro respostas históricas. A emissão de participação e
+profissional, pagamento, inquérito, PDF, QR, verificação pública, bloqueio,
+limite de download e reemissão permanecem numa checklist manual opcional de
+regressão, sem bloquear o encerramento desta etapa.

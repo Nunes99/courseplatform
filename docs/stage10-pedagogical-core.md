@@ -274,6 +274,14 @@ A produção de conteúdos de outros cursos, a aprovação institucional e a
 associação de versões a novas ofertas continuam decisões académicas do produto;
 não fazem parte da infraestrutura concluída nesta etapa.
 
+## Encerramento
+
+A etapa foi aceite como encerrada pelo proprietário em 4 de outubro de 2026.
+A revisão real com rubrica, por constituir uma mutação académica deliberada,
+foi dispensada como critério de encerramento. Os testes transacionais, snapshots
+congelados e validações de leitura continuam a ser a evidência executada; não se
+regista uma revisão real como realizada.
+
 ## Reversão
 
 Antes de aplicar a migração final, reverter a aplicação remove os novos controlos

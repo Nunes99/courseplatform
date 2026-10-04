@@ -1,5 +1,13 @@
 # Etapa 12 - UI, navegação e acessibilidade
 
+## Estado
+
+Encerrada por aceitação do proprietário em 4 de outubro de 2026. A cobertura
+automática descrita neste documento foi executada; as verificações que exigem
+observação humana ou dispositivos reais foram dispensadas como porta de saída.
+Isso não equivale a afirmar conformidade validada manualmente com NVDA ou em
+todos os dispositivos.
+
 ## Âmbito desta entrega
 
 Esta entrega estabelece a fundação transversal e conclui a segunda fatia da
@@ -89,7 +97,7 @@ navegação e depois no modo de foco:
 A execução desta checklist requer escuta e julgamento humano. A passagem
 automatizada não deve ser apresentada como validação concluída com NVDA.
 
-## Trabalho ainda pendente na Etapa 12
+## Verificações manuais opcionais após o encerramento
 
 - validar com dados reais os editores de versões de curso, módulos e banco de
   questões, cuja infraestrutura comum já possui cobertura automatizada;
@@ -99,4 +107,5 @@ automatizada não deve ser apresentada como validação concluída com NVDA.
   contraste e reflow nos dois temas;
 - recolher evidência visual em Preview com dados representativos.
 
-Esses pontos não são declarados como concluídos por esta entrega.
+Esses pontos foram aceites como acompanhamento futuro e não bloqueiam o avanço
+do plano. Permanecem explicitamente não executados até existir evidência humana.

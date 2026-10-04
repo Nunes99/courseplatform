@@ -10,14 +10,16 @@ executado na base normal.
 
 | Etapa | Evidência automática e de dados | Validação operacional |
 | --- | --- | --- |
-| 3 - Supabase, RLS, views e âmbito do revisor | Concluída | Estudante, revisor e proprietário validados; âmbito por curso confirmado e exclusividade por nível coberta por testes, aguardando apenas validação visual pós-deploy |
+| 3 - Supabase, RLS, views e âmbito do revisor | Concluída | Encerrada; a validação visual complementar foi dispensada por aceitação do proprietário em 4 de outubro de 2026 |
 | 4 - Migrações e health checks | Concluída localmente e reconciliada com o histórico remoto | Concluída em produção |
 | 6 - Storage privado | Backfill e reconciliação concluídos | Encerrada: estudante, revisor e proprietário validados com ficheiros privados reais; comprovativo recusado ao revisor |
 | 8 - Domínios e rotas tipadas | Suíte e verificadores de compatibilidade concluídos | Leituras reais de estudante, revisor e proprietário concluídas |
 | 9 - Catálogo, versões e turmas | Esquema, vínculos e interface sintética validados | Leitura do estudante e gestão do proprietário concluídas |
 
-Uma etapa só deve ser marcada como operacionalmente encerrada depois de todos
-os itens da sua coluna pendente serem confirmados.
+As verificações manuais não executadas permanecem documentadas como referência,
+mas foram dispensadas como bloqueio de encerramento por decisão explícita do
+proprietário em 4 de outubro de 2026. Essa aceitação não converte uma verificação
+dispensada em evidência executada.
 
 ## Evidência de produção somente leitura
 

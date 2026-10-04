@@ -1,5 +1,13 @@
 # Etapa 13 - Operacao confiavel da LMS
 
+## Estado
+
+Encerrada por aceitação do proprietário em 4 de outubro de 2026. Os controlos
+de runtime, agendamento, observabilidade e recuperação local foram implementados
+e validados conforme descrito abaixo. Monitorização, resposta a incidentes e
+ensaios trimestrais são obrigações operacionais contínuas, não pendências que
+mantêm a etapa aberta.
+
 ## Estado desta entrega
 
 Implementado e validado em producao em 3 de outubro de 2026:
