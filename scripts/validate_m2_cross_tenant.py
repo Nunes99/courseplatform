@@ -33,17 +33,43 @@ ROOM_B = "ROOM-M2-VALIDATION"
 NOTIFICATION_B = "NTF-M2-VALIDATION"
 DELIVERY_B = "NDL-M2-VALIDATION"
 MARKER = "m2-validation"
+TEMP_SESSION_HASH = ""
 
 
 class ValidationError(RuntimeError):
     pass
 
 
-def required_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise ValidationError(f"Variável obrigatória ausente: {name}")
-    return value
+def temporary_admin_token() -> str:
+    """Create an isolated session for an existing owner/admin in organization A."""
+    global TEMP_SESSION_HASH
+    with connection() as conn:
+        admin = conn.execute(
+            """
+            select membership.admin_id
+            from courseplatform.organization_memberships membership
+            join courseplatform.admins admin on admin.admin_id = membership.admin_id
+            where membership.organization_id = %s
+              and membership.membership_role in ('OWNER', 'ADMIN')
+              and membership.status = 'ACTIVE'
+              and admin.status = 'ACTIVE'
+            order by case membership.membership_role when 'OWNER' then 0 else 1 end,
+                     membership.created_at
+            limit 1
+            """,
+            (ORG_A,),
+        ).fetchone()
+        if not admin:
+            raise ValidationError("Nenhum proprietário/administrador ativo disponível na instituição A.")
+        session = actions.create_session(
+            conn,
+            f"ADMIN:{admin['admin_id']}",
+            user_agent="courseplatform-m2-validation/1.0",
+            organization_id=ORG_A,
+        )
+        conn.commit()
+    TEMP_SESSION_HASH = actions.hash_secret(session["token"])
+    return session["token"]
 
 
 def base_url() -> str:
@@ -99,7 +125,13 @@ def contains_identifier(value, identifier: str) -> bool:
 
 
 def cleanup() -> None:
+    global TEMP_SESSION_HASH
     with connection() as conn:
+        if TEMP_SESSION_HASH:
+            conn.execute(
+                "delete from courseplatform.sessions where session_token = %s",
+                (TEMP_SESSION_HASH,),
+            )
         conn.execute("delete from courseplatform.notification_deliveries where delivery_id = %s", (DELIVERY_B,))
         conn.execute("delete from courseplatform.notifications where notification_id = %s", (NOTIFICATION_B,))
         conn.execute("delete from courseplatform.chat_rooms where room_id = %s", (ROOM_B,))
@@ -113,6 +145,7 @@ def cleanup() -> None:
         conn.execute("delete from courseplatform.students where student_id = %s", (STUDENT_B,))
         conn.execute("delete from courseplatform.organizations where organization_id = %s", (ORG_B,))
         conn.commit()
+    TEMP_SESSION_HASH = ""
 
 
 def seed() -> None:
@@ -198,6 +231,9 @@ def seed() -> None:
 
 
 def validate(origin: str, token: str) -> None:
+    local_statistics = actions.admin_platform_statistics({"adminToken": token})
+    assert_success(local_statistics, "local_admin_platform_statistics")
+    print("local_admin_platform_statistics: ok")
     assert_error(
         api_action(
             origin,
@@ -248,6 +284,40 @@ def validate(origin: str, token: str) -> None:
         "CHAT_ROOM_NOT_FOUND",
     )
 
+    local_students = actions.admin_list_students({
+        "adminToken": token,
+        "query": MARKER,
+        "limit": 10,
+    })
+    assert_success(local_students, "local_student_cross_tenant_list")
+    print("local_student_cross_tenant_list: ok")
+    local_staff = actions.admin_list_staff({
+        "adminToken": token,
+        "query": MARKER,
+        "limit": 10,
+    })
+    assert_success(local_staff, "local_staff_cross_tenant_list")
+    print("local_staff_cross_tenant_list: ok")
+    claimed = actions.claim_notification_deliveries("EMAIL", [NOTIFICATION_B], 1, ORG_A)
+    if claimed:
+        raise ValidationError("delivery_cross_tenant_claim: A reclamou uma entrega de B.")
+    with connection() as conn:
+        row = conn.execute(
+            "select status, attempt_count from courseplatform.notification_deliveries where delivery_id = %s",
+            (DELIVERY_B,),
+        ).fetchone() or {}
+    if row.get("status") != "FAILED" or int(row.get("attempt_count") or 0) != 0:
+        raise ValidationError("delivery_cross_tenant_claim: a entrega de B foi alterada.")
+    print("delivery_cross_tenant_claim: isolated=ok")
+
+    staff = assert_success(
+        api_action(origin, token, "adminListStaff", query=MARKER, limit=10),
+        "staff_cross_tenant_list",
+    )
+    if contains_identifier(staff, ADMIN_B):
+        raise ValidationError("staff_cross_tenant_list: staff B ficou visível para A.")
+    print("staff_cross_tenant_list: isolated=ok")
+
     students = assert_success(
         api_action(origin, token, "adminListStudents", query=MARKER, limit=10),
         "student_cross_tenant_list",
@@ -261,25 +331,11 @@ def validate(origin: str, token: str) -> None:
         "STUDENT_NOT_FOUND",
     )
 
-    staff = assert_success(
-        api_action(origin, token, "adminListStaff", query=MARKER, limit=10),
-        "staff_cross_tenant_list",
+    assert_success(
+        api_action(origin, token, "adminGetPlatformStatistics"),
+        "admin_platform_statistics",
     )
-    if contains_identifier(staff, ADMIN_B):
-        raise ValidationError("staff_cross_tenant_list: staff B ficou visível para A.")
-    print("staff_cross_tenant_list: isolated=ok")
-
-    claimed = actions.claim_notification_deliveries("EMAIL", [NOTIFICATION_B], 1, ORG_A)
-    if claimed:
-        raise ValidationError("delivery_cross_tenant_claim: A reclamou uma entrega de B.")
-    with connection() as conn:
-        row = conn.execute(
-            "select status, attempt_count from courseplatform.notification_deliveries where delivery_id = %s",
-            (DELIVERY_B,),
-        ).fetchone() or {}
-    if row.get("status") != "FAILED" or int(row.get("attempt_count") or 0) != 0:
-        raise ValidationError("delivery_cross_tenant_claim: a entrega de B foi alterada.")
-    print("delivery_cross_tenant_claim: isolated=ok")
+    print("admin_platform_statistics: ok")
 
 
 def main() -> int:
@@ -290,9 +346,11 @@ def main() -> int:
         parser.error("A validação cria fixtures temporárias; confirme com --apply.")
     get_settings().require_database()
     origin = base_url()
-    token = required_env("COURSEPLATFORM_VALIDATION_ADMIN_TOKEN")
     seed()
     try:
+        token = os.getenv("COURSEPLATFORM_VALIDATION_ADMIN_TOKEN", "").strip()
+        if not token:
+            token = temporary_admin_token()
         validate(origin, token)
     finally:
         cleanup()

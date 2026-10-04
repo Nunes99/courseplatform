@@ -158,6 +158,36 @@ class MultiTenantCommunicationTests(unittest.TestCase):
 
 
 class MultiTenantAdministrationTests(unittest.TestCase):
+    def test_platform_statistics_scopes_certificates_through_course(self):
+        source = inspect.getsource(administration.admin_platform_statistics_action)
+
+        self.assertIn(
+            "join courseplatform.courses course on course.course_id = certificate.course_id",
+            source,
+        )
+        self.assertIn("where course.organization_id = %s", source)
+        self.assertNotIn(
+            "from courseplatform.certificates where organization_id = %s",
+            source,
+        )
+
+    def test_student_list_distinguishes_membership_status(self):
+        source = inspect.getsource(administration.admin_list_students_action)
+
+        self.assertIn("organization_membership.status as membership_status", source)
+        self.assertIn("where membership_status = 'ACTIVE'", source)
+        self.assertIn('"status": row.get("membership_status")', source)
+        self.assertNotIn("organization_membership.status as status", source)
+
+    def test_staff_list_distinguishes_membership_role_and_status(self):
+        source = inspect.getsource(administration.admin_list_staff_action)
+
+        self.assertIn("organization_membership.membership_role as membership_role", source)
+        self.assertIn("organization_membership.status as membership_status", source)
+        self.assertIn("where membership_status = 'ACTIVE'", source)
+        self.assertIn('"role": row.get("membership_role")', source)
+        self.assertIn('"status": row.get("membership_status")', source)
+
     def test_admin_from_a_cannot_load_student_b(self):
         def handler(_query, params):
             if params == ("ORG-B", "STUDENT-B"):

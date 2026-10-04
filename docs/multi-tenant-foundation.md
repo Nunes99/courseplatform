@@ -171,8 +171,9 @@ a organização ativa da sessão:
 A migração `20261004180000_isolate_communication_by_organization.sql` é
 expansiva: preserva mensagens, notificações, dispositivos e tokens existentes,
 faz o backfill para a organização histórica e só depois instala `NOT NULL`, FKs,
-índices e unicidade composta. Ela ainda não foi aplicada externamente nesta
-fatia.
+índices e unicidade composta. Foi aplicada de forma controlada em 4 de outubro
+de 2026. O pós-flight confirmou a versão `20261004180000`, backfill sem nulos e
+readiness saudável.
 
 Durante o rollout, essas cinco colunas mantêm temporariamente o default da única
 instituição ativa para que o deployment anterior continue funcional enquanto o
@@ -185,6 +186,27 @@ públicas e auditoria persistida. Configurações de transporte como SMTP, bot e
 VAPID continuam sendo infraestrutura global da plataforma; não devem ser
 expostas como configuração independente por instituição até existir um plano de
 controlo global separado da administração institucional.
+
+O inventário verificável e os critérios de encerramento estão em
+[`m2-isolation-inventory.md`](m2-isolation-inventory.md).
+
+### Gate de validação após `20261004180000`
+
+Os testes A/B reais com fixtures temporárias confirmaram isolamento para
+inquéritos, notificações, salas de chat e reclamação de retries. As fixtures e a
+sessão administrativa temporária são removidas no final de cada execução.
+
+A validação revelou duas regressões SQL preexistentes nas leituras
+administrativas: a estatística de certificados assumia uma coluna direta no
+certificado, e as listas de estudantes/staff projetavam campos `status`/`role`
+ambíguos. As consultas foram corrigidas e os testes locais passam, mas o gate de
+produção só pode fechar depois de publicar o backend corrigido e repetir o
+verificador completo. Até lá:
+
+- não remover os defaults transitórios das cinco colunas de comunicação;
+- não ativar uma segunda instituição;
+- não marcar M2 como concluída;
+- repetir `scripts/validate_m2_cross_tenant.py --apply` após o deployment.
 
 ## Decisões de negócio pendentes
 

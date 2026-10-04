@@ -349,7 +349,11 @@ def admin_platform_statistics_action(payload: dict[str, Any], *, runtime: Admini
               (select count(*) from courseplatform.courses where organization_id = %s and status = 'ACTIVE') as active_courses,
               (select count(*) from courseplatform.enrollments enrollment join courseplatform.courses course on course.course_id = enrollment.course_id where course.organization_id = %s and enrollment.status in ('ACTIVE', 'COMPLETED')) as enrollments,
               (select count(*) from courseplatform.attempts attempt join courseplatform.lessons lesson on lesson.lesson_id = attempt.lesson_id join courseplatform.courses course on course.course_id = lesson.course_id where course.organization_id = %s and attempt.status in ('SUBMITTED', 'UNDER_REVIEW')) as pending_reviews,
-              (select count(*) from courseplatform.certificates where organization_id = %s and coalesce(status, 'ISSUED') = 'ISSUED') as issued_certificates
+              (select count(*)
+               from courseplatform.certificates certificate
+               join courseplatform.courses course on course.course_id = certificate.course_id
+               where course.organization_id = %s
+                 and coalesce(certificate.status, 'ISSUED') = 'ISSUED') as issued_certificates
             """,
             (organization_id,) * 6,
         ).fetchone() or {}
@@ -584,7 +588,7 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
     rows = fetch_all(
         f"""
         with student_rows as (
-          select s.*, organization_membership.status as status,
+          select s.*, organization_membership.status as membership_status,
             (select count(*) from courseplatform.push_subscriptions ps where ps.organization_id = %s and ps.student_id = s.student_id and ps.enabled) as push_subscription_count,
             coalesce(jsonb_agg(distinct to_jsonb(e)) filter (where e.enrollment_id is not null), '[]') as enrollments,
             coalesce(jsonb_agg(distinct to_jsonb(gm)) filter (where gm.group_member_id is not null), '[]') as memberships,
@@ -613,8 +617,8 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
         ), numbered_students as (
           select *,
             count(*) over() as total_count,
-            count(*) filter (where status = 'ACTIVE') over() as active_count,
-            count(*) filter (where status = 'BLOCKED') over() as blocked_count,
+            count(*) filter (where membership_status = 'ACTIVE') over() as active_count,
+            count(*) filter (where membership_status = 'BLOCKED') over() as blocked_count,
             count(*) filter (where primary_progress >= 100) over() as completed_count,
             avg(primary_progress) over() as average_progress
           from filtered_students
@@ -638,7 +642,7 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
     return success({
         "students": [
             {
-                "student": public_student(row),
+                "student": public_student({**row, "status": row.get("membership_status")}),
                 "enrollments": [public_enrollment(item) for item in row.get("enrollments", [])],
                 "memberships": [public_group_member(item) for item in row.get("memberships", [])],
             }
@@ -684,8 +688,8 @@ def admin_list_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     rows = fetch_all(
         f"""
         with staff_rows as (
-          select a.*, organization_membership.membership_role as role,
-            organization_membership.status as status,
+          select a.*, organization_membership.membership_role as membership_role,
+            organization_membership.status as membership_status,
             s.student_id as identity_student_id,
             s.email as identity_email,
             s.status as identity_status,
@@ -713,8 +717,8 @@ def admin_list_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
         ), numbered_staff as (
           select *,
             count(*) over() as total_count,
-            count(*) filter (where status = 'ACTIVE') over() as active_count,
-            count(*) filter (where role = 'REVIEWER' and status = 'ACTIVE') over() as reviewer_count
+            count(*) filter (where membership_status = 'ACTIVE') over() as active_count,
+            count(*) filter (where membership_role = 'REVIEWER' and membership_status = 'ACTIVE') over() as reviewer_count
           from staff_rows
         )
         select * from numbered_staff
@@ -734,7 +738,14 @@ def admin_list_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     )
     page_info["total"] = total
     return success({
-        "staff": [public_admin(row) for row in rows],
+        "staff": [
+            public_admin({
+                **row,
+                "role": row.get("membership_role"),
+                "status": row.get("membership_status"),
+            })
+            for row in rows
+        ],
         "currentAdmin": public_admin(current_admin),
         "pagination": page_info,
         "summary": {
