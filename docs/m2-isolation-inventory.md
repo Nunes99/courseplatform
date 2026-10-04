@@ -18,7 +18,10 @@ ainda bloqueia o encerramento da M2.
 | Notificações | Listas e destinatários usam tenant; teste A/B real passou | Isolada |
 | Chat e Realtime | Sala, presença e autorização de tópico usam tenant; testes A/B de lista e leitura passaram | Isolada |
 | Retry de entregas | Retry administrativo reclama apenas notificações do tenant ativo; teste A/B real passou | Isolada |
-| Estudantes e staff | Consultas locais corrigidas e testes unitários passam | Aguarda novo deployment e repetição A/B |
+| Estudantes e staff | Consultas corrigidas, publicadas e validadas por API e navegador | Isolada |
+| Auditoria persistida | `organization_id`, âmbito explícito, constraints validadas e zero registos inválidos no pós-flight | Aplicada e validada |
+| Projeção pública institucional | Perfil e catálogo públicos responderam em Preview e produção sem campos internos | Aplicada e validada |
+| Defaults de comunicação | Os cinco defaults transitórios foram removidos; pós-flight confirmou zero defaults restantes | Aplicada e validada |
 
 As fixtures A/B e a sessão administrativa temporária são eliminadas no bloco
 `finally` do verificador. Nenhuma segunda organização permanente é criada.
@@ -30,22 +33,23 @@ e cursores de consumidores são infraestrutura da plataforma. Permanecem
 globais e não podem ser expostas a administradores institucionais. A futura
 administração global deve ser o único contexto autorizado a alterá-las.
 
-## Bloqueios para a segunda instituição
+## Bloqueios restantes para a segunda instituição
 
-1. Publicar as correções de estatísticas, estudantes e staff e executar
-   `scripts/validate_m2_cross_tenant.py --apply` até terminar com
-   `m2_cross_tenant_validation=passed cleanup=passed`.
-2. Adicionar `organization_id` ao `audit_log`, fazer backfill sem perder o
-   histórico e exigir tenant explícito em toda nova escrita de auditoria.
-3. Criar projeções públicas próprias para organização e catálogo. As ações
-   legadas `publicCourseConfig` e `getMediaConfig` aceitam um `courseId` ativo,
-   mas não representam uma política editorial de agregador, slug institucional
-   ou publicação pública.
-4. Remover os defaults temporários de `organization_id` em `notifications`,
-   `push_subscriptions`, `telegram_link_tokens`, `chat_rooms` e
-   `chat_presence` por migração compensatória, depois do deployment compatível.
-5. Executar as cinco integrações PostgreSQL ignoradas pela suíte numa base
+1. Executar as cinco integrações PostgreSQL ignoradas pela suíte numa base
    descartável para confirmar a cadeia completa de migrações e os triggers.
+2. Repetir os testes negativos A/B após a migração, incluindo consulta de
+   auditoria institucional e ausência de cursos privados no catálogo público.
+
+`20261004213604_complete_m2_tenant_isolation.sql` foi aplicada em 5 de outubro
+de 2026. O pós-flight confirmou a versão, três colunas públicas, zero auditorias
+inválidas, zero defaults transitórios e zero constraints não validadas. O
+deployment de produção `dpl_R7t4HZjcgEsp8UczMNhuMSWqb1nE` ficou `Ready`, com
+liveness, readiness, perfil, catálogo e página administrativa saudáveis.
+
+A suíte local terminou com 453 testes aprovados e cinco integrações PostgreSQL
+ignoradas. Esta máquina não possui Docker ativo nem uma instância PostgreSQL
+local. O gate A/B mutável não foi repetido na produção para não criar ou apagar
+fixtures numa base real; continua sendo obrigatório antes da segunda instituição.
 
 ## Critério de encerramento
 

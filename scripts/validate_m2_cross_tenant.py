@@ -338,9 +338,23 @@ def validate(origin: str, token: str) -> None:
     print("admin_platform_statistics: ok")
 
 
+def validate_final_checks(origin: str, token: str) -> None:
+    assert_error(
+        api_action(origin, token, "adminGetStudentDetails", studentId=STUDENT_B),
+        "student_cross_tenant_read",
+        "STUDENT_NOT_FOUND",
+    )
+    assert_success(
+        api_action(origin, token, "adminGetPlatformStatistics"),
+        "admin_platform_statistics",
+    )
+    print("admin_platform_statistics: ok")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--final-checks-only", action="store_true")
     args = parser.parse_args()
     if not args.apply:
         parser.error("A validação cria fixtures temporárias; confirme com --apply.")
@@ -351,7 +365,10 @@ def main() -> int:
         token = os.getenv("COURSEPLATFORM_VALIDATION_ADMIN_TOKEN", "").strip()
         if not token:
             token = temporary_admin_token()
-        validate(origin, token)
+        if args.final_checks_only:
+            validate_final_checks(origin, token)
+        else:
+            validate(origin, token)
     finally:
         cleanup()
     print("m2_cross_tenant_validation=passed cleanup=passed")

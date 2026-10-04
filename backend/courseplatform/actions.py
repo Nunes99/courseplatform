@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
@@ -118,6 +119,7 @@ _CHAT_SCHEMA_READY = False
 _CHAT_REALTIME_SCHEMA_READY = False
 _CERTIFICATE_SCHEMA_READY = False
 _APPLICATION_SCHEMA_READY = False
+_AUDIT_ORGANIZATION_ID: ContextVar[str] = ContextVar("audit_organization_id", default="")
 
 
 def progress_access_status(row: dict[str, Any] | None) -> str:
@@ -133,13 +135,19 @@ def legacy_progress_status(access_status: str, evaluation_status: str) -> str:
 
 
 def audit(conn, actor_type: str, actor_id: str, action: str, entity_type: str, entity_id: str, details: dict[str, Any] | None = None):
+    organization_id = _AUDIT_ORGANIZATION_ID.get() or None
+    scope = "ORGANIZATION" if organization_id else "PLATFORM"
     conn.execute(
         """
         insert into courseplatform.audit_log
-          (log_id, actor_type, actor_id, action, entity_type, entity_id, details_json, created_at)
-        values (%s, %s, %s, %s, %s, %s, %s, now())
+          (log_id, organization_id, scope, actor_type, actor_id, action,
+           entity_type, entity_id, details_json, created_at)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
         """,
-        (generate_id("LOG"), actor_type, actor_id, action, entity_type, entity_id, json.dumps(details or {})),
+        (
+            generate_id("LOG"), organization_id, scope, actor_type, actor_id,
+            action, entity_type, entity_id, json.dumps(details or {}),
+        ),
     )
 
 
@@ -1824,6 +1832,7 @@ def student_context_with_conn(conn, payload: dict[str, Any]):
             "ORGANIZATION_ACCESS_REVOKED",
             "O acesso a esta instituição foi suspenso ou removido.",
         )
+    _AUDIT_ORGANIZATION_ID.set(str(session["organization_id"]))
     return session, student
 
 
@@ -1902,6 +1911,7 @@ def admin_context_with_conn(
         )
     if allowed_roles and admin.get("role") not in allowed_roles:
         raise ApiError("FORBIDDEN", "O seu perfil não possui permissão para esta operação.")
+    _AUDIT_ORGANIZATION_ID.set(str(session["organization_id"]))
     return session, admin
 
 
@@ -1920,6 +1930,14 @@ def health_diagnostics(payload: dict[str, Any]):
 
 def public_course_config(payload: dict[str, Any]):
     return catalog_domain.public_course_config_action(payload, runtime=_catalog_runtime())
+
+
+def public_institution_profile(payload: dict[str, Any]):
+    return catalog_domain.public_institution_profile_action(payload, runtime=_catalog_runtime())
+
+
+def public_institution_catalog(payload: dict[str, Any]):
+    return catalog_domain.public_institution_catalog_action(payload, runtime=_catalog_runtime())
 
 
 def read_media_config(course_id: str):
@@ -3689,9 +3707,13 @@ ACTIONS = build_action_registry(globals())
 
 
 def dispatch(action: str, payload: dict[str, Any]):
-    handler = ACTIONS.get(action)
-    if not handler:
-        return not_implemented(action)
-    if action not in {"health", "healthDiagnostics"}:
-        require_application_schema()
-    return handler(payload)
+    audit_context_token = _AUDIT_ORGANIZATION_ID.set("")
+    try:
+        handler = ACTIONS.get(action)
+        if not handler:
+            return not_implemented(action)
+        if action not in {"health", "healthDiagnostics"}:
+            require_application_schema()
+        return handler(payload)
+    finally:
+        _AUDIT_ORGANIZATION_ID.reset(audit_context_token)

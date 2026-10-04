@@ -162,6 +162,24 @@ class CourseCatalogData(BaseModel):
     lessons: list[dict[str, Any]]
 
 
+class PublicInstitutionData(BaseModel):
+    slug: str
+    displayName: str
+    headline: str
+    description: str
+    logoUrl: str
+    websiteUrl: str
+
+
+class PublicInstitutionProfileData(BaseModel):
+    institution: PublicInstitutionData
+
+
+class PublicInstitutionCatalogData(BaseModel):
+    institution: PublicInstitutionData
+    courses: list[dict[str, Any]]
+
+
 class MediaConfigData(BaseModel):
     mediaConfig: dict[str, Any]
 

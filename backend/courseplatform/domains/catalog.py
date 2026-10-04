@@ -10,6 +10,8 @@ from ..reviewer_scopes import admin_from_context, require_course_scope, reviewer
 
 
 ACTION_BINDINGS = (
+    ("publicInstitutionProfile", "public_institution_profile"),
+    ("publicInstitutionCatalog", "public_institution_catalog"),
     ("publicCourseConfig", "public_course_config"),
     ("publicMediaConfig", "public_media_config"),
     ("getMediaConfig", "student_media_config"),
@@ -32,6 +34,105 @@ ACTION_BINDINGS = (
     ("adminSaveLesson", "admin_save_lesson"),
     ("adminSaveLessonContent", "admin_save_lesson_content"),
 )
+
+
+def _public_profile(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _public_institution(row: dict[str, Any]) -> dict[str, Any]:
+    profile = _public_profile(row.get("public_profile_json"))
+    return {
+        "slug": row["slug"],
+        "displayName": row["display_name"],
+        "headline": str(profile.get("headline") or ""),
+        "description": str(profile.get("description") or ""),
+        "logoUrl": str(profile.get("logoUrl") or ""),
+        "websiteUrl": str(profile.get("websiteUrl") or ""),
+    }
+
+
+def public_institution_profile_action(payload: dict[str, Any], *, runtime: "CatalogRuntime"):
+    slug = runtime.str_value(payload.get("organizationSlug")).lower()
+    if not slug:
+        raise ApiError("VALIDATION_ERROR", "A instituição não foi informada.")
+    organization = runtime.fetch_one(
+        """
+        select slug, display_name, public_profile_json
+        from courseplatform.organizations
+        where lower(slug) = %s
+          and status = 'ACTIVE'
+          and public_listing_status = 'PUBLISHED'
+        """,
+        (slug,),
+    )
+    if not organization:
+        raise ApiError("ORGANIZATION_NOT_FOUND", "Instituição não encontrada.")
+    return runtime.success({"institution": _public_institution(organization)})
+
+
+def public_institution_catalog_action(payload: dict[str, Any], *, runtime: "CatalogRuntime"):
+    slug = runtime.str_value(payload.get("organizationSlug")).lower()
+    if not slug:
+        raise ApiError("VALIDATION_ERROR", "A instituição não foi informada.")
+    organization = runtime.fetch_one(
+        """
+        select organization_id, slug, display_name, public_profile_json
+        from courseplatform.organizations
+        where lower(slug) = %s
+          and status = 'ACTIVE'
+          and public_listing_status = 'PUBLISHED'
+        """,
+        (slug,),
+    )
+    if not organization:
+        raise ApiError("ORGANIZATION_NOT_FOUND", "Instituição não encontrada.")
+    rows = runtime.fetch_all(
+        """
+        select c.course_id, c.course_code,
+               coalesce(v.title, c.title) as title,
+               coalesce(v.description, c.description) as description,
+               coalesce(v.total_hours, c.total_hours) as total_hours,
+               v.version_number
+        from courseplatform.courses c
+        join lateral (
+          select cv.title, cv.description, cv.total_hours, cv.version_number
+          from courseplatform.course_versions cv
+          where cv.course_id = c.course_id
+            and cv.status = 'PUBLISHED'
+          order by cv.version_number desc
+          limit 1
+        ) v on true
+        where c.organization_id = %s
+          and c.status = 'ACTIVE'
+          and c.catalog_visibility = 'PUBLIC'
+        order by lower(coalesce(v.title, c.title)), c.course_id
+        limit 100
+        """,
+        (organization["organization_id"],),
+    )
+    courses = [
+        {
+            "courseId": row["course_id"],
+            "courseCode": row["course_code"],
+            "title": row["title"],
+            "description": row.get("description") or "",
+            "totalHours": float(row.get("total_hours") or 0),
+            "versionNumber": int(row["version_number"]),
+        }
+        for row in rows
+    ]
+    return runtime.success(
+        {"institution": _public_institution(organization), "courses": courses}
+    )
 
 
 def _snapshot_value(value: Any, *, iso) -> Any:

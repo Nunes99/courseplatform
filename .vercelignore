@@ -1,0 +1,14 @@
+.env
+.env.local
+.venv/
+.security-venv/
+.pytest_cache/
+.pnpm-store/
+node_modules/
+local-secrets/
+output/
+playwright-report/
+test-results/
+tmp/
+**/__pycache__/
+**/*.pyc

@@ -27,6 +27,8 @@ class TypedApiRouteTests(unittest.TestCase):
         self.assertIn("/api/v1/admin/staff", paths)
         self.assertIn("/api/v1/catalog/courses/{course_id}", paths)
         self.assertIn("/api/v1/catalog/courses/{course_id}/media", paths)
+        self.assertIn("/api/v1/catalog/institutions/{organization_slug}", paths)
+        self.assertIn("/api/v1/catalog/institutions/{organization_slug}/courses", paths)
         self.assertIn("/api/v1/students/me/home", paths)
         self.assertIn("/api/v1/students/me/dashboard", paths)
         self.assertIn("/api/v1/students/me/courses/{course_id}/media", paths)
@@ -52,6 +54,35 @@ class TypedApiRouteTests(unittest.TestCase):
             [
                 call("publicCourseConfig", {"courseId": "COURSE-1"}),
                 call("publicMediaConfig", {"courseId": "COURSE-1"}),
+            ],
+            dispatch.call_args_list,
+        )
+
+    def test_public_institution_routes_use_minimal_catalog_actions(self):
+        institution = {
+            "slug": "institution-a",
+            "displayName": "Institution A",
+            "headline": "",
+            "description": "",
+            "logoUrl": "",
+            "websiteUrl": "",
+        }
+        with patch.object(
+            executor.actions,
+            "dispatch",
+            side_effect=[
+                {"success": True, "data": {"institution": institution}},
+                {"success": True, "data": {"institution": institution, "courses": []}},
+            ],
+        ) as dispatch:
+            profile_response = self.client.get("/api/v1/catalog/institutions/institution-a")
+            catalog_response = self.client.get("/api/v1/catalog/institutions/institution-a/courses")
+        self.assertEqual(200, profile_response.status_code)
+        self.assertEqual(200, catalog_response.status_code)
+        self.assertEqual(
+            [
+                call("publicInstitutionProfile", {"organizationSlug": "institution-a"}),
+                call("publicInstitutionCatalog", {"organizationSlug": "institution-a"}),
             ],
             dispatch.call_args_list,
         )

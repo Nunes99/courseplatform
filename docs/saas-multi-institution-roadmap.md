@@ -447,7 +447,7 @@ Antes de M4–M7 precisam de decisão explícita:
 | --- | --- |
 | M0 Fundação | Concluída |
 | M1 Contexto na autenticação | Concluída e validada |
-| M2 Isolamento dos domínios | Em curso: domínios isolados; regressões administrativas corrigidas localmente e revalidação de produção pendente |
+| M2 Isolamento dos domínios | Aplicada em produção; cinco testes PostgreSQL descartáveis e revalidação A/B segura pendentes |
 | M3 Storage e operação | Não iniciada |
 | M4 Administração global | Não iniciada |
 | M5 Publicação editorial | Não iniciada |
@@ -458,7 +458,7 @@ Antes de M4–M7 precisam de decisão explícita:
 
 ## Próxima ação autorizável
 
-Publicar as correções administrativas, repetir o verificador A/B integral e
-fechar o inventário de operações em lote, projeções públicas e auditoria
-persistida. Nenhum endpoint de criação de tenant, nenhuma página de agregador e
-nenhuma segunda instituição permanente devem ser ativados antes desse gate.
+Executar as cinco integrações PostgreSQL numa base descartável e repetir o gate
+A/B num ambiente seguro. Nenhum endpoint de criação de tenant, nenhuma página
+de agregador e nenhuma segunda instituição permanente devem ser ativados antes
+desse gate.

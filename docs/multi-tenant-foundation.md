@@ -175,17 +175,19 @@ faz o backfill para a organização histórica e só depois instala `NOT NULL`, 
 de 2026. O pós-flight confirmou a versão `20261004180000`, backfill sem nulos e
 readiness saudável.
 
-Durante o rollout, essas cinco colunas mantêm temporariamente o default da única
-instituição ativa para que o deployment anterior continue funcional enquanto o
-backend compatível é publicado. O código novo sempre envia `organization_id`
-explicitamente. Uma migração posterior deve remover os defaults antes de criar
-ou ativar a segunda instituição.
+Durante o rollout inicial, essas cinco colunas mantiveram temporariamente o
+default da única instituição ativa. O código atual envia `organization_id`
+explicitamente. A migração `20261004213604_complete_m2_tenant_isolation.sql`
+removeu os defaults em 5 de outubro de 2026; o pós-flight confirmou que nenhum
+dos cinco defaults transitórios permanece.
 
-M2 permanece aberta para o inventário final das operações em lote, projeções
-públicas e auditoria persistida. Configurações de transporte como SMTP, bot e
-VAPID continuam sendo infraestrutura global da plataforma; não devem ser
-expostas como configuração independente por instituição até existir um plano de
-controlo global separado da administração institucional.
+M2 permanece aberta apenas para os cinco testes PostgreSQL descartáveis e a
+repetição segura do gate A/B. A implementação aplicada adiciona âmbito
+institucional à auditoria e rotas públicas mínimas por slug, sem expor
+`settings_json`, nome legal ou dados privados. Configurações de transporte como
+SMTP, bot e VAPID continuam sendo
+infraestrutura global da plataforma; não devem ser expostas como configuração
+independente por instituição até existir um controlo global próprio.
 
 O inventário verificável e os critérios de encerramento estão em
 [`m2-isolation-inventory.md`](m2-isolation-inventory.md).
@@ -199,14 +201,15 @@ sessão administrativa temporária são removidas no final de cada execução.
 A validação revelou duas regressões SQL preexistentes nas leituras
 administrativas: a estatística de certificados assumia uma coluna direta no
 certificado, e as listas de estudantes/staff projetavam campos `status`/`role`
-ambíguos. As consultas foram corrigidas e os testes locais passam, mas o gate de
-produção só pode fechar depois de publicar o backend corrigido e repetir o
-verificador completo. Até lá:
+ambíguos. As consultas foram corrigidas, publicadas e revalidadas em 5 de
+outubro de 2026. O verificador A/B terminou com limpeza confirmada, e as páginas
+de visão geral, estudantes e staff carregaram em produção. Até concluir os
+outros bloqueios do inventário:
 
-- não remover os defaults transitórios das cinco colunas de comunicação;
+- preservar a migração e o backend compatível já publicados;
 - não ativar uma segunda instituição;
 - não marcar M2 como concluída;
-- repetir `scripts/validate_m2_cross_tenant.py --apply` após o deployment.
+- preservar o verificador A/B como gate de regressão para alterações M2.
 
 ## Decisões de negócio pendentes
 
