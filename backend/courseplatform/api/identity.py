@@ -27,6 +27,7 @@ from .contracts import (
     StudentRegistrationRequest,
     StudentLoginRequest,
     StudentSessionData,
+    StudentSessionStatusData,
     SuccessEnvelope,
 )
 from .executor import execute_action
@@ -172,6 +173,20 @@ async def delete_student_session(
     session_token: str = Header(alias="X-Session-Token", min_length=1),
 ):
     return await execute_action("logout", {"sessionToken": session_token})
+
+
+@router.get(
+    "/students/sessions/current",
+    response_model=SuccessEnvelope[StudentSessionStatusData],
+    responses=ERROR_RESPONSES,
+)
+async def get_current_student_session(
+    session_token: str = Header(alias="X-Session-Token", min_length=1),
+):
+    return await execute_action(
+        "currentStudentSession",
+        {"sessionToken": session_token},
+    )
 
 
 @router.post(

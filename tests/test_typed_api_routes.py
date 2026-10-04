@@ -20,6 +20,7 @@ class TypedApiRouteTests(unittest.TestCase):
         schema = self.client.get("/openapi.json").json()
         paths = schema["paths"]
         self.assertIn("/api/v1/auth/students/sessions", paths)
+        self.assertIn("/api/v1/auth/students/sessions/current", paths)
         self.assertIn("/api/v1/auth/administrators/sessions", paths)
         self.assertIn("/api/v1/students/me/courses", paths)
         self.assertIn("/api/v1/admin/students", paths)
@@ -79,6 +80,33 @@ class TypedApiRouteTests(unittest.TestCase):
                 "accessCode": "secret-code",
                 "userAgent": "courseplatform-test",
             },
+        )
+
+    def test_current_student_session_uses_header_and_existing_action(self):
+        result = {
+            "success": True,
+            "data": {
+                "sessionActive": True,
+                "expiresAt": "2026-10-05T10:00:00+00:00",
+                "organization": {
+                    "organizationId": "ORG-A",
+                    "slug": "institution-a",
+                    "displayName": "Institution A",
+                    "membershipRole": "STUDENT",
+                },
+            },
+        }
+        with patch.object(executor.actions, "dispatch", return_value=result) as dispatch:
+            response = self.client.get(
+                "/api/v1/auth/students/sessions/current",
+                headers={"x-session-token": "student-session"},
+            )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(result, response.json())
+        dispatch.assert_called_once_with(
+            "currentStudentSession",
+            {"sessionToken": "student-session"},
         )
 
     def test_typed_login_rejects_unknown_or_missing_fields_before_dispatch(self):

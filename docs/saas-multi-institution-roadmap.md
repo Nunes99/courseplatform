@@ -224,8 +224,7 @@ Gate de saída:
 
 ### M1 — Contexto institucional na autenticação
 
-Estado: **implementada localmente; migração, deploy e validação externa
-pendentes**.
+Estado: **concluída e validada em 4 de outubro de 2026**.
 
 Entregas:
 
@@ -244,6 +243,11 @@ Testes de saída:
 - suspensão numa organização não destrói o acesso legítimo noutra.
 
 ### M2 — Isolamento de consultas e mutações
+
+Estado: **em curso**. A primeira fatia cobre as leituras privadas do estudante
+para cursos, dashboard, aulas e configuração de media. Matrículas, versões,
+ofertas e aulas são agora resolvidas dentro da organização validada na sessão.
+Os restantes domínios abaixo ainda não estão declarados como isolados.
 
 Entregas:
 
@@ -438,8 +442,8 @@ Antes de M4–M7 precisam de decisão explícita:
 | Fase | Estado |
 | --- | --- |
 | M0 Fundação | Concluída |
-| M1 Contexto na autenticação | Implementada localmente; rollout pendente |
-| M2 Isolamento dos domínios | Não iniciada |
+| M1 Contexto na autenticação | Concluída e validada |
+| M2 Isolamento dos domínios | Em curso: leituras privadas de aprendizagem |
 | M3 Storage e operação | Não iniciada |
 | M4 Administração global | Não iniciada |
 | M5 Publicação editorial | Não iniciada |
@@ -450,6 +454,9 @@ Antes de M4–M7 precisam de decisão explícita:
 
 ## Próxima ação autorizável
 
-Aplicar e validar M0 antes de iniciar M1. Nenhum endpoint de criação de tenant,
-nenhuma página de agregador e nenhuma segunda instituição devem ser ativados na
-mesma mudança da fundação.
+Continuar M2 pelas mutações de aprendizagem e avaliações, seguida por
+certificados, pagamentos, inquéritos, comunicação e administração. Cada
+domínio deve receber testes negativos entre duas organizações antes de ser
+marcado como isolado. Nenhum endpoint de criação de tenant, nenhuma página de
+agregador e nenhuma segunda instituição permanente devem ser ativados antes do
+gate integral de M2.

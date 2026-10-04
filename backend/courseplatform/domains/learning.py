@@ -333,7 +333,15 @@ def refresh_enrollment_progress_action(conn, progress_id: str | None, *, runtime
     ).fetchone()
 
 
-def dashboard_payload_action(conn, student: dict[str, Any], course_id: str='', enrollment_id: str='', *, runtime: LearningRuntime):
+def dashboard_payload_action(
+    conn,
+    student: dict[str, Any],
+    course_id: str = '',
+    enrollment_id: str = '',
+    organization_id: str = '',
+    *,
+    runtime: LearningRuntime,
+):
     public_course = runtime.public_course
     public_course_offering = runtime.public_course_offering
     public_course_version = runtime.public_course_version
@@ -345,19 +353,32 @@ def dashboard_payload_action(conn, student: dict[str, Any], course_id: str='', e
     str_value = runtime.str_value
     student_attempt = runtime.student_attempt
     enrollment = resolve_student_enrollment_with_conn(
-        conn, student["student_id"], course_id, enrollment_id
+        conn,
+        student["student_id"],
+        course_id,
+        enrollment_id,
+        organization_id,
     )
     course = conn.execute(
-        "select * from courseplatform.courses where course_id = %s",
-        (enrollment["course_id"],),
+        """
+        select * from courseplatform.courses
+        where course_id = %s and organization_id = %s
+        """,
+        (enrollment["course_id"], organization_id),
     ).fetchone()
     version = conn.execute(
-        "select * from courseplatform.course_versions where course_version_id = %s",
-        (enrollment["course_version_id"],),
+        """
+        select * from courseplatform.course_versions
+        where course_version_id = %s and course_id = %s
+        """,
+        (enrollment["course_version_id"], enrollment["course_id"]),
     ).fetchone()
     offering = conn.execute(
-        "select * from courseplatform.course_offerings where offering_id = %s",
-        (enrollment["offering_id"],),
+        """
+        select * from courseplatform.course_offerings
+        where offering_id = %s and course_id = %s
+        """,
+        (enrollment["offering_id"], enrollment["course_id"]),
     ).fetchone()
     if not course or not version or not offering:
         raise ApiError("ENROLLMENT_STRUCTURE_INVALID", "A matrícula não está ligada a uma edição válida.")
@@ -454,8 +475,9 @@ def student_home_action(payload: dict[str, Any], *, runtime: LearningRuntime):
     require_session_token(payload)
     prepare_assessment_feature_schema()
     with connection() as conn:
-        _, student = student_context_with_conn(conn, payload)
-        course_rows = student_courses_rows(conn, student["student_id"])
+        session, student = student_context_with_conn(conn, payload)
+        organization_id = session["organization_id"]
+        course_rows = student_courses_rows(conn, student["student_id"], organization_id)
         courses = student_courses_payload(course_rows)
         requested_enrollment_id = str_value(payload.get("enrollmentId"))
         requested_course_id = payload.get("courseId") or get_settings().default_course_id
@@ -470,7 +492,13 @@ def student_home_action(payload: dict[str, Any], *, runtime: LearningRuntime):
             )
         selected_enrollment_id = selected_entry.get("enrollment", {}).get("enrollmentId") if selected_entry else ""
         selected_course_id = selected_entry.get("course", {}).get("courseId") if selected_entry else requested_course_id
-        dashboard_data = dashboard_payload(conn, student, selected_course_id, selected_enrollment_id)
+        dashboard_data = dashboard_payload(
+            conn,
+            student,
+            selected_course_id,
+            selected_enrollment_id,
+            organization_id,
+        )
         media = read_media_config_with_conn(conn, selected_course_id)
     return success({
         "student": public_student(student),
@@ -488,14 +516,20 @@ def dashboard_action(payload: dict[str, Any], *, runtime: LearningRuntime):
     get_settings = runtime.get_settings
     prepare_assessment_feature_schema = runtime.prepare_assessment_feature_schema
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
-    _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
     enrollment_id = str_value(payload.get("enrollmentId"))
     prepare_assessment_feature_schema()
     with connection() as conn:
-        return success(dashboard_payload(conn, student, course_id, enrollment_id))
+        session, student = student_context_with_conn(conn, payload)
+        return success(dashboard_payload(
+            conn,
+            student,
+            course_id,
+            enrollment_id,
+            session["organization_id"],
+        ))
 
 
 def get_lesson_action(payload: dict[str, Any], *, runtime: LearningRuntime):
@@ -510,28 +544,41 @@ def get_lesson_action(payload: dict[str, Any], *, runtime: LearningRuntime):
     require_fields = runtime.require_fields
     resolve_student_enrollment_with_conn = runtime.resolve_student_enrollment_with_conn
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     student_attempt = runtime.student_attempt
     student_option = runtime.student_option
     student_question = runtime.student_question
     success = runtime.success
-    _, student = student_context(payload)
     require_fields(payload, ["lessonId"])
     prepare_assessment_feature_schema()
     lesson_id = payload["lessonId"]
     enrollment_id = str_value(payload.get("enrollmentId"))
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
+        organization_id = session["organization_id"]
         live_lesson = conn.execute(
-            "select course_id from courseplatform.lessons where lesson_id = %s",
-            (lesson_id,),
+            """
+            select l.course_id
+            from courseplatform.lessons l
+            join courseplatform.courses c on c.course_id = l.course_id
+            where l.lesson_id = %s and c.organization_id = %s
+            """,
+            (lesson_id, organization_id),
         ).fetchone()
         course_id = live_lesson.get("course_id") if live_lesson else ""
         enrollment = resolve_student_enrollment_with_conn(
-            conn, student["student_id"], course_id, enrollment_id
+            conn,
+            student["student_id"],
+            course_id,
+            enrollment_id,
+            organization_id,
         )
         version = conn.execute(
-            "select * from courseplatform.course_versions where course_version_id = %s",
-            (enrollment["course_version_id"],),
+            """
+            select * from courseplatform.course_versions
+            where course_version_id = %s and course_id = %s
+            """,
+            (enrollment["course_version_id"], enrollment["course_id"]),
         ).fetchone()
         snapshot = (version or {}).get("content_snapshot_json") or {}
         snapshot_lessons = snapshot.get("lessons") if isinstance(snapshot, dict) else []

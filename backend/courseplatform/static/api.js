@@ -312,6 +312,7 @@ export class CoursePlatformApi {
     if (data.sessionToken) {
       localStorage.setItem('courseSessionToken', data.sessionToken);
       localStorage.setItem('courseOrganizationId', data.organization?.organizationId || '');
+      localStorage.setItem('courseSessionExpiresAt', data.expiresAt || '');
     }
     return data;
   }
@@ -327,7 +328,21 @@ export class CoursePlatformApi {
     );
     localStorage.setItem('courseSessionToken', data.sessionToken);
     localStorage.setItem('courseOrganizationId', data.organization?.organizationId || '');
+    localStorage.setItem('courseSessionExpiresAt', data.expiresAt || '');
     return data;
+  }
+
+  currentStudentSession() {
+    const sessionToken = this.studentToken();
+    return this.versionedRead(
+      '/api/v1/auth/students/sessions/current',
+      {},
+      { 'x-session-token': sessionToken },
+      () => this.request('currentStudentSession', { sessionToken })
+    ).then((data) => {
+      localStorage.setItem('courseSessionExpiresAt', data.expiresAt || '');
+      return data;
+    });
   }
 
   recoverStudentAccess(email) {
@@ -378,8 +393,7 @@ export class CoursePlatformApi {
     try {
       return await this.request('logout', { sessionToken });
     } finally {
-      localStorage.removeItem('courseSessionToken');
-      localStorage.removeItem('courseOrganizationId');
+      this.clearStudentSession();
     }
   }
 
@@ -536,7 +550,7 @@ export class CoursePlatformApi {
     });
 
     if (result.requiresLogin) {
-      localStorage.removeItem('courseSessionToken');
+      this.clearStudentSession();
     }
 
     return result;
@@ -551,7 +565,7 @@ export class CoursePlatformApi {
     });
 
     if (result.requiresLogin) {
-      localStorage.removeItem('courseSessionToken');
+      this.clearStudentSession();
     }
 
     return result;
@@ -773,8 +787,21 @@ export class CoursePlatformApi {
     return token;
   }
 
+  clearStudentSession() {
+    localStorage.removeItem('courseSessionToken');
+    localStorage.removeItem('courseOrganizationId');
+    localStorage.removeItem('courseSessionExpiresAt');
+  }
+
   hasStudentSession() {
-    return Boolean(localStorage.getItem('courseSessionToken'));
+    const token = localStorage.getItem('courseSessionToken');
+    if (!token) return false;
+    const expiresAt = Date.parse(localStorage.getItem('courseSessionExpiresAt') || '');
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+      this.clearStudentSession();
+      return false;
+    }
+    return true;
   }
 
   async adminLogin(email, adminKey, organizationId = '') {

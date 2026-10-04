@@ -2206,11 +2206,13 @@ def _catalog_runtime() -> catalog_domain.CatalogRuntime:
         public_course_version=public_course_version,
         public_lesson=public_lesson,
         read_media_config=read_media_config,
+        read_media_config_with_conn=read_media_config_with_conn,
         require_fields=require_fields,
         staff_option=staff_option,
         staff_question=staff_question,
         str_value=str_value,
         student_context=student_context,
+        student_context_with_conn=student_context_with_conn,
         student_visible_media=student_visible_media,
         success=success,
         utc_now=utc_now,
@@ -2387,6 +2389,10 @@ def switch_student_organization(payload: dict[str, Any]):
     return identity_domain.switch_student_organization_action(payload, _identity_runtime())
 
 
+def current_student_session(payload: dict[str, Any]):
+    return identity_domain.current_student_session_action(payload, _identity_runtime())
+
+
 def mask_email(email: str) -> str:
     return identity_domain.mask_email(email)
 
@@ -2472,12 +2478,10 @@ def resolve_student_enrollment_with_conn(
     student_id: str,
     course_id: str = "",
     enrollment_id: str = "",
+    organization_id: str = "",
 ) -> dict[str, Any]:
     return enrollment_domain.resolve_student_enrollment_with_conn_action(
-        conn,
-        student_id,
-        course_id,
-        enrollment_id,
+        conn, student_id, course_id, enrollment_id, organization_id,
         runtime=_enrollment_runtime(),
     )
 
@@ -2509,16 +2513,25 @@ def my_courses(payload: dict[str, Any]):
     return enrollment_domain.my_courses_action(payload, runtime=_enrollment_runtime())
 
 
-def student_courses_rows(conn, student_id: str):
-    return enrollment_domain.student_courses_rows_action(conn, student_id, runtime=_enrollment_runtime())
+def student_courses_rows(conn, student_id: str, organization_id: str):
+    return enrollment_domain.student_courses_rows_action(
+        conn,
+        student_id,
+        organization_id,
+        runtime=_enrollment_runtime(),
+    )
 
 
 def student_courses_payload(rows: list[dict[str, Any]]):
     return enrollment_domain.student_courses_payload_action(rows, runtime=_enrollment_runtime())
 
 
-def dashboard_payload(conn, student: dict[str, Any], course_id: str='', enrollment_id: str=''):
-    return learning_domain.dashboard_payload_action(conn, student, course_id, enrollment_id, runtime=_learning_runtime())
+def dashboard_payload(conn, student: dict[str, Any], course_id: str = '',
+                      enrollment_id: str = '', organization_id: str = ''):
+    return learning_domain.dashboard_payload_action(
+        conn, student, course_id, enrollment_id, organization_id,
+        runtime=_learning_runtime(),
+    )
 
 
 def student_home(payload: dict[str, Any]):

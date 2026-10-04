@@ -74,9 +74,9 @@ Até a conclusão das fases abaixo:
 
 ## M1 — Contexto institucional na autenticação
 
-A implementação M1 está preparada na migração
-`20261004103000_add_tenant_session_guards.sql` e no domínio de identidade. O
-rollout permanece pendente de aplicação da migração e deploy compatível.
+A implementação M1 foi aplicada e validada em 4 de outubro de 2026 pela
+migração `20261004103000_add_tenant_session_guards.sql` e pelo domínio de
+identidade.
 
 - Logins com uma única membership ativa continuam diretos e compatíveis.
 - Depois de validar as credenciais, contas com várias memberships recebem
@@ -88,9 +88,31 @@ rollout permanece pendente de aplicação da migração e deploy compatível.
 - Suspender/remover uma membership revoga somente as sessões desse tenant.
 - Suspender uma organização revoga todas as suas sessões ativas.
 
-Não crie uma segunda organização para testar esta fase no projeto principal.
-Os testes cruzados com múltiplos tenants devem usar uma base descartável até a
-conclusão do isolamento dos domínios na M2.
+O login com uma instituição e a seleção explícita de tenant para uma identidade
+com mais de uma membership foram validados. Os registos temporários usados na
+validação foram removidos e nenhuma segunda organização permanece ativa. Novos
+testes cruzados devem preferir uma base descartável até a conclusão do
+isolamento dos domínios na M2.
+
+O frontend guarda a validade da sessão, elimina localmente tokens expirados e
+confirma a sessão no servidor antes de carregar o dashboard. Sessões revogadas,
+inválidas ou sem membership ativa regressam imediatamente à autenticação após
+essa verificação, sem iniciar o conjunto de leituras do painel.
+
+## M2 — Primeira fatia de isolamento
+
+As leituras privadas de aprendizagem usam agora exclusivamente o
+`organization_id` da sessão validada:
+
+- `getMyCourses` filtra cursos pela organização ativa;
+- home e dashboard resolvem matrícula, curso, versão e oferta no mesmo tenant;
+- a leitura de aula valida a organização do curso antes de carregar o snapshot;
+- a configuração de media autenticada exige que o curso pertença ao tenant;
+- relações entre matrícula, versão e oferta confirmam também o mesmo curso.
+
+Esta fatia não conclui M2. Avaliações e respetivas mutações, certificados,
+pagamentos, inquéritos, comunicação, administração, operações em lote e as
+projeções públicas ainda precisam de revisão e testes negativos próprios.
 
 ## Decisões de negócio pendentes
 

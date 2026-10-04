@@ -22,6 +22,7 @@ ACTION_BINDINGS = (
     ("recoverStudentAccess", "recover_student_access"),
     ("completeStudentPasswordReset", "complete_student_password_reset"),
     ("logout", "logout"),
+    ("currentStudentSession", "current_student_session"),
     ("switchStudentOrganization", "switch_student_organization"),
     ("adminLogin", "admin_login"),
     ("switchAdminOrganization", "switch_admin_organization"),
@@ -1260,6 +1261,20 @@ def logout_action(payload: dict[str, Any], runtime: IdentityRuntime):
                 )
             conn.commit()
     return runtime.success({"loggedOut": True})
+
+
+def current_student_session_action(payload: dict[str, Any], runtime: IdentityRuntime):
+    session, student = runtime.student_context(payload)
+    return runtime.success({
+        "sessionActive": True,
+        "expiresAt": runtime.iso(session["expires_at"]),
+        "organization": {
+            "organizationId": session["organization_id"],
+            "slug": student.get("active_organization_slug") or "",
+            "displayName": student.get("active_organization_name") or "",
+            "membershipRole": student.get("active_membership_role") or "STUDENT",
+        },
+    })
 
 
 def admin_me_action(payload: dict[str, Any], runtime: IdentityRuntime):

@@ -228,6 +228,22 @@ async function initialize() {
     return;
   }
 
+  try {
+    await api.currentStudentSession();
+  } catch (error) {
+    if (
+      error instanceof ApiError
+      && ['INVALID_SESSION', 'SESSION_EXPIRED', 'SESSION_REQUIRED', 'ORGANIZATION_ACCESS_REVOKED'].includes(error.code)
+    ) {
+      api.clearStudentSession();
+      resetStudentAccountState({ clearSelection: true });
+      await route();
+      loadPublicMediaConfig().then(applyBrandLogo);
+      return;
+    }
+    throw error;
+  }
+
   startPresenceHeartbeat();
   route();
 }
@@ -1272,7 +1288,7 @@ function showPasswordResetDialog(token) {
     setBusy(button, true, 'A guardar...');
     try {
       await api.completeStudentPasswordReset(token, values.newPassword, values.confirmPassword);
-      localStorage.removeItem('courseSessionToken');
+      api.clearStudentSession();
       resetStudentAccountState({ clearSelection: true });
       close();
       renderLogin();
@@ -1305,7 +1321,7 @@ async function logout() {
   try {
     await api.logout();
   } catch {
-    localStorage.removeItem('courseSessionToken');
+    api.clearStudentSession();
   }
 
   resetStudentAccountState({ clearSelection: true });
@@ -4775,7 +4791,7 @@ function handleError(error, toast = true) {
     error instanceof ApiError &&
     ['INVALID_SESSION', 'SESSION_EXPIRED', 'SESSION_REQUIRED'].includes(error.code)
   ) {
-    localStorage.removeItem('courseSessionToken');
+    api.clearStudentSession();
     resetStudentAccountState({ clearSelection: true });
     renderLogin();
     return true;

@@ -122,6 +122,12 @@ class LogoutData(BaseModel):
     loggedOut: bool
 
 
+class StudentSessionStatusData(BaseModel):
+    sessionActive: bool
+    expiresAt: str
+    organization: OrganizationSummary
+
+
 class StudentCoursesData(BaseModel):
     student: dict[str, Any]
     courses: list[dict[str, Any]]

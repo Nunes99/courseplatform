@@ -155,9 +155,9 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
         class LessonConnection:
             def execute(self, query, params=()):
                 normalized = " ".join(query.lower().split())
-                if normalized.startswith("select course_id from courseplatform.lessons"):
+                if "from courseplatform.lessons l" in normalized:
                     return QueryResult(row={"course_id": "C1"})
-                if normalized.startswith("select * from courseplatform.enrollments"):
+                if "from courseplatform.enrollments e" in normalized:
                     return QueryResult(row={
                         "enrollment_id": "E1",
                         "student_id": "S1",
@@ -201,7 +201,11 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
 
         with (
             patch.object(actions, "require_application_schema"),
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-1"}, {"student_id": "S1"}),
+            ),
             patch.object(actions, "prepare_assessment_feature_schema"),
             patch.object(actions, "connection", connect),
         ):

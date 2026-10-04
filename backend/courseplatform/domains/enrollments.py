@@ -135,30 +135,44 @@ def resolve_student_enrollment_with_conn_action(
     student_id: str,
     course_id: str = "",
     enrollment_id: str = "",
+    organization_id: str = "",
     *,
     runtime: EnrollmentRuntime,
 ) -> dict[str, Any]:
     if enrollment_id:
         enrollment = conn.execute(
             """
-            select * from courseplatform.enrollments
-            where enrollment_id = %s and student_id = %s
-              and (%s = '' or course_id = %s)
+            select e.*
+            from courseplatform.enrollments e
+            join courseplatform.courses c on c.course_id = e.course_id
+            where e.enrollment_id = %s and e.student_id = %s
+              and (%s = '' or e.course_id = %s)
+              and (%s = '' or c.organization_id = %s)
             """,
-            (enrollment_id, student_id, course_id, course_id),
+            (
+                enrollment_id,
+                student_id,
+                course_id,
+                course_id,
+                organization_id,
+                organization_id,
+            ),
         ).fetchone()
         if not enrollment:
             raise ApiError("ENROLLMENT_NOT_FOUND", "Matrícula não encontrada.")
         return enrollment
     rows = conn.execute(
         """
-        select * from courseplatform.enrollments
-        where student_id = %s and (%s = '' or course_id = %s)
-          and status in ('ACTIVE', 'COMPLETED')
-        order by enrolled_at desc nulls last, updated_at desc nulls last
+        select e.*
+        from courseplatform.enrollments e
+        join courseplatform.courses c on c.course_id = e.course_id
+        where e.student_id = %s and (%s = '' or e.course_id = %s)
+          and e.status in ('ACTIVE', 'COMPLETED')
+          and (%s = '' or c.organization_id = %s)
+        order by e.enrolled_at desc nulls last, e.updated_at desc nulls last
         limit 2
         """,
-        (student_id, course_id, course_id),
+        (student_id, course_id, course_id, organization_id, organization_id),
     ).fetchall()
     if len(rows) == 1:
         return rows[0]
@@ -281,7 +295,13 @@ def ensure_offering_enrollment_with_conn_action(
     return enrollment
 
 
-def student_courses_rows_action(conn, student_id: str, *, runtime: EnrollmentRuntime):
+def student_courses_rows_action(
+    conn,
+    student_id: str,
+    organization_id: str,
+    *,
+    runtime: EnrollmentRuntime,
+):
     return conn.execute(
         """
         select
@@ -301,13 +321,17 @@ def student_courses_rows_action(conn, student_id: str, *, runtime: EnrollmentRun
           coalesce(jsonb_array_length(cv.content_snapshot_json -> 'lessons'), 0) as lesson_count
         from courseplatform.enrollments e
         join courseplatform.courses c on c.course_id = e.course_id
-        join courseplatform.course_versions cv on cv.course_version_id = e.course_version_id
-        join courseplatform.course_offerings o on o.offering_id = e.offering_id
+        join courseplatform.course_versions cv
+          on cv.course_version_id = e.course_version_id and cv.course_id = e.course_id
+        join courseplatform.course_offerings o
+          on o.offering_id = e.offering_id and o.course_id = e.course_id
         left join courseplatform.groups g on g.group_id = e.group_id
-        where e.student_id = %s and c.status <> 'DELETED'
+        where e.student_id = %s
+          and c.organization_id = %s
+          and c.status <> 'DELETED'
         order by coalesce(o.start_date, e.enrolled_at) desc nulls last, c.title
         """,
-        (student_id,),
+        (student_id, organization_id),
     ).fetchall()
 
 
@@ -374,8 +398,12 @@ def my_courses_action(payload: dict[str, Any], *, runtime: EnrollmentRuntime):
     success = runtime.success
     require_session_token(payload)
     with connection() as conn:
-        _, student = student_context_with_conn(conn, payload)
-        rows = student_courses_rows(conn, student["student_id"])
+        session, student = student_context_with_conn(conn, payload)
+        rows = student_courses_rows(
+            conn,
+            student["student_id"],
+            session["organization_id"],
+        )
     return success({
         "student": public_student(student),
         "courses": student_courses_payload(rows),

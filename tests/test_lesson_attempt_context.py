@@ -63,7 +63,7 @@ class LessonAttemptContextTests(unittest.TestCase):
             public_lesson=lambda row: row,
             public_progress=lambda row: row,
             require_fields=lambda payload, fields: None,
-            resolve_student_enrollment_with_conn=lambda conn, student_id, course_id, enrollment_id: {
+            resolve_student_enrollment_with_conn=lambda conn, student_id, course_id, enrollment_id, organization_id: {
                 "enrollment_id": "ENROLLMENT-1",
                 "course_id": "COURSE-1",
                 "course_version_id": "VERSION-1",
@@ -74,7 +74,10 @@ class LessonAttemptContextTests(unittest.TestCase):
                 "status": row["status"],
                 "score": row["score"],
             },
-            student_context=lambda payload: (None, {"student_id": "STUDENT-1"}),
+            student_context_with_conn=lambda conn, payload: (
+                {"organization_id": "ORG-1"},
+                {"student_id": "STUDENT-1"},
+            ),
             student_option=lambda row: row,
             student_question=lambda row: row,
             success=lambda data: {"success": True, "data": data},

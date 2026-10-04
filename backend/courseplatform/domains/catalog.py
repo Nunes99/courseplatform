@@ -78,11 +78,13 @@ class CatalogRuntime:
     public_course_version: Any
     public_lesson: Any
     read_media_config: Any
+    read_media_config_with_conn: Any
     require_fields: Any
     staff_option: Any
     staff_question: Any
     str_value: Any
     student_context: Any
+    student_context_with_conn: Any
     student_visible_media: Any
     success: Any
     utc_now: Any
@@ -171,13 +173,26 @@ def student_visible_media_action(media: dict[str, Any], student: dict[str, Any],
 
 
 def student_media_config_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
+    connection = runtime.connection
     get_settings = runtime.get_settings
-    read_media_config = runtime.read_media_config
-    student_context = runtime.student_context
+    read_media_config_with_conn = runtime.read_media_config_with_conn
+    student_context_with_conn = runtime.student_context_with_conn
     student_visible_media = runtime.student_visible_media
     success = runtime.success
-    _, student = student_context(payload)
-    media = read_media_config(payload.get("courseId") or get_settings().default_course_id)
+    course_id = payload.get("courseId") or get_settings().default_course_id
+    with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
+        course = conn.execute(
+            """
+            select course_id
+            from courseplatform.courses
+            where course_id = %s and organization_id = %s and status <> 'DELETED'
+            """,
+            (course_id, session["organization_id"]),
+        ).fetchone()
+        if not course:
+            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
+        media = read_media_config_with_conn(conn, course_id)
     return success({"mediaConfig": student_visible_media(media, student)})
 
 

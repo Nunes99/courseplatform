@@ -154,6 +154,35 @@ class TenantLoginSelectionTests(unittest.TestCase):
 
 
 class TenantSessionContextTests(unittest.TestCase):
+    def test_current_session_returns_the_server_validated_organization(self):
+        runtime = SimpleNamespace(
+            student_context=Mock(return_value=(
+                {
+                    "organization_id": "ORG-A",
+                    "expires_at": "2026-10-05T10:00:00+00:00",
+                },
+                {
+                    "active_organization_slug": "institution-a",
+                    "active_organization_name": "Institution A",
+                    "active_membership_role": "STUDENT",
+                },
+            )),
+            iso=lambda value: value,
+            success=lambda data: {"success": True, "data": data},
+        )
+
+        result = identity.current_student_session_action(
+            {"sessionToken": "student-token"},
+            runtime,
+        )["data"]
+
+        self.assertTrue(result["sessionActive"])
+        self.assertEqual("2026-10-05T10:00:00+00:00", result["expiresAt"])
+        self.assertEqual("ORG-A", result["organization"]["organizationId"])
+        runtime.student_context.assert_called_once_with(
+            {"sessionToken": "student-token"}
+        )
+
     def test_payload_cannot_override_session_organization(self):
         conn = _Connection([])
         with patch.object(
@@ -275,6 +304,16 @@ class TenantFrontendContractTests(unittest.TestCase):
         self.assertIn("switchAdminOrganization", api)
         self.assertIn("organizationSelectionRequired", student)
         self.assertIn("organizationSelectionRequired", admin)
+
+    def test_student_client_validates_and_expires_sessions_before_loading(self):
+        api = (ROOT / "public" / "api.js").read_text(encoding="utf-8")
+        student = (ROOT / "public" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("/api/v1/auth/students/sessions/current", api)
+        self.assertIn("courseSessionExpiresAt", api)
+        self.assertIn("expiresAt <= Date.now()", api)
+        self.assertIn("await api.currentStudentSession();", student)
+        self.assertIn("ORGANIZATION_ACCESS_REVOKED", student)
 
 
 if __name__ == "__main__":
