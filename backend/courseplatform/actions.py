@@ -1592,10 +1592,21 @@ def course_completion_snapshot(
     student_id: str,
     course_id: str,
     enrollment_id: str = "",
+    organization_id: str = "",
 ):
     ensure_assessment_feature_schema(conn)
-    enrollment = resolve_student_enrollment_with_conn(conn, student_id, course_id, enrollment_id)
-    course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+    enrollment = resolve_student_enrollment_with_conn(
+        conn, student_id, course_id, enrollment_id, organization_id
+    )
+    course = conn.execute(
+        """
+        select * from courseplatform.courses
+        where course_id = %s and (%s = '' or organization_id = %s)
+        """,
+        (course_id, organization_id, organization_id),
+    ).fetchone()
+    if not course:
+        raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
     version = conn.execute(
         "select * from courseplatform.course_versions where course_version_id = %s",
         (enrollment["course_version_id"],),
@@ -1643,16 +1654,15 @@ def refresh_enrollment_progress(conn, progress_id: str | None):
 
 
 def ensure_simple_certificate(
-    conn,
-    student: dict[str, Any],
-    course_id: str,
-    enrollment_id: str = "",
+    conn, student: dict[str, Any], course_id: str,
+    enrollment_id: str = "", organization_id: str = "",
 ):
     return certificate_domain.ensure_simple_certificate_action(
         conn,
         student,
         course_id,
         enrollment_id,
+        organization_id,
         runtime=_certificate_runtime(),
     )
 
@@ -2255,6 +2265,7 @@ def _enrollment_runtime() -> enrollment_domain.EnrollmentRuntime:
 def _certificate_runtime() -> certificate_domain.CertificateRuntime:
     return certificate_domain.CertificateRuntime(
         admin_context=admin_context,
+        admin_context_with_conn=admin_context_with_conn,
         as_bool=as_bool,
         audit=audit,
         certificate_content_summary=certificate_content_summary,
@@ -2294,6 +2305,7 @@ def _certificate_runtime() -> certificate_domain.CertificateRuntime:
         str_value=str_value,
         student_certificate_payload=student_certificate_payload,
         student_context=student_context,
+        student_context_with_conn=student_context_with_conn,
         success=success,
         sync_enrollment_completion=sync_enrollment_completion,
         upload_raster_asset_to_storage=upload_raster_asset_to_storage,
@@ -2305,6 +2317,7 @@ def _financial_runtime() -> financial_domain.FinancialRuntime:
     return financial_domain.FinancialRuntime(
         _private_content_payload=_private_content_payload,
         admin_context=admin_context,
+        admin_context_with_conn=admin_context_with_conn,
         approve_participation_request=approve_participation_request,
         as_bool=as_bool,
         audit=audit,
@@ -2331,6 +2344,7 @@ def _financial_runtime() -> financial_domain.FinancialRuntime:
         storage_object_path=storage_object_path,
         str_value=str_value,
         student_context=student_context,
+        student_context_with_conn=student_context_with_conn,
         success=success,
         upload_private_object=upload_private_object,
         validate_upload=validate_upload,
@@ -2608,6 +2622,7 @@ def _assessment_runtime() -> assessment_domain.AssessmentRuntime:
         student_answer=student_answer,
         student_attempt=student_attempt,
         student_context=student_context,
+        student_context_with_conn=student_context_with_conn,
         student_review=student_review,
         student_snapshot_questions=student_snapshot_questions,
         submission_item=submission_item,
@@ -2685,19 +2700,25 @@ def require_latest_attempt(conn, attempt):
         raise ApiError("ATTEMPT_SUPERSEDED", "Já existe uma tentativa mais recente. Abra essa tentativa para gerir o reenvio.")
 
 
-def editable_attempt(conn, attempt_id, student_id):
+def editable_attempt(conn, attempt_id, student_id, organization_id=""):
     conn.execute(
         """select p.progress_id from courseplatform.lesson_progress p
            join courseplatform.attempts a on a.progress_id = p.progress_id
-           where a.attempt_id = %s and a.student_id = %s for update of p""",
-        (attempt_id, student_id),
+           join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
+           join courseplatform.courses c on c.course_id = e.course_id
+           where a.attempt_id = %s and a.student_id = %s
+             and (%s = '' or c.organization_id = %s) for update of p""",
+        (attempt_id, student_id, organization_id, organization_id),
     ).fetchone()
     attempt = conn.execute(
         """select a.*, p.content_access_status, p.status as progress_status
            from courseplatform.attempts a
            join courseplatform.lesson_progress p on p.progress_id = a.progress_id
-           where a.attempt_id = %s and a.student_id = %s for update of a""",
-        (attempt_id, student_id),
+           join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
+           join courseplatform.courses c on c.course_id = e.course_id
+           where a.attempt_id = %s and a.student_id = %s
+             and (%s = '' or c.organization_id = %s) for update of a""",
+        (attempt_id, student_id, organization_id, organization_id),
     ).fetchone()
     if not attempt or attempt["status"] != "IN_PROGRESS":
         raise ApiError("ATTEMPT_NOT_EDITABLE", "Esta tentativa já não pode ser alterada. Solicite autorização para um novo envio.")
@@ -3000,12 +3021,11 @@ def start_attempt(payload: dict[str, Any]):
     return assessment_domain.start_attempt_action(payload, _assessment_runtime())
 
 
-def start_attempt_with_conn(conn, student, lesson_id, enrollment_id: str = ""):
+def start_attempt_with_conn(
+    conn, student, lesson_id, enrollment_id: str = "", organization_id: str = ""
+):
     return assessment_domain.start_attempt_with_conn_action(
-        conn,
-        student,
-        lesson_id,
-        enrollment_id,
+        conn, student, lesson_id, enrollment_id, organization_id,
         runtime=_assessment_runtime(),
     )
 
@@ -3449,11 +3469,12 @@ def admin_delete_certificate(payload: dict[str, Any]):
     return certificate_domain.admin_delete_certificate_action(payload, _certificate_runtime())
 
 
-def approve_participation_request(conn, request, admin):
+def approve_participation_request(conn, request, admin, organization_id):
     return financial_domain.approve_participation_request_action(
         conn,
         request,
         admin,
+        organization_id,
         _financial_runtime(),
     )
 

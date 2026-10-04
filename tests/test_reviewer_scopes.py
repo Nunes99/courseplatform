@@ -48,7 +48,7 @@ class ReviewerScopeUnitTests(unittest.TestCase):
 
     def test_reviewer_predicate_covers_course_offering_and_group(self):
         sql, params = reviewer_scope_predicate(
-            {"role": "REVIEWER", "admin_id": "ADM-2"},
+            {"role": "REVIEWER", "admin_id": "ADM-2", "active_organization_id": "ORG-A"},
             course_expr="e.course_id",
             offering_expr="e.offering_id",
             group_expr="e.group_id",
@@ -58,14 +58,15 @@ class ReviewerScopeUnitTests(unittest.TestCase):
         self.assertIn("rs.group_id = e.group_id", sql)
         self.assertIn("select max(", sql)
         self.assertIn("effective_scope.status = 'ACTIVE'", sql)
-        self.assertEqual(("ADM-2",), params)
+        self.assertEqual(("ADM-2", "ORG-A", "ORG-A"), params)
 
     def test_course_parent_is_visible_for_any_scope_below_it(self):
         sql, params = reviewer_course_predicate(
-            {"role": "REVIEWER", "admin_id": "ADM-3"}, "c.course_id"
+            {"role": "REVIEWER", "admin_id": "ADM-3", "active_organization_id": "ORG-A"},
+            "c.course_id",
         )
         self.assertIn("rs.course_id = c.course_id", sql)
-        self.assertEqual(("ADM-3",), params)
+        self.assertEqual(("ADM-3", "ORG-A", "ORG-A"), params)
 
     def test_global_scope_cannot_be_combined(self):
         with self.assertRaises(ApiError):
@@ -100,7 +101,11 @@ class ReviewerScopeUnitTests(unittest.TestCase):
         with self.assertRaises(ApiError) as error:
             require_attempt_scope(
                 connection,
-                {"role": "REVIEWER", "admin_id": "ADM-4"},
+                {
+                    "role": "REVIEWER",
+                    "admin_id": "ADM-4",
+                    "active_organization_id": "ORG-A",
+                },
                 "ATT-1",
             )
         self.assertEqual("REVIEWER_SCOPE_REQUIRED", error.exception.code)
@@ -109,7 +114,7 @@ class ReviewerScopeUnitTests(unittest.TestCase):
         with self.assertRaises(ApiError) as error:
             require_course_scope(
                 _Connection(row=None),
-                {"role": "REVIEWER", "admin_id": "ADM-4"},
+                {"role": "REVIEWER", "admin_id": "ADM-4", "active_organization_id": "ORG-A"},
                 "COURSE-OUTSIDE",
             )
         self.assertEqual("REVIEWER_SCOPE_REQUIRED", error.exception.code)
@@ -118,7 +123,7 @@ class ReviewerScopeUnitTests(unittest.TestCase):
         with self.assertRaises(ApiError) as error:
             require_student_scope(
                 _Connection(row=None),
-                {"role": "REVIEWER", "admin_id": "ADM-4"},
+                {"role": "REVIEWER", "admin_id": "ADM-4", "active_organization_id": "ORG-A"},
                 "STU-OUTSIDE",
             )
         self.assertEqual("REVIEWER_SCOPE_REQUIRED", error.exception.code)
@@ -127,7 +132,7 @@ class ReviewerScopeUnitTests(unittest.TestCase):
         with self.assertRaises(ApiError) as error:
             require_certificate_scope(
                 _Connection(row=None),
-                {"role": "REVIEWER", "admin_id": "ADM-4"},
+                {"role": "REVIEWER", "admin_id": "ADM-4", "active_organization_id": "ORG-A"},
                 "CERT-OUTSIDE",
             )
         self.assertEqual("REVIEWER_SCOPE_REQUIRED", error.exception.code)

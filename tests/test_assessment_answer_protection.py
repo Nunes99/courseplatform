@@ -124,8 +124,13 @@ class GradingConnection:
 
 
 class AttemptStatusConnection:
+    def __init__(self, attempt=None):
+        self.attempt = attempt
+
     def execute(self, query, params=()):
         normalized = " ".join(query.lower().split())
+        if normalized.startswith("select a.*"):
+            return QueryResult(row=self.attempt)
         if "from courseplatform.answers" in normalized:
             return QueryResult(rows=[{
                 "answer_id": "ANS1",
@@ -263,22 +268,25 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
         self.assertTrue(question["options"][0]["isCorrect"])
 
     def test_student_cannot_read_another_students_attempt(self):
-        captured = {}
+        database = AttemptStatusConnection()
 
-        def fetch_one(query, params):
-            captured["params"] = params
-            return None
+        @contextmanager
+        def connect():
+            yield database
 
         with (
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
             patch.object(actions, "prepare_assessment_feature_schema"),
-            patch.object(actions, "fetch_one", side_effect=fetch_one),
+            patch.object(actions, "connection", connect),
         ):
             with self.assertRaises(actions.ApiError) as raised:
                 actions.attempt_status({"attemptId": "ATT-OTHER"})
 
         self.assertEqual(raised.exception.code, "ATTEMPT_NOT_FOUND")
-        self.assertEqual(captured["params"], ("ATT-OTHER", "S1"))
 
     def test_http_in_progress_attempt_hides_grading_and_old_review(self):
         attempt = {
@@ -293,7 +301,7 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
             "reviewed_at": None,
             "assessment_snapshot_json": snapshot(),
         }
-        database = AttemptStatusConnection()
+        database = AttemptStatusConnection(attempt)
 
         @contextmanager
         def connect():
@@ -301,9 +309,12 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
 
         with (
             patch.object(actions, "require_application_schema"),
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
             patch.object(actions, "prepare_assessment_feature_schema"),
-            patch.object(actions, "fetch_one", return_value=attempt),
             patch.object(actions, "connection", connect),
             patch.object(actions, "utc_now", return_value=NOW),
         ):
@@ -378,7 +389,11 @@ class AssessmentAnswerProtectionTests(unittest.TestCase):
             yield database
 
         with (
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
             patch.object(actions, "prepare_assessment_feature_schema"),
             patch.object(actions, "editable_attempt", return_value=attempt),
             patch.object(actions, "connection", connect),

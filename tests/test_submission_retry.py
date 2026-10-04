@@ -68,6 +68,8 @@ class SubmissionDatabase:
         latest = max(self.attempts.values(), key=lambda a: a["attempt_number"], default=None)
         if q.startswith("select p.*") or q.startswith("select progress_id from courseplatform.lesson_progress"):
             return Result(self.progress)
+        if q.startswith("select 1 from courseplatform.attempts"):
+            return Result({"allowed": 1})
         if q.startswith("select p.progress_id"):
             return Result(self.progress)
         if q.startswith("select a.*"):
@@ -104,7 +106,7 @@ class SubmissionDatabase:
             }]}})
         if q.startswith("select * from courseplatform.answers"):
             return Result(rows=self.answers.get(params[0], []))
-        if q.startswith("select attempt_id from courseplatform.files"):
+        if q.startswith("select attempt_id from courseplatform.files") or q.startswith("select f.attempt_id"):
             file = self.files.get(params[0])
             return Result(file if file and file["student_id"] == params[1] else None)
         if q.startswith("insert into courseplatform.reviews"):
@@ -204,7 +206,18 @@ class SubmissionRetryTests(unittest.TestCase):
 
         replacements = {
             "student_context": lambda p: ({}, {"student_id": "S1"}),
-            "admin_context": lambda p, roles: ({}, {"admin_id": "ADM1"}),
+            "student_context_with_conn": lambda conn, p: (
+                {"organization_id": "ORG-A"},
+                {"student_id": "S1"},
+            ),
+            "admin_context": lambda p, roles: (
+                {"organization_id": "ORG-A"},
+                {
+                    "admin_id": "ADM1",
+                    "role": "ADMIN",
+                    "active_organization_id": "ORG-A",
+                },
+            ),
             "connection": connect,
             "fetch_one": lambda q, p: self.db.execute(q, p).fetchone(),
             "utc_now": lambda: NOW,

@@ -99,7 +99,7 @@ confirma a sessão no servidor antes de carregar o dashboard. Sessões revogadas
 inválidas ou sem membership ativa regressam imediatamente à autenticação após
 essa verificação, sem iniciar o conjunto de leituras do painel.
 
-## M2 — Primeira fatia de isolamento
+## M2 — Isolamento de aprendizagem e avaliações
 
 As leituras privadas de aprendizagem usam agora exclusivamente o
 `organization_id` da sessão validada:
@@ -110,9 +110,51 @@ As leituras privadas de aprendizagem usam agora exclusivamente o
 - a configuração de media autenticada exige que o curso pertença ao tenant;
 - relações entre matrícula, versão e oferta confirmam também o mesmo curso.
 
-Esta fatia não conclui M2. Avaliações e respetivas mutações, certificados,
-pagamentos, inquéritos, comunicação, administração, operações em lote e as
-projeções públicas ainda precisam de revisão e testes negativos próprios.
+As mutações de aprendizagem e avaliações validam agora a organização da sessão
+na mesma ligação usada pela operação:
+
+- iniciar, consultar, responder, anexar, remover e submeter uma tentativa exige
+  que matrícula, curso e tentativa pertençam à organização ativa;
+- o download de um trabalho confirma estudante, tentativa e organização antes
+  de ler Storage ou o Base64 histórico;
+- revisão, reenvio, exceções e atualização administrativa recusam tentativas de
+  outra organização, inclusive para administradores e proprietários;
+- concessão de acesso e atualização de progresso validam curso, grupo, aula e
+  membership ativa de todos os estudantes antes de qualquer escrita em lote;
+- testes negativos sintéticos cobrem instituições A e B sem criar um segundo
+  tenant permanente.
+
+O domínio de certificados também está vinculado à organização ativa:
+
+- emissão, consulta, PDF e contagem de downloads resolvem curso, matrícula e
+  certificado dentro do tenant da sessão do estudante;
+- listagem, bloqueio, reativação, eliminação e reemissão administrativas recusam
+  certificados pertencentes a outra organização;
+- configuração e ativos gráficos só podem ser alterados em cursos da
+  organização administrativa ativa;
+- novos ativos usam um caminho de Storage iniciado por `organization_id`;
+- o âmbito global de um revisor é global apenas dentro da sua organização;
+- a verificação pública por número/código permanece pública e expõe somente o
+  contrato mínimo de validação do certificado.
+
+O domínio de pagamentos e comprovativos também respeita o tenant da sessão:
+
+- pedidos profissionais só aceitam comprovativos quando estudante, pedido e
+  curso pertencem à organização ativa;
+- novos comprovativos privados incluem `organization_id` no caminho de
+  Storage, sem alterar ou invalidar os caminhos históricos;
+- listagem, aprovação, rejeição e eliminação administrativa filtram o curso
+  pela organização antes de qualquer escrita;
+- downloads de comprovativos validam organização e proprietário, tanto para o
+  estudante como para o administrador;
+- cursores da lista administrativa são vinculados ao tenant e não podem ser
+  reutilizados após uma troca de organização;
+- testes negativos sintéticos confirmam que A não submete, consulta, aprova,
+  elimina nem descarrega pedidos ou comprovativos de B.
+
+Esta fatia não conclui M2. Inquéritos, comunicação, administração, restantes
+operações em lote e projeções públicas ainda precisam de revisão e testes
+negativos próprios.
 
 ## Decisões de negócio pendentes
 

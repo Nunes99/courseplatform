@@ -232,6 +232,9 @@ class Stage11CertificationContractTests(unittest.TestCase):
         for name, value in {
             "connection": db,
             "student_context": ({}, {"student_id": "S1", "full_name": "Estudante"}),
+            "student_context_with_conn": (
+                {"organization_id": "ORG-A"}, {"student_id": "S1", "full_name": "Estudante"},
+            ),
             "ensure_simple_certificate": (None, enrollment, {"course_id": "C1"}, True),
             "certificate_settings_payload": {
                 "certificateProfile": {"printAccess": "paid"},
@@ -275,6 +278,10 @@ class Stage11CertificationContractTests(unittest.TestCase):
                     for name, value in {
                         "connection": db,
                         "student_context": ({}, {"student_id": "S1", "full_name": "Estudante"}),
+                        "student_context_with_conn": (
+                            {"organization_id": "ORG-A"},
+                            {"student_id": "S1", "full_name": "Estudante"},
+                        ),
                         "ensure_simple_certificate": (None, enrollment, {"course_id": "C1"}, True),
                         "certificate_settings_payload": {
                             "certificateProfile": {"printAccess": "paid"},
@@ -311,6 +318,9 @@ class Stage11CertificationContractTests(unittest.TestCase):
             for name, value in {
                 "connection": db,
                 "student_context": ({}, {"student_id": "S1", "full_name": "Estudante"}),
+                "student_context_with_conn": (
+                    {"organization_id": "ORG-A"}, {"student_id": "S1", "full_name": "Estudante"},
+                ),
                 "ensure_simple_certificate": (None, enrollment, {"course_id": "C1"}, True),
                 "certificate_settings_payload": {
                     "certificateProfile": {"printAccess": "paid"},
@@ -355,6 +365,10 @@ class Stage11CertificationContractTests(unittest.TestCase):
         for name, value in {
             "connection": db,
             "admin_context": ({}, {"admin_id": "ADMIN1", "role": "OWNER"}),
+            "admin_context_with_conn": (
+                {"organization_id": "ORG-A"},
+                {"admin_id": "ADMIN1", "role": "OWNER", "active_organization_id": "ORG-A"},
+            ),
             "ensure_certificate_feature_schema": None,
             "certificate_content_summary": "Conteúdo versionado",
             "certificate_template_snapshot": snapshot,

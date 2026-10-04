@@ -244,10 +244,14 @@ Testes de saída:
 
 ### M2 — Isolamento de consultas e mutações
 
-Estado: **em curso**. A primeira fatia cobre as leituras privadas do estudante
-para cursos, dashboard, aulas e configuração de media. Matrículas, versões,
-ofertas e aulas são agora resolvidas dentro da organização validada na sessão.
-Os restantes domínios abaixo ainda não estão declarados como isolados.
+Estado: **em curso**. As leituras privadas do estudante para cursos, dashboard,
+aulas e media estão isoladas. As mutações de aprendizagem e avaliações também
+validam a organização ativa para tentativas, respostas, ficheiros, submissão,
+revisão, reenvio, exceções, acesso às aulas e progresso. Matrículas, versões,
+ofertas, grupos, aulas e memberships são confirmados antes das escritas. Os
+certificados, respetivas configurações, documentos e ativos gráficos também
+estão vinculados ao tenant ativo. Os restantes domínios abaixo ainda não estão
+declarados como isolados.
 
 Entregas:
 
@@ -443,7 +447,7 @@ Antes de M4–M7 precisam de decisão explícita:
 | --- | --- |
 | M0 Fundação | Concluída |
 | M1 Contexto na autenticação | Concluída e validada |
-| M2 Isolamento dos domínios | Em curso: leituras privadas de aprendizagem |
+| M2 Isolamento dos domínios | Em curso: aprendizagem, avaliações, certificados e pagamentos isolados |
 | M3 Storage e operação | Não iniciada |
 | M4 Administração global | Não iniciada |
 | M5 Publicação editorial | Não iniciada |
@@ -454,9 +458,8 @@ Antes de M4–M7 precisam de decisão explícita:
 
 ## Próxima ação autorizável
 
-Continuar M2 pelas mutações de aprendizagem e avaliações, seguida por
-certificados, pagamentos, inquéritos, comunicação e administração. Cada
-domínio deve receber testes negativos entre duas organizações antes de ser
-marcado como isolado. Nenhum endpoint de criação de tenant, nenhuma página de
-agregador e nenhuma segunda instituição permanente devem ser ativados antes do
-gate integral de M2.
+Continuar M2 por inquéritos, seguido individualmente por comunicação e
+administração. Cada domínio deve receber testes negativos entre duas
+organizações antes de ser marcado como isolado. Nenhum endpoint de criação de
+tenant, nenhuma página de agregador e nenhuma segunda instituição permanente
+devem ser ativados antes do gate integral de M2.

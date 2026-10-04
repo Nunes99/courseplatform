@@ -243,6 +243,14 @@ class AdministrativeListContractTests(unittest.TestCase):
         conn = _ListConnection(rows)
         with (
             patch.object(actions, "admin_context"),
+            patch.object(
+                actions,
+                "admin_context_with_conn",
+                return_value=(
+                    {"organization_id": "ORG-A"},
+                    {"admin_id": "ADMIN-1", "role": "ADMIN", "active_organization_id": "ORG-A"},
+                ),
+            ),
             patch.object(actions, "ensure_certificate_feature_schema"),
             patch.object(actions, "connection", return_value=conn),
             patch.object(actions, "public_certificate_request", side_effect=lambda row: {"requestId": row["request_id"]}),
@@ -262,6 +270,14 @@ class AdministrativeListContractTests(unittest.TestCase):
         conn = _ListConnection(rows)
         with (
             patch.object(actions, "admin_context"),
+            patch.object(
+                actions,
+                "admin_context_with_conn",
+                return_value=(
+                    {"organization_id": "ORG-A"},
+                    {"admin_id": "ADMIN-1", "role": "ADMIN", "active_organization_id": "ORG-A"},
+                ),
+            ),
             patch.object(actions, "ensure_certificate_feature_schema"),
             patch.object(actions, "connection", return_value=conn),
             patch.object(actions, "public_certificate", side_effect=lambda row: {"certificateId": row["certificate_id"]}),

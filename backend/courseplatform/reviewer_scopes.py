@@ -6,7 +6,12 @@ from .contracts import ApiError
 REVIEWER_SCOPE_TYPES = {"GLOBAL", "COURSE", "OFFERING", "GROUP"}
 
 
-def _effective_scope_rank_sql(alias: str = "rs") -> str:
+def _effective_scope_rank_sql(alias: str = "rs", organization_expr: str = "") -> str:
+    organization_filter = (
+        f"and effective_scope.organization_id = {organization_expr}"
+        if organization_expr
+        else ""
+    )
     return f"""
     case {alias}.scope_type
       when 'GLOBAL' then 0
@@ -27,6 +32,7 @@ def _effective_scope_rank_sql(alias: str = "rs") -> str:
       from courseplatform.reviewer_scopes effective_scope
       where effective_scope.admin_id = {alias}.admin_id
         and effective_scope.status = 'ACTIVE'
+        {organization_filter}
     )
     """
 
@@ -47,6 +53,14 @@ def reviewer_scope_predicate(
 ) -> tuple[str, tuple[Any, ...]]:
     if (admin.get("role") or "").upper() != "REVIEWER":
         return "true", ()
+    organization_id = str(
+        admin.get("active_organization_id") or admin.get("organization_id") or ""
+    ).strip()
+    if not organization_id:
+        raise ApiError(
+            "ADMIN_ORGANIZATION_REQUIRED",
+            "A sessão administrativa não possui uma instituição ativa.",
+        )
     return (
         f"""
         exists (
@@ -54,7 +68,8 @@ def reviewer_scope_predicate(
           from courseplatform.reviewer_scopes rs
           where rs.admin_id = %s
             and rs.status = 'ACTIVE'
-            and ({_effective_scope_rank_sql('rs')})
+            and rs.organization_id = %s
+            and ({_effective_scope_rank_sql('rs', '%s')})
             and (
               rs.scope_type = 'GLOBAL'
               or (rs.scope_type = 'COURSE' and rs.course_id = {course_expr})
@@ -63,13 +78,21 @@ def reviewer_scope_predicate(
             )
         )
         """,
-        (admin["admin_id"],),
+        (admin["admin_id"], organization_id, organization_id),
     )
 
 
 def reviewer_course_predicate(admin: dict[str, Any], course_expr: str) -> tuple[str, tuple[Any, ...]]:
     if (admin.get("role") or "").upper() != "REVIEWER":
         return "true", ()
+    organization_id = str(
+        admin.get("active_organization_id") or admin.get("organization_id") or ""
+    ).strip()
+    if not organization_id:
+        raise ApiError(
+            "ADMIN_ORGANIZATION_REQUIRED",
+            "A sessão administrativa não possui uma instituição ativa.",
+        )
     return (
         f"""
         exists (
@@ -77,30 +100,35 @@ def reviewer_course_predicate(admin: dict[str, Any], course_expr: str) -> tuple[
           from courseplatform.reviewer_scopes rs
           where rs.admin_id = %s
             and rs.status = 'ACTIVE'
-            and ({_effective_scope_rank_sql('rs')})
+            and rs.organization_id = %s
+            and ({_effective_scope_rank_sql('rs', '%s')})
             and (rs.scope_type = 'GLOBAL' or rs.course_id = {course_expr})
         )
         """,
-        (admin["admin_id"],),
+        (admin["admin_id"], organization_id, organization_id),
     )
 
 
 def require_attempt_scope(conn: Any, admin: dict[str, Any], attempt_id: str) -> None:
-    if (admin.get("role") or "").upper() != "REVIEWER":
-        return
-    allowed = conn.execute(
-        f"""
-        select 1
-        from courseplatform.attempts a
-        join courseplatform.lessons l on l.lesson_id = a.lesson_id
-        left join courseplatform.lesson_progress lp on lp.progress_id = a.progress_id
-        left join courseplatform.enrollments e on e.enrollment_id = lp.enrollment_id
-        where a.attempt_id = %s
-          and exists (
+    organization_id = str(
+        admin.get("active_organization_id") or admin.get("organization_id") or ""
+    ).strip()
+    if not organization_id:
+        raise ApiError(
+            "ADMIN_ORGANIZATION_REQUIRED",
+            "A sessão administrativa não possui uma instituição ativa.",
+        )
+    reviewer = (admin.get("role") or "").upper() == "REVIEWER"
+    reviewer_sql = "true"
+    reviewer_params: tuple[Any, ...] = ()
+    if reviewer:
+        reviewer_sql = f"""
+          exists (
             select 1
             from courseplatform.reviewer_scopes rs
             where rs.admin_id = %s and rs.status = 'ACTIVE'
-              and ({_effective_scope_rank_sql('rs')})
+              and rs.organization_id = c.organization_id
+              and ({_effective_scope_rank_sql('rs', 'c.organization_id')})
               and (
                 rs.scope_type = 'GLOBAL'
                 or (rs.scope_type = 'COURSE' and rs.course_id = l.course_id)
@@ -108,27 +136,51 @@ def require_attempt_scope(conn: Any, admin: dict[str, Any], attempt_id: str) -> 
                 or (rs.scope_type = 'GROUP' and rs.group_id = e.group_id)
               )
           )
+        """
+        reviewer_params = (admin["admin_id"],)
+    allowed = conn.execute(
+        f"""
+        select 1
+        from courseplatform.attempts a
+        join courseplatform.lessons l on l.lesson_id = a.lesson_id
+        left join courseplatform.lesson_progress lp on lp.progress_id = a.progress_id
+        left join courseplatform.enrollments e on e.enrollment_id = lp.enrollment_id
+        join courseplatform.courses c on c.course_id = l.course_id
+        where a.attempt_id = %s
+          and c.organization_id = %s
+          and ({reviewer_sql})
         limit 1
         """,
-        (attempt_id, admin["admin_id"]),
+        (attempt_id, organization_id, *reviewer_params),
     ).fetchone()
     if not allowed:
-        raise ApiError("REVIEWER_SCOPE_REQUIRED", "Esta operação está fora do seu âmbito de revisão.")
+        if reviewer:
+            raise ApiError("REVIEWER_SCOPE_REQUIRED", "Esta operação está fora do seu âmbito de revisão.")
+        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
 
 
 def require_course_scope(conn: Any, admin: dict[str, Any], course_id: str) -> None:
     if (admin.get("role") or "").upper() != "REVIEWER":
         return
+    organization_id = str(
+        admin.get("active_organization_id") or admin.get("organization_id") or ""
+    ).strip()
+    if not organization_id:
+        raise ApiError(
+            "ADMIN_ORGANIZATION_REQUIRED",
+            "A sessão administrativa não possui uma instituição ativa.",
+        )
     allowed = conn.execute(
         f"""
         select 1
         from courseplatform.reviewer_scopes rs
         where rs.admin_id = %s and rs.status = 'ACTIVE'
-          and ({_effective_scope_rank_sql('rs')})
+          and rs.organization_id = %s
+          and ({_effective_scope_rank_sql('rs', '%s')})
           and (rs.scope_type = 'GLOBAL' or rs.course_id = %s)
         limit 1
         """,
-        (admin["admin_id"], course_id),
+        (admin["admin_id"], organization_id, organization_id, course_id),
     ).fetchone()
     if not allowed:
         raise ApiError("REVIEWER_SCOPE_REQUIRED", "Este curso está fora do seu âmbito de revisão.")
@@ -164,19 +216,25 @@ def require_student_scope(conn: Any, admin: dict[str, Any], student_id: str) -> 
 
 
 def require_certificate_scope(conn: Any, admin: dict[str, Any], certificate_id: str) -> None:
-    if (admin.get("role") or "").upper() != "REVIEWER":
-        return
-    allowed = conn.execute(
-        f"""
-        select 1
-        from courseplatform.certificates cert
-        left join courseplatform.enrollments e on e.enrollment_id = cert.enrollment_id
-        where cert.certificate_id = %s
-          and exists (
+    organization_id = str(
+        admin.get("active_organization_id") or admin.get("organization_id") or ""
+    ).strip()
+    if not organization_id:
+        raise ApiError(
+            "ADMIN_ORGANIZATION_REQUIRED",
+            "A sessão administrativa não possui uma instituição ativa.",
+        )
+    reviewer = (admin.get("role") or "").upper() == "REVIEWER"
+    reviewer_sql = "true"
+    reviewer_params: tuple[Any, ...] = ()
+    if reviewer:
+        reviewer_sql = f"""
+          exists (
             select 1
             from courseplatform.reviewer_scopes rs
             where rs.admin_id = %s and rs.status = 'ACTIVE'
-              and ({_effective_scope_rank_sql('rs')})
+              and rs.organization_id = c.organization_id
+              and ({_effective_scope_rank_sql('rs', 'c.organization_id')})
               and (
                 rs.scope_type = 'GLOBAL'
                 or (rs.scope_type = 'COURSE' and rs.course_id = cert.course_id)
@@ -184,12 +242,25 @@ def require_certificate_scope(conn: Any, admin: dict[str, Any], certificate_id: 
                 or (rs.scope_type = 'GROUP' and rs.group_id = e.group_id)
               )
           )
+        """
+        reviewer_params = (admin["admin_id"],)
+    allowed = conn.execute(
+        f"""
+        select 1
+        from courseplatform.certificates cert
+        left join courseplatform.enrollments e on e.enrollment_id = cert.enrollment_id
+        join courseplatform.courses c on c.course_id = cert.course_id
+        where cert.certificate_id = %s
+          and c.organization_id = %s
+          and ({reviewer_sql})
         limit 1
         """,
-        (certificate_id, admin["admin_id"]),
+        (certificate_id, organization_id, *reviewer_params),
     ).fetchone()
     if not allowed:
-        raise ApiError("REVIEWER_SCOPE_REQUIRED", "Este certificado está fora do seu âmbito de revisão.")
+        if reviewer:
+            raise ApiError("REVIEWER_SCOPE_REQUIRED", "Este certificado está fora do seu âmbito de revisão.")
+        raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
 
 
 def normalize_scope_payload(value: Any) -> list[dict[str, str]]:

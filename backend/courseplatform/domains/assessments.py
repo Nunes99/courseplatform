@@ -90,6 +90,7 @@ class AssessmentRuntime:
     student_answer: Callable[..., Any]
     student_attempt: Callable[..., Any]
     student_context: Callable[..., Any]
+    student_context_with_conn: Callable[..., Any]
     student_review: Callable[..., Any]
     student_snapshot_questions: Callable[..., Any]
     submission_item: Callable[..., Any]
@@ -197,32 +198,35 @@ def attempt_status_action(payload: dict[str, Any], runtime: AssessmentRuntime):
     expire_attempt_if_needed = runtime.expire_attempt_if_needed
     feedback_policy = runtime.feedback_policy
     feedback_visibility = runtime.feedback_visibility
-    fetch_one = runtime.fetch_one
     prepare_assessment_feature_schema = runtime.prepare_assessment_feature_schema
     public_file = runtime.public_file
     require_fields = runtime.require_fields
     snapshot_for_attempt_with_conn = runtime.snapshot_for_attempt_with_conn
     student_answer = runtime.student_answer
     student_attempt = runtime.student_attempt
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     student_review = runtime.student_review
     student_snapshot_questions = runtime.student_snapshot_questions
     success = runtime.success
-    _, student = student_context(payload)
     require_fields(payload, ["attemptId"])
     prepare_assessment_feature_schema()
-    attempt = fetch_one(
-        """
-        select *
-        from courseplatform.attempts
-        where attempt_id = %s and student_id = %s
-        """,
-        (payload["attemptId"], student["student_id"]),
-    )
-    attempt = expire_attempt_if_needed(attempt)
-    if not attempt:
-        raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
+        attempt = conn.execute(
+            """
+            select a.*
+            from courseplatform.attempts a
+            join courseplatform.lesson_progress p on p.progress_id = a.progress_id
+            join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
+            join courseplatform.courses c on c.course_id = e.course_id
+            where a.attempt_id = %s and a.student_id = %s
+              and c.organization_id = %s
+            """,
+            (payload["attemptId"], student["student_id"], session["organization_id"]),
+        ).fetchone()
+        attempt = expire_attempt_if_needed(attempt)
+        if not attempt:
+            raise ApiError("ATTEMPT_NOT_FOUND", "Tentativa não encontrada.")
         answers = conn.execute(
             "select * from courseplatform.answers where attempt_id = %s order by saved_at",
             (attempt["attempt_id"],),
@@ -270,17 +274,27 @@ def start_attempt_action(payload: dict[str, Any], runtime: AssessmentRuntime):
     require_fields = runtime.require_fields
     start_attempt_with_conn = runtime.start_attempt_with_conn
     str_value = runtime.str_value
-    student_context = runtime.student_context
-    _, student = student_context(payload)
+    student_context_with_conn = runtime.student_context_with_conn
     require_fields(payload, ["lessonId"])
     prepare_assessment_feature_schema()
     lesson_id = payload["lessonId"]
     enrollment_id = str_value(payload.get("enrollmentId"))
     with connection() as conn:
-        return start_attempt_with_conn(conn, student, lesson_id, enrollment_id)
+        session, student = student_context_with_conn(conn, payload)
+        return start_attempt_with_conn(
+            conn, student, lesson_id, enrollment_id, session["organization_id"]
+        )
 
 
-def start_attempt_with_conn_action(conn, student, lesson_id, enrollment_id: str = "", *, runtime: AssessmentRuntime):
+def start_attempt_with_conn_action(
+    conn,
+    student,
+    lesson_id,
+    enrollment_id: str = "",
+    organization_id: str = "",
+    *,
+    runtime: AssessmentRuntime,
+):
     as_bool = runtime.as_bool
     assessment_snapshot_from_version_lesson = runtime.assessment_snapshot_from_version_lesson
     audit = runtime.audit
@@ -304,10 +318,13 @@ def start_attempt_with_conn_action(conn, student, lesson_id, enrollment_id: str 
                    l.feedback_release_mode, l.show_correct_answers, l.show_explanations
             from courseplatform.lesson_progress p
             join courseplatform.lessons l on l.lesson_id = p.lesson_id
+            join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
+            join courseplatform.courses c on c.course_id = e.course_id
             where p.student_id = %s and p.lesson_id = %s and p.enrollment_id = %s
+              and (%s = '' or c.organization_id = %s)
             for update of p
             """,
-            (student["student_id"], lesson_id, enrollment_id),
+            (student["student_id"], lesson_id, enrollment_id, organization_id, organization_id),
         ).fetchone()
     else:
         matches = conn.execute(
@@ -316,12 +333,15 @@ def start_attempt_with_conn_action(conn, student, lesson_id, enrollment_id: str 
                    l.feedback_release_mode, l.show_correct_answers, l.show_explanations
             from courseplatform.lesson_progress p
             join courseplatform.lessons l on l.lesson_id = p.lesson_id
+            join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
+            join courseplatform.courses c on c.course_id = e.course_id
             where p.student_id = %s and p.lesson_id = %s
+              and (%s = '' or c.organization_id = %s)
             order by p.updated_at desc nulls last
             limit 2
             for update of p
             """,
-            (student["student_id"], lesson_id),
+            (student["student_id"], lesson_id, organization_id, organization_id),
         ).fetchall()
         if len(matches) > 1:
             raise ApiError("ENROLLMENT_REQUIRED", "Selecione a matrícula/edição antes de iniciar a atividade.")
@@ -343,7 +363,12 @@ def start_attempt_with_conn_action(conn, student, lesson_id, enrollment_id: str 
         (progress["progress_id"],),
     ).fetchone()
     if existing and existing.get("status") == "IN_PROGRESS":
-        editable_attempt(conn, existing["attempt_id"], student["student_id"])
+        editable_attempt(
+            conn,
+            existing["attempt_id"],
+            student["student_id"],
+            organization_id,
+        )
         return success({"attempt": student_attempt(existing)})
 
     now = utc_now()
@@ -354,9 +379,11 @@ def start_attempt_with_conn_action(conn, student, lesson_id, enrollment_id: str 
         select cv.content_snapshot_json
         from courseplatform.enrollments e
         join courseplatform.course_versions cv on cv.course_version_id = e.course_version_id
+        join courseplatform.courses c on c.course_id = e.course_id
         where e.enrollment_id = %s
+          and (%s = '' or c.organization_id = %s)
         """,
-        (progress["enrollment_id"],),
+        (progress["enrollment_id"], organization_id, organization_id),
     ).fetchone()
     version_snapshot = (version_row or {}).get("content_snapshot_json") or {}
     version_lesson = next(
@@ -487,13 +514,18 @@ def save_answer_action(payload: dict[str, Any], runtime: AssessmentRuntime):
     snapshot_for_attempt_with_conn = runtime.snapshot_for_attempt_with_conn
     str_value = runtime.str_value
     student_answer = runtime.student_answer
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
-    _, student = student_context(payload)
     require_fields(payload, ["attemptId", "questionId"])
     prepare_assessment_feature_schema()
     with connection() as conn:
-        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
+        session, student = student_context_with_conn(conn, payload)
+        attempt = editable_attempt(
+            conn,
+            payload["attemptId"],
+            student["student_id"],
+            session["organization_id"],
+        )
         snapshot = snapshot_for_attempt_with_conn(conn, attempt)
         question = next(
             (
@@ -547,15 +579,20 @@ def upload_file_action(payload: dict[str, Any], runtime: AssessmentRuntime):
     require_fields = runtime.require_fields
     storage_api_error = runtime.storage_api_error
     storage_object_path = runtime.storage_object_path
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     upload_private_object = runtime.upload_private_object
     validate_upload = runtime.validate_upload
-    _, student = student_context(payload)
     require_fields(payload, ["attemptId", "fileName"])
     prepare_assessment_feature_schema()
     with connection() as conn:
-        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
+        session, student = student_context_with_conn(conn, payload)
+        attempt = editable_attempt(
+            conn,
+            payload["attemptId"],
+            student["student_id"],
+            session["organization_id"],
+        )
     try:
         upload = validate_upload(
             payload.get("base64Data"),
@@ -577,7 +614,13 @@ def upload_file_action(payload: dict[str, Any], runtime: AssessmentRuntime):
         raise storage_api_error(error) from error
 
     with connection() as conn:
-        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
+        session, student = student_context_with_conn(conn, payload)
+        attempt = editable_attempt(
+            conn,
+            payload["attemptId"],
+            student["student_id"],
+            session["organization_id"],
+        )
         row = conn.execute(
             """
             insert into courseplatform.files
@@ -630,19 +673,32 @@ def delete_uploaded_file_action(payload: dict[str, Any], runtime: AssessmentRunt
     prepare_assessment_feature_schema = runtime.prepare_assessment_feature_schema
     public_file = runtime.public_file
     require_fields = runtime.require_fields
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
-    _, student = student_context(payload)
     require_fields(payload, ["fileId"])
     prepare_assessment_feature_schema()
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         file = conn.execute(
-            "select attempt_id from courseplatform.files where file_id = %s and student_id = %s",
-            (payload["fileId"], student["student_id"]),
+            """
+            select f.attempt_id
+            from courseplatform.files f
+            join courseplatform.attempts a on a.attempt_id = f.attempt_id
+            join courseplatform.lesson_progress p on p.progress_id = a.progress_id
+            join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
+            join courseplatform.courses c on c.course_id = e.course_id
+            where f.file_id = %s and f.student_id = %s and c.organization_id = %s
+            """,
+            (payload["fileId"], student["student_id"], session["organization_id"]),
         ).fetchone()
         if not file:
             raise ApiError("FILE_NOT_FOUND", "Ficheiro não encontrado.")
-        editable_attempt(conn, file["attempt_id"], student["student_id"])
+        editable_attempt(
+            conn,
+            file["attempt_id"],
+            student["student_id"],
+            session["organization_id"],
+        )
         row = conn.execute(
             """
             update courseplatform.files
@@ -667,16 +723,21 @@ def submit_attempt_action(payload: dict[str, Any], runtime: AssessmentRuntime):
     require_fields = runtime.require_fields
     snapshot_for_attempt_with_conn = runtime.snapshot_for_attempt_with_conn
     student_attempt = runtime.student_attempt
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     utc_now = runtime.utc_now
-    _, student = student_context(payload)
     require_fields(payload, ["attemptId"])
     prepare_assessment_feature_schema()
     now = utc_now()
     status = "UNDER_REVIEW"
     with connection() as conn:
-        attempt = editable_attempt(conn, payload["attemptId"], student["student_id"])
+        session, student = student_context_with_conn(conn, payload)
+        attempt = editable_attempt(
+            conn,
+            payload["attemptId"],
+            student["student_id"],
+            session["organization_id"],
+        )
         snapshot = snapshot_for_attempt_with_conn(conn, attempt)
         answers = conn.execute(
             "select * from courseplatform.answers where attempt_id = %s for update",
@@ -722,7 +783,7 @@ def submission_file_download_payload_action(payload: dict[str, Any], runtime: As
     fetch_one = runtime.fetch_one
     require_fields = runtime.require_fields
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     require_fields(payload, ["fileId"])
     if str_value(payload.get("adminToken")):
         admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
@@ -734,12 +795,22 @@ def submission_file_download_payload_action(payload: dict[str, Any], runtime: As
             with runtime.connection() as conn:
                 require_attempt_scope(conn, admin, row.get("attempt_id"))
     else:
-        _, student = student_context(payload)
-        row = fetch_one(
-            """select * from courseplatform.files
-               where file_id = %s and student_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'""",
-            (payload["fileId"], student["student_id"]),
-        )
+        with runtime.connection() as conn:
+            session, student = student_context_with_conn(conn, payload)
+            row = conn.execute(
+                """
+                select f.*
+                from courseplatform.files f
+                join courseplatform.attempts a on a.attempt_id = f.attempt_id
+                join courseplatform.lesson_progress p on p.progress_id = a.progress_id
+                join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
+                join courseplatform.courses c on c.course_id = e.course_id
+                where f.file_id = %s and f.student_id = %s
+                  and c.organization_id = %s
+                  and coalesce(f.status, 'ACTIVE') <> 'DELETED'
+                """,
+                (payload["fileId"], student["student_id"], session["organization_id"]),
+            ).fetchone()
     if not row:
         raise ApiError("FILE_NOT_FOUND", "Ficheiro não encontrado.")
     return _private_content_payload(

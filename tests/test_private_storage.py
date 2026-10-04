@@ -65,14 +65,31 @@ class UploadConnection:
         return None
 
 
+class TenantFileConnection:
+    def __init__(self, row=None):
+        self.row = row
+
+    def execute(self, query, params=()):
+        normalized = " ".join(query.lower().split())
+        if normalized.startswith("select f.* from courseplatform.files f"):
+            return Result(self.row)
+        raise AssertionError(normalized)
+
+
 class ReceiptConnection:
-    def __init__(self):
+    def __init__(self, request="DEFAULT"):
         self.queries = []
+        self.request = {
+            "request_id": "R1", "student_id": "S1", "course_id": "C1",
+            "request_type": "PROFESSIONAL", "status": "REQUESTED", "certificate_id": None,
+        } if request == "DEFAULT" else request
 
     def execute(self, query, params=()):
         normalized = " ".join(query.lower().split())
         self.queries.append((normalized, params))
-        if normalized.startswith("update courseplatform.certificate_requests"):
+        if normalized.startswith("select cr.*"):
+            return Result(self.request)
+        if normalized.startswith("update courseplatform.certificate_requests cr"):
             return Result({
                 "request_id": params[6],
                 "student_id": params[7],
@@ -161,7 +178,11 @@ class PrivateStorageActionTests(unittest.TestCase):
             yield database
 
         with (
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
             patch.object(actions, "prepare_assessment_feature_schema"),
             patch.object(actions, "editable_attempt", return_value={"attempt_id": "A1", "lesson_id": "L1"}),
             patch.object(actions, "connection", connect),
@@ -197,8 +218,11 @@ class PrivateStorageActionTests(unittest.TestCase):
             yield database
 
         with (
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
-            patch.object(actions, "fetch_one", return_value=request),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
             patch.object(actions, "connection", connect),
             patch.object(actions, "ensure_certificate_feature_schema"),
             patch.object(actions, "get_settings", return_value=SETTINGS),
@@ -214,6 +238,7 @@ class PrivateStorageActionTests(unittest.TestCase):
             })["data"]["request"]
 
         upload_object.assert_called_once()
+        self.assertIn("/ORG-A/", upload_object.call_args.args[1])
         self.assertEqual("/api/certificate-requests/R1/receipt", result["paymentReceiptUrl"])
         self.assertEqual(len(PDF_BYTES), result["paymentReceiptSizeBytes"])
         self.assertNotIn("base64", str(result).lower())
@@ -245,9 +270,19 @@ class PrivateStorageActionTests(unittest.TestCase):
         self.assertNotIn("example.invalid", str(receipt_payload))
 
     def test_receipt_ownership_is_checked_before_content_validation(self):
+        database = ReceiptConnection(request={})
+
+        @contextmanager
+        def connect():
+            yield database
+
         with (
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
-            patch.object(actions, "fetch_one", return_value=None),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
+            patch.object(actions, "connection", connect),
             patch.object(actions, "validate_upload") as validate,
         ):
             with self.assertRaises(actions.ApiError) as raised:
@@ -258,9 +293,19 @@ class PrivateStorageActionTests(unittest.TestCase):
         validate.assert_not_called()
 
     def test_student_cannot_download_another_students_file(self):
+        database = TenantFileConnection()
+
+        @contextmanager
+        def connect():
+            yield database
+
         with (
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
-            patch.object(actions, "fetch_one", return_value=None),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
+            patch.object(actions, "connection", connect),
             patch.object(actions, "download_private_object") as download,
         ):
             with self.assertRaises(actions.ApiError) as raised:
@@ -278,9 +323,19 @@ class PrivateStorageActionTests(unittest.TestCase):
             "size_bytes": len(PDF_BASE64),
             "status": "ACTIVE",
         }
+        database = TenantFileConnection(row)
+
+        @contextmanager
+        def connect():
+            yield database
+
         with (
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
-            patch.object(actions, "fetch_one", return_value=row),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
+            patch.object(actions, "connection", connect),
             patch.object(actions, "get_settings", return_value=SETTINGS),
         ):
             result = actions.submission_file_download_payload({"fileId": "F1", "sessionToken": "session"})
@@ -293,9 +348,19 @@ class PrivateStorageActionTests(unittest.TestCase):
             "mime_type": "application/pdf", "storage_bucket": "private", "storage_path": "x",
             "storage_status": "READY", "storage_checksum_sha256": "0" * 64, "status": "ACTIVE",
         }
+        database = TenantFileConnection(row)
+
+        @contextmanager
+        def connect():
+            yield database
+
         with (
-            patch.object(actions, "student_context", return_value=({}, {"student_id": "S1"})),
-            patch.object(actions, "fetch_one", return_value=row),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
+            patch.object(actions, "connection", connect),
             patch.object(actions, "get_settings", return_value=SETTINGS),
             patch.object(actions, "download_private_object", return_value=PDF_BYTES),
         ):

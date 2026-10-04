@@ -33,7 +33,7 @@ class CertificateDB:
         self.profile = {'participation': a.normalize_participation_policy()}
         self.requests = []
         self.calls = []
-        self.course = {'course_id': 'C1', 'title': 'Curso de teste'}
+        self.course = {'course_id': 'C1', 'title': 'Curso de teste', 'organization_id': 'ORG-A'}
         self.enrollment = {'enrollment_id': 'E1', 'student_id': 'S1', 'course_id': 'C1',
                            'course_version_id': 'CV1', 'offering_id': 'O1',
                            'status': 'COMPLETED', 'progress_percent': 100}
@@ -66,7 +66,7 @@ class CertificateDB:
                 return Result()
             if 'cert.student_id = %s and cert.course_id' in sql:
                 return Result([self.cert])
-            if 'student_id = %s' in sql and params[-1] != 'S1':
+            if 'student_id = %s' in sql and len(params) > 1 and params[1] != 'S1':
                 return Result()
             return Result([self.cert])
         if sql.startswith('insert into courseplatform.certificates'):
@@ -76,7 +76,7 @@ class CertificateDB:
                          'document_snapshot_hash': params[-1], 'document_snapshot_version': 2,
                          'generation_revision': 1}
             return Result([self.cert])
-        if sql.startswith('select * from courseplatform.certificate_requests'):
+        if sql.startswith('select * from courseplatform.certificate_requests') or sql.startswith('select cr.* from courseplatform.certificate_requests'):
             if 'request_id = %s' in sql:
                 return Result([r for r in self.requests if r['request_id'] == params[0]])
             return Result([r for r in self.requests if r['status'] == 'PAYMENT_SUBMITTED'])
@@ -118,7 +118,12 @@ class ParticipationPolicyTests(unittest.TestCase):
         for name, value in {
             'connection': self.db,
             'student_context': ({}, self.db.student),
+            'student_context_with_conn': ({'organization_id': 'ORG-A'}, self.db.student),
             'admin_context': ({}, {'admin_id': 'ADMIN1', 'role': 'OWNER'}),
+            'admin_context_with_conn': (
+                {'organization_id': 'ORG-A'},
+                {'admin_id': 'ADMIN1', 'role': 'OWNER', 'active_organization_id': 'ORG-A'},
+            ),
             'utc_now': NOW,
             'ensure_certificate_feature_schema': None,
             'audit': None,
@@ -235,7 +240,11 @@ class ParticipationPolicyTests(unittest.TestCase):
         self.assert_code('PARTICIPATION_DISABLED', a.record_certificate_download, {'certificateId': 'CERT1'})
 
     def test_foreign_certificate_is_inaccessible(self):
-        with patch.object(a, 'student_context', return_value=({}, {'student_id': 'OTHER'})):
+        with patch.object(
+            a,
+            'student_context_with_conn',
+            return_value=({'organization_id': 'ORG-A'}, {'student_id': 'OTHER'}),
+        ):
             for endpoint in [a.record_certificate_download, a.certificate_pdf_payload]:
                 self.assert_code('CERTIFICATE_NOT_FOUND', endpoint, {'certificateId': 'CERT1'})
 
@@ -329,7 +338,11 @@ class ParticipationPolicyTests(unittest.TestCase):
         self.assertEqual(access['maxDownloads'], 1)
 
     def test_authorization_cannot_be_bypassed_by_payload(self):
-        with patch.object(a, 'admin_context', side_effect=a.ApiError('ADMIN_FORBIDDEN', 'Sem permissão.')):
+        with patch.object(
+            a,
+            'admin_context_with_conn',
+            side_effect=a.ApiError('ADMIN_FORBIDDEN', 'Sem permissão.'),
+        ):
             self.assert_code('ADMIN_FORBIDDEN', a.admin_save_certificate_settings, {'courseId': 'C1'})
             self.assert_code('ADMIN_FORBIDDEN', a.admin_set_certificate_status, {'certificateId': 'CERT1', 'status': 'ISSUED'})
 

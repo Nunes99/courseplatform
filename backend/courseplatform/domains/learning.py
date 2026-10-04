@@ -641,6 +641,32 @@ def get_lesson_action(payload: dict[str, Any], *, runtime: LearningRuntime):
     })
 
 
+def _require_active_student_memberships(
+    conn,
+    student_ids: set[str],
+    organization_id: str,
+) -> None:
+    if not student_ids:
+        return
+    rows = conn.execute(
+        """
+        select student_id
+        from courseplatform.organization_memberships
+        where organization_id = %s
+          and student_id = any(%s)
+          and membership_role = 'STUDENT'
+          and status = 'ACTIVE'
+        """,
+        (organization_id, list(student_ids)),
+    ).fetchall()
+    allowed = {row["student_id"] for row in rows}
+    if allowed != student_ids:
+        raise ApiError(
+            "STUDENT_ORGANIZATION_MISMATCH",
+            "Um ou mais estudantes não pertencem à instituição ativa.",
+        )
+
+
 def admin_set_lesson_access_action(payload: dict[str, Any], *, runtime: LearningRuntime):
     CONTENT_ACCESS_STATUSES = runtime.CONTENT_ACCESS_STATUSES
     admin_context = runtime.admin_context
@@ -659,6 +685,9 @@ def admin_set_lesson_access_action(payload: dict[str, Any], *, runtime: Learning
     str_value = runtime.str_value
     success = runtime.success
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    organization_id = admin.get("active_organization_id") or ""
+    if not organization_id:
+        raise ApiError("ADMIN_ORGANIZATION_REQUIRED", "A sessão administrativa não possui uma instituição ativa.")
     prepare_assessment_feature_schema()
     prepare_notification_feature_schema()
     status = str_value(payload.get("status") or "AVAILABLE").upper()
@@ -674,9 +703,11 @@ def admin_set_lesson_access_action(payload: dict[str, Any], *, runtime: Learning
             select gm.student_id, g.offering_id
             from courseplatform.group_members gm
             join courseplatform.groups g on g.group_id = gm.group_id
+            join courseplatform.courses c on c.course_id = g.course_id
             where gm.group_id = any(%s) and gm.status = 'ACTIVE'
+              and c.organization_id = %s
             """,
-            (group_ids,),
+            (group_ids, organization_id),
         )
         student_ids.update(row["student_id"] for row in rows)
         offering_ids = {row.get("offering_id") for row in rows if row.get("offering_id")}
@@ -691,11 +722,20 @@ def admin_set_lesson_access_action(payload: dict[str, Any], *, runtime: Learning
     updated = 0
     notification_ids: list[str] = []
     with connection() as conn:
+        _require_active_student_memberships(conn, student_ids, organization_id)
         for student_id in student_ids:
             for lesson_id in lesson_ids:
-                lesson = conn.execute("select * from courseplatform.lessons where lesson_id = %s", (lesson_id,)).fetchone()
+                lesson = conn.execute(
+                    """
+                    select l.*
+                    from courseplatform.lessons l
+                    join courseplatform.courses c on c.course_id = l.course_id
+                    where l.lesson_id = %s and c.organization_id = %s
+                    """,
+                    (lesson_id, organization_id),
+                ).fetchone()
                 if not lesson:
-                    continue
+                    raise ApiError("LESSON_NOT_FOUND", "Módulo não encontrado.")
                 offering = resolve_course_offering_with_conn(
                     conn, lesson["course_id"], offering_id
                 )
@@ -787,6 +827,9 @@ def admin_manage_lesson_progress_action(payload: dict[str, Any], *, runtime: Lea
     str_value = runtime.str_value
     success = runtime.success
     _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    organization_id = admin.get("active_organization_id") or ""
+    if not organization_id:
+        raise ApiError("ADMIN_ORGANIZATION_REQUIRED", "A sessão administrativa não possui uma instituição ativa.")
     prepare_assessment_feature_schema()
     prepare_notification_feature_schema()
     lesson_ids = payload.get("lessonIds") if isinstance(payload.get("lessonIds"), list) else []
@@ -822,9 +865,11 @@ def admin_manage_lesson_progress_action(payload: dict[str, Any], *, runtime: Lea
                 select gm.student_id, g.offering_id
                 from courseplatform.group_members gm
                 join courseplatform.groups g on g.group_id = gm.group_id
+                join courseplatform.courses c on c.course_id = g.course_id
                 where gm.group_id = any(%s) and gm.status = 'ACTIVE'
+                  and c.organization_id = %s
                 """,
-                (group_ids,),
+                (group_ids, organization_id),
             ).fetchall()
             student_ids.update(row["student_id"] for row in rows)
             offering_ids = {row.get("offering_id") for row in rows if row.get("offering_id")}
@@ -837,24 +882,34 @@ def admin_manage_lesson_progress_action(payload: dict[str, Any], *, runtime: Lea
         if (access_status or evaluation_status) and not student_ids:
             raise ApiError("EMPTY_PROGRESS_TARGET", "Selecione pelo menos uma turma ou estudante.")
 
+        _require_active_student_memberships(conn, student_ids, organization_id)
+
         if duration_supplied:
             conn.execute(
                 """
-                update courseplatform.lessons
+                update courseplatform.lessons l
                 set submission_duration_minutes = %s, updated_at = now()
-                where lesson_id = any(%s)
+                from courseplatform.courses c
+                where l.lesson_id = any(%s)
+                  and c.course_id = l.course_id
+                  and c.organization_id = %s
                 """,
-                (submission_duration, lesson_ids),
+                (submission_duration, lesson_ids, organization_id),
             )
 
         for student_id in student_ids:
             for lesson_id in lesson_ids:
                 lesson = conn.execute(
-                    "select * from courseplatform.lessons where lesson_id = %s",
-                    (lesson_id,),
+                    """
+                    select l.*
+                    from courseplatform.lessons l
+                    join courseplatform.courses c on c.course_id = l.course_id
+                    where l.lesson_id = %s and c.organization_id = %s
+                    """,
+                    (lesson_id, organization_id),
                 ).fetchone()
                 if not lesson:
-                    continue
+                    raise ApiError("LESSON_NOT_FOUND", "Módulo não encontrado.")
                 offering = resolve_course_offering_with_conn(
                     conn, lesson["course_id"], offering_id
                 )

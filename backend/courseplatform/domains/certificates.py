@@ -36,6 +36,7 @@ ACTION_BINDINGS = (
 @dataclass(frozen=True)
 class CertificateRuntime:
     admin_context: Callable[..., Any]
+    admin_context_with_conn: Callable[..., Any]
     as_bool: Callable[..., Any]
     audit: Callable[..., Any]
     certificate_content_summary: Callable[..., Any]
@@ -75,6 +76,7 @@ class CertificateRuntime:
     str_value: Callable[..., Any]
     student_certificate_payload: Callable[..., Any]
     student_context: Callable[..., Any]
+    student_context_with_conn: Callable[..., Any]
     success: Callable[..., Any]
     sync_enrollment_completion: Callable[..., Any]
     upload_raster_asset_to_storage: Callable[..., Any]
@@ -88,13 +90,15 @@ def my_certificate_action(payload: dict[str, Any], runtime: CertificateRuntime):
     participation_policy = runtime.participation_policy
     str_value = runtime.str_value
     student_certificate_payload = runtime.student_certificate_payload
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
-    _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
     enrollment_id = str_value(payload.get("enrollmentId"))
     with connection() as conn:
-        cert, _, _, _ = ensure_simple_certificate(conn, student, course_id, enrollment_id)
+        session, student = student_context_with_conn(conn, payload)
+        cert, _, _, _ = ensure_simple_certificate(
+            conn, student, course_id, enrollment_id, session["organization_id"]
+        )
         policy = participation_policy(conn, course_id)
         conn.commit()
     return success({"certificate": student_certificate_payload(cert, policy)})
@@ -112,14 +116,14 @@ def my_certifications_action(payload: dict[str, Any], runtime: CertificateRuntim
     public_student = runtime.public_student
     str_value = runtime.str_value
     student_certificate_payload = runtime.student_certificate_payload
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
-    _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
     enrollment_id = str_value(payload.get("enrollmentId"))
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         simple_cert, enrollment, course, completed = ensure_simple_certificate(
-            conn, student, course_id, enrollment_id
+            conn, student, course_id, enrollment_id, session["organization_id"]
         )
         settings_row = conn.execute(
             "select * from courseplatform.certificate_settings where course_id = %s",
@@ -171,19 +175,22 @@ def request_professional_certificate_action(payload: dict[str, Any], runtime: Ce
     get_settings = runtime.get_settings
     public_certificate_request = runtime.public_certificate_request
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
-    _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
     enrollment_id = str_value(payload.get("enrollmentId"))
     survey_answers = payload.get("surveyAnswers") if isinstance(payload.get("surveyAnswers"), dict) else {}
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         _, enrollment, _, completed = ensure_simple_certificate(
-            conn, student, course_id, enrollment_id
+            conn, student, course_id, enrollment_id, session["organization_id"]
         )
         if not completed:
             raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado profissional.")
-        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+        course = conn.execute(
+            "select * from courseplatform.courses where course_id = %s and organization_id = %s",
+            (course_id, session["organization_id"]),
+        ).fetchone()
         settings_row = conn.execute(
             "select * from courseplatform.certificate_settings where course_id = %s",
             (course_id,),
@@ -320,14 +327,14 @@ def request_participation_certificate_action(payload: dict[str, Any], runtime: C
     participation_policy = runtime.participation_policy
     public_certificate_request = runtime.public_certificate_request
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
-    _, student = student_context(payload)
     course_id = payload.get("courseId") or get_settings().default_course_id
     enrollment_id = str_value(payload.get("enrollmentId"))
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         cert, enrollment, _, completed = ensure_simple_certificate(
-            conn, student, course_id, enrollment_id
+            conn, student, course_id, enrollment_id, session["organization_id"]
         )
         if not completed:
             raise ApiError("COURSE_NOT_COMPLETED", "Conclua o curso antes de solicitar o certificado.")
@@ -371,15 +378,22 @@ def record_certificate_download_action(payload: dict[str, Any], runtime: Certifi
     public_certificate = runtime.public_certificate
     require_certificate_download_access = runtime.require_certificate_download_access
     require_fields = runtime.require_fields
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
-    _, student = student_context(payload)
     require_fields(payload, ["certificateId"])
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         ensure_certificate_feature_schema(conn)
         cert = conn.execute(
-            "select * from courseplatform.certificates where certificate_id = %s and student_id = %s for update",
-            (payload["certificateId"], student["student_id"]),
+            """
+            select cert.*
+            from courseplatform.certificates cert
+            join courseplatform.courses c on c.course_id = cert.course_id
+            where cert.certificate_id = %s and cert.student_id = %s
+              and c.organization_id = %s
+            for update of cert
+            """,
+            (payload["certificateId"], student["student_id"], session["organization_id"]),
         ).fetchone()
         if not cert:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
@@ -398,7 +412,7 @@ def record_certificate_download_action(payload: dict[str, Any], runtime: Certifi
 
 
 def admin_list_certificates_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     certificate_download_access = runtime.certificate_download_access
     connection = runtime.connection
     cursor_page_limit = runtime.cursor_page_limit
@@ -409,7 +423,6 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
     public_certificate = runtime.public_certificate
     str_value = runtime.str_value
     success = runtime.success
-    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     status = (payload.get("status") or "ACTIVE").upper()
     query = str_value(payload.get("query")).lower()
     limit = cursor_page_limit(payload)
@@ -436,13 +449,15 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
               )
             """
             cursor_params.extend((cursor_at, cursor_at, cursor_id))
-    reviewer_sql, reviewer_params = reviewer_scope_predicate(
-        admin,
-        course_expr="cert.course_id",
-        offering_expr="cert.offering_id",
-        group_expr="e.group_id",
-    )
     with connection() as conn:
+        _, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN", "REVIEWER"})
+        organization_id = admin["active_organization_id"]
+        reviewer_sql, reviewer_params = reviewer_scope_predicate(
+            admin,
+            course_expr="cert.course_id",
+            offering_expr="cert.offering_id",
+            group_expr="e.group_id",
+        )
         ensure_certificate_feature_schema(conn)
         rows = conn.execute(
             f"""
@@ -458,6 +473,7 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
                 or (%s = 'ACTIVE' and coalesce(cert.status, 'ISSUED') not in ('DELETED', 'SUPERSEDED'))
                 or cert.status = %s
               )
+              and c.organization_id = %s
               and (
                 %s = ''
                 or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
@@ -469,7 +485,10 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
             order by cert.issue_date desc nulls last, cert.certificate_id desc
             limit %s
             """,
-            (status, status, status, query, f"%{query}%", *reviewer_params, *cursor_params, limit + 1),
+            (
+                status, status, status, organization_id, query, f"%{query}%",
+                *reviewer_params, *cursor_params, limit + 1,
+            ),
         ).fetchall()
         conn.commit()
     rows, page_info = cursor_pagination_result(
@@ -488,7 +507,7 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
 
 
 def admin_set_certificate_status_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     as_bool = runtime.as_bool
     audit = runtime.audit
     connection = runtime.connection
@@ -498,16 +517,22 @@ def admin_set_certificate_status_action(payload: dict[str, Any], runtime: Certif
     require_fields = runtime.require_fields
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["certificateId", "status"])
     status = str_value(payload.get("status")).upper()
     if status not in {"ISSUED", "BLOCKED"}:
         raise ApiError("INVALID_CERTIFICATE_STATUS", "Estado de certificado inválido.")
     with connection() as conn:
+        _, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN"})
         ensure_certificate_feature_schema(conn)
         current = conn.execute(
-            "select * from courseplatform.certificates where certificate_id = %s for update",
-            (payload["certificateId"],),
+            """
+            select cert.*
+            from courseplatform.certificates cert
+            join courseplatform.courses c on c.course_id = cert.course_id
+            where cert.certificate_id = %s and c.organization_id = %s
+            for update of cert
+            """,
+            (payload["certificateId"], admin["active_organization_id"]),
         ).fetchone()
         if not current:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
@@ -545,7 +570,7 @@ def admin_set_certificate_status_action(payload: dict[str, Any], runtime: Certif
 
 
 def admin_refresh_certificate_format_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     audit = runtime.audit
     certificate_content_summary = runtime.certificate_content_summary
     certificate_number = runtime.certificate_number
@@ -561,13 +586,13 @@ def admin_refresh_certificate_format_action(payload: dict[str, Any], runtime: Ce
     str_value = runtime.str_value
     success = runtime.success
     utc_now = runtime.utc_now
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["certificateId", "reason"])
     certificate_id = str_value(payload.get("certificateId"))
     reason = str_value(payload.get("reason"))
     if len(reason) < 3:
         raise ApiError("CERTIFICATE_REISSUE_REASON_REQUIRED", "Indique o motivo da reemissão.")
     with connection() as conn:
+        _, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN"})
         ensure_certificate_feature_schema(conn)
         current = conn.execute(
             """
@@ -575,10 +600,10 @@ def admin_refresh_certificate_format_action(payload: dict[str, Any], runtime: Ce
             from courseplatform.certificates cert
             join courseplatform.students s on s.student_id = cert.student_id
             join courseplatform.courses c on c.course_id = cert.course_id
-            where cert.certificate_id = %s
+            where cert.certificate_id = %s and c.organization_id = %s
             for update of cert
             """,
-            (certificate_id,),
+            (certificate_id, admin["active_organization_id"]),
         ).fetchone()
         if not current:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
@@ -686,7 +711,7 @@ def admin_refresh_certificate_format_action(payload: dict[str, Any], runtime: Ce
 
 
 def admin_delete_certificate_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     audit = runtime.audit
     connection = runtime.connection
     ensure_certificate_feature_schema = runtime.ensure_certificate_feature_schema
@@ -694,21 +719,28 @@ def admin_delete_certificate_action(payload: dict[str, Any], runtime: Certificat
     require_fields = runtime.require_fields
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["certificateId"])
     with connection() as conn:
+        _, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN"})
         ensure_certificate_feature_schema(conn)
         certificate = conn.execute(
             """
-            update courseplatform.certificates
+            update courseplatform.certificates cert
             set status = 'DELETED',
                 status_note = %s,
                 status_updated_by = %s,
                 status_updated_at = now()
-            where certificate_id = %s and coalesce(status, 'ISSUED') <> 'DELETED'
-            returning *
+            from courseplatform.courses c
+            where cert.certificate_id = %s
+              and c.course_id = cert.course_id
+              and c.organization_id = %s
+              and coalesce(cert.status, 'ISSUED') <> 'DELETED'
+            returning cert.*
             """,
-            (str_value(payload.get("statusNote")) or "Apagado pelo administrador.", admin["admin_id"], payload["certificateId"]),
+            (
+                str_value(payload.get("statusNote")) or "Apagado pelo administrador.",
+                admin["admin_id"], payload["certificateId"], admin["active_organization_id"],
+            ),
         ).fetchone()
         if not certificate:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
@@ -718,26 +750,31 @@ def admin_delete_certificate_action(payload: dict[str, Any], runtime: Certificat
 
 
 def admin_get_certificate_settings_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     certificate_settings_payload = runtime.certificate_settings_payload
     connection = runtime.connection
     ensure_certificate_feature_schema = runtime.ensure_certificate_feature_schema
     get_settings = runtime.get_settings
     public_course = runtime.public_course
     success = runtime.success
-    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     course_id = payload.get("courseId") or get_settings().default_course_id
     with connection() as conn:
+        _, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN", "REVIEWER"})
         ensure_certificate_feature_schema(conn)
+        course = conn.execute(
+            "select * from courseplatform.courses where course_id = %s and organization_id = %s",
+            (course_id, admin["active_organization_id"]),
+        ).fetchone()
+        if not course:
+            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
         require_course_scope(conn, admin, course_id)
-        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
         row = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
         conn.commit()
     return success({"settings": certificate_settings_payload(row, course), "course": public_course(course)})
 
 
 def admin_save_certificate_settings_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     audit = runtime.audit
     certificate_settings_payload = runtime.certificate_settings_payload
     connection = runtime.connection
@@ -748,11 +785,16 @@ def admin_save_certificate_settings_action(payload: dict[str, Any], runtime: Cer
     public_course = runtime.public_course
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     course_id = payload.get("courseId") or get_settings().default_course_id
     with connection() as conn:
+        _, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN"})
         ensure_certificate_feature_schema(conn)
-        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+        course = conn.execute(
+            "select * from courseplatform.courses where course_id = %s and organization_id = %s",
+            (course_id, admin["active_organization_id"]),
+        ).fetchone()
+        if not course:
+            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
         current = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()
         current_payload = certificate_settings_payload(current, course)
         survey_questions = normalize_survey_questions(payload.get("surveyQuestions")) if isinstance(payload.get("surveyQuestions"), list) else current_payload.get("surveyQuestions", [])
@@ -912,21 +954,29 @@ def admin_save_certificate_survey_action(payload: dict[str, Any], runtime: Certi
 
 
 def admin_upload_certificate_asset_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     certificate_token = runtime.certificate_token
+    connection = runtime.connection
     decode_raster_data_url = runtime.decode_raster_data_url
     default_certificate_profile = runtime.default_certificate_profile
     require_fields = runtime.require_fields
     str_value = runtime.str_value
     success = runtime.success
     upload_raster_asset_to_storage = runtime.upload_raster_asset_to_storage
-    admin_context(payload, {"OWNER", "ADMIN"})
     require_fields(payload, ["courseId", "assetKey", "fileName", "mimeType", "dataUrl"])
     course_id = str_value(payload.get("courseId"))
     asset_key = str_value(payload.get("assetKey"))
     allowed_keys = set(default_certificate_profile().get("assets", {}).keys())
     if asset_key not in allowed_keys:
         raise ApiError("INVALID_ASSET_KEY", "Tipo de elemento gráfico inválido.")
+    with connection() as conn:
+        _, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN"})
+        course = conn.execute(
+            "select course_id from courseplatform.courses where course_id = %s and organization_id = %s",
+            (course_id, admin["active_organization_id"]),
+        ).fetchone()
+        if not course:
+            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
     mime_type, data_url, file_bytes = decode_raster_data_url(
         payload.get("dataUrl"),
         payload.get("mimeType"),
@@ -934,7 +984,10 @@ def admin_upload_certificate_asset_action(payload: dict[str, Any], runtime: Cert
     )
 
     extension = mimetypes.guess_extension(mime_type) or ".png"
-    object_path = f"{course_id}/{asset_key}-{certificate_token(8)}{extension}"
+    object_path = (
+        f"{admin['active_organization_id']}/{course_id}/"
+        f"{asset_key}-{certificate_token(8)}{extension}"
+    )
     storage_saved, storage_error = upload_raster_asset_to_storage(file_bytes, mime_type, object_path)
 
     return success({
@@ -1004,11 +1057,11 @@ def certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certificate
     require_certificate_download_access = runtime.require_certificate_download_access
     require_fields = runtime.require_fields
     str_value = runtime.str_value
-    student_context = runtime.student_context
-    _, student = student_context(payload)
+    student_context_with_conn = runtime.student_context_with_conn
     require_fields(payload, ["certificateId"])
     verification_base_url = str_value(payload.get("verificationBaseUrl")) or "verify.html"
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         ensure_certificate_feature_schema(conn)
         cert = conn.execute(
             """
@@ -1021,8 +1074,9 @@ def certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certificate
             left join courseplatform.enrollments e
               on e.enrollment_id = cert.enrollment_id
             where cert.certificate_id = %s and cert.student_id = %s
+              and c.organization_id = %s
             """,
-            (payload["certificateId"], student["student_id"]),
+            (payload["certificateId"], student["student_id"], session["organization_id"]),
         ).fetchone()
         if not cert:
             raise ApiError("CERTIFICATE_NOT_FOUND", "Certificado não encontrado.")
@@ -1038,16 +1092,16 @@ def certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certificate
 
 
 def admin_certificate_pdf_payload_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     certificate_document_payload = runtime.certificate_document_payload
     connection = runtime.connection
     ensure_certificate_feature_schema = runtime.ensure_certificate_feature_schema
     require_fields = runtime.require_fields
     str_value = runtime.str_value
-    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     require_fields(payload, ["certificateId"])
     verification_base_url = str_value(payload.get("verificationBaseUrl")) or "verify.html"
     with connection() as conn:
+        _, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN", "REVIEWER"})
         ensure_certificate_feature_schema(conn)
         cert = conn.execute(
             """
@@ -1059,9 +1113,9 @@ def admin_certificate_pdf_payload_action(payload: dict[str, Any], runtime: Certi
             join courseplatform.students s on s.student_id = cert.student_id
             left join courseplatform.enrollments e
               on e.enrollment_id = cert.enrollment_id
-            where cert.certificate_id = %s
+            where cert.certificate_id = %s and c.organization_id = %s
             """,
-            (payload["certificateId"],),
+            (payload["certificateId"], admin["active_organization_id"]),
         ).fetchone()
         if cert:
             require_certificate_scope(conn, admin, cert["certificate_id"])
@@ -1084,6 +1138,7 @@ def ensure_simple_certificate_action(
     student: dict[str, Any],
     course_id: str,
     enrollment_id: str = "",
+    organization_id: str = "",
     *,
     runtime: CertificateRuntime,
 ):
@@ -1105,12 +1160,20 @@ def ensure_simple_certificate_action(
         select enrollment_id from courseplatform.enrollments
         where student_id = %s and course_id = %s
           and (%s = '' or enrollment_id = %s)
+          and exists (
+            select 1 from courseplatform.courses c
+            where c.course_id = courseplatform.enrollments.course_id
+              and (%s = '' or c.organization_id = %s)
+          )
         for update
         """,
-        (student["student_id"], course_id, enrollment_id, enrollment_id),
+        (
+            student["student_id"], course_id, enrollment_id, enrollment_id,
+            organization_id, organization_id,
+        ),
     ).fetchone()
     enrollment, course, version, _, _, completed = course_completion_snapshot(
-        conn, student["student_id"], course_id, enrollment_id
+        conn, student["student_id"], course_id, enrollment_id, organization_id
     )
     enrollment = sync_enrollment_completion(conn, enrollment, completed, (enrollment or {}).get("final_score"))
     if not completed:
