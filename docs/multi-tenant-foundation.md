@@ -152,9 +152,33 @@ O domínio de pagamentos e comprovativos também respeita o tenant da sessão:
 - testes negativos sintéticos confirmam que A não submete, consulta, aprova,
   elimina nem descarrega pedidos ou comprovativos de B.
 
-Esta fatia não conclui M2. Inquéritos, comunicação, administração, restantes
-operações em lote e projeções públicas ainda precisam de revisão e testes
-negativos próprios.
+Os domínios de inquéritos, comunicação e administração também passaram a usar
+a organização ativa da sessão:
+
+- configuração e listagem de inquéritos exigem que o curso pertença ao tenant;
+- notificações, preferências, Push, Telegram, salas, presença e tópicos
+  Realtime carregam `organization_id` e não reutilizam chaves globais;
+- a fila pode continuar a ser processada globalmente por jobs internos, mas o
+  retry iniciado por um administrador reclama apenas entregas do tenant ativo;
+- contagens, listas, detalhes, alterações de estado, recuperação de acesso,
+  staff e âmbitos de revisão são filtrados pela membership institucional;
+- desativar um estudante ou staff revoga apenas as sessões da organização
+  afetada; uma membership suspensa continua visível ao administrador para poder
+  ser reativada;
+- testes negativos sintéticos cobrem inquérito, sala, fila de entrega e
+  estudante entre instituições A e B.
+
+A migração `20261004180000_isolate_communication_by_organization.sql` é
+expansiva: preserva mensagens, notificações, dispositivos e tokens existentes,
+faz o backfill para a organização histórica e só depois instala `NOT NULL`, FKs,
+índices e unicidade composta. Ela ainda não foi aplicada externamente nesta
+fatia.
+
+M2 permanece aberta para o inventário final das operações em lote, projeções
+públicas e auditoria persistida. Configurações de transporte como SMTP, bot e
+VAPID continuam sendo infraestrutura global da plataforma; não devem ser
+expostas como configuração independente por instituição até existir um plano de
+controlo global separado da administração institucional.
 
 ## Decisões de negócio pendentes
 

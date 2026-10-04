@@ -17,9 +17,20 @@ class _Connection:
 
     def execute(self, query, params=()):
         self.queries.append((" ".join(query.split()).lower(), params))
+        if "select 1 from courseplatform.courses" in query.lower():
+            return _Result({"allowed": 1})
+        return _Result(None)
 
     def commit(self):
         self.committed = True
+
+
+class _Result:
+    def __init__(self, row):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
 
 
 class BrandLogoBackendTests(unittest.TestCase):
@@ -57,7 +68,11 @@ class BrandLogoBackendTests(unittest.TestCase):
         }
         existing_media = {"logoUrl": "https://legacy.example/logo.png", "videos": [{"id": "VID-1"}]}
         with (
-            patch.object(actions, "admin_context", return_value=("session", {"admin_id": "ADM-1"})),
+            patch.object(
+                actions,
+                "admin_context",
+                return_value=({"organization_id": "ORG-A"}, {"admin_id": "ADM-1"}),
+            ),
             patch.object(actions, "read_media_config", return_value=existing_media),
             patch.object(actions, "upload_raster_asset_to_storage", return_value=(True, "")),
             patch.object(actions, "connection", fake_connection),

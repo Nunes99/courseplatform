@@ -835,7 +835,7 @@ def admin_save_certificate_settings_action(payload: dict[str, Any], runtime: Cer
 
 
 def admin_list_certificate_surveys_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     certificate_settings_payload = runtime.certificate_settings_payload
     connection = runtime.connection
     cursor_page_limit = runtime.cursor_page_limit
@@ -847,20 +847,22 @@ def admin_list_certificate_surveys_action(payload: dict[str, Any], runtime: Cert
     public_course = runtime.public_course
     str_value = runtime.str_value
     success = runtime.success
-    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
     query = str_value(payload.get("query")).lower()
     limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-certificate-surveys", query)
-    cursor = decode_list_cursor(payload.get("cursor"), "admin-certificate-surveys", scope, sort_type="text")
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_title, cursor_id = cursor
-        cursor_sql = "and (lower(coalesce(c.title, '')) > %s or (lower(coalesce(c.title, '')) = %s and c.course_id > %s))"
-        cursor_params.extend((cursor_title, cursor_title, cursor_id))
-    reviewer_sql, reviewer_params = reviewer_course_predicate(admin, "c.course_id")
     with connection() as conn:
+        session, admin_row = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN", "REVIEWER"})
+        admin = admin_from_context((session, admin_row))
+        organization_id = session["organization_id"]
         ensure_certificate_feature_schema(conn)
+        scope = cursor_scope("admin-certificate-surveys", organization_id, query)
+        cursor = decode_list_cursor(payload.get("cursor"), "admin-certificate-surveys", scope, sort_type="text")
+        cursor_sql = ""
+        cursor_params: list[Any] = []
+        if cursor:
+            cursor_title, cursor_id = cursor
+            cursor_sql = "and (lower(coalesce(c.title, '')) > %s or (lower(coalesce(c.title, '')) = %s and c.course_id > %s))"
+            cursor_params.extend((cursor_title, cursor_title, cursor_id))
+        reviewer_sql, reviewer_params = reviewer_course_predicate(admin, "c.course_id")
         rows = conn.execute(
             f"""
             with survey_rows as (
@@ -868,7 +870,8 @@ def admin_list_certificate_surveys_action(payload: dict[str, Any], runtime: Cert
                      lower(coalesce(c.title, '')) as pagination_sort_text
               from courseplatform.courses c
               left join courseplatform.certificate_settings cs on cs.course_id = c.course_id
-              where coalesce(c.status, 'ACTIVE') <> 'DELETED'
+              where c.organization_id = %s
+                and coalesce(c.status, 'ACTIVE') <> 'DELETED'
                 and (%s = '' or lower(coalesce(c.title, '') || ' ' || coalesce(c.course_code, '') || ' ' || coalesce(c.course_id, '')) like %s)
                 and ({reviewer_sql})
             ), numbered_surveys as (
@@ -879,7 +882,7 @@ def admin_list_certificate_surveys_action(payload: dict[str, Any], runtime: Cert
             order by pagination_sort_text, course_id
             limit %s
             """,
-            (query, f"%{query}%", *reviewer_params, *cursor_params, limit + 1),
+            (organization_id, query, f"%{query}%", *reviewer_params, *cursor_params, limit + 1),
         ).fetchall()
         conn.commit()
     total = int(rows[0]["total_count"]) if rows else 0
@@ -901,7 +904,7 @@ def admin_list_certificate_surveys_action(payload: dict[str, Any], runtime: Cert
 
 
 def admin_save_certificate_survey_action(payload: dict[str, Any], runtime: CertificateRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     audit = runtime.audit
     certificate_settings_payload = runtime.certificate_settings_payload
     connection = runtime.connection
@@ -912,12 +915,15 @@ def admin_save_certificate_survey_action(payload: dict[str, Any], runtime: Certi
     public_course = runtime.public_course
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     course_id = payload.get("courseId") or get_settings().default_course_id
     survey_questions = normalize_survey_questions(payload.get("surveyQuestions") if isinstance(payload.get("surveyQuestions"), list) else [])
     with connection() as conn:
+        session, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN"})
         ensure_certificate_feature_schema(conn)
-        course = conn.execute("select * from courseplatform.courses where course_id = %s", (course_id,)).fetchone()
+        course = conn.execute(
+            "select * from courseplatform.courses where course_id = %s and organization_id = %s",
+            (course_id, session["organization_id"]),
+        ).fetchone()
         if not course:
             raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado.")
         current = conn.execute("select * from courseplatform.certificate_settings where course_id = %s", (course_id,)).fetchone()

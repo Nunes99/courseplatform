@@ -389,7 +389,7 @@ class NotificationChannelBackendTests(unittest.TestCase):
                 self.deliveries = []
 
             def execute(self, query, params=()):
-                if query.strip().lower().startswith("select * from courseplatform.students"):
+                if "from courseplatform.students s" in query.lower():
                     return _Cursor(student)
                 if "insert into courseplatform.notification_deliveries" in query:
                     self.deliveries.append(params)
@@ -398,6 +398,7 @@ class NotificationChannelBackendTests(unittest.TestCase):
         database = _Connection()
         actions.create_student_notification(
             database, "STU-1", "GENERAL", "Título", "Mensagem",
+            organization_id="ORG-A",
             send_whatsapp=True, send_email=True, send_telegram=True,
         )
         by_channel = {params[2]: params for params in database.deliveries}
@@ -429,7 +430,11 @@ class NotificationChannelBackendTests(unittest.TestCase):
 
         with (
             patch.object(actions, "prepare_notification_feature_schema"),
-            patch.object(actions, "student_context", return_value=("session", {"student_id": "STU-1"})),
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "STU-1"}),
+            ),
             patch.object(actions, "telegram_runtime_configuration", return_value={
                 "configured": True, "botUsername": "CoursePlatformBot"
             }),

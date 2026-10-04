@@ -306,6 +306,7 @@ def normalize_scope_payload(value: Any) -> list[dict[str, str]]:
 def replace_reviewer_scopes(
     conn: Any,
     *,
+    organization_id: str,
     admin_id: str,
     actor_admin_id: str,
     scopes: list[dict[str, str]],
@@ -315,8 +316,8 @@ def replace_reviewer_scopes(
         if scope["scopeType"] == "GLOBAL":
             continue
         course = conn.execute(
-            "select course_id from courseplatform.courses where course_id = %s",
-            (scope["courseId"],),
+            "select course_id from courseplatform.courses where course_id = %s and organization_id = %s",
+            (scope["courseId"], organization_id),
         ).fetchone()
         if not course:
             raise ApiError("INVALID_REVIEWER_SCOPE", "O curso selecionado não existe.")
@@ -337,18 +338,21 @@ def replace_reviewer_scopes(
             ).fetchone()
             if not group:
                 raise ApiError("INVALID_REVIEWER_SCOPE", "O grupo não pertence à turma selecionada.")
-    conn.execute("delete from courseplatform.reviewer_scopes where admin_id = %s", (admin_id,))
+    conn.execute(
+        "delete from courseplatform.reviewer_scopes where organization_id = %s and admin_id = %s",
+        (organization_id, admin_id),
+    )
     for scope in scopes:
         conn.execute(
             """
             insert into courseplatform.reviewer_scopes
-              (reviewer_scope_id, admin_id, scope_type, course_id, offering_id, group_id,
+              (reviewer_scope_id, organization_id, admin_id, scope_type, course_id, offering_id, group_id,
                status, created_by, created_at, updated_at)
-            values (%s, %s, %s, nullif(%s, ''), nullif(%s, ''), nullif(%s, ''),
+            values (%s, %s, %s, %s, nullif(%s, ''), nullif(%s, ''), nullif(%s, ''),
                     'ACTIVE', %s, now(), now())
             """,
             (
-                generate_id("RS"), admin_id, scope["scopeType"], scope["courseId"],
+                generate_id("RS"), organization_id, admin_id, scope["scopeType"], scope["courseId"],
                 scope["offeringId"], scope["groupId"], actor_admin_id,
             ),
         )

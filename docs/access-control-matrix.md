@@ -197,6 +197,10 @@ Alterações futuras devem repetir o inventário de dependências e usar migraç
 | URL de ficheiro privado sem sessão | Recusada/expirada |
 | Chave pública Supabase consulta view sensível | Recusado |
 | Service role aparece no frontend/log | Teste/release falha |
+| Estudante da instituição A usa recurso de B | Recusado em curso, tentativa, certificado, pagamento, inquérito, notificação e chat |
+| ADMIN da instituição A consulta ou altera estudante/staff de B | Recusado antes de qualquer escrita |
+| ADMIN de A repete entregas falhadas de B | Nenhuma entrega de B é reclamada ou alterada |
+| Token Realtime de A subscreve tópico de B | Recusado pela organização assinada no JWT e membership ativa |
 
 ## Pontos ainda não verificados
 
@@ -211,5 +215,8 @@ Alterações futuras devem repetir o inventário de dependências e usar migraç
 - Validação operacional do seletor exclusivo de âmbito após o próximo deploy.
 - Gestão de consentimento/retensão conforme requisitos legais aplicáveis.
 - Revogação de todas as formas de acesso após mudança de papel, email ou estado.
+- Separação entre configurações globais de transporte (SMTP, bot e VAPID) e
+  futuras configurações institucionais; até lá, elas pertencem ao plano de
+  controlo da plataforma, não ao tenant.
 
 Esta matriz deve ser atualizada sempre que um papel, ação ou recurso for adicionado.

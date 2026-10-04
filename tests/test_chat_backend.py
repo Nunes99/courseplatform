@@ -129,7 +129,7 @@ class ChatBackendTests(unittest.TestCase):
     def test_realtime_token_is_scoped_signed_and_short_lived(self):
         secret = "realtime-test-secret-with-at-least-32-bytes"
         token, expires_at = actions.chat_realtime_token(
-            {"type": "STUDENT", "id": "STU-PRIVATE-1"},
+            {"type": "STUDENT", "id": "STU-PRIVATE-1", "organization_id": "ORG-A"},
             secret,
             30,
         )
@@ -147,6 +147,7 @@ class ChatBackendTests(unittest.TestCase):
         self.assertEqual(claims["role"], "authenticated")
         self.assertEqual(claims["actor_type"], "STUDENT")
         self.assertEqual(claims["actor_id"], "STU-PRIVATE-1")
+        self.assertEqual(claims["organization_id"], "ORG-A")
         self.assertLessEqual(claims["exp"] - claims["iat"], 30 * 60)
         self.assertEqual(int(expires_at.timestamp()), claims["exp"])
 

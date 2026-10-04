@@ -81,6 +81,7 @@ class CommunicationRuntime:
     _template_tokens: Any
     accessible_chat_room: Any
     admin_context: Any
+    admin_context_with_conn: Any
     as_bool: Any
     audit: Any
     chat_actor_with_conn: Any
@@ -916,6 +917,7 @@ def create_student_notification_action(
     title: str,
     message: str,
     *,
+    organization_id: str = "",
     admin_id: str | None = None,
     action_url: str = "#/notifications",
     entity_type: str = "",
@@ -942,9 +944,35 @@ def create_student_notification_action(
     resolve_notification_content = runtime.resolve_notification_content
     safe_notification_action_url = runtime.safe_notification_action_url
     str_value = runtime.str_value
+    organization_id = str_value(organization_id)
+    if not organization_id:
+        memberships = conn.execute(
+            """
+            select organization_id
+            from courseplatform.organization_memberships
+            where student_id = %s and membership_role = 'STUDENT' and status = 'ACTIVE'
+            order by organization_id
+            limit 2
+            """,
+            (student_id,),
+        ).fetchall()
+        if len(memberships) != 1:
+            raise ApiError(
+                "NOTIFICATION_ORGANIZATION_REQUIRED",
+                "A instituição da notificação deve ser informada explicitamente.",
+            )
+        organization_id = memberships[0]["organization_id"]
     student = conn.execute(
-        "select * from courseplatform.students where student_id = %s",
-        (student_id,),
+        """
+        select s.* from courseplatform.students s
+        join courseplatform.organization_memberships m
+          on m.student_id = s.student_id
+         and m.organization_id = %s
+         and m.membership_role = 'STUDENT'
+         and m.status = 'ACTIVE'
+        where s.student_id = %s and s.status = 'ACTIVE'
+        """,
+        (organization_id, student_id),
     ).fetchone()
     if not student:
         return None
@@ -968,15 +996,16 @@ def create_student_notification_action(
     conn.execute(
         """
         insert into courseplatform.notifications
-          (notification_id, student_id, created_by_admin_id, category, title, message,
+          (notification_id, organization_id, student_id, created_by_admin_id, category, title, message,
            action_url, entity_type, entity_id, priority, template_key,
            template_variables_json, email_subject, email_message, push_title,
            push_message, created_at)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s::jsonb, %s, %s, %s, %s, now())
         """,
         (
             notification_id,
+            organization_id,
             student_id,
             admin_id,
             normalized_category,
@@ -1043,8 +1072,8 @@ def create_student_notification_action(
         )
     if send_push:
         active_push = conn.execute(
-            "select count(*) as count from courseplatform.push_subscriptions where student_id = %s and enabled",
-            (student_id,),
+            "select count(*) as count from courseplatform.push_subscriptions where organization_id = %s and student_id = %s and enabled",
+            (organization_id, student_id),
         ).fetchone() or {}
         queue_delivery(
             "PUSH",
@@ -1457,7 +1486,13 @@ def send_telegram_notification_action(delivery: dict[str, Any], configuration: d
     return message_id
 
 
-def push_subscriptions_for_student_action(student_id: str, encryption_key: str, *, runtime: CommunicationRuntime) -> list[dict[str, Any]]:
+def push_subscriptions_for_student_action(
+    student_id: str,
+    encryption_key: str,
+    organization_id: str = "",
+    *,
+    runtime: CommunicationRuntime,
+) -> list[dict[str, Any]]:
     fetch_all = runtime.fetch_all
     return fetch_all(
         """
@@ -1466,10 +1501,10 @@ def push_subscriptions_for_student_action(student_id: str, encryption_key: str, 
                pgp_sym_decrypt(p256dh_encrypted, %s)::text as p256dh,
                pgp_sym_decrypt(auth_encrypted, %s)::text as auth
         from courseplatform.push_subscriptions
-        where student_id = %s and enabled
+        where student_id = %s and organization_id = %s and enabled
         order by updated_at desc
         """,
-        (encryption_key, encryption_key, encryption_key, student_id),
+        (encryption_key, encryption_key, encryption_key, student_id, organization_id),
     )
 
 
@@ -1512,9 +1547,16 @@ def send_web_push_notification_action(delivery: dict[str, Any], configuration: d
     if not configuration.get("configured") or webpush is None:
         raise RuntimeError("Integração Web Push ainda não configurada no servidor.")
     student_id = str_value(delivery.get("student_id") or delivery.get("recipient"))
+    organization_id = str_value(delivery.get("organization_id"))
     if not student_id:
         raise RuntimeError("Destinatário Push inválido.")
-    subscriptions = push_subscriptions_for_student(student_id, configuration["encryptionKey"])
+    if not organization_id:
+        raise RuntimeError("Instituição da notificação Push inválida.")
+    subscriptions = push_subscriptions_for_student(
+        student_id,
+        configuration["encryptionKey"],
+        organization_id,
+    )
     if not subscriptions:
         raise RuntimeError("Nenhum dispositivo possui notificações Push ativas.")
     action_url = resolved_notification_action_url(delivery, configuration) or str_value(delivery.get("action_url")) or "#/notifications"
@@ -1527,7 +1569,7 @@ def send_web_push_notification_action(delivery: dict[str, Any], configuration: d
         "tag": f"courseplatform-{str_value(delivery.get('notification_id'))[:80]}",
         "notificationId": str_value(delivery.get("notification_id")),
         "priority": str_value(delivery.get("priority") or "NORMAL"),
-        "badgeCount": student_unread_badge_count(student_id),
+        "badgeCount": student_unread_badge_count(student_id, organization_id),
     }, ensure_ascii=False)
     delivered = 0
     failures: list[str] = []
@@ -1560,7 +1602,12 @@ def send_web_push_notification_action(delivery: dict[str, Any], configuration: d
     return f"{delivered} dispositivo(s)"
 
 
-def student_unread_badge_count_action(student_id: str, *, runtime: CommunicationRuntime) -> int:
+def student_unread_badge_count_action(
+    student_id: str,
+    organization_id: str = "",
+    *,
+    runtime: CommunicationRuntime,
+) -> int:
     connection = runtime.connection
     """Return the exact application badge without exposing private content."""
     try:
@@ -1569,9 +1616,9 @@ def student_unread_badge_count_action(student_id: str, *, runtime: Communication
                 """
                 select count(*) as count
                 from courseplatform.notifications
-                where student_id = %s and read_at is null
+                where student_id = %s and organization_id = %s and read_at is null
                 """,
-                (student_id,),
+                (student_id, organization_id),
             ).fetchone() or {}
             messages = conn.execute(
                 """
@@ -1582,6 +1629,7 @@ def student_unread_badge_count_action(student_id: str, *, runtime: Communication
                   on room_read.room_id = room.room_id and room_read.student_id = %s
                 where message.status = 'ACTIVE'
                   and room.status = 'ACTIVE'
+                  and room.organization_id = %s
                   and message.sender_student_id is distinct from %s
                   and message.created_at > coalesce(room_read.last_read_at, 'epoch'::timestamptz)
                   and (
@@ -1620,8 +1668,8 @@ def student_unread_badge_count_action(student_id: str, *, runtime: Communication
                   )
                 """,
                 (
-                    student_id, student_id, student_id, student_id,
-                    student_id, student_id, student_id, student_id,
+                    student_id, organization_id, student_id, student_id,
+                    student_id, student_id, student_id, student_id, student_id,
                 ),
             ).fetchone() or {}
         return max(0, int(notifications.get("count") or 0) + int(messages.get("count") or 0))
@@ -1760,6 +1808,7 @@ def claim_notification_deliveries_action(
     channel: str,
     notification_ids: list[str] | None,
     limit: int,
+    organization_id: str = "",
     *,
     runtime: CommunicationRuntime,
 ) -> list[dict[str, Any]]:
@@ -1775,6 +1824,17 @@ def claim_notification_deliveries_action(
     if notification_ids:
         notification_filter = " and d.notification_id = any(%s)"
         params.append(notification_ids)
+    organization_filter = ""
+    if organization_id:
+        organization_filter = """
+            and exists (
+              select 1
+              from courseplatform.notifications scoped_notification
+              where scoped_notification.notification_id = d.notification_id
+                and scoped_notification.organization_id = %s
+            )
+        """
+        params.append(organization_id)
     params.extend([max(1, min(int(limit), 200)), claim_token])
     query = f"""
         with candidates as (
@@ -1790,6 +1850,7 @@ def claim_notification_deliveries_action(
             )
             and d.attempt_count < d.max_attempts
             {notification_filter}
+            {organization_filter}
           order by d.created_at
           limit %s
           for update of d skip locked
@@ -1805,7 +1866,7 @@ def claim_notification_deliveries_action(
           where d.delivery_id = c.delivery_id
           returning d.*
         )
-        select claimed.*, n.student_id, n.notification_id, n.title, n.message,
+        select claimed.*, n.organization_id, n.student_id, n.notification_id, n.title, n.message,
                n.email_subject, n.email_message, n.push_title, n.push_message,
                n.action_url, n.priority, s.full_name as student_name
         from claimed
@@ -1819,24 +1880,24 @@ def claim_notification_deliveries_action(
     return rows
 
 
-def claim_whatsapp_deliveries_action(notification_ids: list[str] | None, limit: int, *, runtime: CommunicationRuntime) -> list[dict[str, Any]]:
+def claim_whatsapp_deliveries_action(notification_ids: list[str] | None, limit: int, organization_id: str = "", *, runtime: CommunicationRuntime) -> list[dict[str, Any]]:
     claim_notification_deliveries = runtime.claim_notification_deliveries
-    return claim_notification_deliveries("WHATSAPP", notification_ids, limit)
+    return claim_notification_deliveries("WHATSAPP", notification_ids, limit, organization_id)
 
 
-def claim_email_deliveries_action(notification_ids: list[str] | None, limit: int, *, runtime: CommunicationRuntime) -> list[dict[str, Any]]:
+def claim_email_deliveries_action(notification_ids: list[str] | None, limit: int, organization_id: str = "", *, runtime: CommunicationRuntime) -> list[dict[str, Any]]:
     claim_notification_deliveries = runtime.claim_notification_deliveries
-    return claim_notification_deliveries("EMAIL", notification_ids, limit)
+    return claim_notification_deliveries("EMAIL", notification_ids, limit, organization_id)
 
 
-def claim_telegram_deliveries_action(notification_ids: list[str] | None, limit: int, *, runtime: CommunicationRuntime) -> list[dict[str, Any]]:
+def claim_telegram_deliveries_action(notification_ids: list[str] | None, limit: int, organization_id: str = "", *, runtime: CommunicationRuntime) -> list[dict[str, Any]]:
     claim_notification_deliveries = runtime.claim_notification_deliveries
-    return claim_notification_deliveries("TELEGRAM", notification_ids, limit)
+    return claim_notification_deliveries("TELEGRAM", notification_ids, limit, organization_id)
 
 
-def claim_push_deliveries_action(notification_ids: list[str] | None, limit: int, *, runtime: CommunicationRuntime) -> list[dict[str, Any]]:
+def claim_push_deliveries_action(notification_ids: list[str] | None, limit: int, organization_id: str = "", *, runtime: CommunicationRuntime) -> list[dict[str, Any]]:
     claim_notification_deliveries = runtime.claim_notification_deliveries
-    return claim_notification_deliveries("PUSH", notification_ids, limit)
+    return claim_notification_deliveries("PUSH", notification_ids, limit, organization_id)
 
 
 def deliver_pending_channel_action(
@@ -1845,6 +1906,7 @@ def deliver_pending_channel_action(
     sender,
     notification_ids: list[str] | None = None,
     limit: int = 50,
+    organization_id: str = "",
     *,
     runtime: CommunicationRuntime,
 ) -> dict[str, int]:
@@ -1856,7 +1918,7 @@ def deliver_pending_channel_action(
     if not configuration["configured"]:
         return {"sent": 0, "failed": 0, "pending": 0}
     prepare_notification_feature_schema()
-    rows = claim_notification_deliveries(channel, notification_ids, limit)
+    rows = claim_notification_deliveries(channel, notification_ids, limit, organization_id)
     delivery_results: list[tuple[dict[str, Any], str, str]] = []
     if rows:
         worker_count = min(5, len(rows))
@@ -1917,43 +1979,43 @@ def deliver_pending_channel_action(
     return {"sent": sent, "failed": failed, "pending": max(0, len(rows) - sent - failed)}
 
 
-def deliver_pending_whatsapp_action(notification_ids: list[str] | None = None, limit: int = 50, *, runtime: CommunicationRuntime) -> dict[str, int]:
+def deliver_pending_whatsapp_action(notification_ids: list[str] | None = None, limit: int = 50, organization_id: str = "", *, runtime: CommunicationRuntime) -> dict[str, int]:
     deliver_pending_channel = runtime.deliver_pending_channel
     send_whatsapp_template = runtime.send_whatsapp_template
     whatsapp_runtime_configuration = runtime.whatsapp_runtime_configuration
     return deliver_pending_channel(
         "WHATSAPP", whatsapp_runtime_configuration, send_whatsapp_template,
-        notification_ids, limit,
+        notification_ids, limit, organization_id,
     )
 
 
-def deliver_pending_email_action(notification_ids: list[str] | None = None, limit: int = 50, *, runtime: CommunicationRuntime) -> dict[str, int]:
+def deliver_pending_email_action(notification_ids: list[str] | None = None, limit: int = 50, organization_id: str = "", *, runtime: CommunicationRuntime) -> dict[str, int]:
     deliver_pending_channel = runtime.deliver_pending_channel
     email_runtime_configuration = runtime.email_runtime_configuration
     send_email_notification = runtime.send_email_notification
     return deliver_pending_channel(
         "EMAIL", email_runtime_configuration, send_email_notification,
-        notification_ids, limit,
+        notification_ids, limit, organization_id,
     )
 
 
-def deliver_pending_telegram_action(notification_ids: list[str] | None = None, limit: int = 50, *, runtime: CommunicationRuntime) -> dict[str, int]:
+def deliver_pending_telegram_action(notification_ids: list[str] | None = None, limit: int = 50, organization_id: str = "", *, runtime: CommunicationRuntime) -> dict[str, int]:
     deliver_pending_channel = runtime.deliver_pending_channel
     send_telegram_notification = runtime.send_telegram_notification
     telegram_runtime_configuration = runtime.telegram_runtime_configuration
     return deliver_pending_channel(
         "TELEGRAM", telegram_runtime_configuration, send_telegram_notification,
-        notification_ids, limit,
+        notification_ids, limit, organization_id,
     )
 
 
-def deliver_pending_push_action(notification_ids: list[str] | None = None, limit: int = 50, *, runtime: CommunicationRuntime) -> dict[str, int]:
+def deliver_pending_push_action(notification_ids: list[str] | None = None, limit: int = 50, organization_id: str = "", *, runtime: CommunicationRuntime) -> dict[str, int]:
     deliver_pending_channel = runtime.deliver_pending_channel
     send_web_push_notification = runtime.send_web_push_notification
     web_push_runtime_configuration = runtime.web_push_runtime_configuration
     return deliver_pending_channel(
         "PUSH", web_push_runtime_configuration, send_web_push_notification,
-        notification_ids, limit,
+        notification_ids, limit, organization_id,
     )
 
 
@@ -2036,7 +2098,7 @@ def ensure_chat_realtime_schema_action(conn, *, runtime: CommunicationRuntime) -
             join pg_namespace namespace on namespace.oid = procedure.pronamespace
             where namespace.nspname = 'courseplatform'
               and procedure.proname = 'chat_realtime_topic_allowed'
-              and pg_get_functiondef(procedure.oid) like '%chat:actor:%'
+              and pg_get_functiondef(procedure.oid) like '%chat:organization:%'
               and pg_get_functiondef(procedure.oid) like '%active_group.status%'
           ) as access_policy_function_ready,
           exists (
@@ -2091,6 +2153,7 @@ def chat_realtime_token_action(actor: dict[str, Any], secret: str, lifetime_minu
         "exp": int(expires_at.timestamp()),
         "actor_type": actor["type"],
         "actor_id": actor["id"],
+        "organization_id": actor.get("organization_id") or "ORG-LMTWEBNAIRS",
     })
     signing_input = f"{header}.{claims}".encode("ascii")
     signature = base64.urlsafe_b64encode(
@@ -2100,23 +2163,24 @@ def chat_realtime_token_action(actor: dict[str, Any], secret: str, lifetime_minu
 
 
 def student_push_configuration_action(payload: dict[str, Any], *, runtime: CommunicationRuntime):
-    fetch_one = runtime.fetch_one
+    connection = runtime.connection
     iso = runtime.iso
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     web_push_configuration = runtime.web_push_configuration
     prepare_notification_feature_schema()
-    _, student = student_context(payload)
     configuration = web_push_configuration()
-    subscription = fetch_one(
-        """
-        select count(*) as count, max(updated_at) as updated_at
-        from courseplatform.push_subscriptions
-        where student_id = %s and enabled
-        """,
-        (student["student_id"],),
-    ) or {}
+    with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
+        subscription = conn.execute(
+            """
+            select count(*) as count, max(updated_at) as updated_at
+            from courseplatform.push_subscriptions
+            where organization_id = %s and student_id = %s and enabled
+            """,
+            (session["organization_id"], student["student_id"]),
+        ).fetchone() or {}
     return success({
         "pushConfiguration": configuration,
         "subscriptionCount": int(subscription.get("count") or 0),
@@ -2133,13 +2197,12 @@ def student_subscribe_push_action(payload: dict[str, Any], *, runtime: Communica
     iso = runtime.iso
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     valid_push_endpoint = runtime.valid_push_endpoint
     valid_push_key = runtime.valid_push_key
     web_push_runtime_configuration = runtime.web_push_runtime_configuration
     prepare_notification_feature_schema()
-    _, student = student_context(payload)
     configuration = web_push_runtime_configuration()
     if not configuration.get("configured"):
         raise ApiError(
@@ -2165,20 +2228,21 @@ def student_subscribe_push_action(payload: dict[str, Any], *, runtime: Communica
     device_label = str_value(payload.get("deviceLabel"))[:120]
     user_agent = str_value(payload.get("userAgent"))[:500]
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         row = conn.execute(
             """
             insert into courseplatform.push_subscriptions
-              (subscription_id, student_id, endpoint_hash, endpoint_encrypted,
+              (subscription_id, organization_id, student_id, endpoint_hash, endpoint_encrypted,
                p256dh_encrypted, auth_encrypted, user_agent, device_label,
                enabled, failure_count, created_at, updated_at)
             values (
-              %s, %s, %s,
+              %s, %s, %s, %s,
               pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
               pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
               pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
               %s, %s, true, 0, now(), now()
             )
-            on conflict (endpoint_hash) do update set
+            on conflict (organization_id, endpoint_hash) do update set
               student_id = excluded.student_id,
               endpoint_encrypted = excluded.endpoint_encrypted,
               p256dh_encrypted = excluded.p256dh_encrypted,
@@ -2191,7 +2255,7 @@ def student_subscribe_push_action(payload: dict[str, Any], *, runtime: Communica
             returning subscription_id, device_label, enabled, created_at, updated_at
             """,
             (
-                generate_id("PSH"), student["student_id"], endpoint_hash,
+                generate_id("PSH"), session["organization_id"], student["student_id"], endpoint_hash,
                 endpoint, encryption_key, p256dh, encryption_key, auth_key, encryption_key,
                 user_agent or None, device_label or None,
             ),
@@ -2220,32 +2284,32 @@ def student_unsubscribe_push_action(payload: dict[str, Any], *, runtime: Communi
     hash_secret = runtime.hash_secret
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     prepare_notification_feature_schema()
-    _, student = student_context(payload)
     endpoint = str_value(payload.get("endpoint"))
     all_devices = as_bool(payload.get("allDevices"))
     if not endpoint and not all_devices:
         raise ApiError("PUSH_SUBSCRIPTION_REQUIRED", "Informe a subscrição Push deste dispositivo.")
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         if all_devices:
             result = conn.execute(
                 """
                 update courseplatform.push_subscriptions
                 set enabled = false, updated_at = now()
-                where student_id = %s and enabled
+                where organization_id = %s and student_id = %s and enabled
                 """,
-                (student["student_id"],),
+                (session["organization_id"], student["student_id"]),
             )
         else:
             result = conn.execute(
                 """
                 update courseplatform.push_subscriptions
                 set enabled = false, updated_at = now()
-                where student_id = %s and endpoint_hash = %s and enabled
+                where organization_id = %s and student_id = %s and endpoint_hash = %s and enabled
                 """,
-                (student["student_id"], hash_secret(endpoint)),
+                (session["organization_id"], student["student_id"], hash_secret(endpoint)),
             )
         audit(
             conn, "STUDENT", student["student_id"], "PUSH_UNSUBSCRIBED",
@@ -2261,11 +2325,10 @@ def student_start_telegram_link_action(payload: dict[str, Any], *, runtime: Comm
     hash_secret = runtime.hash_secret
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     telegram_runtime_configuration = runtime.telegram_runtime_configuration
     prepare_notification_feature_schema()
-    _, student = student_context(payload)
     configuration = telegram_runtime_configuration()
     bot_username = str_value(configuration.get("botUsername")).lstrip("@")
     if not configuration.get("configured") or not bot_username:
@@ -2275,21 +2338,22 @@ def student_start_telegram_link_action(payload: dict[str, Any], *, runtime: Comm
         )
     token = secrets.token_urlsafe(24)
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         conn.execute(
             """
             update courseplatform.telegram_link_tokens
             set consumed_at = coalesce(consumed_at, now())
-            where student_id = %s and consumed_at is null
+            where organization_id = %s and student_id = %s and consumed_at is null
             """,
-            (student["student_id"],),
+            (session["organization_id"], student["student_id"]),
         )
         conn.execute(
             """
             insert into courseplatform.telegram_link_tokens
-              (token_hash, student_id, expires_at, created_at)
-            values (%s, %s, now() + interval '15 minutes', now())
+              (token_hash, organization_id, student_id, expires_at, created_at)
+            values (%s, %s, %s, now() + interval '15 minutes', now())
             """,
-            (hash_secret(token), student["student_id"]),
+            (hash_secret(token), session["organization_id"], student["student_id"]),
         )
         conn.commit()
     return success({
@@ -2301,41 +2365,48 @@ def student_start_telegram_link_action(payload: dict[str, Any], *, runtime: Comm
 
 
 def student_confirm_telegram_link_action(payload: dict[str, Any], *, runtime: CommunicationRuntime):
-    fetch_one = runtime.fetch_one
+    connection = runtime.connection
     hash_secret = runtime.hash_secret
     normalize_telegram_recipient = runtime.normalize_telegram_recipient
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
     process_telegram_link_updates = runtime.process_telegram_link_updates
     public_student = runtime.public_student
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     prepare_notification_feature_schema()
-    _, student = student_context(payload)
     link_token = str_value(payload.get("linkToken"))
     if not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", link_token):
         raise ApiError("INVALID_TELEGRAM_LINK_TOKEN", "A ligação ao Telegram é inválida ou expirou.")
-    pending = fetch_one(
-        """
-        select token_hash from courseplatform.telegram_link_tokens
-        where token_hash = %s and student_id = %s and consumed_at is null and expires_at > now()
-        """,
-        (hash_secret(link_token), student["student_id"]),
-    )
+    with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
+        pending = conn.execute(
+            """
+            select token_hash from courseplatform.telegram_link_tokens
+            where token_hash = %s and organization_id = %s and student_id = %s
+              and consumed_at is null and expires_at > now()
+            """,
+            (hash_secret(link_token), session["organization_id"], student["student_id"]),
+        ).fetchone()
     if not pending:
         raise ApiError("TELEGRAM_LINK_EXPIRED", "A ligação ao Telegram é inválida ou expirou. Gere uma nova ligação.")
     try:
         process_telegram_link_updates()
     except RuntimeError as error:
         raise ApiError("TELEGRAM_LINK_CHECK_FAILED", str(error)) from error
-    linked_student = fetch_one(
-        "select * from courseplatform.students where student_id = %s",
-        (student["student_id"],),
-    ) or student
-    consumed = fetch_one(
-        "select consumed_at from courseplatform.telegram_link_tokens where token_hash = %s and student_id = %s",
-        (hash_secret(link_token), student["student_id"]),
-    ) or {}
+    with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
+        linked_student = conn.execute(
+            "select * from courseplatform.students where student_id = %s",
+            (student["student_id"],),
+        ).fetchone() or student
+        consumed = conn.execute(
+            """
+            select consumed_at from courseplatform.telegram_link_tokens
+            where token_hash = %s and organization_id = %s and student_id = %s
+            """,
+            (hash_secret(link_token), session["organization_id"], student["student_id"]),
+        ).fetchone() or {}
     if not consumed.get("consumed_at") or not normalize_telegram_recipient(linked_student.get("telegram_chat_id")):
         return success({
             "linked": False,
@@ -2350,11 +2421,11 @@ def student_unlink_telegram_action(payload: dict[str, Any], *, runtime: Communic
     connection = runtime.connection
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
     public_student = runtime.public_student
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     prepare_notification_feature_schema()
-    _, student = student_context(payload)
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         row = conn.execute(
             """
             update courseplatform.students
@@ -2369,9 +2440,9 @@ def student_unlink_telegram_action(payload: dict[str, Any], *, runtime: Communic
             """
             update courseplatform.telegram_link_tokens
             set consumed_at = coalesce(consumed_at, now())
-            where student_id = %s and consumed_at is null
+            where organization_id = %s and student_id = %s and consumed_at is null
             """,
-            (student["student_id"],),
+            (session["organization_id"], student["student_id"]),
         )
         audit(
             conn,
@@ -2388,20 +2459,20 @@ def student_unlink_telegram_action(payload: dict[str, Any], *, runtime: Communic
 
 def my_notifications_action(payload: dict[str, Any], *, runtime: CommunicationRuntime):
     as_bool = runtime.as_bool
-    fetch_all = runtime.fetch_all
-    fetch_one = runtime.fetch_one
+    connection = runtime.connection
     pagination = runtime.pagination
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
     public_notification = runtime.public_notification
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     prepare_notification_feature_schema()
-    _, student = student_context(payload)
     limit, offset, page = pagination(payload, default_limit=40, max_limit=100)
     unread_only = as_bool(payload.get("unreadOnly"))
     where_unread = "and n.read_at is null" if unread_only else ""
-    rows = fetch_all(
-        f"""
+    with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
+        rows = conn.execute(
+            f"""
         select n.*,
                w.status as whatsapp_status, w.recipient as whatsapp_recipient,
                w.provider_message_id as whatsapp_provider_message_id,
@@ -2428,20 +2499,20 @@ def my_notifications_action(payload: dict[str, Any], *, runtime: CommunicationRu
           on t.notification_id = n.notification_id and t.channel = 'TELEGRAM'
         left join courseplatform.notification_deliveries p
           on p.notification_id = n.notification_id and p.channel = 'PUSH'
-        where n.student_id = %s {where_unread}
+        where n.organization_id = %s and n.student_id = %s {where_unread}
         order by n.created_at desc
         limit %s offset %s
-        """,
-        (student["student_id"], limit, offset),
-    )
-    unread = fetch_one(
-        "select count(*) as count from courseplatform.notifications where student_id = %s and read_at is null",
-        (student["student_id"],),
-    )
-    total = fetch_one(
-        "select count(*) as count from courseplatform.notifications where student_id = %s",
-        (student["student_id"],),
-    )
+            """,
+            (session["organization_id"], student["student_id"], limit, offset),
+        ).fetchall()
+        unread = conn.execute(
+            "select count(*) as count from courseplatform.notifications where organization_id = %s and student_id = %s and read_at is null",
+            (session["organization_id"], student["student_id"]),
+        ).fetchone()
+        total = conn.execute(
+            "select count(*) as count from courseplatform.notifications where organization_id = %s and student_id = %s",
+            (session["organization_id"], student["student_id"]),
+        ).fetchone()
     return success({
         "notifications": [public_notification(row) for row in rows],
         "unreadCount": int((unread or {}).get("count") or 0),
@@ -2456,28 +2527,28 @@ def mark_notification_read_action(payload: dict[str, Any], *, runtime: Communica
     connection = runtime.connection
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
     str_value = runtime.str_value
-    student_context = runtime.student_context
+    student_context_with_conn = runtime.student_context_with_conn
     success = runtime.success
     prepare_notification_feature_schema()
-    _, student = student_context(payload)
     notification_id = str_value(payload.get("notificationId"))
     mark_all = as_bool(payload.get("markAll"))
     if not notification_id and not mark_all:
         raise ApiError("NOTIFICATION_REQUIRED", "Selecione uma notificação.")
     with connection() as conn:
+        session, student = student_context_with_conn(conn, payload)
         if mark_all:
             result = conn.execute(
-                "update courseplatform.notifications set read_at = coalesce(read_at, now()) where student_id = %s",
-                (student["student_id"],),
+                "update courseplatform.notifications set read_at = coalesce(read_at, now()) where organization_id = %s and student_id = %s",
+                (session["organization_id"], student["student_id"]),
             )
         else:
             result = conn.execute(
                 """
                 update courseplatform.notifications
                 set read_at = coalesce(read_at, now())
-                where notification_id = %s and student_id = %s
+                where notification_id = %s and organization_id = %s and student_id = %s
                 """,
-                (notification_id, student["student_id"]),
+                (notification_id, session["organization_id"], student["student_id"]),
             )
         updated_count = result.rowcount
         conn.commit()
@@ -2501,12 +2572,13 @@ def admin_list_notifications_action(payload: dict[str, Any], *, runtime: Communi
     telegram_configuration = runtime.telegram_configuration
     web_push_configuration = runtime.web_push_configuration
     whatsapp_configuration = runtime.whatsapp_configuration
-    _, _admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    session, _admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    organization_id = session["organization_id"]
     prepare_notification_feature_schema()
     limit = cursor_page_limit(payload, default_limit=80, max_limit=200)
     query = str_value(payload.get("query")).lower()
     category = str_value(payload.get("category") or "ALL").upper()
-    scope = cursor_scope("admin-notifications", category, query)
+    scope = cursor_scope("admin-notifications", organization_id, category, query)
     cursor = decode_list_cursor(payload.get("cursor"), "admin-notifications", scope)
     cursor_sql = ""
     cursor_params: list[Any] = []
@@ -2544,13 +2616,14 @@ def admin_list_notifications_action(payload: dict[str, Any], *, runtime: Communi
           on t.notification_id = n.notification_id and t.channel = 'TELEGRAM'
         left join courseplatform.notification_deliveries p
           on p.notification_id = n.notification_id and p.channel = 'PUSH'
-        where (%s = 'ALL' or n.category = %s)
+        where n.organization_id = %s
+          and (%s = 'ALL' or n.category = %s)
           and (%s = '' or lower(coalesce(s.full_name, '') || ' ' || coalesce(n.title, '') || ' ' || coalesce(n.message, '')) like %s)
           {cursor_sql}
         order by n.created_at desc, n.notification_id desc
         limit %s
         """,
-        (category, category, query, f"%{query}%", *cursor_params, limit + 1),
+        (organization_id, category, category, query, f"%{query}%", *cursor_params, limit + 1),
     )
     rows, page_info = cursor_pagination_result(
         rows, limit, "admin-notifications", scope, "pagination_sort_at", "notification_id"
@@ -2558,7 +2631,7 @@ def admin_list_notifications_action(payload: dict[str, Any], *, runtime: Communi
     totals = fetch_one(
         """
         select
-          (select count(*) from courseplatform.notifications) as internal_total,
+          (select count(*) from courseplatform.notifications where organization_id = %s) as internal_total,
           count(*) filter (where d.channel = 'WHATSAPP' and d.status = 'SENT') as whatsapp_sent,
           count(*) filter (where d.channel = 'WHATSAPP' and d.status in ('PENDING', 'PROCESSING')) as whatsapp_pending,
           count(*) filter (where d.channel = 'WHATSAPP' and d.status = 'FAILED') as whatsapp_failed,
@@ -2576,7 +2649,10 @@ def admin_list_notifications_action(payload: dict[str, Any], *, runtime: Communi
           count(*) filter (where d.channel = 'PUSH' and d.status = 'FAILED') as push_failed,
           count(*) filter (where d.channel = 'PUSH' and d.status = 'SKIPPED') as push_skipped
         from courseplatform.notification_deliveries d
-        """
+        join courseplatform.notifications n on n.notification_id = d.notification_id
+        where n.organization_id = %s
+        """,
+        (organization_id, organization_id),
     ) or {}
     return success({
         "notifications": [public_notification(row) for row in rows],
@@ -2622,7 +2698,8 @@ def admin_create_notification_action(payload: dict[str, Any], *, runtime: Commun
     safe_notification_action_url = runtime.safe_notification_action_url
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    session, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    organization_id = session["organization_id"]
     prepare_notification_feature_schema()
     require_fields(payload, ["title", "message"])
     notify_all = as_bool(payload.get("notifyAll"))
@@ -2631,12 +2708,34 @@ def admin_create_notification_action(payload: dict[str, Any], *, runtime: Commun
     if notify_all:
         student_ids = [
             row["student_id"]
-            for row in fetch_all("select student_id from courseplatform.students where status = 'ACTIVE' order by full_name")
+            for row in fetch_all(
+                """
+                select s.student_id from courseplatform.students s
+                join courseplatform.organization_memberships m
+                  on m.student_id = s.student_id
+                 and m.organization_id = %s
+                 and m.membership_role = 'STUDENT'
+                 and m.status = 'ACTIVE'
+                where s.status = 'ACTIVE' order by s.full_name
+                """,
+                (organization_id,),
+            )
         ]
     if not student_ids:
         raise ApiError("NOTIFICATION_RECIPIENT_REQUIRED", "Selecione pelo menos um estudante.")
     notification_ids: list[str] = []
     with connection() as conn:
+        allowed_rows = conn.execute(
+            """
+            select student_id from courseplatform.organization_memberships
+            where organization_id = %s and membership_role = 'STUDENT'
+              and status = 'ACTIVE' and student_id = any(%s::text[])
+            """,
+            (organization_id, student_ids),
+        ).fetchall()
+        student_ids = [row["student_id"] for row in allowed_rows]
+        if not student_ids:
+            raise ApiError("NOTIFICATION_RECIPIENT_REQUIRED", "Selecione pelo menos um estudante desta instituição.")
         for student_id in dict.fromkeys(student_ids):
             notification_id = create_student_notification(
                 conn,
@@ -2644,6 +2743,7 @@ def admin_create_notification_action(payload: dict[str, Any], *, runtime: Commun
                 str_value(payload.get("category") or "GENERAL"),
                 str_value(payload.get("title")),
                 str_value(payload.get("message")),
+                organization_id=organization_id,
                 admin_id=admin["admin_id"],
                 action_url=safe_notification_action_url(payload.get("actionUrl")),
                 entity_type="MANUAL_UPDATE",
@@ -3120,7 +3220,7 @@ def admin_save_telegram_configuration_action(payload: dict[str, Any], *, runtime
 
 
 def admin_retry_notification_deliveries_action(payload: dict[str, Any], *, runtime: CommunicationRuntime):
-    admin_context = runtime.admin_context
+    admin_context_with_conn = runtime.admin_context_with_conn
     audit = runtime.audit
     connection = runtime.connection
     deliver_pending_email = runtime.deliver_pending_email
@@ -3136,7 +3236,6 @@ def admin_retry_notification_deliveries_action(payload: dict[str, Any], *, runti
     telegram_configuration = runtime.telegram_configuration
     web_push_configuration = runtime.web_push_configuration
     whatsapp_configuration = runtime.whatsapp_configuration
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
     prepare_notification_feature_schema()
     limit = max(1, min(int_value(payload.get("limit"), 20), 20))
     requested = payload.get("channels") if isinstance(payload.get("channels"), list) else []
@@ -3145,14 +3244,22 @@ def admin_retry_notification_deliveries_action(payload: dict[str, Any], *, runti
     if not channels:
         channels = ["WHATSAPP", "EMAIL", "TELEGRAM", "PUSH"]
     with connection() as conn:
+        _session, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN"})
+        organization_id = str_value(admin.get("active_organization_id") or admin.get("organization_id"))
         conn.execute(
             """
             update courseplatform.notification_deliveries
             set status = 'FAILED', attempt_count = 0, available_at = now(),
                 claim_token = null, lease_expires_at = null, updated_at = now()
             where status = 'DEAD' and channel = any(%s)
+              and exists (
+                select 1
+                from courseplatform.notifications notification
+                where notification.notification_id = courseplatform.notification_deliveries.notification_id
+                  and notification.organization_id = %s
+              )
             """,
-            (channels,),
+            (channels, organization_id),
         )
         conn.commit()
     delivery_functions = {
@@ -3164,7 +3271,10 @@ def admin_retry_notification_deliveries_action(payload: dict[str, Any], *, runti
     deliveries: dict[str, dict[str, int]] = {}
     for channel in channels:
         try:
-            deliveries[channel.lower()] = delivery_functions[channel](limit=limit)
+            deliveries[channel.lower()] = delivery_functions[channel](
+                limit=limit,
+                organization_id=organization_id,
+            )
         except Exception as error:
             deliveries[channel.lower()] = {
                 "sent": 0, "failed": 1, "pending": 0,
@@ -3205,15 +3315,16 @@ def touch_chat_presence_action(conn, actor: dict[str, Any], room_id: str = "", *
     conn.execute(
         """
         insert into courseplatform.chat_presence
-          (presence_id, actor_type, actor_id, current_room_id, last_seen_at, updated_at)
-        values (%s, %s, %s, %s, now(), now())
-        on conflict (actor_type, actor_id) do update set
+          (presence_id, organization_id, actor_type, actor_id, current_room_id, last_seen_at, updated_at)
+        values (%s, %s, %s, %s, %s, now(), now())
+        on conflict (organization_id, actor_type, actor_id) do update set
           current_room_id = excluded.current_room_id,
           last_seen_at = now(),
           updated_at = now()
         """,
         (
             generate_id("CPR"),
+            actor["organization_id"],
             actor["type"],
             actor["id"],
             str_value(room_id)[:160] or None,
@@ -3222,35 +3333,27 @@ def touch_chat_presence_action(conn, actor: dict[str, Any], room_id: str = "", *
 
 
 def chat_actor_with_conn_action(conn, payload: dict[str, Any], *, runtime: CommunicationRuntime) -> dict[str, Any]:
+    admin_context_with_conn = runtime.admin_context_with_conn
     str_value = runtime.str_value
     student_context_with_conn = runtime.student_context_with_conn
     touch_chat_presence = runtime.touch_chat_presence
-    validate_session_with_conn = runtime.validate_session_with_conn
     if payload.get("adminToken"):
-        session = validate_session_with_conn(conn, str_value(payload.get("adminToken")), "ADMIN")
-        admin_id = str(session["subject_id"]).replace("ADMIN:", "", 1)
-        admin = conn.execute(
-            """
-            select a.*, s.status as identity_status
-            from courseplatform.admins a
-            left join courseplatform.students s on s.student_id = a.student_id
-            where a.admin_id = %s
-            """,
-            (admin_id,),
-        ).fetchone()
-        if (
-            not admin
-            or admin.get("status") != "ACTIVE"
-            or (admin.get("student_id") and admin.get("identity_status") != "ACTIVE")
-        ):
-            raise ApiError("ADMIN_NOT_ACTIVE", "A conta administrativa não está ativa.")
-        if admin.get("role") not in {"OWNER", "ADMIN", "REVIEWER"}:
-            raise ApiError("FORBIDDEN", "O seu perfil não possui acesso às conversas.")
-        actor = {"type": "ADMIN", "id": admin_id, "record": admin}
+        session, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN", "REVIEWER"})
+        actor = {
+            "type": "ADMIN",
+            "id": admin["admin_id"],
+            "record": admin,
+            "organization_id": session["organization_id"],
+        }
         touch_chat_presence(conn, actor, payload.get("roomId") or payload.get("currentRoomId") or "")
         return actor
-    _, student = student_context_with_conn(conn, payload)
-    actor = {"type": "STUDENT", "id": student["student_id"], "record": student}
+    session, student = student_context_with_conn(conn, payload)
+    actor = {
+        "type": "STUDENT",
+        "id": student["student_id"],
+        "record": student,
+        "organization_id": session["organization_id"],
+    }
     touch_chat_presence(conn, actor, payload.get("roomId") or payload.get("currentRoomId") or "")
     return actor
 
@@ -3262,6 +3365,7 @@ def upsert_chat_room_action(
     name: str,
     description: str,
     *,
+    organization_id: str,
     course_id: str | None = None,
     group_id: str | None = None,
     owner_student_id: str | None = None,
@@ -3273,11 +3377,11 @@ def upsert_chat_room_action(
     return conn.execute(
         """
         insert into courseplatform.chat_rooms
-          (room_id, room_key, room_type, name, description, course_id, group_id,
+          (room_id, organization_id, room_key, room_type, name, description, course_id, group_id,
            owner_student_id, direct_student_one_id, direct_student_two_id,
            status, created_at, updated_at)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', now(), now())
-        on conflict (room_key) do update set
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'ACTIVE', now(), now())
+        on conflict (organization_id, room_key) do update set
           name = excluded.name,
           description = excluded.description,
           course_id = excluded.course_id,
@@ -3306,7 +3410,7 @@ def upsert_chat_room_action(
         returning *
         """,
         (
-            generate_id("CRM"), room_key, room_type, name[:160], description[:500],
+            generate_id("CRM"), organization_id, room_key, room_type, name[:160], description[:500],
             course_id, group_id, owner_student_id,
             direct_student_one_id, direct_student_two_id,
         ),
@@ -3321,6 +3425,7 @@ def chat_direct_pair_action(student_a: str, student_b: str, *, runtime: Communic
 
 
 def sync_chat_rooms_action(conn, actor: dict[str, Any], *, runtime: CommunicationRuntime) -> None:
+    organization_id = actor.get("organization_id") or "ORG-LMTWEBNAIRS"
     if actor["type"] == "STUDENT":
         desired_rooms_sql = """
           select 'COMMUNITY'::text as room_key, 'COMMUNITY'::text as room_type,
@@ -3333,7 +3438,8 @@ def sync_chat_rooms_action(conn, actor: dict[str, Any], *, runtime: Communicatio
                  c.course_id, null::text, null::text
           from courseplatform.enrollments e
           join courseplatform.courses c on c.course_id = e.course_id
-          where e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED') and c.status = 'ACTIVE'
+          where e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED')
+            and c.status = 'ACTIVE' and c.organization_id = %s
           union all
           select distinct 'GROUP:' || g.group_id, 'GROUP', g.name,
                  'Canal reservado aos membros deste grupo.',
@@ -3343,13 +3449,19 @@ def sync_chat_rooms_action(conn, actor: dict[str, Any], *, runtime: Communicatio
             on gm.group_id = g.group_id and gm.student_id = %s and gm.status = 'ACTIVE'
           left join courseplatform.enrollments e
             on e.group_id = g.group_id and e.student_id = %s and e.status in ('ACTIVE', 'COMPLETED')
-          where g.status = 'ACTIVE' and (gm.group_member_id is not null or e.enrollment_id is not null)
+          join courseplatform.courses gc on gc.course_id = g.course_id
+          where g.status = 'ACTIVE' and gc.organization_id = %s
+            and (gm.group_member_id is not null or e.enrollment_id is not null)
           union all
           select 'SUPPORT:' || %s, 'SUPPORT', 'Apoio com formadores',
                  'Conversa privada entre o estudante e a equipa de formação.',
                  null::text, null::text, %s
         """
-        params = (actor["id"], actor["id"], actor["id"], actor["id"], actor["id"])
+        params = (
+            actor["id"], organization_id,
+            actor["id"], actor["id"], organization_id,
+            actor["id"], actor["id"],
+        )
     else:
         desired_rooms_sql = """
           select 'COMMUNITY'::text as room_key, 'COMMUNITY'::text as room_type,
@@ -3360,32 +3472,38 @@ def sync_chat_rooms_action(conn, actor: dict[str, Any], *, runtime: Communicatio
           select 'COURSE:' || c.course_id, 'COURSE', c.title,
                  'Conversa do curso com estudantes e formadores matriculados.',
                  c.course_id, null::text, null::text
-          from courseplatform.courses c where c.status = 'ACTIVE'
+          from courseplatform.courses c where c.status = 'ACTIVE' and c.organization_id = %s
           union all
           select 'GROUP:' || g.group_id, 'GROUP', g.name,
                  'Canal reservado aos membros deste grupo.',
                  g.course_id, g.group_id, null::text
-          from courseplatform.groups g where g.status = 'ACTIVE'
+          from courseplatform.groups g
+          join courseplatform.courses gc on gc.course_id = g.course_id
+          where g.status = 'ACTIVE' and gc.organization_id = %s
           union all
           select 'SUPPORT:' || s.student_id, 'SUPPORT', 'Apoio com formadores',
                  'Conversa privada entre o estudante e a equipa de formação.',
                  null::text, null::text, s.student_id
-          from courseplatform.students s where s.status = 'ACTIVE'
+          from courseplatform.students s
+          join courseplatform.organization_memberships m
+            on m.student_id = s.student_id and m.organization_id = %s
+           and m.membership_role = 'STUDENT' and m.status = 'ACTIVE'
+          where s.status = 'ACTIVE'
         """
-        params = ()
+        params = (organization_id, organization_id, organization_id)
 
     conn.execute(
         f"""
         with desired_rooms as ({desired_rooms_sql})
         insert into courseplatform.chat_rooms
-          (room_id, room_key, room_type, name, description, course_id, group_id,
+          (room_id, organization_id, room_key, room_type, name, description, course_id, group_id,
            owner_student_id, status, created_at, updated_at)
         select
           'CRM-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 12)),
-          room_key, room_type, left(name, 160), left(description, 500),
+          %s, room_key, room_type, left(name, 160), left(description, 500),
           course_id, group_id, owner_student_id, 'ACTIVE', now(), now()
         from desired_rooms
-        on conflict (room_key) do update set
+        on conflict (organization_id, room_key) do update set
           name = excluded.name,
           description = excluded.description,
           course_id = excluded.course_id,
@@ -3406,7 +3524,7 @@ def sync_chat_rooms_action(conn, actor: dict[str, Any], *, runtime: Communicatio
           excluded.owner_student_id
         )
         """,
-        params,
+        (*params, organization_id),
     )
 
 
@@ -3453,8 +3571,8 @@ def student_can_access_chat_room_action(conn, student_id: str, room: dict[str, A
 def accessible_chat_room_action(conn, room_id: str, actor: dict[str, Any], *, runtime: CommunicationRuntime) -> dict[str, Any]:
     student_can_access_chat_room = runtime.student_can_access_chat_room
     room = conn.execute(
-        "select * from courseplatform.chat_rooms where room_id = %s and status = 'ACTIVE'",
-        (room_id,),
+        "select * from courseplatform.chat_rooms where room_id = %s and organization_id = %s and status = 'ACTIVE'",
+        (room_id, actor["organization_id"]),
     ).fetchone()
     if not room:
         raise ApiError("CHAT_ROOM_NOT_FOUND", "A conversa não foi encontrada.")
@@ -3512,7 +3630,10 @@ def chat_realtime_configuration_action(payload: dict[str, Any], *, runtime: Comm
             "publishableKey": settings.supabase_publishable_key,
             "accessToken": token,
             "expiresAt": iso(expires_at),
-            "inboxTopic": f"chat:actor:{actor['type'].lower()}:{actor['id']}:inbox",
+            "inboxTopic": (
+                f"chat:organization:{actor['organization_id']}:actor:"
+                f"{actor['type'].lower()}:{actor['id']}:inbox"
+            ),
         })
     return success({"realtime": result})
 
@@ -3721,6 +3842,7 @@ def chat_room_summary_context_action(
 ) -> dict[str, dict[str, Any]]:
     chat_message_rows = runtime.chat_message_rows
     str_value = runtime.str_value
+    organization_id = actor.get("organization_id") or "ORG-LMTWEBNAIRS"
     room_ids = [str_value(room.get("room_id")) for room in rooms if room.get("room_id")]
     if not room_ids:
         return {}
@@ -3764,11 +3886,11 @@ def chat_room_summary_context_action(
         """
         select current_room_id as room_id, count(*) as count
         from courseplatform.chat_presence
-        where current_room_id = any(%s)
+        where organization_id = %s and current_room_id = any(%s)
           and last_seen_at > now() - interval '75 seconds'
         group by current_room_id
         """,
-        (room_ids,),
+        (organization_id, room_ids),
     ).fetchall()
     online_by_room = {row["room_id"]: int(row.get("count") or 0) for row in online_rows}
 
@@ -3808,7 +3930,12 @@ def chat_room_summary_context_action(
     active_student_count = 0
     if any(room.get("room_type") == "COMMUNITY" for room in rooms):
         row = conn.execute(
-            "select count(*) as count from courseplatform.students where status = 'ACTIVE'"
+            """
+            select count(*) as count
+            from courseplatform.organization_memberships
+            where organization_id = %s and membership_role = 'STUDENT' and status = 'ACTIVE'
+            """,
+            (organization_id,),
         ).fetchone() or {}
         active_student_count = int(row.get("count") or 0)
 
@@ -3833,10 +3960,11 @@ def chat_room_summary_context_action(
                    coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
             from courseplatform.students s
             left join courseplatform.chat_presence presence
-              on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
+              on presence.organization_id = %s
+             and presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
             where s.student_id = any(%s)
             """,
-            (sorted(peer_ids),),
+            (organization_id, sorted(peer_ids)),
         ).fetchall()
         peers_by_id = {row["student_id"]: row for row in rows}
 
@@ -3871,10 +3999,16 @@ def chat_room_participant_count_action(conn, room: dict[str, Any], active_admin_
             """
             select count(*) as count
             from courseplatform.admins a
+            join courseplatform.organization_memberships membership
+              on membership.admin_id = a.admin_id
+             and membership.organization_id = %s
+             and membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
+             and membership.status = 'ACTIVE'
             left join courseplatform.students s on s.student_id = a.student_id
             where a.status = 'ACTIVE'
               and (a.student_id is null or s.status = 'ACTIVE')
-            """
+            """,
+            (room["organization_id"],),
         ).fetchone() or {}
         admin_count = int(active_admins.get("count") or 0)
     else:
@@ -3906,7 +4040,12 @@ def chat_room_participant_count_action(conn, room: dict[str, Any], active_admin_
         ).fetchone() or {}
         return int(row.get("count") or 0) + admin_count
     row = conn.execute(
-        "select count(*) as count from courseplatform.students where status = 'ACTIVE'"
+        """
+        select count(*) as count
+        from courseplatform.organization_memberships
+        where organization_id = %s and membership_role = 'STUDENT' and status = 'ACTIVE'
+        """,
+        (room["organization_id"],),
     ).fetchone() or {}
     return int(row.get("count") or 0) + admin_count
 
@@ -3924,6 +4063,7 @@ def public_chat_room_action(
     chat_room_participant_count = runtime.chat_room_participant_count
     iso = runtime.iso
     public_chat_message = runtime.public_chat_message
+    organization_id = actor.get("organization_id") or room.get("organization_id") or "ORG-LMTWEBNAIRS"
     actor_column = "student_id" if actor["type"] == "STUDENT" else "admin_id"
     sender_column = "sender_student_id" if actor["type"] == "STUDENT" else "sender_admin_id"
     if summary is None:
@@ -3970,10 +4110,11 @@ def public_chat_room_action(
                        coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
                 from courseplatform.students s
                 left join courseplatform.chat_presence presence
-                  on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
+                  on presence.organization_id = %s
+                 and presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
                 where s.student_id = %s and s.status = 'ACTIVE'
                 """,
-                (peer_id,),
+                (organization_id, peer_id),
             ).fetchone() or {}
         display_name = peer.get("full_name") or "Colega de curso"
         peer_payload = {
@@ -3994,10 +4135,11 @@ def public_chat_room_action(
                        coalesce(presence.last_seen_at > now() - interval '75 seconds', false) as is_online
                 from courseplatform.students s
                 left join courseplatform.chat_presence presence
-                  on presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
+                  on presence.organization_id = %s
+                 and presence.actor_type = 'STUDENT' and presence.actor_id = s.student_id
                 where s.student_id = %s
                 """,
-                (room.get("owner_student_id"),),
+                (organization_id, room.get("owner_student_id")),
             ).fetchone() or {}
         display_name = owner.get("full_name") or "Apoio ao estudante"
         peer_payload = {
@@ -4012,9 +4154,10 @@ def public_chat_room_action(
         online = conn.execute(
             """
             select count(*) as count from courseplatform.chat_presence
-            where current_room_id = %s and last_seen_at > now() - interval '75 seconds'
+            where organization_id = %s and current_room_id = %s
+              and last_seen_at > now() - interval '75 seconds'
             """,
-            (room["room_id"],),
+            (organization_id, room["room_id"]),
         ).fetchone() or {}
         participant_count = chat_room_participant_count(conn, room, active_admin_count)
     else:
@@ -4068,16 +4211,19 @@ def chat_list_contacts_action(payload: dict[str, Any], *, runtime: Communication
               on c.course_id = mine.course_id and c.status = 'ACTIVE'
             left join courseplatform.chat_rooms direct_room
               on direct_room.room_type = 'DIRECT'
+             and direct_room.organization_id = %s
              and direct_room.status = 'ACTIVE'
              and direct_room.direct_student_one_id = least(mine.student_id, peer.student_id)
              and direct_room.direct_student_two_id = greatest(mine.student_id, peer.student_id)
             left join courseplatform.chat_presence presence
-              on presence.actor_type = 'STUDENT' and presence.actor_id = peer.student_id
+              on presence.organization_id = %s
+             and presence.actor_type = 'STUDENT' and presence.actor_id = peer.student_id
             where mine.student_id = %s
+              and c.organization_id = %s
               and mine.status in ('ACTIVE', 'COMPLETED')
             order by peer.full_name, c.title
             """,
-            (actor["id"],),
+            (actor["organization_id"], actor["organization_id"], actor["id"], actor["organization_id"]),
         ).fetchall()
         contacts: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -4117,10 +4263,17 @@ def chat_start_direct_action(payload: dict[str, Any], *, runtime: CommunicationR
         peer = conn.execute(
             """
             select student_id, public_student_id, full_name
-            from courseplatform.students
-            where public_student_id = %s and status = 'ACTIVE'
+            from courseplatform.students s
+            where s.public_student_id = %s and s.status = 'ACTIVE'
+              and exists (
+                select 1 from courseplatform.organization_memberships membership
+                where membership.organization_id = %s
+                  and membership.student_id = s.student_id
+                  and membership.membership_role = 'STUDENT'
+                  and membership.status = 'ACTIVE'
+              )
             """,
-            (str_value(payload["publicStudentId"]),),
+            (str_value(payload["publicStudentId"]), actor["organization_id"]),
         ).fetchone()
         if not peer:
             raise ApiError("CHAT_CONTACT_NOT_FOUND", "O colega selecionado não está disponível.")
@@ -4135,11 +4288,12 @@ def chat_start_direct_action(payload: dict[str, Any], *, runtime: CommunicationR
              and shared.status in ('ACTIVE', 'COMPLETED')
             join courseplatform.courses c
               on c.course_id = mine.course_id and c.status = 'ACTIVE'
+             and c.organization_id = %s
             where mine.student_id = %s
               and mine.status in ('ACTIVE', 'COMPLETED')
             limit 1
             """,
-            (peer["student_id"], actor["id"]),
+            (peer["student_id"], actor["organization_id"], actor["id"]),
         ).fetchone()
         if not shared_course:
             raise ApiError("CHAT_CONTACT_FORBIDDEN", "Só pode conversar em privado com colegas dos seus cursos.")
@@ -4150,13 +4304,14 @@ def chat_start_direct_action(payload: dict[str, Any], *, runtime: CommunicationR
             "DIRECT",
             "Conversa privada",
             "Conversa privada entre colegas de curso.",
+            organization_id=actor["organization_id"],
             direct_student_one_id=first_id,
             direct_student_two_id=second_id,
         )
         if not room:
             room = conn.execute(
-                "select * from courseplatform.chat_rooms where room_key = %s and status = 'ACTIVE'",
-                (room_key,),
+                "select * from courseplatform.chat_rooms where organization_id = %s and room_key = %s and status = 'ACTIVE'",
+                (actor["organization_id"], room_key),
             ).fetchone()
         if not room:
             raise ApiError("CHAT_ROOM_NOT_FOUND", "Não foi possível preparar a conversa privada.")
@@ -4237,23 +4392,29 @@ def chat_list_rooms_action(payload: dict[str, Any], *, runtime: CommunicationRun
             select r.*,
                    (select max(m.created_at) from courseplatform.chat_messages m where m.room_id = r.room_id) as last_message_at
             from courseplatform.chat_rooms r
-            where r.status = 'ACTIVE'
+            where r.organization_id = %s and r.status = 'ACTIVE'
               {access_sql}
             order by last_message_at desc nulls last,
                      case r.room_type when 'COMMUNITY' then 1 when 'GROUP' then 2 when 'COURSE' then 3 else 4 end,
                      r.name,
                      r.room_id
             """,
-            access_params,
+            (actor["organization_id"], *access_params),
         ).fetchall()
         active_admins = conn.execute(
             """
             select count(*) as count
             from courseplatform.admins a
+            join courseplatform.organization_memberships membership
+              on membership.admin_id = a.admin_id
+             and membership.organization_id = %s
+             and membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
+             and membership.status = 'ACTIVE'
             left join courseplatform.students s on s.student_id = a.student_id
             where a.status = 'ACTIVE'
               and (a.student_id is null or s.status = 'ACTIVE')
-            """
+            """,
+            (actor["organization_id"],),
         ).fetchone() or {}
         active_admin_count = int(active_admins.get("count") or 0)
         summaries = chat_room_summary_context(conn, rooms, actor, active_admin_count)
@@ -4348,9 +4509,13 @@ def chat_send_message_action(payload: dict[str, Any], *, runtime: CommunicationR
         recent = conn.execute(
             f"""
             select count(*) as count from courseplatform.chat_messages
-            where {sender_column} = %s and created_at > now() - interval '1 minute'
+            where {sender_column} = %s
+              and room_id in (
+                select room_id from courseplatform.chat_rooms where organization_id = %s
+              )
+              and created_at > now() - interval '1 minute'
             """,
-            (actor["id"],),
+            (actor["id"], actor["organization_id"]),
         ).fetchone() or {}
         if int(recent.get("count") or 0) >= 25:
             raise ApiError("CHAT_RATE_LIMIT", "Aguarde um momento antes de enviar novas mensagens.")
@@ -4392,6 +4557,7 @@ def chat_send_message_action(payload: dict[str, Any], *, runtime: CommunicationR
                 "GENERAL",
                 "Nova mensagem do formador",
                 f"{actor['record'].get('full_name') or 'A equipa de formação'} respondeu à sua conversa de apoio.",
+                organization_id=actor["organization_id"],
                 admin_id=actor["id"],
                 action_url=f"#/chat/{room['room_id']}",
                 entity_type="CHAT_ROOM",
@@ -4416,6 +4582,7 @@ def chat_send_message_action(payload: dict[str, Any], *, runtime: CommunicationR
                 "GENERAL",
                 "Nova mensagem privada",
                 f"{actor['record'].get('full_name') or 'Um colega'} enviou-lhe uma mensagem.",
+                organization_id=actor["organization_id"],
                 action_url=f"#/chat/{room['room_id']}",
                 entity_type="CHAT_ROOM",
                 entity_id=room["room_id"],

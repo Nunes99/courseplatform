@@ -107,6 +107,7 @@ class WebPushBackendTests(unittest.TestCase):
         }
         delivery = {
             "notification_id": "NTF-1",
+            "organization_id": "ORG-A",
             "student_id": "STU-1",
             "title": "Título interno",
             "message": "Mensagem interna",

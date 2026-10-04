@@ -209,7 +209,7 @@ class ChatBatchQueryTests(unittest.TestCase):
             actions.sync_chat_rooms(conn, actor)
             self.assertEqual(1, len(conn.queries))
             self.assertIn("with desired_rooms as", conn.queries[0][0])
-            self.assertIn("on conflict (room_key)", conn.queries[0][0])
+        self.assertIn("on conflict (organization_id, room_key)", conn.queries[0][0])
 
     def test_room_summary_query_count_does_not_grow_with_rooms(self):
         rooms = [

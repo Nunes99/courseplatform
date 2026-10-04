@@ -291,7 +291,7 @@ class TenantSessionMigrationTests(unittest.TestCase):
 
     def test_migration_advances_application_contract(self):
         self.assertIn("values ('application', 20261004103000, now())", self.sql)
-        self.assertEqual(20261004103000, actions.EXPECTED_SCHEMA_VERSION)
+        self.assertGreaterEqual(actions.EXPECTED_SCHEMA_VERSION, 20261004180000)
 
 
 class TenantFrontendContractTests(unittest.TestCase):

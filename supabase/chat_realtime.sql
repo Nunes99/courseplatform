@@ -13,7 +13,8 @@ set search_path = ''
 as $$
   select case
     when requested_topic = (
-      'chat:actor:' || lower(coalesce(jwt_claims ->> 'actor_type', '')) || ':'
+      'chat:organization:' || coalesce(jwt_claims ->> 'organization_id', '') || ':actor:'
+      || lower(coalesce(jwt_claims ->> 'actor_type', '')) || ':'
       || coalesce(jwt_claims ->> 'actor_id', '') || ':inbox'
     ) then (
       (
@@ -23,6 +24,13 @@ as $$
           where admin_user.admin_id = jwt_claims ->> 'actor_id'
             and admin_user.status = 'ACTIVE'
             and admin_user.role in ('OWNER', 'ADMIN', 'REVIEWER')
+            and exists (
+              select 1 from courseplatform.organization_memberships membership
+              where membership.organization_id = jwt_claims ->> 'organization_id'
+                and membership.admin_id = admin_user.admin_id
+                and membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
+                and membership.status = 'ACTIVE'
+            )
         )
       )
       or (
@@ -31,6 +39,13 @@ as $$
           select 1 from courseplatform.students student
           where student.student_id = jwt_claims ->> 'actor_id'
             and student.status = 'ACTIVE'
+            and exists (
+              select 1 from courseplatform.organization_memberships membership
+              where membership.organization_id = jwt_claims ->> 'organization_id'
+                and membership.student_id = student.student_id
+                and membership.membership_role = 'STUDENT'
+                and membership.status = 'ACTIVE'
+            )
         )
       )
     )
@@ -38,6 +53,7 @@ as $$
       select 1
       from courseplatform.chat_rooms room
       where room.room_id = substring(requested_topic from '^chat:room:([^:]+):messages$')
+        and room.organization_id = jwt_claims ->> 'organization_id'
         and room.status = 'ACTIVE'
         and (
         (
@@ -48,6 +64,13 @@ as $$
             where admin_user.admin_id = jwt_claims ->> 'actor_id'
               and admin_user.status = 'ACTIVE'
               and admin_user.role in ('OWNER', 'ADMIN', 'REVIEWER')
+              and exists (
+                select 1 from courseplatform.organization_memberships membership
+                where membership.organization_id = room.organization_id
+                  and membership.admin_id = admin_user.admin_id
+                  and membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
+                  and membership.status = 'ACTIVE'
+              )
           )
         )
         or
@@ -57,6 +80,13 @@ as $$
             select 1 from courseplatform.students student
             where student.student_id = jwt_claims ->> 'actor_id'
               and student.status = 'ACTIVE'
+            and exists (
+              select 1 from courseplatform.organization_memberships membership
+              where membership.organization_id = room.organization_id
+                and membership.student_id = student.student_id
+                and membership.membership_role = 'STUDENT'
+                and membership.status = 'ACTIVE'
+            )
           )
           and (
             room.room_type = 'COMMUNITY'
@@ -142,39 +172,43 @@ begin
     'message_id', changed_message_id,
     'operation', tg_op
   );
-  perform realtime.send(change_payload, tg_op, 'chat:room:' || changed_room_id || ':messages', true);
-
   select * into room
   from courseplatform.chat_rooms
   where room_id = changed_room_id;
+
+  perform realtime.send(change_payload, tg_op, 'chat:room:' || changed_room_id || ':messages', true);
 
   if room.room_type = 'DIRECT' then
     if room.direct_student_one_id is not null then
       perform realtime.send(
         change_payload, 'ROOMS_CHANGED',
-        'chat:actor:student:' || room.direct_student_one_id || ':inbox', true
+        'chat:organization:' || room.organization_id || ':actor:student:' || room.direct_student_one_id || ':inbox', true
       );
     end if;
     if room.direct_student_two_id is not null then
       perform realtime.send(
         change_payload, 'ROOMS_CHANGED',
-        'chat:actor:student:' || room.direct_student_two_id || ':inbox', true
+        'chat:organization:' || room.organization_id || ':actor:student:' || room.direct_student_two_id || ':inbox', true
       );
     end if;
   elsif room.room_type = 'SUPPORT' then
     if room.owner_student_id is not null then
       perform realtime.send(
         change_payload, 'ROOMS_CHANGED',
-        'chat:actor:student:' || room.owner_student_id || ':inbox', true
+        'chat:organization:' || room.organization_id || ':actor:student:' || room.owner_student_id || ':inbox', true
       );
     end if;
     for admin_user in
-      select admin_id from courseplatform.admins
-      where status = 'ACTIVE' and role in ('OWNER', 'ADMIN', 'REVIEWER')
+      select membership.admin_id
+      from courseplatform.organization_memberships membership
+      where membership.organization_id = room.organization_id
+        and membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
+        and membership.status = 'ACTIVE'
+        and membership.admin_id is not null
     loop
       perform realtime.send(
         change_payload, 'ROOMS_CHANGED',
-        'chat:actor:admin:' || admin_user.admin_id || ':inbox', true
+        'chat:organization:' || room.organization_id || ':actor:admin:' || admin_user.admin_id || ':inbox', true
       );
     end loop;
   end if;

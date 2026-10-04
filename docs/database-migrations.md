@@ -146,6 +146,30 @@ Rollback operacional: reverta primeiro o backend. Os triggers podem permanecer
 ativos porque não alteram dados históricos; removê-los requer uma migração
 compensatória explícita. Não rebaixe manualmente o marcador de versão.
 
+### M2 comunicação multi-instituição
+
+`20261004180000_isolate_communication_by_organization.sql` adiciona e preenche
+`organization_id` em notificações, subscrições Push, tokens Telegram, salas e
+presença de chat. A migração troca unicidades globais por chaves compostas do
+tenant e atualiza a autorização dos tópicos Realtime. Não elimina conteúdos nem
+reescreve IDs históricos.
+
+Ordem de rollout:
+
+1. Confirme backup e compare as contagens por tabela antes da alteração.
+2. Publique primeiro uma versão transitória que aceite `20261004103000` e
+   `20261004180000` somente durante a janela controlada.
+3. Aplique a migração versionada com a ferramenta de migração, nunca por uma
+   ação HTTP normal.
+4. Confirme o marcador `application = 20261004180000` e o readiness.
+5. Valide notificações, Push, Telegram, salas, presença e Realtime com contas de
+   duas organizações; A não pode ler, reclamar ou alterar registos de B.
+6. Retire a compatibilidade transitória depois da validação.
+
+O rollback operacional reverte primeiro a aplicação. As colunas e índices
+aditivos podem permanecer. Restaurar unicidades globais ou remover o tenant
+exige migração compensatória e verificação prévia de duplicados.
+
 ## Teste local descartável
 
 Nunca use estas instruções com uma URL remota. O teste recusa qualquer host que

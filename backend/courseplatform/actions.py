@@ -931,8 +931,8 @@ def student_notification_channel_info() -> dict[str, Any]:
     return communication_domain.student_notification_channel_info_action(runtime=_communication_runtime())
 
 
-def create_student_notification(conn, student_id: str, category: str, title: str, message: str, *, admin_id: str | None=None, action_url: str='#/notifications', entity_type: str='', entity_id: str='', priority: str='NORMAL', template_key: str='', template_variables: dict[str, Any] | None=None, email_subject: str='', email_message: str='', push_title: str='', push_message: str='', send_whatsapp: bool=True, send_email: bool=True, send_telegram: bool=True, send_push: bool=True) -> str | None:
-    return communication_domain.create_student_notification_action(conn, student_id, category, title, message, admin_id=admin_id, action_url=action_url, entity_type=entity_type, entity_id=entity_id, priority=priority, template_key=template_key, template_variables=template_variables, email_subject=email_subject, email_message=email_message, push_title=push_title, push_message=push_message, send_whatsapp=send_whatsapp, send_email=send_email, send_telegram=send_telegram, send_push=send_push, runtime=_communication_runtime())
+def create_student_notification(conn, student_id: str, category: str, title: str, message: str, *, organization_id: str='', admin_id: str | None=None, action_url: str='#/notifications', entity_type: str='', entity_id: str='', priority: str='NORMAL', template_key: str='', template_variables: dict[str, Any] | None=None, email_subject: str='', email_message: str='', push_title: str='', push_message: str='', send_whatsapp: bool=True, send_email: bool=True, send_telegram: bool=True, send_push: bool=True) -> str | None:
+    return communication_domain.create_student_notification_action(conn, student_id, category, title, message, organization_id=organization_id, admin_id=admin_id, action_url=action_url, entity_type=entity_type, entity_id=entity_id, priority=priority, template_key=template_key, template_variables=template_variables, email_subject=email_subject, email_message=email_message, push_title=push_title, push_message=push_message, send_whatsapp=send_whatsapp, send_email=send_email, send_telegram=send_telegram, send_push=send_push, runtime=_communication_runtime())
 
 
 def send_whatsapp_template(delivery: dict[str, Any], configuration: dict[str, Any] | None=None) -> str:
@@ -972,8 +972,8 @@ def send_telegram_notification(delivery: dict[str, Any], configuration: dict[str
     return communication_domain.send_telegram_notification_action(delivery, configuration, runtime=_communication_runtime())
 
 
-def push_subscriptions_for_student(student_id: str, encryption_key: str) -> list[dict[str, Any]]:
-    return communication_domain.push_subscriptions_for_student_action(student_id, encryption_key, runtime=_communication_runtime())
+def push_subscriptions_for_student(student_id: str, encryption_key: str, organization_id: str = "") -> list[dict[str, Any]]:
+    return communication_domain.push_subscriptions_for_student_action(student_id, encryption_key, organization_id, runtime=_communication_runtime())
 
 
 def update_push_subscription_delivery(subscription_id: str, success_result: bool, expired: bool=False) -> None:
@@ -984,8 +984,8 @@ def send_web_push_notification(delivery: dict[str, Any], configuration: dict[str
     return communication_domain.send_web_push_notification_action(delivery, configuration, runtime=_communication_runtime())
 
 
-def student_unread_badge_count(student_id: str) -> int:
-    return communication_domain.student_unread_badge_count_action(student_id, runtime=_communication_runtime())
+def student_unread_badge_count(student_id: str, organization_id: str = "") -> int:
+    return communication_domain.student_unread_badge_count_action(student_id, organization_id, runtime=_communication_runtime())
 
 
 def telegram_get_updates(configuration: dict[str, Any], offset: int=0) -> list[dict[str, Any]]:
@@ -996,44 +996,44 @@ def process_telegram_link_updates(configuration: dict[str, Any] | None=None) -> 
     return communication_domain.process_telegram_link_updates_action(configuration, runtime=_communication_runtime())
 
 
-def claim_notification_deliveries(channel: str, notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    return communication_domain.claim_notification_deliveries_action(channel, notification_ids, limit, runtime=_communication_runtime())
+def claim_notification_deliveries(channel: str, notification_ids: list[str] | None, limit: int, organization_id: str = "") -> list[dict[str, Any]]:
+    return communication_domain.claim_notification_deliveries_action(channel, notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
-def claim_whatsapp_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    return communication_domain.claim_whatsapp_deliveries_action(notification_ids, limit, runtime=_communication_runtime())
+def claim_whatsapp_deliveries(notification_ids: list[str] | None, limit: int, organization_id: str = "") -> list[dict[str, Any]]:
+    return communication_domain.claim_whatsapp_deliveries_action(notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
-def claim_email_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    return communication_domain.claim_email_deliveries_action(notification_ids, limit, runtime=_communication_runtime())
+def claim_email_deliveries(notification_ids: list[str] | None, limit: int, organization_id: str = "") -> list[dict[str, Any]]:
+    return communication_domain.claim_email_deliveries_action(notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
-def claim_telegram_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    return communication_domain.claim_telegram_deliveries_action(notification_ids, limit, runtime=_communication_runtime())
+def claim_telegram_deliveries(notification_ids: list[str] | None, limit: int, organization_id: str = "") -> list[dict[str, Any]]:
+    return communication_domain.claim_telegram_deliveries_action(notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
-def claim_push_deliveries(notification_ids: list[str] | None, limit: int) -> list[dict[str, Any]]:
-    return communication_domain.claim_push_deliveries_action(notification_ids, limit, runtime=_communication_runtime())
+def claim_push_deliveries(notification_ids: list[str] | None, limit: int, organization_id: str = "") -> list[dict[str, Any]]:
+    return communication_domain.claim_push_deliveries_action(notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
-def deliver_pending_channel(channel: str, configuration_loader, sender, notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
-    return communication_domain.deliver_pending_channel_action(channel, configuration_loader, sender, notification_ids, limit, runtime=_communication_runtime())
+def deliver_pending_channel(channel: str, configuration_loader, sender, notification_ids: list[str] | None=None, limit: int=50, organization_id: str="") -> dict[str, int]:
+    return communication_domain.deliver_pending_channel_action(channel, configuration_loader, sender, notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
-def deliver_pending_whatsapp(notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
-    return communication_domain.deliver_pending_whatsapp_action(notification_ids, limit, runtime=_communication_runtime())
+def deliver_pending_whatsapp(notification_ids: list[str] | None=None, limit: int=50, organization_id: str="") -> dict[str, int]:
+    return communication_domain.deliver_pending_whatsapp_action(notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
-def deliver_pending_email(notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
-    return communication_domain.deliver_pending_email_action(notification_ids, limit, runtime=_communication_runtime())
+def deliver_pending_email(notification_ids: list[str] | None=None, limit: int=50, organization_id: str="") -> dict[str, int]:
+    return communication_domain.deliver_pending_email_action(notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
-def deliver_pending_telegram(notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
-    return communication_domain.deliver_pending_telegram_action(notification_ids, limit, runtime=_communication_runtime())
+def deliver_pending_telegram(notification_ids: list[str] | None=None, limit: int=50, organization_id: str="") -> dict[str, int]:
+    return communication_domain.deliver_pending_telegram_action(notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
-def deliver_pending_push(notification_ids: list[str] | None=None, limit: int=50) -> dict[str, int]:
-    return communication_domain.deliver_pending_push_action(notification_ids, limit, runtime=_communication_runtime())
+def deliver_pending_push(notification_ids: list[str] | None=None, limit: int=50, organization_id: str="") -> dict[str, int]:
+    return communication_domain.deliver_pending_push_action(notification_ids, limit, organization_id, runtime=_communication_runtime())
 
 
 def dispatch_notification_deliveries(notification_ids: list[str]) -> None:
@@ -1972,6 +1972,7 @@ def _administration_runtime() -> administration_domain.AdministrationRuntime:
         EXPECTED_SCHEMA_VERSION=EXPECTED_SCHEMA_VERSION,
         RASTER_IMAGE_MIME_TYPES=RASTER_IMAGE_MIME_TYPES,
         admin_context=admin_context,
+        admin_context_with_conn=admin_context_with_conn,
         as_bool=as_bool,
         audit=audit,
         certificate_token=certificate_token,
@@ -2088,6 +2089,7 @@ def _communication_runtime() -> communication_domain.CommunicationRuntime:
         _template_tokens=_template_tokens,
         accessible_chat_room=accessible_chat_room,
         admin_context=admin_context,
+        admin_context_with_conn=admin_context_with_conn,
         as_bool=as_bool,
         audit=audit,
         chat_actor_with_conn=chat_actor_with_conn,
@@ -3559,8 +3561,8 @@ def chat_actor_with_conn(conn, payload: dict[str, Any]) -> dict[str, Any]:
     return communication_domain.chat_actor_with_conn_action(conn, payload, runtime=_communication_runtime())
 
 
-def upsert_chat_room(conn, room_key: str, room_type: str, name: str, description: str, *, course_id: str | None=None, group_id: str | None=None, owner_student_id: str | None=None, direct_student_one_id: str | None=None, direct_student_two_id: str | None=None) -> dict[str, Any] | None:
-    return communication_domain.upsert_chat_room_action(conn, room_key, room_type, name, description, course_id=course_id, group_id=group_id, owner_student_id=owner_student_id, direct_student_one_id=direct_student_one_id, direct_student_two_id=direct_student_two_id, runtime=_communication_runtime())
+def upsert_chat_room(conn, room_key: str, room_type: str, name: str, description: str, *, organization_id: str, course_id: str | None=None, group_id: str | None=None, owner_student_id: str | None=None, direct_student_one_id: str | None=None, direct_student_two_id: str | None=None) -> dict[str, Any] | None:
+    return communication_domain.upsert_chat_room_action(conn, room_key, room_type, name, description, organization_id=organization_id, course_id=course_id, group_id=group_id, owner_student_id=owner_student_id, direct_student_one_id=direct_student_one_id, direct_student_two_id=direct_student_two_id, runtime=_communication_runtime())
 
 
 def chat_direct_pair(student_a: str, student_b: str) -> tuple[str, str]:

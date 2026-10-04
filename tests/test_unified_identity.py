@@ -251,7 +251,7 @@ class UnifiedIdentityRecoveryTests(unittest.TestCase):
 class UnifiedIdentityStaffManagementTests(unittest.TestCase):
     def _runtime(self, conn):
         return SimpleNamespace(
-            admin_context=lambda *_args: ({}, {"admin_id": "OWNER-1", "role": "OWNER"}),
+            admin_context=lambda *_args: ({"organization_id": "ORG-A"}, {"admin_id": "OWNER-1", "role": "OWNER"}),
             audit=Mock(),
             connection=_connection_for(conn),
             generate_access_code=Mock(return_value="temporary-password"),
@@ -273,9 +273,9 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
         }
 
         def handler(query, params):
-            if "from courseplatform.admins where admin_id" in query:
+            if "from courseplatform.admins a" in query:
                 return _Result(None)
-            if "from courseplatform.students where student_id" in query:
+            if "from courseplatform.students s" in query:
                 return _Result(student)
             if "where student_id = %s and admin_id <> %s" in query:
                 return _Result(None)
@@ -311,9 +311,9 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
 
     def test_new_reviewer_requires_an_active_student_account(self):
         def handler(query, _params):
-            if "from courseplatform.admins where admin_id" in query:
+            if "from courseplatform.admins a" in query:
                 return _Result(None)
-            if "from courseplatform.students where student_id" in query:
+            if "from courseplatform.students s" in query:
                 return _Result(None)
             return _Result()
 
@@ -339,7 +339,7 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
         }
 
         def handler(query, _params):
-            if "from courseplatform.admins where admin_id" in query:
+            if "from courseplatform.admins a" in query:
                 return _Result(existing)
             return _Result()
 
@@ -359,7 +359,7 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
 
     def test_owner_cannot_disable_the_current_owner_session(self):
         runtime = SimpleNamespace(
-            admin_context=lambda *_args: ({}, {"admin_id": "OWNER-1", "role": "OWNER"}),
+            admin_context=lambda *_args: ({"organization_id": "ORG-A"}, {"admin_id": "OWNER-1", "role": "OWNER"}),
             audit=Mock(),
             connection=Mock(),
             public_admin=Mock(),
@@ -391,7 +391,7 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
             return _Result()
 
         runtime = SimpleNamespace(
-            admin_context=lambda *_args: ({}, {"admin_id": "OWNER-1", "role": "OWNER"}),
+            admin_context=lambda *_args: ({"organization_id": "ORG-A"}, {"admin_id": "OWNER-1", "role": "OWNER"}),
             audit=Mock(),
             connection=_connection_for(_Connection(handler)),
             public_admin=Mock(),
@@ -409,16 +409,18 @@ class UnifiedIdentityStaffManagementTests(unittest.TestCase):
         self.assertEqual("STUDENT_ACCOUNT_REQUIRED", raised.exception.code)
 
     def test_disabling_student_revokes_student_and_linked_admin_sessions(self):
-        student = {"student_id": "STU-1", "status": "INACTIVE"}
+        student = {"student_id": "STU-1", "status": "ACTIVE"}
 
         def handler(query, _params):
-            if "update courseplatform.students set status" in query:
+            if "from courseplatform.students s" in query:
                 return _Result(student)
+            if "update courseplatform.organization_memberships" in query:
+                return _Result({"status": "SUSPENDED"})
             return _Result()
 
         conn = _Connection(handler)
         runtime = SimpleNamespace(
-            admin_context=lambda *_args: ({}, {"admin_id": "ADMIN-1", "role": "ADMIN"}),
+            admin_context=lambda *_args: ({"organization_id": "ORG-A"}, {"admin_id": "ADMIN-1", "role": "ADMIN"}),
             audit=Mock(),
             connection=_connection_for(conn),
             public_student=lambda row: row,

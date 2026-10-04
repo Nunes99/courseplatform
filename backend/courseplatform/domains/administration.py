@@ -35,6 +35,8 @@ ACTION_BINDINGS = (
     ("adminRestoreCredentials", "admin_restore_credentials"),
 )
 
+LEGACY_ORGANIZATION_ID = "ORG-LMTWEBNAIRS"
+
 
 @dataclass(frozen=True)
 class AdministrationRuntime:
@@ -42,6 +44,7 @@ class AdministrationRuntime:
     EXPECTED_SCHEMA_VERSION: Any
     RASTER_IMAGE_MIME_TYPES: Any
     admin_context: Any
+    admin_context_with_conn: Any
     as_bool: Any
     audit: Any
     certificate_token: Any
@@ -97,6 +100,49 @@ def public_admin_action(row: dict[str, Any] | None, *, runtime: AdministrationRu
     return serialize_admin(row, as_iso=iso)
 
 
+def organization_admin_context_action(context: Any) -> tuple[dict[str, Any], dict[str, Any], str]:
+    if isinstance(context, tuple) and len(context) == 2:
+        session = context[0] if isinstance(context[0], dict) else {}
+        admin = context[1] if isinstance(context[1], dict) else {}
+    else:
+        session = {}
+        admin = admin_from_context(context)
+    organization_id = str(
+        session.get("organization_id")
+        or admin.get("active_organization_id")
+        or admin.get("organization_id")
+        or LEGACY_ORGANIZATION_ID
+    ).strip()
+    return session, admin, organization_id
+
+
+def require_organization_student_action(
+    conn,
+    organization_id: str,
+    student_id: str,
+    *,
+    active_only: bool = True,
+) -> dict[str, Any]:
+    membership_status_sql = "and membership.status = 'ACTIVE'" if active_only else ""
+    row = conn.execute(
+        f"""
+        select s.*
+        from courseplatform.students s
+        join courseplatform.organization_memberships membership
+          on membership.student_id = s.student_id
+         and membership.organization_id = %s
+         and membership.membership_role = 'STUDENT'
+         {membership_status_sql}
+        where s.student_id = %s
+        for update of s
+        """,
+        (organization_id, student_id),
+    ).fetchone()
+    if not row:
+        raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado nesta instituição.")
+    return row
+
+
 def health_action(_: dict[str, Any], *, runtime: AdministrationRuntime):
     """Compatibility action for the public readiness check."""
     schema_status = runtime.schema_status
@@ -116,7 +162,9 @@ def health_diagnostics_action(payload: dict[str, Any], *, runtime: Administratio
     fetch_one = runtime.fetch_one
     schema_status = runtime.schema_status
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN"})
+    session, _admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN"})
+    )
     settings = runtime.get_settings()
     student_password_recovery_configured = len(
         str(getattr(settings, "password_reset_hash_key", "") or "").encode("utf-8")
@@ -136,17 +184,26 @@ def health_diagnostics_action(payload: dict[str, Any], *, runtime: Administratio
             data_row = fetch_one(
                 """
                 select
-                  (select count(*) from courseplatform.students) as students,
-                  (select count(*) from courseplatform.students where password_hash is not null) as students_with_password,
-                  (select count(*) from courseplatform.admins) as admins,
+                  (select count(*) from courseplatform.organization_memberships where organization_id = %s and membership_role = 'STUDENT') as students,
+                  (select count(*) from courseplatform.organization_memberships membership
+                   join courseplatform.students student on student.student_id = membership.student_id
+                   where membership.organization_id = %s and membership.membership_role = 'STUDENT'
+                     and student.password_hash is not null) as students_with_password,
+                  (select count(*) from courseplatform.organization_memberships where organization_id = %s and membership_role in ('OWNER', 'ADMIN', 'REVIEWER')) as admins,
                   (select count(*)
-                   from courseplatform.admins a
+                   from courseplatform.organization_memberships membership
+                   join courseplatform.admins a on a.admin_id = membership.admin_id
                    left join courseplatform.students s on s.student_id = a.student_id
-                   where case when a.student_id is not null
+                   where membership.organization_id = %s
+                     and membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
+                     and case when a.student_id is not null
                      then s.password_hash is not null else a.password_hash is not null end) as admins_with_password,
-                  (select count(*) from courseplatform.courses) as courses,
-                  (select count(*) from courseplatform.lessons) as lessons
-                """
+                  (select count(*) from courseplatform.courses where organization_id = %s) as courses,
+                  (select count(*) from courseplatform.lessons lesson
+                   join courseplatform.courses course on course.course_id = lesson.course_id
+                   where course.organization_id = %s) as lessons
+                """,
+                (organization_id,) * 6,
             ) or {}
             data_diagnostics = {
                 "students": int(data_row.get("students") or 0),
@@ -276,70 +333,81 @@ def admin_platform_statistics_action(payload: dict[str, Any], *, runtime: Admini
     prepare_notification_feature_schema = runtime.prepare_notification_feature_schema
     success = runtime.success
     utc_now = runtime.utc_now
-    admin_context(payload, {"OWNER", "ADMIN"})
+    session, _admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN"})
+    )
     prepare_chat_feature_schema()
     prepare_notification_feature_schema()
     with connection() as conn:
         summary = conn.execute(
             """
             select
-              (select count(*) from courseplatform.students where status = 'ACTIVE') as active_students,
+              (select count(*) from courseplatform.organization_memberships where organization_id = %s and membership_role = 'STUDENT' and status = 'ACTIVE') as active_students,
               (select count(*) from courseplatform.chat_presence p
                join courseplatform.students s on s.student_id = p.actor_id and s.status = 'ACTIVE'
-               where p.actor_type = 'STUDENT' and p.last_seen_at > now() - interval '75 seconds') as online_students,
-              (select count(*) from courseplatform.courses where status = 'ACTIVE') as active_courses,
-              (select count(*) from courseplatform.enrollments where status in ('ACTIVE', 'COMPLETED')) as enrollments,
-              (select count(*) from courseplatform.attempts where status in ('SUBMITTED', 'UNDER_REVIEW')) as pending_reviews,
-              (select count(*) from courseplatform.certificates where coalesce(status, 'ISSUED') = 'ISSUED') as issued_certificates
-            """
+               where p.organization_id = %s and p.actor_type = 'STUDENT' and p.last_seen_at > now() - interval '75 seconds') as online_students,
+              (select count(*) from courseplatform.courses where organization_id = %s and status = 'ACTIVE') as active_courses,
+              (select count(*) from courseplatform.enrollments enrollment join courseplatform.courses course on course.course_id = enrollment.course_id where course.organization_id = %s and enrollment.status in ('ACTIVE', 'COMPLETED')) as enrollments,
+              (select count(*) from courseplatform.attempts attempt join courseplatform.lessons lesson on lesson.lesson_id = attempt.lesson_id join courseplatform.courses course on course.course_id = lesson.course_id where course.organization_id = %s and attempt.status in ('SUBMITTED', 'UNDER_REVIEW')) as pending_reviews,
+              (select count(*) from courseplatform.certificates where organization_id = %s and coalesce(status, 'ISSUED') = 'ISSUED') as issued_certificates
+            """,
+            (organization_id,) * 6,
         ).fetchone() or {}
         engagement = conn.execute(
             """
             select
               (select count(*) from courseplatform.students s
+               join courseplatform.organization_memberships membership on membership.student_id = s.student_id and membership.organization_id = %s and membership.membership_role = 'STUDENT' and membership.status = 'ACTIVE'
                where s.status = 'ACTIVE' and (
                  s.last_login_at >= now() - interval '24 hours'
-                 or exists (select 1 from courseplatform.chat_presence p where p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '24 hours')
+                  or exists (select 1 from courseplatform.chat_presence p where p.organization_id = %s and p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '24 hours')
                )) as active_today,
               (select count(*) from courseplatform.students s
+               join courseplatform.organization_memberships membership on membership.student_id = s.student_id and membership.organization_id = %s and membership.membership_role = 'STUDENT' and membership.status = 'ACTIVE'
                where s.status = 'ACTIVE' and (
                  s.last_login_at >= now() - interval '7 days'
-                 or exists (select 1 from courseplatform.chat_presence p where p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '7 days')
+                  or exists (select 1 from courseplatform.chat_presence p where p.organization_id = %s and p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '7 days')
                )) as active_7_days,
               (select count(*) from courseplatform.students s
+               join courseplatform.organization_memberships membership on membership.student_id = s.student_id and membership.organization_id = %s and membership.membership_role = 'STUDENT' and membership.status = 'ACTIVE'
                where s.status = 'ACTIVE' and (
                  s.last_login_at >= now() - interval '30 days'
-                 or exists (select 1 from courseplatform.chat_presence p where p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '30 days')
+                  or exists (select 1 from courseplatform.chat_presence p where p.organization_id = %s and p.actor_type = 'STUDENT' and p.actor_id = s.student_id and p.last_seen_at >= now() - interval '30 days')
                )) as active_30_days,
-              (select count(*) from courseplatform.chat_messages
-               where status = 'ACTIVE' and created_at >= now() - interval '7 days') as messages_7_days,
-              (select count(*) from courseplatform.attempts
-               where submitted_at >= now() - interval '30 days') as submissions_30_days,
+              (select count(*) from courseplatform.chat_messages message join courseplatform.chat_rooms room on room.room_id = message.room_id
+               where room.organization_id = %s and message.status = 'ACTIVE' and message.created_at >= now() - interval '7 days') as messages_7_days,
+              (select count(*) from courseplatform.attempts attempt join courseplatform.lessons lesson on lesson.lesson_id = attempt.lesson_id join courseplatform.courses course on course.course_id = lesson.course_id
+               where course.organization_id = %s and attempt.submitted_at >= now() - interval '30 days') as submissions_30_days,
               (select count(*) from courseplatform.notifications
-               where created_at >= now() - interval '30 days') as notifications_30_days
-            """
+               where organization_id = %s and created_at >= now() - interval '30 days') as notifications_30_days
+            """,
+            (organization_id,) * 9,
         ).fetchone() or {}
         performance = conn.execute(
             """
             select
-              coalesce((select avg(progress_percent) from courseplatform.enrollments
-                        where status in ('ACTIVE', 'COMPLETED')), 0) as average_progress,
-              coalesce((select 100.0 * count(*) filter (where status = 'COMPLETED') / nullif(count(*), 0)
-                        from courseplatform.enrollments where status in ('ACTIVE', 'COMPLETED')), 0) as completion_rate,
-              coalesce((select 100.0 * count(*) filter (where status = 'APPROVED') / nullif(count(*), 0)
-                        from courseplatform.attempts
-                        where status in ('APPROVED', 'FAILED', 'CORRECTION_REQUIRED')), 0) as approval_rate
-            """
+              coalesce((select avg(enrollment.progress_percent) from courseplatform.enrollments enrollment
+                        join courseplatform.courses course on course.course_id = enrollment.course_id
+                        where course.organization_id = %s and enrollment.status in ('ACTIVE', 'COMPLETED')), 0) as average_progress,
+              coalesce((select 100.0 * count(*) filter (where enrollment.status = 'COMPLETED') / nullif(count(*), 0)
+                        from courseplatform.enrollments enrollment join courseplatform.courses course on course.course_id = enrollment.course_id
+                        where course.organization_id = %s and enrollment.status in ('ACTIVE', 'COMPLETED')), 0) as completion_rate,
+              coalesce((select 100.0 * count(*) filter (where attempt.status = 'APPROVED') / nullif(count(*), 0)
+                        from courseplatform.attempts attempt join courseplatform.lessons lesson on lesson.lesson_id = attempt.lesson_id join courseplatform.courses course on course.course_id = lesson.course_id
+                        where course.organization_id = %s and attempt.status in ('APPROVED', 'FAILED', 'CORRECTION_REQUIRED')), 0) as approval_rate
+            """,
+            (organization_id,) * 3,
         ).fetchone() or {}
         operations = conn.execute(
             """
             select
-              (select count(*) from courseplatform.notification_deliveries where status = 'FAILED') as failed_deliveries,
-              (select count(*) from courseplatform.certificate_requests where status in ('REQUESTED', 'PAYMENT_SUBMITTED')) as pending_certificates,
-              (select count(*) from courseplatform.students where status in ('BLOCKED', 'INACTIVE')) as inactive_students,
-              (select count(*) from courseplatform.attempts where status = 'TIME_EXCEEDED') as expired_attempts,
-              (select count(*) from courseplatform.chat_message_reports where status = 'OPEN') as open_chat_reports
-            """
+              (select count(*) from courseplatform.notification_deliveries delivery join courseplatform.notifications notification on notification.notification_id = delivery.notification_id where notification.organization_id = %s and delivery.status = 'FAILED') as failed_deliveries,
+              (select count(*) from courseplatform.certificate_requests request join courseplatform.courses course on course.course_id = request.course_id where course.organization_id = %s and request.status in ('REQUESTED', 'PAYMENT_SUBMITTED')) as pending_certificates,
+              (select count(*) from courseplatform.organization_memberships where organization_id = %s and membership_role = 'STUDENT' and status <> 'ACTIVE') as inactive_students,
+              (select count(*) from courseplatform.attempts attempt join courseplatform.lessons lesson on lesson.lesson_id = attempt.lesson_id join courseplatform.courses course on course.course_id = lesson.course_id where course.organization_id = %s and attempt.status = 'TIME_EXCEEDED') as expired_attempts,
+              (select count(*) from courseplatform.chat_message_reports report join courseplatform.chat_messages message on message.message_id = report.message_id join courseplatform.chat_rooms room on room.room_id = message.room_id where room.organization_id = %s and report.status = 'OPEN') as open_chat_reports
+            """,
+            (organization_id,) * 5,
         ).fetchone() or {}
         courses = conn.execute(
             """
@@ -364,21 +432,26 @@ def admin_platform_statistics_action(payload: dict[str, Any], *, runtime: Admini
             from courseplatform.courses c
             left join enrollment_stats e on e.course_id = c.course_id
             left join pending_stats p on p.course_id = c.course_id
-            where c.status = 'ACTIVE'
+            where c.organization_id = %s and c.status = 'ACTIVE'
             order by student_count desc, c.title
             limit 10
-            """
+            """,
+            (organization_id,),
         ).fetchall()
         activity = conn.execute(
             """
             select day::date as activity_date,
-                   (select count(*) from courseplatform.attempts a
-                    where a.submitted_at >= day and a.submitted_at < day + interval '1 day') as submissions,
+                    (select count(*) from courseplatform.attempts a
+                     join courseplatform.lessons lesson on lesson.lesson_id = a.lesson_id
+                     join courseplatform.courses course on course.course_id = lesson.course_id
+                     where course.organization_id = %s and a.submitted_at >= day and a.submitted_at < day + interval '1 day') as submissions,
                    (select count(*) from courseplatform.chat_messages m
-                    where m.status = 'ACTIVE' and m.created_at >= day and m.created_at < day + interval '1 day') as messages
+                     join courseplatform.chat_rooms room on room.room_id = m.room_id
+                     where room.organization_id = %s and m.status = 'ACTIVE' and m.created_at >= day and m.created_at < day + interval '1 day') as messages
             from generate_series(current_date - interval '6 days', current_date, interval '1 day') day
             order by day
-            """
+            """,
+            (organization_id, organization_id),
         ).fetchall()
         conn.commit()
     numeric = lambda row, key: int(row.get(key) or 0)
@@ -442,7 +515,10 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
     public_student = runtime.public_student
     str_value = runtime.str_value
     success = runtime.success
-    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    session, admin_record, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    )
+    admin = admin_from_context((session, admin_record))
     prepare_notification_feature_schema()
     status = (payload.get("status") or "ALL").upper()
     query = str_value(payload.get("query")).lower()
@@ -453,7 +529,7 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
     if sort not in {"name", "progressDesc", "progressAsc", "recentLogin"}:
         raise ApiError("INVALID_STUDENT_SORT", "A ordenação de estudantes é inválida.")
     limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-students", status, progress, sort, query)
+    scope = cursor_scope("admin-students", organization_id, status, progress, sort, query)
     sort_type = "text" if sort == "name" else "number" if sort.startswith("progress") else "datetime"
     cursor = decode_list_cursor(
         payload.get("cursor"), "admin-students", scope,
@@ -508,20 +584,30 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
     rows = fetch_all(
         f"""
         with student_rows as (
-          select s.*,
-            (select count(*) from courseplatform.push_subscriptions ps where ps.student_id = s.student_id and ps.enabled) as push_subscription_count,
+          select s.*, organization_membership.status as status,
+            (select count(*) from courseplatform.push_subscriptions ps where ps.organization_id = %s and ps.student_id = s.student_id and ps.enabled) as push_subscription_count,
             coalesce(jsonb_agg(distinct to_jsonb(e)) filter (where e.enrollment_id is not null), '[]') as enrollments,
             coalesce(jsonb_agg(distinct to_jsonb(gm)) filter (where gm.group_member_id is not null), '[]') as memberships,
             coalesce(max(e.progress_percent), 0) as primary_progress,
             lower(coalesce(s.full_name, '')) as pagination_sort_text
           from courseplatform.students s
+          join courseplatform.organization_memberships organization_membership
+            on organization_membership.student_id = s.student_id
+           and organization_membership.organization_id = %s
+           and organization_membership.membership_role = 'STUDENT'
           left join courseplatform.enrollments e on e.student_id = s.student_id
+            and exists (select 1 from courseplatform.courses ec where ec.course_id = e.course_id and ec.organization_id = %s)
           left join courseplatform.group_members gm on gm.student_id = s.student_id and gm.status = 'ACTIVE'
-          where (%s = 'ALL' or s.status = %s)
+            and exists (
+              select 1 from courseplatform.groups gg
+              join courseplatform.courses gc on gc.course_id = gg.course_id
+              where gg.group_id = gm.group_id and gc.organization_id = %s
+            )
+          where (%s = 'ALL' or organization_membership.status = %s)
             and (%s = '' or lower(coalesce(s.full_name, '') || ' ' || coalesce(s.email, '') || ' ' ||
               coalesce(s.public_student_id, '') || ' ' || coalesce(s.country, '') || ' ' || coalesce(s.organization, '')) like %s)
             and ({scope_sql})
-          group by s.student_id
+          group by s.student_id, organization_membership.status
         ), filtered_students as (
           select * from student_rows where {progress_sql}
         ), numbered_students as (
@@ -538,7 +624,10 @@ def admin_list_students_action(payload: dict[str, Any], *, runtime: Administrati
         order by {order_sql}
         limit %s
         """,
-        (status, status, query, f"%{query}%", *scope_params, *cursor_params, limit + 1),
+        (
+            organization_id, organization_id, organization_id, organization_id,
+            status, status, query, f"%{query}%", *scope_params, *cursor_params, limit + 1,
+        ),
     )
     summary_row = rows[0] if rows else {}
     total = int(summary_row.get("total_count") or 0)
@@ -577,12 +666,14 @@ def admin_list_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     public_admin = runtime.public_admin
     str_value = runtime.str_value
     success = runtime.success
-    _, current_admin = admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    session, current_admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    )
     status = str_value(payload.get("status") or "ALL").upper()
     role = str_value(payload.get("role") or "ALL").upper()
     query = str_value(payload.get("query")).lower()
     limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-staff", status, role, query)
+    scope = cursor_scope("admin-staff", organization_id, status, role, query)
     cursor = decode_list_cursor(payload.get("cursor"), "admin-staff", scope, sort_type="text")
     cursor_sql = ""
     cursor_params: list[Any] = []
@@ -593,13 +684,18 @@ def admin_list_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     rows = fetch_all(
         f"""
         with staff_rows as (
-          select a.*,
+          select a.*, organization_membership.membership_role as role,
+            organization_membership.status as status,
             s.student_id as identity_student_id,
             s.email as identity_email,
             s.status as identity_status,
             coalesce(sc.reviewer_scopes, '[]'::jsonb) as reviewer_scopes,
             lower(coalesce(a.full_name, '')) as pagination_sort_text
           from courseplatform.admins a
+          join courseplatform.organization_memberships organization_membership
+            on organization_membership.admin_id = a.admin_id
+           and organization_membership.organization_id = %s
+           and organization_membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
           left join courseplatform.students s on s.student_id = a.student_id
           left join lateral (
             select jsonb_agg(jsonb_build_object(
@@ -609,10 +705,10 @@ def admin_list_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
               'groupId', coalesce(rs.group_id, '')
             ) order by rs.scope_type, rs.course_id, rs.offering_id, rs.group_id) as reviewer_scopes
             from courseplatform.reviewer_scopes rs
-            where rs.admin_id = a.admin_id and rs.status = 'ACTIVE'
+            where rs.admin_id = a.admin_id and rs.organization_id = %s and rs.status = 'ACTIVE'
           ) sc on true
-          where (%s = 'ALL' or a.status = %s)
-            and (%s = 'ALL' or a.role = %s)
+          where (%s = 'ALL' or organization_membership.status = %s)
+            and (%s = 'ALL' or organization_membership.membership_role = %s)
             and (%s = '' or lower(coalesce(a.full_name, '') || ' ' || coalesce(s.email, a.email, '') || ' ' || coalesce(a.role, '')) like %s)
         ), numbered_staff as (
           select *,
@@ -626,7 +722,10 @@ def admin_list_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
         order by pagination_sort_text, admin_id
         limit %s
         """,
-        (status, status, role, role, query, f"%{query}%", *cursor_params, limit + 1),
+        (
+            organization_id, organization_id, status, status, role, role,
+            query, f"%{query}%", *cursor_params, limit + 1,
+        ),
     )
     summary_row = rows[0] if rows else {}
     total = int(summary_row.get("total_count") or 0)
@@ -655,7 +754,9 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     require_fields = runtime.require_fields
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER"})
+    session, admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER"})
+    )
     require_fields(payload, ["studentId"])
     admin_id = str_value(payload.get("targetAdminId") or payload.get("adminId")) or generate_id("ADM")
     requested_student_id = str_value(payload.get("studentId"))
@@ -669,24 +770,31 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
     scopes = normalize_scope_payload(payload.get("reviewScopes")) if scopes_supplied else []
     with connection() as conn:
         existing = conn.execute(
-            "select * from courseplatform.admins where admin_id = %s for update",
-            (admin_id,),
+            """
+            select a.*
+            from courseplatform.admins a
+            join courseplatform.organization_memberships membership
+              on membership.admin_id = a.admin_id and membership.organization_id = %s
+             and membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
+            where a.admin_id = %s
+            for update of a
+            """,
+            (organization_id, admin_id),
         ).fetchone()
         if existing and existing.get("student_id") and existing.get("student_id") != requested_student_id:
             raise ApiError(
                 "STAFF_IDENTITY_CHANGE_FORBIDDEN",
                 "A identidade ligada ao staff não pode ser substituída. Remova a função e atribua-a ao outro utilizador.",
             )
-        linked_student = conn.execute(
-            "select * from courseplatform.students where student_id = %s for update",
-            (requested_student_id,),
-        ).fetchone()
-
-        if not linked_student:
+        try:
+            linked_student = require_organization_student_action(
+                conn, organization_id, requested_student_id
+            )
+        except ApiError as error:
             raise ApiError(
                 "STUDENT_ACCOUNT_REQUIRED",
-                "Selecione um utilizador já cadastrado antes de atribuir a função de staff.",
-            )
+                "Selecione um utilizador desta instituição antes de atribuir a função de staff.",
+            ) from error
         if linked_student.get("status") != "ACTIVE":
             raise ApiError(
                 "STAFF_IDENTITY_NOT_ACTIVE",
@@ -716,7 +824,7 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
             on conflict (admin_id) do update
             set student_id = excluded.student_id,
                 full_name = excluded.full_name, email = excluded.email,
-                role = excluded.role, status = excluded.status, updated_at = now()
+                updated_at = now()
             returning *
             """,
             (
@@ -728,6 +836,25 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
                 status,
             ),
         ).fetchone()
+        conn.execute(
+            """
+            delete from courseplatform.organization_memberships
+            where organization_id = %s and admin_id = %s
+              and membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
+            """,
+            (organization_id, admin_id),
+        )
+        conn.execute(
+            """
+            insert into courseplatform.organization_memberships
+              (membership_id, organization_id, admin_id, membership_role, status, created_at, updated_at)
+            values (%s, %s, %s, %s, %s, now(), now())
+            on conflict (organization_id, admin_id, membership_role)
+            where admin_id is not null
+            do update set status = excluded.status, updated_at = now()
+            """,
+            (generate_id("MEM"), organization_id, admin_id, role, status),
+        )
         if role == "REVIEWER":
             if not scopes_supplied and not existing:
                 scopes = [{"scopeType": "GLOBAL", "courseId": "", "offeringId": "", "groupId": ""}]
@@ -736,6 +863,7 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
             if scopes_supplied or not existing:
                 replace_reviewer_scopes(
                     conn,
+                    organization_id=organization_id,
                     admin_id=admin_id,
                     actor_admin_id=admin["admin_id"],
                     scopes=scopes,
@@ -743,7 +871,10 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
                 )
                 row = {**row, "reviewer_scopes": scopes}
         else:
-            conn.execute("delete from courseplatform.reviewer_scopes where admin_id = %s", (admin_id,))
+            conn.execute(
+                "delete from courseplatform.reviewer_scopes where organization_id = %s and admin_id = %s",
+                (organization_id, admin_id),
+            )
         if student_id:
             row = {
                 **row,
@@ -767,15 +898,21 @@ def admin_save_staff_action(payload: dict[str, Any], *, runtime: AdministrationR
             or scopes_supplied
         ):
             conn.execute(
-                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                (f"ADMIN:{admin_id}",),
+                """
+                update courseplatform.sessions
+                set active = false, revoked_at = now()
+                where organization_id = %s and subject_id = %s
+                """,
+                (organization_id, f"ADMIN:{admin_id}"),
             )
         conn.commit()
     return success({"admin": public_admin(row), "adminPassword": ""})
 
 
 def admin_reviewer_scope_options_action(payload: dict[str, Any], *, runtime: AdministrationRuntime):
-    _, _admin = runtime.admin_context(payload, {"OWNER"})
+    session, _admin, organization_id = organization_admin_context_action(
+        runtime.admin_context(payload, {"OWNER"})
+    )
     rows = runtime.fetch_all(
         """
         select c.course_id, c.course_code, c.title as course_title,
@@ -787,9 +924,10 @@ def admin_reviewer_scope_options_action(payload: dict[str, Any], *, runtime: Adm
         left join courseplatform.groups g
           on g.course_id = c.course_id and g.offering_id = o.offering_id
          and coalesce(g.status, 'ACTIVE') <> 'DELETED'
-        where coalesce(c.status, 'ACTIVE') <> 'DELETED'
+        where c.organization_id = %s and coalesce(c.status, 'ACTIVE') <> 'DELETED'
         order by c.title, o.start_date desc nulls last, o.name, g.name
-        """
+        """,
+        (organization_id,),
     )
     return runtime.success({"options": [{
         "courseId": row.get("course_id") or "",
@@ -810,7 +948,9 @@ def admin_set_staff_status_action(payload: dict[str, Any], *, runtime: Administr
     require_fields = runtime.require_fields
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER"})
+    session, admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER"})
+    )
     require_fields(payload, ["targetAdminId", "status"])
     target_status = str_value(payload["status"]).upper()
     if target_status not in {"ACTIVE", "INACTIVE", "BLOCKED", "DELETED"}:
@@ -822,11 +962,15 @@ def admin_set_staff_status_action(payload: dict[str, Any], *, runtime: Administr
             """
             select a.*, s.status as identity_status
             from courseplatform.admins a
+            join courseplatform.organization_memberships membership
+              on membership.admin_id = a.admin_id
+             and membership.organization_id = %s
+             and membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
             left join courseplatform.students s on s.student_id = a.student_id
             where a.admin_id = %s
             for update of a
             """,
-            (payload["targetAdminId"],),
+            (organization_id, payload["targetAdminId"]),
         ).fetchone()
         if not target:
             raise ApiError("ADMIN_NOT_FOUND", "Staff não encontrado.")
@@ -840,14 +984,21 @@ def admin_set_staff_status_action(payload: dict[str, Any], *, runtime: Administr
                 "STAFF_IDENTITY_NOT_ACTIVE",
                 "A conta do utilizador deve estar ativa antes de receber acesso administrativo.",
             )
-        row = conn.execute(
-            "update courseplatform.admins set status = %s, updated_at = now() where admin_id = %s returning *",
-            (target_status, payload["targetAdminId"]),
+        membership = conn.execute(
+            """
+            update courseplatform.organization_memberships
+            set status = %s, updated_at = now()
+            where organization_id = %s and admin_id = %s
+              and membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
+            returning membership_role, status
+            """,
+            (target_status, organization_id, payload["targetAdminId"]),
         ).fetchone()
+        row = {**target, "role": membership["membership_role"], "status": membership["status"]}
         if target_status != "ACTIVE":
             conn.execute(
-                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                (f"ADMIN:{payload['targetAdminId']}",),
+                "update courseplatform.sessions set active = false, revoked_at = now() where organization_id = %s and subject_id = %s",
+                (organization_id, f"ADMIN:{payload['targetAdminId']}"),
             )
         audit(conn, "ADMIN", admin["admin_id"], "STAFF_STATUS_CHANGED", "ADMIN", payload["targetAdminId"], {"status": payload["status"]})
         conn.commit()
@@ -866,7 +1017,9 @@ def admin_create_student_action(payload: dict[str, Any], *, runtime: Administrat
     require_fields = runtime.require_fields
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    session, admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN"})
+    )
     require_fields(payload, ["fullName", "email"])
     access_code = generate_access_code(12)
     student_id = generate_id("STU")
@@ -894,6 +1047,14 @@ def admin_create_student_action(payload: dict[str, Any], *, runtime: Administrat
                 str_value(payload.get("organization")),
             ),
         ).fetchone()
+        conn.execute(
+            """
+            insert into courseplatform.organization_memberships
+              (membership_id, organization_id, student_id, membership_role, status, created_at, updated_at)
+            values (%s, %s, %s, 'STUDENT', 'ACTIVE', now(), now())
+            """,
+            (generate_id("MEM"), organization_id, student_id),
+        )
         audit(conn, "ADMIN", admin["admin_id"], "STUDENT_CREATED", "STUDENT", student_id)
         conn.commit()
     return success({"student": public_student(row), "accessCode": access_code})
@@ -912,7 +1073,9 @@ def admin_change_student_email_action(payload: dict[str, Any], *, runtime: Admin
     success = runtime.success
     validated_email_change = runtime.validated_email_change
     verify_password_with_conn = runtime.verify_password_with_conn
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    session, admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN"})
+    )
     prepare_notification_feature_schema()
     require_fields(
         payload,
@@ -966,12 +1129,9 @@ def admin_change_student_email_action(payload: dict[str, Any], *, runtime: Admin
                     "INVALID_ADMIN_PASSWORD",
                     "A palavra-passe administrativa não está correta.",
                 )
-            student = conn.execute(
-                "select * from courseplatform.students where student_id = %s for update",
-                (str_value(payload.get("studentId")),),
-            ).fetchone()
-            if not student:
-                raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
+            student = require_organization_student_action(
+                conn, organization_id, str_value(payload.get("studentId"))
+            )
             row = secure_student_email_update(
                 conn,
                 student,
@@ -1006,33 +1166,50 @@ def admin_set_student_status_action(payload: dict[str, Any], *, runtime: Adminis
     require_fields = runtime.require_fields
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    session, admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN"})
+    )
     require_fields(payload, ["studentId", "status"])
     target_status = str_value(payload["status"]).upper()
+    if target_status not in {"ACTIVE", "INACTIVE", "BLOCKED", "DELETED"}:
+        raise ApiError("INVALID_STUDENT_STATUS", "Estado de estudante inválido.")
     with connection() as conn:
-        row = conn.execute(
-            "update courseplatform.students set status = %s, updated_at = now() where student_id = %s returning *",
-            (target_status, payload["studentId"]),
-        ).fetchone()
-        if not row:
-            raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
+        student = require_organization_student_action(
+            conn,
+            organization_id,
+            payload["studentId"],
+            active_only=False,
+        )
+        membership_status = {
+            "ACTIVE": "ACTIVE",
+            "DELETED": "REVOKED",
+        }.get(target_status, "SUSPENDED")
+        conn.execute(
+            """
+            update courseplatform.organization_memberships
+            set status = %s, updated_at = now()
+            where organization_id = %s and student_id = %s and membership_role = 'STUDENT'
+            """,
+            (membership_status, organization_id, payload["studentId"]),
+        )
+        row = {**student, "status": target_status}
         if target_status != "ACTIVE":
             conn.execute(
-                "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                (payload["studentId"],),
+                "update courseplatform.sessions set active = false, revoked_at = now() where organization_id = %s and subject_id = %s",
+                (organization_id, payload["studentId"]),
             )
             conn.execute(
                 """
                 update courseplatform.sessions ses
                 set active = false, revoked_at = now()
-                where ses.active = true
+                where ses.active = true and ses.organization_id = %s
                   and ses.subject_id in (
                     select 'ADMIN:' || a.admin_id
                     from courseplatform.admins a
                     where a.student_id = %s
                   )
                 """,
-                (payload["studentId"],),
+                (organization_id, payload["studentId"]),
             )
         audit(conn, "ADMIN", admin["admin_id"], "STUDENT_STATUS_CHANGED", "STUDENT", payload["studentId"], {"status": payload["status"]})
         conn.commit()
@@ -1047,10 +1224,13 @@ def admin_reset_student_access_code_action(payload: dict[str, Any], *, runtime: 
     public_student = runtime.public_student
     require_fields = runtime.require_fields
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    session, admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN"})
+    )
     require_fields(payload, ["studentId"])
     access_code = generate_access_code(12)
     with connection() as conn:
+        require_organization_student_action(conn, organization_id, payload["studentId"])
         row = conn.execute(
             """
             update courseplatform.students
@@ -1064,19 +1244,22 @@ def admin_reset_student_access_code_action(payload: dict[str, Any], *, runtime: 
         ).fetchone()
         if not row:
             raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
-        conn.execute("update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s", (payload["studentId"],))
+        conn.execute(
+            "update courseplatform.sessions set active = false, revoked_at = now() where organization_id = %s and subject_id = %s",
+            (organization_id, payload["studentId"]),
+        )
         conn.execute(
             """
             update courseplatform.sessions ses
             set active = false, revoked_at = now()
-            where ses.active = true
+            where ses.active = true and ses.organization_id = %s
               and ses.subject_id in (
                 select 'ADMIN:' || a.admin_id
                 from courseplatform.admins a
                 where a.student_id = %s
               )
             """,
-            (payload["studentId"],),
+            (organization_id, payload["studentId"]),
         )
         audit(conn, "ADMIN", admin["admin_id"], "STUDENT_ACCESS_RESET", "STUDENT", payload["studentId"])
         conn.commit()
@@ -1115,7 +1298,9 @@ def admin_restore_credentials_action(payload: dict[str, Any], *, runtime: Admini
     generate_access_code = runtime.generate_access_code
     str_value = runtime.str_value
     success = runtime.success
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    session, admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN"})
+    )
     target_type = str_value(payload.get("targetType") or "STUDENTS").upper()
     if target_type not in {"STUDENTS", "ADMINS", "ALL"}:
         raise ApiError("INVALID_TARGET", "Tipo de conta inválido para restauração de credenciais.")
@@ -1133,15 +1318,20 @@ def admin_restore_credentials_action(payload: dict[str, Any], *, runtime: Admini
         if target_type in {"STUDENTS", "ALL"}:
             students = conn.execute(
                 """
-                select student_id, public_student_id, full_name, email, status, password_hash
-                from courseplatform.students
-                where (%s or status = 'ACTIVE')
-                  and (%s = 0 or student_id = any(%s::text[]))
-                  and (%s = false or password_hash is null)
-                order by full_name
+                select student.student_id, student.public_student_id, student.full_name, student.email,
+                       membership.status, student.password_hash
+                from courseplatform.students student
+                join courseplatform.organization_memberships membership
+                  on membership.student_id = student.student_id
+                 and membership.organization_id = %s
+                 and membership.membership_role = 'STUDENT'
+                where (%s or membership.status = 'ACTIVE')
+                  and (%s = 0 or student.student_id = any(%s::text[]))
+                  and (%s = false or student.password_hash is null)
+                order by student.full_name
                 limit 1000
                 """,
-                (include_inactive, len(student_ids), student_ids, only_missing_password),
+                (organization_id, include_inactive, len(student_ids), student_ids, only_missing_password),
             ).fetchall()
             for student in students:
                 temporary_password = generate_access_code(12)
@@ -1157,21 +1347,21 @@ def admin_restore_credentials_action(payload: dict[str, Any], *, runtime: Admini
                     (temporary_password, student["student_id"]),
                 ).fetchone()
                 conn.execute(
-                    "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                    (student["student_id"],),
+                    "update courseplatform.sessions set active = false, revoked_at = now() where organization_id = %s and subject_id = %s",
+                    (organization_id, student["student_id"]),
                 )
                 conn.execute(
                     """
                     update courseplatform.sessions ses
                     set active = false, revoked_at = now()
-                    where ses.active = true
+                    where ses.active = true and ses.organization_id = %s
                       and ses.subject_id in (
                         select 'ADMIN:' || a.admin_id
                         from courseplatform.admins a
                         where a.student_id = %s
                       )
                     """,
-                    (student["student_id"],),
+                    (organization_id, student["student_id"]),
                 )
                 restored_student_passwords[student["student_id"]] = temporary_password
                 credentials.append(credential_restore_item("STUDENT", row, temporary_password))
@@ -1181,19 +1371,23 @@ def admin_restore_credentials_action(payload: dict[str, Any], *, runtime: Admini
                 """
                 select a.admin_id, a.student_id, a.full_name,
                        coalesce(s.email, a.email) as email,
-                       a.role, a.status, a.password_hash,
+                       membership.membership_role as role, membership.status, a.password_hash,
                        s.password_hash as identity_password_hash,
                        s.status as identity_status
                 from courseplatform.admins a
+                join courseplatform.organization_memberships membership
+                  on membership.admin_id = a.admin_id
+                 and membership.organization_id = %s
+                 and membership.membership_role in ('OWNER', 'ADMIN', 'REVIEWER')
                 left join courseplatform.students s on s.student_id = a.student_id
-                where (%s or a.status = 'ACTIVE')
+                where (%s or membership.status = 'ACTIVE')
                   and (%s = 0 or a.admin_id = any(%s::text[]))
                   and (%s = false or case when a.student_id is not null
                     then s.password_hash is null else a.password_hash is null end)
                 order by case a.role when 'OWNER' then 1 when 'ADMIN' then 2 else 3 end, a.full_name
                 limit 200
                 """,
-                (include_inactive, len(admin_ids), admin_ids, only_missing_password),
+                (organization_id, include_inactive, len(admin_ids), admin_ids, only_missing_password),
             ).fetchall()
             for staff in admins:
                 if staff.get("student_id"):
@@ -1213,8 +1407,8 @@ def admin_restore_credentials_action(payload: dict[str, Any], *, runtime: Admini
                             (temporary_password, staff["student_id"]),
                         )
                         conn.execute(
-                            "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                            (staff["student_id"],),
+                            "update courseplatform.sessions set active = false, revoked_at = now() where organization_id = %s and subject_id = %s",
+                            (organization_id, staff["student_id"]),
                         )
                         restored_student_passwords[staff["student_id"]] = temporary_password
                     row = staff
@@ -1232,8 +1426,8 @@ def admin_restore_credentials_action(payload: dict[str, Any], *, runtime: Admini
                         (temporary_password, staff["admin_id"]),
                     ).fetchone()
                 conn.execute(
-                    "update courseplatform.sessions set active = false, revoked_at = now() where subject_id = %s",
-                    (f"ADMIN:{staff['admin_id']}",),
+                    "update courseplatform.sessions set active = false, revoked_at = now() where organization_id = %s and subject_id = %s",
+                    (organization_id, f"ADMIN:{staff['admin_id']}"),
                 )
                 credentials.append(credential_restore_item("ADMIN", row, temporary_password))
 
@@ -1278,15 +1472,21 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
     require_fields = runtime.require_fields
     staff_attempt = runtime.staff_attempt
     success = runtime.success
-    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    session, admin_record, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"})
+    )
+    admin = admin_from_context((session, admin_record))
     require_fields(payload, ["studentId"])
     prepare_assessment_feature_schema()
     student_id = payload["studentId"]
     with connection() as conn:
         ensure_certificate_feature_schema(conn)
-        student = conn.execute("select * from courseplatform.students where student_id = %s", (student_id,)).fetchone()
-        if not student:
-            raise ApiError("STUDENT_NOT_FOUND", "Estudante não encontrado.")
+        student = require_organization_student_action(
+            conn,
+            organization_id,
+            student_id,
+            active_only=False,
+        )
         require_student_scope(conn, admin, student_id)
         enrollment_scope_sql, enrollment_scope_params = reviewer_scope_predicate(
             admin, course_expr="e.course_id", offering_expr="e.offering_id", group_expr="e.group_id"
@@ -1297,10 +1497,10 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
             from courseplatform.enrollments e
             left join courseplatform.courses c on c.course_id = e.course_id
             left join courseplatform.groups g on g.group_id = e.group_id
-            where e.student_id = %s and ({enrollment_scope_sql})
+            where e.student_id = %s and c.organization_id = %s and ({enrollment_scope_sql})
             order by coalesce(e.updated_at, e.enrolled_at) desc nulls last
             """,
-            (student_id, *enrollment_scope_params),
+            (student_id, organization_id, *enrollment_scope_params),
         ).fetchall()
         progress_scope_sql, progress_scope_params = reviewer_scope_predicate(
             admin, course_expr="e.course_id", offering_expr="e.offering_id", group_expr="e.group_id"
@@ -1314,6 +1514,7 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
                    coalesce(f.file_count, 0) as file_count
             from courseplatform.lesson_progress p
             join courseplatform.lessons l on l.lesson_id = p.lesson_id
+            join courseplatform.courses course on course.course_id = l.course_id
             left join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
             left join lateral (
               select *
@@ -1328,10 +1529,10 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
               where f.student_id = p.student_id and f.lesson_id = p.lesson_id
                 and coalesce(f.status, 'ACTIVE') <> 'DELETED'
             ) f on true
-            where p.student_id = %s and ({progress_scope_sql})
+            where p.student_id = %s and course.organization_id = %s and ({progress_scope_sql})
             order by l.course_id, l.lesson_number
             """,
-            (student_id, *progress_scope_params),
+            (student_id, organization_id, *progress_scope_params),
         ).fetchall()
         group_scope_sql, group_scope_params = reviewer_scope_predicate(
             admin, course_expr="g.course_id", offering_expr="g.offering_id", group_expr="g.group_id"
@@ -1341,10 +1542,11 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
             select gm.*, g.name, g.group_code, g.course_id, g.start_date, g.end_date
             from courseplatform.group_members gm
             join courseplatform.groups g on g.group_id = gm.group_id
-            where gm.student_id = %s and ({group_scope_sql})
+            join courseplatform.courses course on course.course_id = g.course_id
+            where gm.student_id = %s and course.organization_id = %s and ({group_scope_sql})
             order by g.name
             """,
-            (student_id, *group_scope_params),
+            (student_id, organization_id, *group_scope_params),
         ).fetchall()
         certificate_scope_sql, certificate_scope_params = reviewer_scope_predicate(
             admin, course_expr="cert.course_id", offering_expr="cert.offering_id", group_expr="e.group_id"
@@ -1356,10 +1558,10 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
             join courseplatform.courses c on c.course_id = cert.course_id
             join courseplatform.students s on s.student_id = cert.student_id
             left join courseplatform.enrollments e on e.enrollment_id = cert.enrollment_id
-            where cert.student_id = %s and ({certificate_scope_sql})
+            where cert.student_id = %s and cert.organization_id = %s and ({certificate_scope_sql})
             order by cert.issue_date desc nulls last
             """,
-            (student_id, *certificate_scope_params),
+            (student_id, organization_id, *certificate_scope_params),
         ).fetchall()
         request_scope_sql, request_scope_params = reviewer_scope_predicate(
             admin, course_expr="cr.course_id", offering_expr="e.offering_id", group_expr="e.group_id"
@@ -1371,10 +1573,10 @@ def admin_student_details_action(payload: dict[str, Any], *, runtime: Administra
             join courseplatform.students s on s.student_id = cr.student_id
             join courseplatform.courses c on c.course_id = cr.course_id
             left join courseplatform.enrollments e on e.enrollment_id = cr.enrollment_id
-            where cr.student_id = %s and ({request_scope_sql})
+            where cr.student_id = %s and c.organization_id = %s and ({request_scope_sql})
             order by coalesce(cr.updated_at, cr.created_at) desc
             """,
-            (student_id, *request_scope_params),
+            (student_id, organization_id, *request_scope_params),
         ).fetchall()
     return success({
         "student": public_student(student),
@@ -1443,9 +1645,18 @@ def admin_upload_brand_logo_action(payload: dict[str, Any], *, runtime: Administ
     str_value = runtime.str_value
     success = runtime.success
     upload_raster_asset_to_storage = runtime.upload_raster_asset_to_storage
-    _, admin = admin_context(payload, {"OWNER", "ADMIN"})
+    session, admin, organization_id = organization_admin_context_action(
+        admin_context(payload, {"OWNER", "ADMIN"})
+    )
     require_fields(payload, ["fileName", "mimeType", "dataUrl"])
     course_id = str_value(payload.get("courseId") or get_settings().default_course_id)
+    with connection() as conn:
+        course = conn.execute(
+            "select 1 from courseplatform.courses where course_id = %s and organization_id = %s",
+            (course_id, organization_id),
+        ).fetchone()
+    if not course:
+        raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado nesta instituição.")
     mime_type, data_url, file_bytes = decode_raster_data_url(
         payload.get("dataUrl"),
         payload.get("mimeType"),

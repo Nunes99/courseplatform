@@ -58,14 +58,14 @@ class SchemaContractTests(unittest.TestCase):
         self.assertTrue(status["compatible"])
         self.assertEqual("READY", status["reason"])
 
-    def test_m0_remains_compatible_during_m1_rollout(self):
+    def test_m0_is_rejected_after_communication_isolation(self):
         conn = _SchemaConnection(
             {"students_ready": True, "admins_ready": True, "version_table_ready": True},
             {"version": 20261004063506},
         )
         status = db.schema_status_with_conn(conn)
-        self.assertTrue(status["compatible"])
-        self.assertEqual("READY_TRANSITIONAL", status["reason"])
+        self.assertFalse(status["compatible"])
+        self.assertEqual("VERSION_MISMATCH", status["reason"])
 
     def test_dispatch_rejects_incompatible_schema_before_handler(self):
         called = []
