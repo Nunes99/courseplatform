@@ -81,6 +81,7 @@ from .storage import (
     decode_legacy_data_url,
     download_private_object,
     legacy_external_url,
+    require_organization_storage_path,
     storage_service_headers,
     storage_object_path,
     upload_private_object,
@@ -3089,6 +3090,7 @@ def submit_professional_certificate_payment(payload: dict[str, Any]):
 def _private_content_payload(
     row: dict[str, Any],
     *,
+    organization_id: str,
     bucket_field: str,
     path_field: str,
     checksum_field: str,
@@ -3102,9 +3104,10 @@ def _private_content_payload(
     legacy_url = str_value(row.get(legacy_url_field))
     if row.get(status_field) == "READY" and row.get(bucket_field) and row.get(path_field):
         try:
+            object_path = require_organization_storage_path(row[path_field], organization_id)
             content = download_private_object(
                 row[bucket_field],
-                row[path_field],
+                object_path,
                 settings.storage_legacy_read_max_bytes,
             )
         except StorageError as error:

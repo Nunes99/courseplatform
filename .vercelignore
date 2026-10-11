@@ -10,5 +10,8 @@ output/
 playwright-report/
 test-results/
 tmp/
+document_work/
+economic_data/
+outputs/
 **/__pycache__/
 **/*.pyc

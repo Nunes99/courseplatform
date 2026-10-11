@@ -99,7 +99,8 @@ def submit_professional_certificate_payment_action(payload: dict[str, Any], runt
     object_path = storage_object_path(
         "payment-receipt",
         organization_id,
-        f'{student["student_id"]}-{request["request_id"]}',
+        student["student_id"],
+        request["request_id"],
         upload,
     )
     try:
@@ -516,6 +517,7 @@ def certificate_receipt_download_payload_action(payload: dict[str, Any], runtime
         raise ApiError("PAYMENT_RECEIPT_NOT_FOUND", "Comprovativo de pagamento não encontrado.")
     return _private_content_payload(
         row,
+        organization_id=session["organization_id"],
         bucket_field="payment_receipt_bucket",
         path_field="payment_receipt_path",
         checksum_field="payment_receipt_checksum_sha256",

@@ -163,10 +163,28 @@ class StorageValidationTests(unittest.TestCase):
     def test_object_path_contains_no_original_filename_or_traversal(self):
         with patch.object(storage, "get_settings", return_value=SETTINGS):
             upload = storage.validate_upload(PDF_BASE64, "../../private.pdf", "application/pdf", purpose="SUBMISSION")
-        path = storage.storage_object_path("submission", "S/1", "A../1", upload)
+        path = storage.storage_object_path("submission", "ORG-A", "S/1", "A../1", upload)
         self.assertNotIn("..", path)
         self.assertNotIn("private", path)
+        self.assertTrue(path.startswith("ORG-A/submission/"))
         self.assertTrue(path.endswith("/content.pdf"))
+
+    def test_modern_object_path_must_match_active_organization(self):
+        own_path = "ORG-A/submission/S1/A1/checksum/content.pdf"
+        legacy_path = "submission/S1/A1/checksum/content.pdf"
+        self.assertEqual(
+            own_path,
+            storage.require_organization_storage_path(own_path, "ORG-A"),
+        )
+        self.assertEqual(
+            legacy_path,
+            storage.require_organization_storage_path(legacy_path, "ORG-A"),
+        )
+        with self.assertRaises(storage.StorageError) as raised:
+            storage.require_organization_storage_path(
+                "ORG-B/submission/S1/A1/checksum/content.pdf", "ORG-A"
+            )
+        self.assertEqual("STORAGE_TENANT_MISMATCH", raised.exception.code)
 
 
 class PrivateStorageActionTests(unittest.TestCase):
@@ -199,6 +217,7 @@ class PrivateStorageActionTests(unittest.TestCase):
             })["data"]["file"]
 
         upload_object.assert_called_once()
+        self.assertTrue(upload_object.call_args.args[1].startswith("ORG-A/submission/"))
         self.assertEqual(len(PDF_BYTES), result["sizeBytes"])
         self.assertEqual("", result["driveUrl"])
         self.assertEqual("READY", result["storageStatus"])
@@ -238,7 +257,7 @@ class PrivateStorageActionTests(unittest.TestCase):
             })["data"]["request"]
 
         upload_object.assert_called_once()
-        self.assertIn("/ORG-A/", upload_object.call_args.args[1])
+        self.assertTrue(upload_object.call_args.args[1].startswith("ORG-A/payment-receipt/"))
         self.assertEqual("/api/certificate-requests/R1/receipt", result["paymentReceiptUrl"])
         self.assertEqual(len(PDF_BYTES), result["paymentReceiptSizeBytes"])
         self.assertNotIn("base64", str(result).lower())
@@ -345,7 +364,8 @@ class PrivateStorageActionTests(unittest.TestCase):
     def test_checksum_mismatch_blocks_download(self):
         row = {
             "file_id": "F1", "student_id": "S1", "file_name": "stored.pdf",
-            "mime_type": "application/pdf", "storage_bucket": "private", "storage_path": "x",
+            "mime_type": "application/pdf", "storage_bucket": "private",
+            "storage_path": "ORG-A/submission/S1/A1/checksum/content.pdf",
             "storage_status": "READY", "storage_checksum_sha256": "0" * 64, "status": "ACTIVE",
         }
         database = TenantFileConnection(row)
@@ -367,6 +387,37 @@ class PrivateStorageActionTests(unittest.TestCase):
             with self.assertRaises(actions.ApiError) as raised:
                 actions.submission_file_download_payload({"fileId": "F1", "sessionToken": "session"})
         self.assertEqual("FILE_INTEGRITY_ERROR", raised.exception.code)
+
+    def test_cross_tenant_modern_storage_path_is_rejected_before_download(self):
+        row = {
+            "file_id": "F1", "student_id": "S1", "file_name": "stored.pdf",
+            "mime_type": "application/pdf", "storage_bucket": "private",
+            "storage_path": "ORG-B/submission/S1/A1/checksum/content.pdf",
+            "storage_status": "READY", "storage_checksum_sha256": "0" * 64,
+            "status": "ACTIVE",
+        }
+        database = TenantFileConnection(row)
+
+        @contextmanager
+        def connect():
+            yield database
+
+        with (
+            patch.object(
+                actions,
+                "student_context_with_conn",
+                return_value=({"organization_id": "ORG-A"}, {"student_id": "S1"}),
+            ),
+            patch.object(actions, "connection", connect),
+            patch.object(actions, "get_settings", return_value=SETTINGS),
+            patch.object(actions, "download_private_object") as download,
+        ):
+            with self.assertRaises(actions.ApiError) as raised:
+                actions.submission_file_download_payload(
+                    {"fileId": "F1", "sessionToken": "session"}
+                )
+        self.assertEqual("STORAGE_TENANT_MISMATCH", raised.exception.code)
+        download.assert_not_called()
 
 
 class PrivateStorageHttpTests(unittest.TestCase):
@@ -439,12 +490,13 @@ class PrivateStorageMigrationTests(unittest.TestCase):
             hashlib.sha256(PDF_BYTES).hexdigest(),
         )
         first = backfill_private_storage.submission_storage_path(
-            {"student_id": "S1", "attempt_id": "A1", "file_id": "F1"}, upload
+            {"organization_id": "ORG-A", "student_id": "S1", "attempt_id": "A1", "file_id": "F1"}, upload
         )
         second = backfill_private_storage.submission_storage_path(
-            {"student_id": "S1", "attempt_id": "A1", "file_id": "F2"}, upload
+            {"organization_id": "ORG-A", "student_id": "S1", "attempt_id": "A1", "file_id": "F2"}, upload
         )
         self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith("ORG-A/submission/"))
 
     def test_backfill_verifies_uploaded_bytes_before_database_update(self):
         with patch.object(backfill_private_storage, "download_private_object", return_value=PDF_BYTES):

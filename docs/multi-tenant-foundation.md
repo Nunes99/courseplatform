@@ -181,9 +181,11 @@ explicitamente. A migração `20261004213604_complete_m2_tenant_isolation.sql`
 removeu os defaults em 5 de outubro de 2026; o pós-flight confirmou que nenhum
 dos cinco defaults transitórios permanece.
 
-M2 permanece aberta apenas para os cinco testes PostgreSQL descartáveis e a
-repetição segura do gate A/B. A implementação aplicada adiciona âmbito
-institucional à auditoria e rotas públicas mínimas por slug, sem expor
+M2 foi encerrada operacionalmente em 5 de outubro de 2026, com cinco testes
+PostgreSQL destrutivos mantidos como risco residual aceite e proibidos em
+produção. O gate A/B foi repetido em produção com autorização explícita, dados
+sintéticos e limpeza confirmada. A implementação aplicada adiciona
+âmbito institucional à auditoria e rotas públicas mínimas por slug, sem expor
 `settings_json`, nome legal ou dados privados. Configurações de transporte como
 SMTP, bot e VAPID continuam sendo
 infraestrutura global da plataforma; não devem ser expostas como configuração
@@ -203,12 +205,11 @@ administrativas: a estatística de certificados assumia uma coluna direta no
 certificado, e as listas de estudantes/staff projetavam campos `status`/`role`
 ambíguos. As consultas foram corrigidas, publicadas e revalidadas em 5 de
 outubro de 2026. O verificador A/B terminou com limpeza confirmada, e as páginas
-de visão geral, estudantes e staff carregaram em produção. Até concluir os
-outros bloqueios do inventário:
+de visão geral, estudantes e staff carregaram em produção. Durante a evolução:
 
 - preservar a migração e o backend compatível já publicados;
 - não ativar uma segunda instituição;
-- não marcar M2 como concluída;
+- manter visível o risco residual dos cinco testes PostgreSQL não executados;
 - preservar o verificador A/B como gate de regressão para alterações M2.
 
 ## Decisões de negócio pendentes
@@ -221,6 +222,40 @@ eventuais contratos de SSO, LTI, SCORM ou xAPI.
 
 Essas decisões não foram inventadas nesta migração. A estrutura atual permite
 avançar por expansão, mantendo compatibilidade com a instituição existente.
+
+## M3 — Storage e operação
+
+A primeira implementação local da M3 introduz caminhos privados iniciados por
+`organization_id` para trabalhos e comprovativos. Caminhos históricos continuam
+legíveis após a autorização institucional pelo registo da base de dados, mas
+um caminho moderno de outro tenant é recusado antes do acesso ao Storage.
+
+A migração `20261005020000_isolate_operational_jobs_by_organization.sql` faz o
+backfill dos jobs históricos para `ORG-LMTWEBNAIRS`, torna o tenant obrigatório,
+substitui a unicidade global pela deduplicação `(organization_id,
+idempotency_key)` e regista `dead_lettered_at`. Métricas internas continuam
+agregadas para alertas globais e também apresentam contagens por instituição.
+Essa migração foi aplicada em produção em 11 de outubro de 2026. O pós-flight
+confirmou versão `20261005020000`, duas colunas novas, backfill sem nulos,
+referências institucionais válidas, chave estrangeira validada, ausência de
+duplicados e remoção da unicidade global antiga.
+
+O rollout possui um gate explícito em
+`scripts/apply_m3_operational_isolation_migration.py`. Sem argumentos, o script
+executa apenas o preflight; `--apply` é necessário para executar a DDL; e
+`--postflight` repete a validação sem alterar o esquema. O gate confirma a
+versão, os privilégios, a instituição usada no backfill, as referências, a
+chave estrangeira validada, a deduplicação por instituição e os registos da
+dead-letter. A ligação à base nunca é impressa.
+
+O backend compatível foi publicado no deployment Vercel
+`dpl_8AJathjLRQRDFPxkmnq41UuztubP`. Liveness, readiness e a raiz pública
+responderam `200`. O runner foi acionado pelo Supabase Vault sem exportar o
+segredo, o cron permaneceu ativo a cada minuto e nenhuma tarefa ficou pendente,
+em retry ou dead-letter. As métricas indicaram 15% de utilização das ligações.
+O gate Realtime permitiu o tenant ativo e recusou claims de um tenant externo.
+Um objeto privado real de 397715 bytes foi descarregado e validado por checksum
+e contexto institucional.
 
 O roteiro completo, incluindo administração global, modelo editorial e página
 pública do agregador, está em

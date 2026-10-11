@@ -55,6 +55,7 @@ class DurableJobTests(unittest.TestCase):
         conn = _Connection(_Result(row={"job_id": "JOB-1"}))
         settings = SimpleNamespace(
             notification_config_encryption_key="test-only-encryption-key-with-32-bytes",
+            default_organization_id="ORG-A",
         )
         with (
             patch.object(jobs, "connection", _connection_for(conn)),
@@ -69,10 +70,45 @@ class DurableJobTests(unittest.TestCase):
         query, params = conn.queries[0]
         self.assertEqual("JOB-1", job_id)
         self.assertIn("pgp_sym_encrypt", query)
-        self.assertIn("on conflict (idempotency_key)", query)
-        self.assertEqual(f"{jobs.PASSWORD_RESET_JOB}:PWR-1", params[2])
+        self.assertIn("on conflict (organization_id, idempotency_key)", query)
+        self.assertEqual("ORG-A", params[1])
+        self.assertEqual(f"{jobs.PASSWORD_RESET_JOB}:PWR-1", params[3])
         self.assertNotIn("one-time-secret", query)
         self.assertTrue(conn.committed)
+
+    def test_terminal_failure_records_dead_letter_timestamp(self):
+        conn = _Connection(_Result())
+        with patch.object(jobs, "connection", _connection_for(conn)):
+            status = jobs._mark_failed(
+                {"job_id": "JOB-1", "attempt_count": 5, "max_attempts": 5},
+                "worker-a",
+                RuntimeError("provider down"),
+            )
+        query, params = conn.queries[0]
+        self.assertEqual("DEAD", status)
+        self.assertIn("dead_lettered_at", query)
+        self.assertEqual("DEAD", params[5])
+        self.assertTrue(conn.committed)
+
+    def test_claimed_job_keeps_organization_context(self):
+        conn = _Connection(_Result(rows=[{
+            "job_id": "JOB-1",
+            "organization_id": "ORG-B",
+            "job_type": jobs.PASSWORD_RESET_JOB,
+            "attempt_count": 1,
+            "max_attempts": 5,
+            "payload_json": '{"resetId":"PWR-1","token":"secret"}',
+        }]))
+        settings = SimpleNamespace(
+            notification_config_encryption_key="test-only-encryption-key-with-32-bytes",
+        )
+        with (
+            patch.object(jobs, "connection", _connection_for(conn)),
+            patch.object(jobs, "get_settings", return_value=settings),
+        ):
+            claimed = jobs.claim_jobs("worker-a", 10)
+        self.assertEqual("ORG-B", claimed[0]["organization_id"])
+        self.assertIn("organization_id", conn.queries[0][0])
 
     def test_retry_cycle_does_not_log_plaintext_payload(self):
         claimed = [{
@@ -231,6 +267,39 @@ class Stage13MigrationTests(unittest.TestCase):
         self.assertIn("enable row level security", migration)
         self.assertIn("from public, anon, authenticated", migration)
         self.assertIn("20261003060000", migration)
+
+    def test_operational_jobs_are_isolated_and_deduplicated_per_organization(self):
+        migration = (
+            ROOT / "supabase" / "migrations" /
+            "20261005020000_isolate_operational_jobs_by_organization.sql"
+        ).read_text(encoding="utf-8").lower()
+        self.assertIn("add column if not exists organization_id", migration)
+        self.assertIn("foreign key (organization_id)", migration)
+        self.assertIn("on delete restrict not valid", migration)
+        self.assertIn(
+            "operational_jobs(organization_id, idempotency_key)", migration
+        )
+        self.assertIn("dead_lettered_at", migration)
+        self.assertIn("20261005020000", migration)
+
+    def test_m3_rollout_requires_explicit_apply_and_has_postflight(self):
+        source = (
+            ROOT / "scripts" / "apply_m3_operational_isolation_migration.py"
+        ).read_text(encoding="utf-8").lower()
+        self.assertIn('mode.add_argument("--apply"', source)
+        self.assertIn('mode.add_argument("--postflight"', source)
+        self.assertIn("mode=preflight_only", source)
+        self.assertIn("jobs_requiring_organization_backfill", source)
+        self.assertIn("postflight_foreign_key_validated", source)
+        self.assertIn("postflight_tenant_unique_index", source)
+        self.assertIn("postflight_duplicate_keys", source)
+
+    def test_operational_metrics_include_tenant_breakdown(self):
+        source = (ROOT / "backend" / "courseplatform" / "jobs.py").read_text(
+            encoding="utf-8"
+        ).lower()
+        self.assertIn("group by organization_id", source)
+        self.assertIn('"organizations"', source)
 
 
 if __name__ == "__main__":

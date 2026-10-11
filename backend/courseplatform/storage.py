@@ -171,10 +171,52 @@ def validate_upload(
     )
 
 
-def storage_object_path(purpose: str, owner_id: Any, entity_id: Any, upload: ValidatedUpload) -> str:
-    segments = [purpose.lower(), str(owner_id or "unknown"), str(entity_id or "unknown"), upload.checksum_sha256]
-    safe_segments = [re.sub(r"[^A-Za-z0-9_-]+", "-", item).strip("-") or "unknown" for item in segments]
+def _storage_segment(value: Any) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", str(value or "unknown")).strip("-") or "unknown"
+
+
+def _organization_storage_segment(value: Any) -> str:
+    organization_id = str(value or "").strip()
+    if not organization_id or not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", organization_id):
+        raise StorageError(
+            "STORAGE_ORGANIZATION_REQUIRED",
+            "A instituição ativa não possui um identificador válido para armazenamento.",
+        )
+    return organization_id
+
+
+def storage_object_path(
+    purpose: str,
+    organization_id: Any,
+    owner_id: Any,
+    entity_id: Any,
+    upload: ValidatedUpload,
+) -> str:
+    safe_segments = [
+        _organization_storage_segment(organization_id),
+        *[
+            _storage_segment(item)
+            for item in (purpose.lower(), owner_id, entity_id, upload.checksum_sha256)
+        ],
+    ]
     return "/".join([*safe_segments, f"content.{MIME_EXTENSIONS[upload.mime_type]}"])
+
+
+def require_organization_storage_path(object_path: Any, organization_id: Any) -> str:
+    """Reject modern object keys from another tenant while retaining legacy reads."""
+    path = str(object_path or "").strip().strip("/")
+    segments = path.split("/") if path else []
+    if not segments or any(segment in {"", ".", ".."} for segment in segments):
+        raise StorageError("INVALID_STORAGE_PATH", "O caminho do ficheiro armazenado é inválido.")
+    expected = _organization_storage_segment(organization_id)
+    if segments[0] == expected:
+        return path
+    if segments[0] in {"submission", "payment-receipt"}:
+        return path
+    raise StorageError(
+        "STORAGE_TENANT_MISMATCH",
+        "O ficheiro armazenado não pertence à instituição ativa.",
+    )
 
 
 def storage_service_headers(settings: Any) -> dict[str, str]:

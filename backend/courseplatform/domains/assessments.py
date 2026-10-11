@@ -604,7 +604,13 @@ def upload_file_action(payload: dict[str, Any], runtime: AssessmentRuntime):
         raise storage_api_error(error) from error
 
     settings = get_settings()
-    object_path = storage_object_path("submission", student["student_id"], attempt["attempt_id"], upload)
+    object_path = storage_object_path(
+        "submission",
+        session["organization_id"],
+        student["student_id"],
+        attempt["attempt_id"],
+        upload,
+    )
     upload_key = hashlib.sha256(
         f"{student['student_id']}:{attempt['attempt_id']}:{upload.checksum_sha256}".encode("utf-8")
     ).hexdigest()
@@ -787,6 +793,9 @@ def submission_file_download_payload_action(payload: dict[str, Any], runtime: As
     require_fields(payload, ["fileId"])
     if str_value(payload.get("adminToken")):
         admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+        organization_id = str_value(
+            admin.get("active_organization_id") or admin.get("organization_id")
+        )
         row = fetch_one(
             "select * from courseplatform.files where file_id = %s and coalesce(status, 'ACTIVE') <> 'DELETED'",
             (payload["fileId"],),
@@ -797,6 +806,7 @@ def submission_file_download_payload_action(payload: dict[str, Any], runtime: As
     else:
         with runtime.connection() as conn:
             session, student = student_context_with_conn(conn, payload)
+            organization_id = session["organization_id"]
             row = conn.execute(
                 """
                 select f.*
@@ -815,6 +825,7 @@ def submission_file_download_payload_action(payload: dict[str, Any], runtime: As
         raise ApiError("FILE_NOT_FOUND", "Ficheiro não encontrado.")
     return _private_content_payload(
         row,
+        organization_id=organization_id,
         bucket_field="storage_bucket",
         path_field="storage_path",
         checksum_field="storage_checksum_sha256",

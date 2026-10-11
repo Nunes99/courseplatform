@@ -57,18 +57,25 @@ def verify_private_object(bucket: str, path: str, upload) -> None:
 
 def submission_storage_path(row, upload) -> str:
     entity_id = f"{row['attempt_id']}-{row['file_id']}"
-    return storage_object_path("submission", row["student_id"], entity_id, upload)
+    return storage_object_path(
+        "submission", row["organization_id"], row["student_id"], entity_id, upload
+    )
 
 
 def submission_rows(limit: int):
     with connection() as conn:
         return conn.execute(
             """
-            select file_id, attempt_id, student_id, file_name, mime_type, drive_url
-            from courseplatform.files
-            where drive_url like 'data:%%;base64,%%'
-              and coalesce(storage_status, '') <> 'READY'
-            order by uploaded_at nulls first, file_id
+            select f.file_id, f.attempt_id, f.student_id, f.file_name, f.mime_type,
+                   f.drive_url, c.organization_id
+            from courseplatform.files f
+            join courseplatform.attempts a on a.attempt_id = f.attempt_id
+            join courseplatform.lesson_progress p on p.progress_id = a.progress_id
+            join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
+            join courseplatform.courses c on c.course_id = e.course_id
+            where f.drive_url like 'data:%%;base64,%%'
+              and coalesce(f.storage_status, '') <> 'READY'
+            order by f.uploaded_at nulls first, f.file_id
             limit %s
             """,
             (limit,),
@@ -79,12 +86,14 @@ def receipt_rows(limit: int):
     with connection() as conn:
         return conn.execute(
             """
-            select request_id, student_id, payment_receipt_name, payment_receipt_mime_type,
-                   payment_receipt_url
-            from courseplatform.certificate_requests
-            where payment_receipt_url like 'data:%%;base64,%%'
-              and coalesce(payment_receipt_storage_status, '') <> 'READY'
-            order by submitted_at nulls first, request_id
+            select cr.request_id, cr.student_id, cr.payment_receipt_name,
+                   cr.payment_receipt_mime_type, cr.payment_receipt_url,
+                   c.organization_id
+            from courseplatform.certificate_requests cr
+            join courseplatform.courses c on c.course_id = cr.course_id
+            where cr.payment_receipt_url like 'data:%%;base64,%%'
+              and coalesce(cr.payment_receipt_storage_status, '') <> 'READY'
+            order by cr.submitted_at nulls first, cr.request_id
             limit %s
             """,
             (limit,),
@@ -158,7 +167,13 @@ def backfill_receipts(limit: int, apply: bool) -> BackfillResult:
             result.eligible += 1
             if not apply:
                 continue
-            path = storage_object_path("payment-receipt", row["student_id"], row["request_id"], upload)
+            path = storage_object_path(
+                "payment-receipt",
+                row["organization_id"],
+                row["student_id"],
+                row["request_id"],
+                upload,
+            )
             upload_private_object(settings.supabase_payment_receipt_bucket, path, upload)
             verify_private_object(settings.supabase_payment_receipt_bucket, path, upload)
             result.verified += 1

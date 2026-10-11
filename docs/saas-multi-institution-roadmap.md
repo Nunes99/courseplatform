@@ -271,6 +271,21 @@ Testes de saída:
 
 ### M3 — Storage, Realtime e operação isolados
 
+Estado: **em curso, fundação operacional publicada e validada**. Novos trabalhos e comprovativos passam a usar caminhos
+privados no formato `{organization_id}/{domain}/{owner}/{object}`. O backend
+valida o primeiro segmento antes do download e continua a aceitar os caminhos
+históricos sem tenant somente depois da autorização institucional pelo registo
+da base de dados. O backfill também resolve `organization_id` antes de criar um
+novo objeto. A migração `20261005020000` adiciona tenant obrigatório aos jobs,
+deduplicação por instituição, timestamp de dead-letter e índices parciais por
+tenant. O worker mantém `organization_id` no claim e nos logs, e as métricas
+protegidas incluem uma decomposição por organização.
+
+A migração `20261005020000` e o backend compatível foram publicados em 11 de
+outubro de 2026. O pós-flight, readiness, execução do runner via Vault,
+métricas, autorização Realtime A/B e checksum de um objeto Storage real
+passaram. Nenhum segredo foi exportado durante a validação.
+
 Entregas:
 
 - objetos privados em `{organization_id}/{domain}/{owner}/{object}`;
@@ -447,8 +462,8 @@ Antes de M4–M7 precisam de decisão explícita:
 | --- | --- |
 | M0 Fundação | Concluída |
 | M1 Contexto na autenticação | Concluída e validada |
-| M2 Isolamento dos domínios | Aplicada em produção; cinco testes PostgreSQL descartáveis e revalidação A/B segura pendentes |
-| M3 Storage e operação | Não iniciada |
+| M2 Isolamento dos domínios | Concluída com gate A/B aprovado; cinco testes PostgreSQL não executados aceites como risco residual |
+| M3 Storage e operação | Em curso: fundação publicada; pós-flight, jobs, métricas, Realtime A/B e Storage real validados |
 | M4 Administração global | Não iniciada |
 | M5 Publicação editorial | Não iniciada |
 | M6 Agregador público | Planeada |
@@ -458,7 +473,5 @@ Antes de M4–M7 precisam de decisão explícita:
 
 ## Próxima ação autorizável
 
-Executar as cinco integrações PostgreSQL numa base descartável e repetir o gate
-A/B num ambiente seguro. Nenhum endpoint de criação de tenant, nenhuma página
-de agregador e nenhuma segunda instituição permanente devem ser ativados antes
-desse gate.
+Continuar M3 com cache e pesquisa usando namespace institucional, mantendo o
+mesmo gate negativo A/B antes de ativar uma segunda instituição permanente.

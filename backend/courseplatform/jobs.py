@@ -39,31 +39,45 @@ def _job_id() -> str:
     return f"JOB-{secrets.token_hex(12).upper()}"
 
 
-def enqueue_job(job_type: str, payload: dict[str, Any], idempotency_key: str) -> str:
+def enqueue_job(
+    job_type: str,
+    payload: dict[str, Any],
+    idempotency_key: str,
+    organization_id: str,
+) -> str:
     if job_type not in SUPPORTED_JOB_TYPES:
         raise ValueError("Unsupported operational job type.")
+    organization_id = str(organization_id or "").strip()
+    if not organization_id:
+        raise ValueError("Operational jobs require an organization.")
     key = _encryption_key()
     serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
     with connection() as conn:
         row = conn.execute(
             """
             insert into courseplatform.operational_jobs
-              (job_id, job_type, idempotency_key, payload_encrypted, status,
+              (job_id, organization_id, job_type, idempotency_key, payload_encrypted, status,
                priority, attempt_count, max_attempts, available_at, created_at, updated_at)
-            values (%s, %s, %s,
+            values (%s, %s, %s, %s,
                     pgp_sym_encrypt(%s, %s, 'cipher-algo=aes256'),
                     'PENDING', 100, 0, 5, now(), now(), now())
-            on conflict (idempotency_key) do update
+            on conflict (organization_id, idempotency_key) do update
             set updated_at = courseplatform.operational_jobs.updated_at
             returning job_id
             """,
-            (_job_id(), job_type, idempotency_key, serialized, key),
+            (_job_id(), organization_id, job_type, idempotency_key, serialized, key),
         ).fetchone()
         conn.commit()
     return str(row["job_id"])
 
 
 def enqueue_identity_delivery(delivery_type: str, delivery: dict[str, Any]) -> str:
+    settings = get_settings()
+    organization_id = str(
+        delivery.get("organizationId")
+        or getattr(settings, "default_organization_id", "")
+        or ""
+    ).strip()
     if delivery_type == PASSWORD_RESET_JOB:
         entity_id = str(delivery.get("resetId") or "")
         payload = {"resetId": entity_id, "token": str(delivery.get("token") or "")}
@@ -74,7 +88,12 @@ def enqueue_identity_delivery(delivery_type: str, delivery: dict[str, Any]) -> s
         raise ValueError("Unsupported identity delivery type.")
     if not entity_id or not payload["token"]:
         raise ValueError("Identity delivery is incomplete.")
-    return enqueue_job(delivery_type, payload, f"{delivery_type}:{entity_id}")
+    return enqueue_job(
+        delivery_type,
+        payload,
+        f"{delivery_type}:{entity_id}",
+        organization_id,
+    )
 
 
 def claim_jobs(worker_id: str, limit: int) -> list[dict[str, Any]]:
@@ -107,7 +126,7 @@ def claim_jobs(worker_id: str, limit: int) -> list[dict[str, Any]]:
               where j.job_id = c.job_id
               returning j.*
             )
-            select job_id, job_type, attempt_count, max_attempts,
+            select job_id, organization_id, job_type, attempt_count, max_attempts,
                    pgp_sym_decrypt(payload_encrypted, %s)::text as payload_json
             from claimed
             order by priority, created_at
@@ -153,12 +172,13 @@ def _mark_failed(job: dict[str, Any], worker_id: str, error: Exception) -> str:
                 lease_expires_at = null, locked_by = null,
                 last_error_code = %s,
                 completed_at = case when %s = 'DEAD' then now() else null end,
+                dead_lettered_at = case when %s = 'DEAD' then now() else null end,
                 updated_at = now()
             where job_id = %s and status = 'PROCESSING' and locked_by = %s
             """,
             (
                 next_status, next_status, delay_seconds, error.__class__.__name__[:80],
-                next_status, job["job_id"], worker_id[:120],
+                next_status, next_status, job["job_id"], worker_id[:120],
             ),
         )
         conn.commit()
@@ -206,6 +226,7 @@ def run_operational_cycle(limit: int | None = None, worker_id: str = "") -> dict
                     "event": "operational_job_failed",
                     "job_id": job["job_id"],
                     "job_type": job["job_type"],
+                    "organization_id": job.get("organization_id"),
                     "attempt": int(job["attempt_count"]),
                     "terminal": status == "DEAD",
                     "error_type": error.__class__.__name__,
@@ -402,7 +423,7 @@ def _dispatch_operational_alert(metrics: dict[str, int]) -> None:
     _finish_operational_alert()
 
 
-def operational_metrics() -> dict[str, int]:
+def operational_metrics() -> dict[str, Any]:
     with connection() as conn:
         row = conn.execute(
             """
@@ -418,6 +439,38 @@ def operational_metrics() -> dict[str, int]:
             from courseplatform.operational_jobs
             """
         ).fetchone() or {}
+        organization_rows = conn.execute(
+            """
+            with job_metrics as (
+              select organization_id,
+                     count(*) filter (where status = 'PENDING') as pending_jobs,
+                     count(*) filter (where status = 'PROCESSING') as processing_jobs,
+                     count(*) filter (where status = 'DEAD') as dead_jobs,
+                     count(*) filter (
+                       where status = 'PENDING'
+                         and available_at < now() - interval '5 minutes'
+                     ) as overdue_jobs
+              from courseplatform.operational_jobs
+              group by organization_id
+            ), notification_metrics as (
+              select n.organization_id,
+                     count(*) filter (where nd.status = 'DEAD') as failed_notifications
+              from courseplatform.notification_deliveries nd
+              join courseplatform.notifications n
+                on n.notification_id = nd.notification_id
+              group by n.organization_id
+            )
+            select coalesce(j.organization_id, n.organization_id) as organization_id,
+                   coalesce(j.pending_jobs, 0) as pending_jobs,
+                   coalesce(j.processing_jobs, 0) as processing_jobs,
+                   coalesce(j.dead_jobs, 0) as dead_jobs,
+                   coalesce(j.overdue_jobs, 0) as overdue_jobs,
+                   coalesce(n.failed_notifications, 0) as failed_notifications
+            from job_metrics j
+            full join notification_metrics n using (organization_id)
+            order by coalesce(j.organization_id, n.organization_id)
+            """
+        ).fetchall()
         database_row = conn.execute(
             """
             select
@@ -449,6 +502,17 @@ def operational_metrics() -> dict[str, int]:
         "dbConnectionUtilizationPercent": round(
             database_connections * 100 / connection_limit
         ),
+        "organizations": [
+            {
+                "organizationId": item["organization_id"],
+                "pendingJobs": int(item.get("pending_jobs") or 0),
+                "processingJobs": int(item.get("processing_jobs") or 0),
+                "deadJobs": int(item.get("dead_jobs") or 0),
+                "overdueJobs": int(item.get("overdue_jobs") or 0),
+                "failedNotifications": int(item.get("failed_notifications") or 0),
+            }
+            for item in organization_rows
+        ],
     }
 
 

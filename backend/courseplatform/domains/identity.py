@@ -469,7 +469,13 @@ def register_student_account_action(payload: dict[str, Any], runtime: IdentityRu
                         student["student_id"],
                         {"verificationId": verification_id, "expiresAt": runtime.iso(expires_at)},
                     )
-                    delivery = {"verificationId": verification_id, "token": token}
+                    delivery = {
+                        "verificationId": verification_id,
+                        "token": token,
+                        "organizationId": getattr(
+                            settings, "default_organization_id", "ORG-LMTWEBNAIRS"
+                        ),
+                    }
             conn.commit()
     except ApiError:
         raise
@@ -780,7 +786,13 @@ def recover_student_access_action(payload: dict[str, Any], runtime: IdentityRunt
                         student["student_id"],
                         {"resetId": reset_id, "expiresAt": runtime.iso(expires_at)},
                     )
-                    delivery = {"resetId": reset_id, "token": token}
+                    delivery = {
+                        "resetId": reset_id,
+                        "token": token,
+                        "organizationId": getattr(
+                            settings, "default_organization_id", "ORG-LMTWEBNAIRS"
+                        ),
+                    }
             conn.commit()
     except Exception as error:
         raise runtime.database_api_error(error) from error
