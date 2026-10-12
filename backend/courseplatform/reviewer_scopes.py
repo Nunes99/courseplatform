@@ -44,6 +44,18 @@ def admin_from_context(context: Any) -> dict[str, Any]:
     return {"role": "ADMIN", "admin_id": ""}
 
 
+def admin_organization_id(admin: dict[str, Any]) -> str:
+    organization_id = str(
+        admin.get("active_organization_id") or admin.get("organization_id") or ""
+    ).strip()
+    if not organization_id:
+        raise ApiError(
+            "ADMIN_ORGANIZATION_REQUIRED",
+            "A sessão administrativa não possui uma instituição ativa.",
+        )
+    return organization_id
+
+
 def reviewer_scope_predicate(
     admin: dict[str, Any],
     *,
@@ -53,14 +65,7 @@ def reviewer_scope_predicate(
 ) -> tuple[str, tuple[Any, ...]]:
     if (admin.get("role") or "").upper() != "REVIEWER":
         return "true", ()
-    organization_id = str(
-        admin.get("active_organization_id") or admin.get("organization_id") or ""
-    ).strip()
-    if not organization_id:
-        raise ApiError(
-            "ADMIN_ORGANIZATION_REQUIRED",
-            "A sessão administrativa não possui uma instituição ativa.",
-        )
+    organization_id = admin_organization_id(admin)
     return (
         f"""
         exists (
@@ -85,14 +90,7 @@ def reviewer_scope_predicate(
 def reviewer_course_predicate(admin: dict[str, Any], course_expr: str) -> tuple[str, tuple[Any, ...]]:
     if (admin.get("role") or "").upper() != "REVIEWER":
         return "true", ()
-    organization_id = str(
-        admin.get("active_organization_id") or admin.get("organization_id") or ""
-    ).strip()
-    if not organization_id:
-        raise ApiError(
-            "ADMIN_ORGANIZATION_REQUIRED",
-            "A sessão administrativa não possui uma instituição ativa.",
-        )
+    organization_id = admin_organization_id(admin)
     return (
         f"""
         exists (
@@ -110,14 +108,7 @@ def reviewer_course_predicate(admin: dict[str, Any], course_expr: str) -> tuple[
 
 
 def require_attempt_scope(conn: Any, admin: dict[str, Any], attempt_id: str) -> None:
-    organization_id = str(
-        admin.get("active_organization_id") or admin.get("organization_id") or ""
-    ).strip()
-    if not organization_id:
-        raise ApiError(
-            "ADMIN_ORGANIZATION_REQUIRED",
-            "A sessão administrativa não possui uma instituição ativa.",
-        )
+    organization_id = admin_organization_id(admin)
     reviewer = (admin.get("role") or "").upper() == "REVIEWER"
     reviewer_sql = "true"
     reviewer_params: tuple[Any, ...] = ()

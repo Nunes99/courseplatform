@@ -7,6 +7,7 @@ from typing import Any
 from ..contracts import ApiError
 from ..reviewer_scopes import (
     admin_from_context,
+    admin_organization_id,
     require_certificate_scope,
     require_course_scope,
     reviewer_course_predicate,
@@ -426,32 +427,32 @@ def admin_list_certificates_action(payload: dict[str, Any], runtime: Certificate
     status = (payload.get("status") or "ACTIVE").upper()
     query = str_value(payload.get("query")).lower()
     limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-certificates", status, query)
-    cursor = decode_list_cursor(
-        payload.get("cursor"),
-        "admin-certificates",
-        scope,
-        allow_null_sort=True,
-    )
-    cursor_sql = ""
-    cursor_params: list[Any] = []
-    if cursor:
-        cursor_at, cursor_id = cursor
-        if cursor_at is None:
-            cursor_sql = "and cert.issue_date is null and cert.certificate_id < %s"
-            cursor_params.append(cursor_id)
-        else:
-            cursor_sql = """
-              and (
-                cert.issue_date < %s
-                or cert.issue_date is null
-                or (cert.issue_date = %s and cert.certificate_id < %s)
-              )
-            """
-            cursor_params.extend((cursor_at, cursor_at, cursor_id))
     with connection() as conn:
         _, admin = admin_context_with_conn(conn, payload, {"OWNER", "ADMIN", "REVIEWER"})
-        organization_id = admin["active_organization_id"]
+        organization_id = admin_organization_id(admin)
+        scope = cursor_scope("admin-certificates", organization_id, status, query)
+        cursor = decode_list_cursor(
+            payload.get("cursor"),
+            "admin-certificates",
+            scope,
+            allow_null_sort=True,
+        )
+        cursor_sql = ""
+        cursor_params: list[Any] = []
+        if cursor:
+            cursor_at, cursor_id = cursor
+            if cursor_at is None:
+                cursor_sql = "and cert.issue_date is null and cert.certificate_id < %s"
+                cursor_params.append(cursor_id)
+            else:
+                cursor_sql = """
+                  and (
+                    cert.issue_date < %s
+                    or cert.issue_date is null
+                    or (cert.issue_date = %s and cert.certificate_id < %s)
+                  )
+                """
+                cursor_params.extend((cursor_at, cursor_at, cursor_id))
         reviewer_sql, reviewer_params = reviewer_scope_predicate(
             admin,
             course_expr="cert.course_id",

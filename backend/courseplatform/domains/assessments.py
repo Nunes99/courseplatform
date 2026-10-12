@@ -6,7 +6,12 @@ from datetime import timedelta, timezone
 from typing import Any
 
 from ..contracts import ApiError
-from ..reviewer_scopes import admin_from_context, require_attempt_scope, reviewer_scope_predicate
+from ..reviewer_scopes import (
+    admin_from_context,
+    admin_organization_id,
+    require_attempt_scope,
+    reviewer_scope_predicate,
+)
 from ..storage import StorageError
 
 
@@ -848,11 +853,12 @@ def admin_list_submissions_action(payload: dict[str, Any], runtime: AssessmentRu
     submission_item = runtime.submission_item
     success = runtime.success
     admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    organization_id = admin_organization_id(admin)
     expire_overdue_attempts()
     status = (payload.get("status") or "ALL").upper()
     query = (payload.get("query") or "").strip().lower()
     limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-submissions", status, query)
+    scope = cursor_scope("admin-submissions", organization_id, status, query)
     cursor = decode_list_cursor(payload.get("cursor"), "admin-submissions", scope)
     cursor_sql = ""
     cursor_params: list[Any] = []
@@ -906,11 +912,13 @@ def admin_list_submissions_action(payload: dict[str, Any], runtime: AssessmentRu
         from courseplatform.attempts a
         left join courseplatform.students s on s.student_id = a.student_id
         left join courseplatform.lessons l on l.lesson_id = a.lesson_id
+        join courseplatform.courses c on c.course_id = l.course_id
         left join courseplatform.lesson_progress p on p.progress_id = a.progress_id
         left join courseplatform.enrollments e on e.enrollment_id = p.enrollment_id
         left join latest_reviews lr on lr.attempt_id = a.attempt_id
         left join file_counts fc on fc.attempt_id = a.attempt_id
-        where
+        where c.organization_id = %s
+          and
           (
             %s = 'ALL'
             or (%s = 'REVIEWED' and a.status in ('APPROVED', 'CORRECTION_REQUIRED', 'FAILED'))
@@ -928,7 +936,7 @@ def admin_list_submissions_action(payload: dict[str, Any], runtime: AssessmentRu
                  a.attempt_id desc
         limit %s
         """,
-        (status, status, status, query, f"%{query}%", *scope_params, *cursor_params, limit + 1),
+        (organization_id, status, status, status, query, f"%{query}%", *scope_params, *cursor_params, limit + 1),
     )
     rows, page_info = cursor_pagination_result(
         rows,
@@ -946,6 +954,7 @@ def admin_list_submissions_action(payload: dict[str, Any], runtime: AssessmentRu
 
 def admin_list_gradebook_action(payload: dict[str, Any], runtime: AssessmentRuntime):
     admin = admin_from_context(runtime.admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    organization_id = admin_organization_id(admin)
     course_id = runtime.str_value(payload.get("courseId"))
     offering_id = runtime.str_value(payload.get("offeringId"))
     group_id = runtime.str_value(payload.get("groupId"))
@@ -954,7 +963,7 @@ def admin_list_gradebook_action(payload: dict[str, Any], runtime: AssessmentRunt
     if status not in {"ALL", "ACTIVE", "COMPLETED", "BLOCKED", "INACTIVE", "CANCELLED"}:
         raise ApiError("INVALID_ENROLLMENT_STATUS", "O estado da matrícula é inválido.")
     limit = runtime.cursor_page_limit(payload, default_limit=50, max_limit=200)
-    scope = runtime.cursor_scope("admin-gradebook", course_id, offering_id, group_id, query, status)
+    scope = runtime.cursor_scope("admin-gradebook", organization_id, course_id, offering_id, group_id, query, status)
     cursor = runtime.decode_list_cursor(payload.get("cursor"), "admin-gradebook", scope)
     cursor_sql = ""
     cursor_params: list[Any] = []
@@ -992,7 +1001,8 @@ def admin_list_gradebook_action(payload: dict[str, Any], runtime: AssessmentRunt
         join courseplatform.course_offerings o on o.offering_id = e.offering_id
         left join courseplatform.groups g on g.group_id = e.group_id
         left join courseplatform.lesson_progress p on p.enrollment_id = e.enrollment_id
-        where (%s = '' or e.course_id = %s)
+        where c.organization_id = %s
+          and (%s = '' or e.course_id = %s)
           and (%s = '' or e.offering_id = %s)
           and (%s = '' or e.group_id = %s)
           and (%s = 'ALL' or e.status = %s)
@@ -1008,7 +1018,7 @@ def admin_list_gradebook_action(payload: dict[str, Any], runtime: AssessmentRunt
         limit %s
         """,
         (
-            course_id, course_id, offering_id, offering_id, group_id, group_id,
+            organization_id, course_id, course_id, offering_id, offering_id, group_id, group_id,
             status, status, query, f"%{query}%", *scope_params, *cursor_params, limit + 1,
         ),
     )

@@ -39,7 +39,7 @@ export class CoursePlatformApi {
     this.apiUrl = String(config.apiUrl || '').trim();
     this.courseId = config.courseId || '';
     this.cache = new Map();
-    this.cacheVersion = 0;
+    this.cacheVersions = new Map();
     this.cacheTtlMs = Number(config.apiCacheTtlMs || 45000);
     this.requestTimeoutMs = Math.max(1, Number(config.requestTimeoutMs || 30000));
 
@@ -819,6 +819,7 @@ export class CoursePlatformApi {
     if (data.adminToken) {
       sessionStorage.setItem('courseAdminToken', data.adminToken);
       sessionStorage.setItem('courseAdminOrganizationId', data.organization?.organizationId || '');
+      this.clearCache(this.adminCacheNamespace());
     }
     return data;
   }
@@ -834,6 +835,7 @@ export class CoursePlatformApi {
     );
     sessionStorage.setItem('courseAdminToken', data.adminToken);
     sessionStorage.setItem('courseAdminOrganizationId', data.organization?.organizationId || '');
+    this.clearCache(this.adminCacheNamespace());
     return data;
   }
 
@@ -846,10 +848,11 @@ export class CoursePlatformApi {
 
   async adminLogout() {
     const adminToken = this.adminToken();
+    const cacheNamespace = this.adminCacheNamespace();
     try {
       return await this.request('adminLogout', { adminToken });
     } finally {
-      this.clearCache();
+      this.clearCache(cacheNamespace);
       sessionStorage.removeItem('courseAdminToken');
       sessionStorage.removeItem('courseAdminOrganizationId');
     }
@@ -1229,13 +1232,14 @@ export class CoursePlatformApi {
 
   cachedAdminRequest(action, payload = {}, options = {}) {
     const ttlMs = Number(options.ttlMs || this.cacheTtlMs);
-    const key = this.cacheKey('admin', action, {
+    const cacheNamespace = this.adminCacheNamespace();
+    const key = this.cacheKey(cacheNamespace, action, {
       adminToken: this.adminToken(),
       ...payload
     });
     const cached = this.cache.get(key);
     const now = Date.now();
-    const cacheVersion = this.cacheVersion;
+    const cacheVersion = this.cacheNamespaceVersion(cacheNamespace);
 
     if (!options.force && cached) {
       if (cached.promise) return cached.promise;
@@ -1244,8 +1248,9 @@ export class CoursePlatformApi {
 
     const promise = this.adminRequest(action, payload, options)
       .then((data) => {
-        if (this.cacheVersion === cacheVersion) {
+        if (this.cacheNamespaceVersion(cacheNamespace) === cacheVersion) {
           this.cache.set(key, {
+            namespace: cacheNamespace,
             data,
             expiresAt: Date.now() + ttlMs
           });
@@ -1258,6 +1263,7 @@ export class CoursePlatformApi {
       });
 
     this.cache.set(key, {
+      namespace: cacheNamespace,
       promise,
       expiresAt: now + ttlMs
     });
@@ -1267,7 +1273,7 @@ export class CoursePlatformApi {
 
   mutateAdmin(action, payload = {}) {
     return this.adminRequest(action, payload).then((data) => {
-      this.clearCache();
+      this.clearCache(this.adminCacheNamespace());
       return data;
     });
   }
@@ -1283,9 +1289,20 @@ export class CoursePlatformApi {
     return `${scope}:${action}:${stableStringify(payload)}`;
   }
 
-  clearCache() {
-    this.cacheVersion += 1;
-    this.cache.clear();
+  adminCacheNamespace() {
+    const organizationId = String(sessionStorage.getItem('courseAdminOrganizationId') || '').trim();
+    return `organization:${organizationId || 'unscoped'}`;
+  }
+
+  cacheNamespaceVersion(namespace) {
+    return Number(this.cacheVersions.get(namespace) || 0);
+  }
+
+  clearCache(namespace = this.adminCacheNamespace()) {
+    this.cacheVersions.set(namespace, this.cacheNamespaceVersion(namespace) + 1);
+    for (const [key, entry] of this.cache.entries()) {
+      if (entry?.namespace === namespace) this.cache.delete(key);
+    }
   }
 
   adminToken() {

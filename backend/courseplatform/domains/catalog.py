@@ -6,7 +6,12 @@ from decimal import Decimal
 from typing import Any
 
 from ..contracts import ApiError
-from ..reviewer_scopes import admin_from_context, require_course_scope, reviewer_course_predicate
+from ..reviewer_scopes import (
+    admin_from_context,
+    admin_organization_id,
+    require_course_scope,
+    reviewer_course_predicate,
+)
 
 
 ACTION_BINDINGS = (
@@ -898,12 +903,13 @@ def public_question_bank_version(row: dict[str, Any], options: list[dict[str, An
 
 
 def admin_list_question_bank_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
-    runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    admin = admin_from_context(runtime.admin_context(payload, {"OWNER", "ADMIN"}))
+    organization_id = admin_organization_id(admin)
     course_id = str(payload.get("courseId") or "").strip()
     query = str(payload.get("query") or "").strip()
     status = str(payload.get("status") or "ALL").strip().upper()
-    params: list[Any] = []
-    clauses = ["1 = 1"]
+    params: list[Any] = [organization_id]
+    clauses = ["item.organization_id = %s"]
     if course_id:
         clauses.append("(item.course_id = %s or item.course_id is null)")
         params.append(course_id)
@@ -965,10 +971,11 @@ def admin_list_question_bank_action(payload: dict[str, Any], *, runtime: Catalog
     } for row in rows]})
 
 
-def _question_bank_detail(conn, bank_question_id: str) -> dict[str, Any]:
+def _question_bank_detail(conn, bank_question_id: str, organization_id: str) -> dict[str, Any]:
     item = conn.execute(
-        "select * from courseplatform.question_bank_items where bank_question_id = %s",
-        (bank_question_id,),
+        """select * from courseplatform.question_bank_items
+           where bank_question_id = %s and organization_id = %s""",
+        (bank_question_id, organization_id),
     ).fetchone()
     if not item:
         raise ApiError("QUESTION_BANK_NOT_FOUND", "Questão não encontrada no banco.")
@@ -997,36 +1004,51 @@ def _question_bank_detail(conn, bank_question_id: str) -> dict[str, Any]:
 
 
 def admin_get_question_bank_item_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
-    runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    admin = admin_from_context(runtime.admin_context(payload, {"OWNER", "ADMIN"}))
+    organization_id = admin_organization_id(admin)
     runtime.require_fields(payload, ["bankQuestionId"])
     with runtime.connection() as conn:
-        item = _question_bank_detail(conn, str(payload["bankQuestionId"]))
+        item = _question_bank_detail(conn, str(payload["bankQuestionId"]), organization_id)
     return runtime.success({"question": item})
 
 
 def admin_save_question_bank_draft_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
     _, admin = runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    organization_id = admin_organization_id(admin)
     normalized = normalize_question_bank_draft(payload, require_publishable=False)
     bank_question_id = str(payload.get("bankQuestionId") or "").strip() or runtime.generate_id("QBANK")
     course_id = str(payload.get("courseId") or "").strip() or None
     with runtime.connection() as conn:
+        if course_id and not conn.execute(
+            """select 1 from courseplatform.courses
+               where course_id = %s and organization_id = %s and status <> 'DELETED'""",
+            (course_id, organization_id),
+        ).fetchone():
+            raise ApiError("COURSE_NOT_FOUND", "Curso não encontrado nesta instituição.")
         item = conn.execute(
-            "select * from courseplatform.question_bank_items where bank_question_id = %s for update",
-            (bank_question_id,),
+            """select * from courseplatform.question_bank_items
+               where bank_question_id = %s and organization_id = %s for update""",
+            (bank_question_id, organization_id),
         ).fetchone()
         if not item:
+            if payload.get("bankQuestionId") and conn.execute(
+                "select 1 from courseplatform.question_bank_items where bank_question_id = %s",
+                (bank_question_id,),
+            ).fetchone():
+                raise ApiError("QUESTION_BANK_NOT_FOUND", "Questão não encontrada no banco.")
             item = conn.execute(
                 """insert into courseplatform.question_bank_items
-                   (bank_question_id, course_id, question_code, title, created_by, created_at, updated_at)
-                   values (%s, %s, %s, %s, %s, now(), now()) returning *""",
-                (bank_question_id, course_id, str(payload.get("questionCode") or bank_question_id), normalized["title"], admin["admin_id"]),
+                   (bank_question_id, organization_id, course_id, question_code, title, created_by, created_at, updated_at)
+                   values (%s, %s, %s, %s, %s, %s, now(), now()) returning *""",
+                (bank_question_id, organization_id, course_id, str(payload.get("questionCode") or bank_question_id), normalized["title"], admin["admin_id"]),
             ).fetchone()
         else:
             if course_id != item.get("course_id"):
                 raise ApiError("QUESTION_BANK_COURSE_IMMUTABLE", "O âmbito do curso não pode ser alterado depois da criação.")
             item = conn.execute(
-                "update courseplatform.question_bank_items set title = %s, updated_at = now() where bank_question_id = %s returning *",
-                (normalized["title"], bank_question_id),
+                """update courseplatform.question_bank_items set title = %s, updated_at = now()
+                   where bank_question_id = %s and organization_id = %s returning *""",
+                (normalized["title"], bank_question_id, organization_id),
             ).fetchone()
         version = conn.execute(
             "select * from courseplatform.question_bank_versions where bank_question_id = %s and status = 'DRAFT' for update",
@@ -1066,18 +1088,23 @@ def admin_save_question_bank_draft_action(payload: dict[str, Any], *, runtime: C
         runtime.audit(conn, "ADMIN", admin["admin_id"], "QUESTION_BANK_DRAFT_SAVED", "QUESTION_BANK", bank_question_id,
                       {"courseId": course_id, "versionNumber": version["version_number"]})
         conn.commit()
-        detail = _question_bank_detail(conn, bank_question_id)
+        detail = _question_bank_detail(conn, bank_question_id, organization_id)
     return runtime.success({"question": detail})
 
 
 def admin_publish_question_bank_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
     _, admin = runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    organization_id = admin_organization_id(admin)
     runtime.require_fields(payload, ["bankQuestionVersionId"])
     version_id = str(payload["bankQuestionVersionId"])
     with runtime.connection() as conn:
         version = conn.execute(
-            "select * from courseplatform.question_bank_versions where bank_question_version_id = %s for update",
-            (version_id,),
+            """select version.* from courseplatform.question_bank_versions version
+               join courseplatform.question_bank_items item
+                 on item.bank_question_id = version.bank_question_id
+               where version.bank_question_version_id = %s
+                 and item.organization_id = %s for update of version""",
+            (version_id, organization_id),
         ).fetchone()
         if not version:
             raise ApiError("QUESTION_BANK_VERSION_NOT_FOUND", "Versão da questão não encontrada.")
@@ -1106,11 +1133,15 @@ def admin_publish_question_bank_version_action(payload: dict[str, Any], *, runti
 
 def admin_attach_question_bank_version_action(payload: dict[str, Any], *, runtime: CatalogRuntime):
     _, admin = runtime.admin_context(payload, {"OWNER", "ADMIN"})
+    organization_id = admin_organization_id(admin)
     runtime.require_fields(payload, ["courseVersionId", "lessonId", "bankQuestionVersionId"])
     with runtime.connection() as conn:
         course_version = conn.execute(
-            "select * from courseplatform.course_versions where course_version_id = %s for update",
-            (payload["courseVersionId"],),
+            """select version.* from courseplatform.course_versions version
+               join courseplatform.courses course on course.course_id = version.course_id
+               where version.course_version_id = %s and course.organization_id = %s
+               for update of version""",
+            (payload["courseVersionId"], organization_id),
         ).fetchone()
         if not course_version:
             raise ApiError("COURSE_VERSION_NOT_FOUND", "Versão do curso não encontrada.")
@@ -1120,8 +1151,9 @@ def admin_attach_question_bank_version_action(payload: dict[str, Any], *, runtim
             """select version.*, item.course_id, item.title as bank_title
                from courseplatform.question_bank_versions version
                join courseplatform.question_bank_items item on item.bank_question_id = version.bank_question_id
-               where version.bank_question_version_id = %s and version.status = 'PUBLISHED'""",
-            (payload["bankQuestionVersionId"],),
+               where version.bank_question_version_id = %s and version.status = 'PUBLISHED'
+                 and item.organization_id = %s""",
+            (payload["bankQuestionVersionId"], organization_id),
         ).fetchone()
         if not version:
             raise ApiError("QUESTION_BANK_VERSION_NOT_PUBLISHED", "Selecione uma versão publicada da questão.")
@@ -1323,16 +1355,17 @@ def admin_list_courses_action(payload: dict[str, Any], *, runtime: CatalogRuntim
     str_value = runtime.str_value
     success = runtime.success
     admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    organization_id = admin_organization_id(admin)
     limit = cursor_page_limit(payload)
     query = str_value(payload.get("query")).lower()
     status = (payload.get("status") or "ALL").upper()
     content = (payload.get("content") or "ALL").upper()
     if content not in {"ALL", "WITH_MODULES", "WITHOUT_MODULES", "WITH_GROUPS", "WITHOUT_GROUPS"}:
         raise ApiError("INVALID_COURSE_FILTER", "O filtro de conteúdo é inválido.")
-    scope = cursor_scope("admin-courses", status, content, query)
+    scope = cursor_scope("admin-courses", organization_id, status, content, query)
     cursor = decode_list_cursor(payload.get("cursor"), "admin-courses", scope, sort_type="text")
-    conditions = ["(%s = 'ALL' or c.status = %s)"]
-    params: list[Any] = [status, status]
+    conditions = ["c.organization_id = %s", "(%s = 'ALL' or c.status = %s)"]
+    params: list[Any] = [organization_id, status, status]
     reviewer_sql, reviewer_params = reviewer_course_predicate(admin, "c.course_id")
     conditions.append(f"({reviewer_sql})")
     params.extend(reviewer_params)

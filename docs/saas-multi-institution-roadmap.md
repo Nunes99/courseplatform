@@ -271,7 +271,7 @@ Testes de saída:
 
 ### M3 — Storage, Realtime e operação isolados
 
-Estado: **em curso, fundação operacional publicada e validada**. Novos trabalhos e comprovativos passam a usar caminhos
+Estado: **concluída e validada no ambiente real**. Novos trabalhos e comprovativos passam a usar caminhos
 privados no formato `{organization_id}/{domain}/{owner}/{object}`. O backend
 valida o primeiro segmento antes do download e continua a aceitar os caminhos
 históricos sem tenant somente depois da autorização institucional pelo registo
@@ -281,10 +281,26 @@ deduplicação por instituição, timestamp de dead-letter e índices parciais p
 tenant. O worker mantém `organization_id` no claim e nos logs, e as métricas
 protegidas incluem uma decomposição por organização.
 
+O cache administrativo passou a usar namespaces e versões de invalidação por
+instituição. Cursos, grupos, submissões, pauta, certificados e reconciliação
+incluem a instituição ativa tanto na consulta como no escopo do cursor. O banco
+de questões também passa a ter unicidade e pesquisa institucionais através da
+migração `20261011120000`. Esta segunda fatia foi publicada e validada no
+ambiente real em 12 de outubro de 2026.
+
 A migração `20261005020000` e o backend compatível foram publicados em 11 de
 outubro de 2026. O pós-flight, readiness, execução do runner via Vault,
 métricas, autorização Realtime A/B e checksum de um objeto Storage real
 passaram. Nenhum segredo foi exportado durante a validação.
+
+A migração `20261011120000` passou no pós-flight com as duas colunas
+institucionais obrigatórias, zero registos sem organização e os quatro índices
+esperados, e foi reconciliada no histórico remoto de migrações. O deployment de produção respondeu aos smoke tests de liveness,
+readiness, correlação de pedidos e entrega do frontend. A pesquisa A/B usou
+organizações sintéticas dentro de uma transação revertida, encontrou um
+resultado por tenant, nenhum resultado cruzado e deixou zero registos
+sintéticos persistidos. O `api.js` efetivamente publicado passou o teste de
+namespace e invalidação de cache A/B.
 
 Entregas:
 
@@ -463,7 +479,7 @@ Antes de M4–M7 precisam de decisão explícita:
 | M0 Fundação | Concluída |
 | M1 Contexto na autenticação | Concluída e validada |
 | M2 Isolamento dos domínios | Concluída com gate A/B aprovado; cinco testes PostgreSQL não executados aceites como risco residual |
-| M3 Storage e operação | Em curso: fundação publicada; pós-flight, jobs, métricas, Realtime A/B e Storage real validados |
+| M3 Storage e operação | Concluída e validada no ambiente real; dados sintéticos A/B revertidos |
 | M4 Administração global | Não iniciada |
 | M5 Publicação editorial | Não iniciada |
 | M6 Agregador público | Planeada |
@@ -473,5 +489,6 @@ Antes de M4–M7 precisam de decisão explícita:
 
 ## Próxima ação autorizável
 
-Continuar M3 com cache e pesquisa usando namespace institucional, mantendo o
-mesmo gate negativo A/B antes de ativar uma segunda instituição permanente.
+Iniciar M4 pela administração global e pelo onboarding institucional, definindo
+o fluxo de candidatura, aprovação, criação do primeiro proprietário e auditoria
+antes de ativar uma segunda instituição permanente.

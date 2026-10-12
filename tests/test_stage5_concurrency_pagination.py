@@ -106,7 +106,11 @@ class CursorPaginationTests(unittest.TestCase):
             for index in range(3)
         ]
         with (
-            patch.object(actions, "admin_context"),
+            patch.object(
+                actions,
+                "admin_context",
+                return_value=("token", {"admin_id": "ADMIN-1", "role": "ADMIN", "active_organization_id": "ORG-A"}),
+            ),
             patch.object(actions, "expire_overdue_attempts"),
             patch.object(actions, "fetch_all", return_value=rows) as fetch_all,
         ):
@@ -289,7 +293,7 @@ class AdministrativeListContractTests(unittest.TestCase):
         decoded_at, decoded_id = actions.decode_list_cursor(
             cursor,
             "admin-certificates",
-            actions.cursor_scope("admin-certificates", "ALL", ""),
+            actions.cursor_scope("admin-certificates", "ORG-A", "ALL", ""),
             allow_null_sort=True,
         )
         self.assertIsNone(decoded_at)

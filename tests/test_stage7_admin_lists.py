@@ -97,7 +97,11 @@ class AdministrativeListQueryTests(unittest.TestCase):
             for index in range(3)
         ]
         with (
-            patch.object(actions, "admin_context"),
+            patch.object(
+                actions,
+                "admin_context",
+                return_value=("token", {"admin_id": "ADMIN-1", "role": "ADMIN", "active_organization_id": "ORG-A"}),
+            ),
             patch.object(actions, "fetch_all", return_value=rows) as fetch_all,
             patch.object(actions, "public_course", side_effect=lambda row: {"courseId": row["course_id"]}),
         ):
@@ -157,7 +161,11 @@ class AdministrativeListQueryTests(unittest.TestCase):
             }
             for index in range(3)
         ]
-        with patch.object(actions, "admin_context"), patch.object(
+        with patch.object(
+            actions,
+            "admin_context",
+            return_value=("token", {"admin_id": "ADMIN-1", "role": "ADMIN", "active_organization_id": "ORG-A"}),
+        ), patch.object(
             actions, "fetch_all", return_value=group_rows
         ):
             groups = actions.admin_list_groups({"limit": 2})["data"]

@@ -4,7 +4,7 @@ from datetime import timezone
 from typing import Any
 
 from ..contracts import ApiError
-from ..reviewer_scopes import admin_from_context, reviewer_scope_predicate
+from ..reviewer_scopes import admin_from_context, admin_organization_id, reviewer_scope_predicate
 
 
 ACTION_BINDINGS = (
@@ -422,11 +422,12 @@ def admin_list_groups_action(payload: dict[str, Any], *, runtime: EnrollmentRunt
     str_value = runtime.str_value
     success = runtime.success
     admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN", "REVIEWER"}))
+    organization_id = admin_organization_id(admin)
     course_id = str_value(payload.get("courseId"))
     status = str_value(payload.get("status") or "ALL").upper()
     query = str_value(payload.get("query")).lower()
     limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-groups", course_id, status, query)
+    scope = cursor_scope("admin-groups", organization_id, course_id, status, query)
     cursor = decode_list_cursor(payload.get("cursor"), "admin-groups", scope, sort_type="text")
     cursor_sql = ""
     cursor_params: list[Any] = []
@@ -446,8 +447,10 @@ def admin_list_groups_action(payload: dict[str, Any], *, runtime: EnrollmentRunt
           select g.*, count(gm.group_member_id) filter (where gm.status = 'ACTIVE') as member_count,
                  lower(coalesce(g.name, '')) as pagination_sort_text
           from courseplatform.groups g
+          join courseplatform.courses c on c.course_id = g.course_id
           left join courseplatform.group_members gm on gm.group_id = g.group_id
-          where (%s = '' or g.course_id = %s)
+          where c.organization_id = %s
+            and (%s = '' or g.course_id = %s)
             and (%s = 'ALL' or (%s = 'NON_DELETED' and g.status <> 'DELETED') or g.status = %s)
             and (%s = '' or lower(coalesce(g.name, '') || ' ' || coalesce(g.group_code, '') || ' ' || coalesce(g.group_id, '')) like %s)
             and ({reviewer_sql})
@@ -460,7 +463,7 @@ def admin_list_groups_action(payload: dict[str, Any], *, runtime: EnrollmentRunt
         order by pagination_sort_text, group_id
         limit %s
         """,
-        (course_id, course_id, status, status, status, query, f"%{query}%", *reviewer_params, *cursor_params, limit + 1),
+        (organization_id, course_id, course_id, status, status, status, query, f"%{query}%", *reviewer_params, *cursor_params, limit + 1),
     )
     total = int(rows[0]["total_count"]) if rows else 0
     rows, page_info = cursor_pagination_result(
@@ -739,10 +742,11 @@ def admin_list_course_reconciliation_issues_action(payload: dict[str, Any], *, r
     iso = runtime.iso
     str_value = runtime.str_value
     success = runtime.success
-    admin_context(payload, {"OWNER", "ADMIN"})
+    admin = admin_from_context(admin_context(payload, {"OWNER", "ADMIN"}))
+    organization_id = admin_organization_id(admin)
     status = str_value(payload.get("status") or "OPEN").upper()
     limit = cursor_page_limit(payload)
-    scope = cursor_scope("admin-course-reconciliation", status)
+    scope = cursor_scope("admin-course-reconciliation", organization_id, status)
     cursor = decode_list_cursor(payload.get("cursor"), "admin-course-reconciliation", scope)
     cursor_sql = ""
     cursor_params: list[Any] = []
@@ -756,13 +760,14 @@ def admin_list_course_reconciliation_issues_action(payload: dict[str, Any], *, r
         f"""
         select *, detected_at as pagination_sort_at
         from courseplatform.migration_reconciliation_issues
-        where migration_key = '20260915101047'
+        where organization_id = %s
+          and migration_key = '20260915101047'
           and (%s = 'ALL' or status = %s)
           {cursor_sql}
         order by detected_at, issue_id
         limit %s
         """,
-        (status, status, *cursor_params, limit + 1),
+        (organization_id, status, status, *cursor_params, limit + 1),
     )
     rows, page_info = cursor_pagination_result(
         rows, limit, "admin-course-reconciliation", scope, "pagination_sort_at", "issue_id"

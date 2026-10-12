@@ -24,7 +24,8 @@
     "qa:stage12-accessibility": "node scripts/verify_stage12_navigation_accessibility.cjs",
     "qa:stage12-admin": "node scripts/verify_stage7_admin_lists.cjs",
     "qa:api-config": "node scripts/verify_api_configuration.cjs",
-    "qa:typed-api-client": "node scripts/verify_versioned_api_client.cjs"
+    "qa:typed-api-client": "node scripts/verify_versioned_api_client.cjs",
+    "qa:m3-tenant-cache": "node scripts/verify_m3_tenant_cache.cjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"
