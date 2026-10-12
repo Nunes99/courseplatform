@@ -351,6 +351,7 @@ def static_file_response(raw_path: str):
     path = (raw_path or "index.html").lstrip("/")
     aliases = {
         "admin": "admin.html",
+        "platform": "platform.html",
         "verify": "verify.html",
         "connection-test": "connection-test.html",
     }

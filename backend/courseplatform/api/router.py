@@ -5,6 +5,7 @@ from .assessments import router as assessments_router
 from .catalog import router as catalog_router
 from .enrollments import router as enrollments_router
 from .identity import router as identity_router
+from .platform import router as platform_router
 from .learning import router as learning_router
 
 
@@ -15,3 +16,4 @@ router.include_router(enrollments_router)
 router.include_router(learning_router)
 router.include_router(assessments_router)
 router.include_router(administration_router)
+router.include_router(platform_router)

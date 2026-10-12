@@ -12,7 +12,7 @@ Esta é a **política esperada**, derivada dos handlers e do produto atual. Não
 - **Gestão**: criar/editar/bloquear de acordo com a operação.
 - **Não**: acesso deve ser recusado pelo backend, mesmo que o botão esteja oculto.
 
-Papéis administrativos atuais: `REVIEWER`, `ADMIN` e `OWNER`. O `OWNER` é o único papel que gere contas de staff.
+Papéis administrativos institucionais: `REVIEWER`, `ADMIN` e `OWNER`. O `OWNER` é o único papel que gere contas de staff. A administração global usa papéis separados: `GLOBAL_OWNER`, `PLATFORM_ADMIN`, `SUPPORT` e `AUDITOR`.
 
 A fundação multi-instituição separa identidade global de membership
 institucional. Estes papéis serão avaliados dentro de uma organização; `OWNER`
@@ -81,6 +81,21 @@ identidade.
 | Criar/editar/desativar staff | Não | Não | Não | Não | Gestão exclusiva |
 | Auditoria | Não | Não | Apenas se for criada permissão específica | Consulta administrativa prevista | Consulta integral |
 | Configuração/segredos da plataforma | Não | Não | Não | Estado sem valor secreto | Gestão sem retorno de segredo |
+
+## Administração global
+
+`/platform` e `/api/v1/platform/*` usam `platform_sessions`, separadas das
+sessões de estudante e de administração institucional. Ser `OWNER` de uma
+instituição não concede acesso global. O acesso exige uma identidade ativa em
+`students` e uma atribuição ativa explícita em `platform_operators`.
+
+| Operação global | Anónimo | OWNER institucional | SUPPORT/AUDITOR | PLATFORM_ADMIN/GLOBAL_OWNER |
+| --- | --- | --- | --- | --- |
+| Submeter candidatura institucional | Sim, com contrato mínimo e idempotência | Igual ao anónimo | Igual ao anónimo | Igual ao anónimo |
+| Consultar organizações e onboarding | Não | Não | Leitura | Leitura |
+| Alterar estado do onboarding | Não | Não | Não | Sim, por transições permitidas e com auditoria |
+| Provisionar/ativar nova organização | Não disponível nesta fase | Não | Não | Não disponível nesta fase |
+| Consultar dados académicos de um tenant | Não | Apenas pela sessão institucional | Não por acesso global | Não por acesso global |
 
 ## Mapeamento dos handlers atuais
 
