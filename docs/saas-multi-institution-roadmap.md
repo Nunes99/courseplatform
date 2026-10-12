@@ -480,7 +480,7 @@ Antes de M4–M7 precisam de decisão explícita:
 | M1 Contexto na autenticação | Concluída e validada |
 | M2 Isolamento dos domínios | Concluída com gate A/B aprovado; cinco testes PostgreSQL não executados aceites como risco residual |
 | M3 Storage e operação | Concluída e validada no ambiente real; dados sintéticos A/B revertidos |
-| M4 Administração global | Em implementação: fundação global e onboarding prontos localmente; migração e validação externa pendentes |
+| M4 Administração global | Fundação aplicada e login global validado; revisão auditável de onboarding implementada; provisionamento e convite do primeiro OWNER continuam bloqueados por autorização separada |
 | M5 Publicação editorial | Não iniciada |
 | M6 Agregador público | Planeada |
 | M7 Inscrição/comercialização | Não iniciada |
@@ -489,8 +489,8 @@ Antes de M4–M7 precisam de decisão explícita:
 
 ## Próxima ação autorizável
 
-Aplicar de forma controlada a migração `20261012120000`, atribuir o primeiro
-operador global a uma identidade existente por procedimento administrativo e
-validar `/platform`. A criação da organização e o convite do primeiro `OWNER`
-continuam bloqueados até uma autorização independente; nenhum pedido aprovado
-é provisionado automaticamente.
+Validar visualmente o fluxo detalhado de revisão em `/platform` e, numa ação
+posterior e explicitamente autorizada, preparar o contrato transacional de
+provisionamento. A criação da segunda organização e o convite do primeiro
+`OWNER` permanecem operações independentes; nenhum pedido pronto é provisionado
+automaticamente.

@@ -75,6 +75,9 @@ class OnboardingReviewRequest(StrictRequest):
         "CANCELLED",
     ]
     review_notes: str | None = Field(default=None, alias="reviewNotes", max_length=4000)
+    review_checklist: dict[str, bool] = Field(default_factory=dict, alias="reviewChecklist")
+    expected_updated_at: str | None = Field(default=None, alias="expectedUpdatedAt", max_length=64)
+    readiness_confirmation: str | None = Field(default=None, alias="readinessConfirmation", max_length=80)
 
 
 def _payload(model: StrictRequest) -> dict[str, Any]:

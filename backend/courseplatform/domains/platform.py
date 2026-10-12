@@ -33,6 +33,18 @@ ONBOARDING_TRANSITIONS = {
 }
 PLATFORM_WRITE_ROLES = frozenset({"GLOBAL_OWNER", "PLATFORM_ADMIN"})
 SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+ONBOARDING_REVIEW_CHECKS = frozenset(
+    {
+        "institutionIdentity",
+        "contactAuthority",
+        "slugAvailability",
+        "dataProtection",
+        "commercialApproval",
+    }
+)
+ONBOARDING_NOTE_REQUIRED_STATUSES = frozenset(
+    {"NEEDS_INFORMATION", "REJECTED", "CANCELLED"}
+)
 
 
 def _normalize_email(value: Any) -> str:
@@ -92,6 +104,12 @@ def _serialize_organization(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _serialize_onboarding(row: dict[str, Any]) -> dict[str, Any]:
+    review_details = row.get("review_details_json") or {}
+    if not isinstance(review_details, dict):
+        review_details = {}
+    review_checklist = review_details.get("reviewChecklist") or {}
+    if not isinstance(review_checklist, dict):
+        review_checklist = {}
     return {
         "requestId": row["request_id"],
         "requestedSlug": row.get("requested_slug") or "",
@@ -109,10 +127,61 @@ def _serialize_onboarding(row: dict[str, Any]) -> dict[str, Any]:
         "status": row.get("status") or "",
         "applicantNotes": row.get("applicant_notes") or "",
         "reviewNotes": row.get("review_notes") or "",
+        "reviewChecklist": {
+            key: bool(review_checklist.get(key)) for key in ONBOARDING_REVIEW_CHECKS
+        },
         "submittedAt": iso(row.get("submitted_at")),
         "reviewedAt": iso(row.get("reviewed_at")),
         "updatedAt": iso(row.get("updated_at")),
     }
+
+
+def _validate_onboarding_review(
+    current: dict[str, Any], payload: dict[str, Any]
+) -> tuple[str, dict[str, bool]]:
+    target_status = str(payload.get("status") or "").strip().upper()
+    if target_status not in ONBOARDING_STATUSES:
+        raise ApiError("INVALID_ONBOARDING_STATUS", "Estado de onboarding inválido.")
+    current_status = str(current.get("status") or "")
+    if target_status != current_status and target_status not in ONBOARDING_TRANSITIONS[current_status]:
+        raise ApiError("INVALID_ONBOARDING_TRANSITION", "Esta mudança de estado não é permitida.")
+
+    expected_updated_at = str(payload.get("expectedUpdatedAt") or "").strip()
+    if expected_updated_at and expected_updated_at != iso(current.get("updated_at")):
+        raise ApiError(
+            "ONBOARDING_REQUEST_CHANGED",
+            "O pedido foi atualizado por outro operador. Recarregue os dados antes de continuar.",
+        )
+
+    notes = str(payload.get("reviewNotes") or "").strip()
+    if target_status in ONBOARDING_NOTE_REQUIRED_STATUSES and len(notes) < 10:
+        raise ApiError(
+            "ONBOARDING_REVIEW_NOTES_REQUIRED",
+            "Registe uma justificação com pelo menos 10 caracteres para esta decisão.",
+        )
+
+    supplied_checklist = payload.get("reviewChecklist") or {}
+    if not isinstance(supplied_checklist, dict):
+        supplied_checklist = {}
+    unknown_checks = set(supplied_checklist) - ONBOARDING_REVIEW_CHECKS
+    if unknown_checks:
+        raise ApiError("INVALID_ONBOARDING_CHECKLIST", "A checklist de onboarding é inválida.")
+    checklist = {
+        key: bool(supplied_checklist.get(key)) for key in ONBOARDING_REVIEW_CHECKS
+    }
+    if target_status == "READY_FOR_PROVISIONING":
+        if not all(checklist.values()):
+            raise ApiError(
+                "ONBOARDING_CHECKLIST_INCOMPLETE",
+                "Conclua toda a checklist antes de preparar o provisionamento.",
+            )
+        confirmation = str(payload.get("readinessConfirmation") or "").strip().lower()
+        if confirmation != str(current.get("requested_slug") or "").lower():
+            raise ApiError(
+                "ONBOARDING_CONFIRMATION_REQUIRED",
+                "Confirme o identificador institucional para preparar o provisionamento.",
+            )
+    return target_status, checklist
 
 
 def _platform_context_with_conn(
@@ -373,8 +442,19 @@ def platform_dashboard(token: str) -> dict[str, Any]:
             ).fetchall()
             request_rows = conn.execute(
                 """
-                select * from courseplatform.organization_onboarding_requests
-                order by submitted_at desc, request_id desc
+                select request.*,
+                       latest_review.details_json as review_details_json
+                from courseplatform.organization_onboarding_requests request
+                left join lateral (
+                  select audit.details_json
+                  from courseplatform.platform_audit_log audit
+                  where audit.entity_type = 'ONBOARDING_REQUEST'
+                    and audit.entity_id = request.request_id
+                    and audit.action = 'ONBOARDING_STATUS_CHANGED'
+                  order by audit.created_at desc, audit.event_id desc
+                  limit 1
+                ) latest_review on true
+                order by request.submitted_at desc, request.request_id desc
                 limit 100
                 """
             ).fetchall()
@@ -404,9 +484,6 @@ def platform_dashboard(token: str) -> dict[str, Any]:
 
 
 def update_onboarding_request(token: str, request_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    target_status = str(payload.get("status") or "").strip().upper()
-    if target_status not in ONBOARDING_STATUSES:
-        raise ApiError("INVALID_ONBOARDING_STATUS", "Estado de onboarding inválido.")
     try:
         with connection() as conn:
             _session, operator = _platform_context_with_conn(conn, token, PLATFORM_WRITE_ROLES)
@@ -420,8 +497,7 @@ def update_onboarding_request(token: str, request_id: str, payload: dict[str, An
             ).fetchone()
             if not current:
                 raise ApiError("ONBOARDING_REQUEST_NOT_FOUND", "Pedido de onboarding não encontrado.")
-            if target_status != current["status"] and target_status not in ONBOARDING_TRANSITIONS[current["status"]]:
-                raise ApiError("INVALID_ONBOARDING_TRANSITION", "Esta mudança de estado não é permitida.")
+            target_status, review_checklist = _validate_onboarding_review(current, payload)
             updated = conn.execute(
                 """
                 update courseplatform.organization_onboarding_requests
@@ -440,13 +516,20 @@ def update_onboarding_request(token: str, request_id: str, payload: dict[str, An
                     request_id,
                 ),
             ).fetchone()
+            updated = {**updated, "review_details_json": {"reviewChecklist": review_checklist}}
             _platform_audit(
                 conn,
                 operator["operator_id"],
                 "ONBOARDING_STATUS_CHANGED",
                 "ONBOARDING_REQUEST",
                 request_id,
-                {"from": current["status"], "to": target_status},
+                {
+                    "from": current["status"],
+                    "to": target_status,
+                    "reviewChecklist": review_checklist,
+                    "notesRecorded": bool(str(payload.get("reviewNotes") or "").strip()),
+                    "provisioningExecuted": False,
+                },
             )
             conn.commit()
     except ApiError:

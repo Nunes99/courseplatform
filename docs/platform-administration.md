@@ -15,13 +15,37 @@ cada instituição. Ela não cria nem ativa uma segunda instituição.
 - `platform_audit_log` regista login e decisões de onboarding sem dados
   académicos dos tenants.
 
+A fundação `20261012120000` foi aplicada, o primeiro `GLOBAL_OWNER` foi
+associado a uma identidade normal ativa e o login em `/platform` foi validado.
+O ambiente continua com uma única instituição.
+
+## Fluxo de onboarding
+
+O pedido institucional segue uma máquina de estados explícita:
+
+1. `SUBMITTED`: candidatura recebida de forma idempotente.
+2. `UNDER_REVIEW`: identidade, contacto, slug, privacidade e condições são
+   verificados por um operador global autorizado.
+3. `NEEDS_INFORMATION`: devolução fundamentada ao contacto institucional.
+4. `READY_FOR_PROVISIONING`: revisão concluída, sem criar recursos.
+5. `REJECTED` ou `CANCELLED`: decisão terminal com justificação obrigatória.
+
+As decisões usam bloqueio de linha e `expectedUpdatedAt` para impedir que uma
+revisão antiga substitua trabalho concorrente. Preparar o provisionamento exige
+checklist completa e confirmação manual do slug. A checklist fica preservada no
+evento de auditoria da decisão. Pedir informação, rejeitar ou cancelar exige
+uma nota com pelo menos dez caracteres.
+
+`READY_FOR_PROVISIONING` não cria uma organização, não adiciona domínios, não
+configura branding e não convida o primeiro `OWNER`. Estas operações continuam
+fora deste fluxo e exigem autorização separada.
+
 ## Primeiro operador
 
-A migração não promove automaticamente nenhum `OWNER` institucional. Depois de
-aplicar a migração, um administrador da base deve conceder o primeiro papel
-global a uma identidade existente e ativa, usando parâmetros e uma transação.
-O procedimento deve ser executado fora dos pedidos HTTP e registado na mudança
-operacional do ambiente.
+A migração não promove automaticamente nenhum `OWNER` institucional. O primeiro
+operador foi concedido depois de confirmar uma única correspondência entre o
+`OWNER` institucional e uma identidade normal ativa. O procedimento foi
+transacional, executado fora dos pedidos HTTP e registado na auditoria global.
 
 Exemplo parametrizado para o procedimento controlado:
 

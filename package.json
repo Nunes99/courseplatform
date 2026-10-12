@@ -25,7 +25,8 @@
     "qa:stage12-admin": "node scripts/verify_stage7_admin_lists.cjs",
     "qa:api-config": "node scripts/verify_api_configuration.cjs",
     "qa:typed-api-client": "node scripts/verify_versioned_api_client.cjs",
-    "qa:m3-tenant-cache": "node scripts/verify_m3_tenant_cache.cjs"
+    "qa:m3-tenant-cache": "node scripts/verify_m3_tenant_cache.cjs",
+    "qa:platform-onboarding": "node scripts/verify_platform_onboarding_browser.cjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"

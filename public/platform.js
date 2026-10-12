@@ -1,6 +1,7 @@
 const root = document.querySelector('#platformApp');
 const toast = document.querySelector('#platformToast');
 const TOKEN_KEY = 'coursePlatformGlobalToken';
+let platformData = null;
 
 const escapeHtml = (value) => String(value ?? '')
   .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
@@ -11,6 +12,13 @@ const statusLabels = {
   SUBMITTED: 'Submetido', UNDER_REVIEW: 'Em análise',
   NEEDS_INFORMATION: 'Aguarda informação', READY_FOR_PROVISIONING: 'Pronto para provisionar',
   REJECTED: 'Rejeitado', CANCELLED: 'Cancelado'
+};
+const reviewChecklistLabels = {
+  institutionIdentity: 'Identidade e existência legal verificadas',
+  contactAuthority: 'Responsável e autoridade de contacto confirmados',
+  slugAvailability: 'Identificador público e conflitos verificados',
+  dataProtection: 'Responsabilidades de dados e privacidade revistas',
+  commercialApproval: 'Plano, limites e condições comerciais aprovados'
 };
 
 function showToast(message) {
@@ -130,7 +138,9 @@ function reviewOptions(current) {
 }
 
 function renderDashboard(data) {
+  platformData = data;
   const operator = data.operator;
+  const canReview = ['GLOBAL_OWNER', 'PLATFORM_ADMIN'].includes(operator.role);
   root.innerHTML = `
     <div class="platform-shell">
       <aside class="platform-sidebar">
@@ -149,26 +159,106 @@ function renderDashboard(data) {
           <div class="metric"><span>Prontas</span><strong>${data.summary.readyForProvisioning}</strong><small>Sem ativação automática</small></div>
         </section>
         <section class="section" id="organizations"><div class="section-heading"><div><h2>Instituições</h2><p>Inventário operacional; dados académicos permanecem isolados.</p></div></div><div class="table-wrap"><table><thead><tr><th>Instituição</th><th>Estado</th><th>Membros</th><th>Cursos</th><th>Criação</th></tr></thead><tbody>${data.organizations.map(org => `<tr><td><strong>${escapeHtml(org.displayName)}</strong><small>${escapeHtml(org.slug)} · ${escapeHtml(org.organizationId)}</small></td><td>${statusBadge(org.status)}</td><td>${org.memberCount}</td><td>${org.courseCount}</td><td>${escapeHtml(new Date(org.createdAt).toLocaleDateString('pt-PT'))}</td></tr>`).join('') || '<tr><td colspan="5" class="empty-state">Nenhuma instituição registada.</td></tr>'}</tbody></table></div></section>
-        <section class="section" id="onboarding"><div class="section-heading"><div><h2>Pedidos de onboarding</h2><p>A aprovação prepara o pedido; não cria uma instituição.</p></div></div><div class="table-wrap"><table><thead><tr><th>Instituição</th><th>Contacto</th><th>Submissão</th><th>Estado</th><th>Revisão</th></tr></thead><tbody>${data.onboardingRequests.map(item => `<tr><td><strong>${escapeHtml(item.displayName)}</strong><small>${escapeHtml(item.requestedSlug)} · ${escapeHtml(item.requestId)}</small></td><td><strong>${escapeHtml(item.contactName)}</strong><small>${escapeHtml(item.contactEmail)}</small></td><td>${escapeHtml(new Date(item.submittedAt).toLocaleDateString('pt-PT'))}</td><td>${statusBadge(item.status)}</td><td><form class="inline-review" data-review-id="${escapeHtml(item.requestId)}"><select name="status" aria-label="Novo estado de ${escapeHtml(item.displayName)}">${reviewOptions(item.status)}</select><button class="secondary-button" type="submit">Guardar</button></form></td></tr>`).join('') || '<tr><td colspan="5" class="empty-state">Nenhum pedido recebido.</td></tr>'}</tbody></table></div></section>
+        <section class="section" id="onboarding"><div class="section-heading"><div><h2>Pedidos de onboarding</h2><p>A decisão de prontidão permanece separada do provisionamento.</p></div></div><div class="table-wrap"><table><thead><tr><th>Instituição</th><th>Contacto</th><th>Submissão</th><th>Estado</th><th>Revisão</th></tr></thead><tbody>${data.onboardingRequests.map(item => `<tr><td><strong>${escapeHtml(item.displayName)}</strong><small>${escapeHtml(item.requestedSlug)} · ${escapeHtml(item.requestId)}</small></td><td><strong>${escapeHtml(item.contactName)}</strong><small>${escapeHtml(item.contactEmail)}</small></td><td>${escapeHtml(new Date(item.submittedAt).toLocaleDateString('pt-PT'))}</td><td>${statusBadge(item.status)}</td><td><button class="secondary-button" type="button" data-open-review="${escapeHtml(item.requestId)}">${canReview ? 'Rever pedido' : 'Consultar'}</button></td></tr>`).join('') || '<tr><td colspan="5" class="empty-state">Nenhum pedido recebido.</td></tr>'}</tbody></table></div></section>
       </div></main>
     </div>`;
   document.querySelector('#platformLogout').addEventListener('click', logout);
   document.querySelector('#refreshPlatform').addEventListener('click', loadDashboard);
-  document.querySelectorAll('[data-review-id]').forEach(form => form.addEventListener('submit', reviewOnboarding));
+  document.querySelectorAll('[data-open-review]').forEach(button => button.addEventListener('click', () => {
+    openOnboardingReview(button.dataset.openReview);
+  }));
 }
 
-async function reviewOnboarding(event) {
+function detailValue(value, fallback = 'Não informado') {
+  return escapeHtml(value || fallback);
+}
+
+function openOnboardingReview(requestId) {
+  const item = platformData?.onboardingRequests?.find(request => request.requestId === requestId);
+  if (!item) return;
+  const canReview = ['GLOBAL_OWNER', 'PLATFORM_ADMIN'].includes(platformData.operator.role);
+  const terminal = ['REJECTED', 'CANCELLED'].includes(item.status);
+  const overlay = document.createElement('div');
+  overlay.className = 'dialog-overlay';
+  overlay.innerHTML = `
+    <section class="review-dialog" role="dialog" aria-modal="true" aria-labelledby="reviewDialogTitle">
+      <header class="review-dialog-header">
+        <div><p class="eyebrow">Pedido ${escapeHtml(item.requestId)}</p><h2 id="reviewDialogTitle">${escapeHtml(item.displayName)}</h2><p>${escapeHtml(item.requestedSlug)}</p></div>
+        <button class="icon-button" type="button" data-close-review aria-label="Fechar revisão">×</button>
+      </header>
+      <div class="review-dialog-body">
+        <section class="review-summary" aria-label="Dados da candidatura">
+          <div><span>Nome legal</span><strong>${detailValue(item.legalName)}</strong></div>
+          <div><span>País</span><strong>${detailValue(item.countryCode)}</strong></div>
+          <div><span>Responsável</span><strong>${detailValue(item.contactName)}</strong></div>
+          <div><span>Email</span><strong>${detailValue(item.contactEmail)}</strong></div>
+          <div><span>Telefone</span><strong>${detailValue(item.contactPhone)}</strong></div>
+          <div><span>Website</span><strong>${detailValue(item.websiteUrl)}</strong></div>
+          <div><span>Plano</span><strong>${detailValue(item.planCode)}</strong></div>
+          <div><span>Submissão</span><strong>${escapeHtml(new Date(item.submittedAt).toLocaleString('pt-PT'))}</strong></div>
+        </section>
+        <section class="applicant-notes"><span>Contexto apresentado</span><p>${detailValue(item.applicantNotes, 'Sem observações adicionais.')}</p></section>
+        <form id="onboardingReviewForm" class="review-form">
+          <div class="field"><label for="reviewStatus">Decisão</label><select id="reviewStatus" name="status" ${!canReview || terminal ? 'disabled' : ''}>${reviewOptions(item.status)}</select></div>
+          <fieldset class="review-checklist" ${!canReview || terminal ? 'disabled' : ''}>
+            <legend>Checklist de prontidão</legend>
+            ${Object.entries(reviewChecklistLabels).map(([key, label]) => `<label><input type="checkbox" name="${key}" ${item.reviewChecklist?.[key] ? 'checked' : ''}><span>${escapeHtml(label)}</span></label>`).join('')}
+          </fieldset>
+          <div class="field field-wide"><label for="reviewNotes">Notas da revisão</label><textarea id="reviewNotes" name="reviewNotes" maxlength="4000" ${!canReview || terminal ? 'readonly' : ''}>${escapeHtml(item.reviewNotes || '')}</textarea><small>Obrigatórias ao pedir informação, rejeitar ou cancelar.</small></div>
+          <div class="readiness-confirmation" id="readinessConfirmation" hidden>
+            <strong>Separação de responsabilidades</strong>
+            <p>Esta decisão apenas prepara o pedido. Não cria instituição, utilizadores, domínios ou convites.</p>
+            <label class="field"><span>Confirme o identificador <b>${escapeHtml(item.requestedSlug)}</b></span><input name="readinessConfirmation" autocomplete="off"></label>
+          </div>
+          <div class="review-dialog-actions">
+            <button class="secondary-button" type="button" data-close-review>Fechar</button>
+            ${canReview && !terminal ? '<button class="primary-button" type="submit">Guardar decisão</button>' : ''}
+          </div>
+        </form>
+      </div>
+    </section>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelectorAll('[data-close-review]').forEach(button => button.addEventListener('click', close));
+  overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+  overlay.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
+  const form = overlay.querySelector('#onboardingReviewForm');
+  const status = overlay.querySelector('#reviewStatus');
+  const confirmation = overlay.querySelector('#readinessConfirmation');
+  const syncDecision = () => { confirmation.hidden = status?.value !== 'READY_FOR_PROVISIONING'; };
+  status?.addEventListener('change', syncDecision);
+  syncDecision();
+  form?.addEventListener('submit', event => reviewOnboarding(event, item, overlay));
+  overlay.querySelector('[data-close-review]')?.focus();
+}
+
+async function reviewOnboarding(event, item, overlay) {
   event.preventDefault();
   const form = event.currentTarget;
-  const button = form.querySelector('button');
+  const button = form.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
-    await request(`/api/v1/platform/onboarding-requests/${encodeURIComponent(form.dataset.reviewId)}`, {
-      method: 'PATCH', body: JSON.stringify({ status: new FormData(form).get('status'), reviewNotes: '' })
+    const values = new FormData(form);
+    const reviewChecklist = Object.fromEntries(Object.keys(reviewChecklistLabels).map(key => [key, values.has(key)]));
+    await request(`/api/v1/platform/onboarding-requests/${encodeURIComponent(item.requestId)}`, {
+      method: 'PATCH', body: JSON.stringify({
+        status: values.get('status'),
+        reviewNotes: values.get('reviewNotes'),
+        reviewChecklist,
+        expectedUpdatedAt: item.updatedAt,
+        readinessConfirmation: values.get('readinessConfirmation') || ''
+      })
     });
-    showToast('Estado do onboarding atualizado.');
+    overlay.remove();
+    showToast('Decisão de onboarding guardada.');
     await loadDashboard();
-  } catch (error) { showToast(error.message); }
+  } catch (error) {
+    showToast(error.message);
+    if (error.code === 'ONBOARDING_REQUEST_CHANGED') {
+      overlay.remove();
+      await loadDashboard();
+    }
+  }
   finally { button.disabled = false; }
 }
 

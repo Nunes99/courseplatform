@@ -1,11 +1,13 @@
 import inspect
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from backend.courseplatform.app import app
+from backend.courseplatform.contracts import ApiError
 from backend.courseplatform.domains import platform
 
 
@@ -62,6 +64,61 @@ class M4DomainContractTests(unittest.TestCase):
         self.assertNotIn("courseplatform.attempts", source)
         self.assertNotIn("courseplatform.answers", source)
         self.assertNotIn("courseplatform.lesson_progress", source)
+
+    def test_readiness_requires_complete_checklist_and_slug_confirmation(self):
+        current = {
+            "status": "UNDER_REVIEW",
+            "requested_slug": "instituicao-teste",
+            "updated_at": datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc),
+        }
+        payload = {
+            "status": "READY_FOR_PROVISIONING",
+            "expectedUpdatedAt": "2026-10-12T12:00:00+00:00",
+            "readinessConfirmation": "instituicao-teste",
+            "reviewChecklist": {
+                key: True for key in platform.ONBOARDING_REVIEW_CHECKS
+            },
+        }
+        status, checklist = platform._validate_onboarding_review(current, payload)
+        self.assertEqual("READY_FOR_PROVISIONING", status)
+        self.assertTrue(all(checklist.values()))
+
+        with self.assertRaises(ApiError) as incomplete:
+            platform._validate_onboarding_review(
+                current,
+                {**payload, "reviewChecklist": {}},
+            )
+        self.assertEqual("ONBOARDING_CHECKLIST_INCOMPLETE", incomplete.exception.code)
+
+        with self.assertRaises(ApiError) as unconfirmed:
+            platform._validate_onboarding_review(
+                current,
+                {**payload, "readinessConfirmation": "outro-slug"},
+            )
+        self.assertEqual("ONBOARDING_CONFIRMATION_REQUIRED", unconfirmed.exception.code)
+
+    def test_sensitive_decisions_require_notes_and_detect_stale_writes(self):
+        current = {
+            "status": "UNDER_REVIEW",
+            "requested_slug": "instituicao-teste",
+            "updated_at": datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc),
+        }
+        with self.assertRaises(ApiError) as missing_notes:
+            platform._validate_onboarding_review(
+                current,
+                {"status": "REJECTED", "reviewNotes": "curta"},
+            )
+        self.assertEqual("ONBOARDING_REVIEW_NOTES_REQUIRED", missing_notes.exception.code)
+
+        with self.assertRaises(ApiError) as stale:
+            platform._validate_onboarding_review(
+                current,
+                {
+                    "status": "UNDER_REVIEW",
+                    "expectedUpdatedAt": "2026-10-12T12:01:00+00:00",
+                },
+            )
+        self.assertEqual("ONBOARDING_REQUEST_CHANGED", stale.exception.code)
 
 
 class M4TypedRouteTests(unittest.TestCase):
@@ -120,6 +177,33 @@ class M4TypedRouteTests(unittest.TestCase):
             json={**payload, "websiteUrl": "javascript:alert(1)"},
         )
         self.assertEqual(422, invalid_url.status_code)
+
+    def test_review_route_accepts_auditable_decision_contract(self):
+        result = {
+            "success": True,
+            "data": {"request": {"requestId": "ONB-1"}, "provisioningEnabled": False},
+        }
+        payload = {
+            "status": "UNDER_REVIEW",
+            "reviewNotes": "Validação documental iniciada.",
+            "reviewChecklist": {"institutionIdentity": True},
+            "expectedUpdatedAt": "2026-10-12T12:00:00+00:00",
+            "readinessConfirmation": "",
+        }
+        with patch.object(platform, "update_onboarding_request", return_value=result) as action:
+            response = self.client.patch(
+                "/api/v1/platform/onboarding-requests/ONB-1",
+                headers={"X-Platform-Token": "platform-token"},
+                json=payload,
+            )
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(payload, action.call_args.args[2])
+
+    def test_platform_ui_keeps_provisioning_as_a_separate_action(self):
+        source = (ROOT / "public" / "platform.js").read_text(encoding="utf-8")
+        self.assertIn("reviewChecklistLabels", source)
+        self.assertIn("Não cria instituição, utilizadores, domínios ou convites.", source)
+        self.assertNotIn("provisionOrganization", source)
 
     def test_idempotency_conflict_and_rate_limit_are_explicit_contracts(self):
         source = inspect.getsource(platform.submit_onboarding_request)
