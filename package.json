@@ -29,6 +29,6 @@
     "qa:platform-onboarding": "node scripts/verify_platform_onboarding_browser.cjs"
   },
   "devDependencies": {
-    "playwright": "1.63.0"
+    "playwright": "1.64.0"
   }
 }
