@@ -1,5 +1,5 @@
 fastapi==0.142.2
-starlette==1.7.0
+starlette==1.8.0
 psycopg[binary]==3.2.9
 python-dotenv==1.2.3
 pywebpush==2.5.0
